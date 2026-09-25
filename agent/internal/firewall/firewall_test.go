@@ -306,3 +306,91 @@ func contains(list []string, s string) bool {
 func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), d)
 }
+
+func TestCollapse(t *testing.T) {
+	got := Collapse([]string{"198.51.100.9", "198.51.100.0/24", "198.51.0.0/16", "203.0.113.7", "203.0.113.7", "2001:db8::1", "2001:db8::/48", "10.0.0.1"})
+	want := []string{"10.0.0.1", "198.51.0.0/16", "2001:db8::/48", "203.0.113.7"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v want %v", got, want)
+	}
+}
+
+func TestCounterParsers(t *testing.T) {
+	out := map[string]uint64{}
+	parseIPSetCounters("Name: xg_ipdb4\nType: hash:net\nHeader: family inet hashsize 1024 maxelem 1048576 counters\nMembers:\n198.51.100.0/24 packets 7 bytes 420\n203.0.113.7 packets 0 bytes 0\n", out)
+	if out["198.51.100.0/24"] != 7 || len(out) != 1 {
+		t.Fatalf("ipset: %v", out)
+	}
+	out = map[string]uint64{}
+	parseNFTSetCounters([]byte(`{"nftables":[{"metainfo":{}},{"set":{"name":"ipdb4","elem":[
+		{"elem":{"val":{"prefix":{"addr":"198.51.100.0","len":24}},"counter":{"packets":3,"bytes":1}}},
+		{"elem":{"val":"203.0.113.7","counter":{"packets":2,"bytes":1}}},
+		{"elem":{"val":"203.0.113.8","counter":{"packets":0,"bytes":0}}}]}}]}`), out)
+	if out["198.51.100.0/24"] != 3 || out["203.0.113.7"] != 2 || len(out) != 2 {
+		t.Fatalf("nft: %v", out)
+	}
+}
+
+func TestIPDBOnKernel(t *testing.T) {
+	providers(t, func(t *testing.T, provider string) {
+		m := newManager(t, provider)
+		m.IPDB = &IPDB{}
+		n, err := m.ApplyIPDB("v1", []string{"198.51.100.0/24 US", "198.51.100.9 US", "203.0.113.7 CN", "192.0.2.250 XX", "2001:db8::/48 DE", "10.99.0.2 ZZ", "bogus"})
+		if err != nil || n != 6 {
+			t.Fatalf("apply: %d %v", n, err)
+		}
+		dump := kernelDump(m)
+		if !strings.Contains(dump, "203.0.113.7") || !strings.Contains(dump, "xg-ipdb") {
+			t.Fatalf("ipdb not loaded:\n%s", dump)
+		}
+		if strings.Contains(dump, "192.0.2.250") && !strings.Contains(dump, "allow") {
+			t.Fatal("protected address was put in the IPDB set")
+		}
+		if c, _ := m.Check("203.0.113.7"); !strings.HasPrefix(c.Status, "ipdb-blocked") {
+			t.Fatalf("check: %+v", c)
+		}
+		if c, _ := m.Check("192.0.2.250"); strings.HasPrefix(c.Status, "ipdb") {
+			t.Fatalf("protected listed: %+v", c)
+		}
+		// The list survives a restart.
+		v, entries := (&IPDB{}).Snapshot()
+		if v != "v1" || len(entries) != 6 {
+			t.Fatalf("reload: %s %v", v, entries)
+		}
+		// Generate real traffic from a network namespace to count hits.
+		sh := func(args ...string) error { return exec.Command(args[0], args[1:]...).Run() }
+		_ = sh("ip", "netns", "del", "xgtest")
+		if sh("ip", "netns", "add", "xgtest") != nil {
+			t.Log("no netns support; skipping hit counting")
+			return
+		}
+		defer sh("ip", "netns", "del", "xgtest")
+		defer sh("ip", "link", "del", "xgv0")
+		for _, c := range [][]string{
+			{"ip", "link", "add", "xgv0", "type", "veth", "peer", "name", "xgv1"},
+			{"ip", "link", "set", "xgv1", "netns", "xgtest"},
+			{"ip", "addr", "add", "10.99.0.1/30", "dev", "xgv0"},
+			{"ip", "link", "set", "xgv0", "up"},
+			{"ip", "netns", "exec", "xgtest", "ip", "addr", "add", "10.99.0.2/30", "dev", "xgv1"},
+			{"ip", "netns", "exec", "xgtest", "ip", "link", "set", "xgv1", "up"},
+		} {
+			if err := sh(c...); err != nil {
+				t.Logf("netns setup failed (%v); skipping hit counting", c)
+				return
+			}
+		}
+		_ = sh("ip", "netns", "exec", "xgtest", "ping", "-c", "3", "-i", "0.2", "-W", "1", "10.99.0.1")
+		m.pollIPDBHits()
+		st := m.IPDBStatus()
+		if st.HitsTotal < 1 || len(st.Recent) == 0 || st.Recent[0].Entry != "10.99.0.2" || st.Countries["ZZ"] < 1 {
+			t.Fatalf("hits not recorded: %+v", st)
+		}
+		hits, _ := m.TakePendingHits(10)
+		if len(hits) != 1 || hits[0].Hits < 1 {
+			t.Fatalf("pending: %+v", hits)
+		}
+		if again, _ := m.TakePendingHits(10); len(again) != 0 {
+			t.Fatalf("pending not cleared: %+v", again)
+		}
+	})
+}

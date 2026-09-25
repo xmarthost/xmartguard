@@ -22,6 +22,22 @@ export interface Config {
   metricsIntervalSeconds: number;
   metricsRetentionDays: number;
   autoUpdateAgents: boolean;
+  /** IPDB: list an IP reported by this many different servers... */
+  ipdbMinReporters: number;
+  /** ...or reported this many times in the window (single-server fleets). */
+  ipdbMinReports: number;
+  ipdbWindowDays: number;
+  /** Community entries expire this long after the last report. */
+  ipdbTtlDays: number;
+  ipdbMaxEntries: number;
+  /** Public blocklist feeds merged into the IPDB (empty disables). */
+  ipdbFeeds: string[];
+  /** Background IPDB sync with agents (disabled in tests). */
+  ipdbSync: boolean;
+  /** Writable directory for the GeoIP database. */
+  dataDir: string;
+  /** Country database (DB-IP Lite, CC BY 4.0); {YYYY}/{MM} are substituted. Empty disables. */
+  geoUrl: string;
   adminEmail?: string;
   adminPassword?: string;
   logLevel: string;
@@ -56,6 +72,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     metricsIntervalSeconds: int(env.METRICS_INTERVAL_SECONDS, 60),
     metricsRetentionDays: int(env.METRICS_RETENTION_DAYS, 35),
     autoUpdateAgents: bool(env.AUTO_UPDATE_AGENTS, true),
+    ipdbMinReporters: int(env.IPDB_MIN_REPORTERS, 2),
+    ipdbMinReports: int(env.IPDB_MIN_REPORTS, 3),
+    ipdbWindowDays: int(env.IPDB_WINDOW_DAYS, 7),
+    ipdbTtlDays: int(env.IPDB_TTL_DAYS, 30),
+    ipdbMaxEntries: int(env.IPDB_MAX_ENTRIES, 200_000),
+    ipdbFeeds: (env.IPDB_FEEDS ?? 'https://www.spamhaus.org/drop/drop_v4.json,https://www.spamhaus.org/drop/drop_v6.json')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    ipdbSync: bool(env.IPDB_SYNC, true),
+    dataDir: path.resolve(env.DATA_DIR || path.join(repoRoot, 'data')),
+    geoUrl: env.GEO_URL ?? 'https://download.db-ip.com/free/dbip-country-lite-{YYYY}-{MM}.csv.gz',
     adminEmail: env.ADMIN_EMAIL || undefined,
     adminPassword: env.ADMIN_PASSWORD || undefined,
     logLevel: env.LOG_LEVEL || 'info',

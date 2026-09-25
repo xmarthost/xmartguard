@@ -8,6 +8,7 @@ import type { AgentHub, MetricsSample } from '../agents/hub.js';
 import { audit } from '../auth.js';
 import { parseEd25519PublicKey, sha256, verifyEd25519 } from '../security.js';
 import { currentRelease, versionLess } from '../agents/release.js';
+import type { IPDBService } from '../ipdb/service.js';
 
 const uuid = z.string().uuid();
 
@@ -36,7 +37,7 @@ function s(v: unknown): string {
   return typeof v === 'string' ? v.slice(0, 255) : '';
 }
 
-export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: AgentHub): void {
+export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: AgentHub, ipdb?: IPDBService): void {
   /** Pushes the bundled release to agents that are older than it. */
   function maybeAutoUpdate(serverId: string, agentVersion: string) {
     const rel = currentRelease(cfg.downloadsDir);
@@ -178,6 +179,7 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
             socket.send(JSON.stringify({ type: 'welcome', config: { metrics_interval: cfg.metricsIntervalSeconds } }));
             log.info({ version: s(msg.version) }, 'agent connected');
             maybeAutoUpdate(serverId, s(msg.version));
+            ipdb?.onConnect(serverId, s(msg.version));
             return;
           }
           if (!conn) return;

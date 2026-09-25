@@ -13,16 +13,35 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Install layout (mirrors /etc/<product> + /opt/<product>):
+//
+//	/etc/xmartguard            agent.json, identity.key, settings.json
+//	/opt/xmartguard/bin        the agent binary
+//	/opt/xmartguard/data       local database, signatures, IPDB list, quarantine
+//	/opt/xmartguard/logs       agent and install logs
+//
 // DefaultStateDir can be overridden with XG_STATE_DIR (tests).
-const DefaultStateDir = "/var/lib/xmartguard"
+const (
+	HomeDir         = "/opt/xmartguard"
+	DefaultStateDir = HomeDir + "/data"
+	// LegacyStateDir is where agents before 0.3.0 kept their data.
+	LegacyStateDir = "/var/lib/xmartguard"
+)
 
 // StateDir returns the agent state directory.
 func StateDir() string {
 	if d := os.Getenv("XG_STATE_DIR"); d != "" {
 		return d
 	}
+	if stateOverride != "" {
+		return stateOverride
+	}
 	return DefaultStateDir
 }
+
+// stateOverride keeps a legacy install on /var/lib/xmartguard when its data
+// cannot be moved (e.g. /opt is a different filesystem).
+var stateOverride string
 
 const schema = `
 CREATE TABLE IF NOT EXISTS scans (
@@ -76,6 +95,21 @@ CREATE TABLE IF NOT EXISTS fw_events (
   status      TEXT NOT NULL            -- blocked | unblocked | expired
 );
 CREATE INDEX IF NOT EXISTS fw_events_created ON fw_events(created_at);
+CREATE TABLE IF NOT EXISTS ipdb_hits (
+  entry       TEXT PRIMARY KEY,        -- IPDB list entry (IP or CIDR) that matched
+  country     TEXT NOT NULL DEFAULT '',
+  hits        INTEGER NOT NULL DEFAULT 0,
+  pending     INTEGER NOT NULL DEFAULT 0, -- not yet sent to the portal
+  first_seen  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ipdb_hits_last ON ipdb_hits(last_seen);
+CREATE TABLE IF NOT EXISTS ipdb_country (
+  day      TEXT NOT NULL,
+  country  TEXT NOT NULL,
+  hits     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, country)
+);
 CREATE TABLE IF NOT EXISTS kv (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -88,7 +122,42 @@ func Open() (*sql.DB, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	return OpenPath(filepath.Join(dir, "agent.db"))
+	moved := false
+	if dir == DefaultStateDir {
+		var ok bool
+		if moved, ok = migrateLegacy(dir); !ok {
+			stateOverride, dir = LegacyStateDir, LegacyStateDir
+		}
+	}
+	db, err := OpenPath(filepath.Join(dir, "agent.db"))
+	if err == nil && moved {
+		// Quarantined files keep their records: point them at the new location.
+		_, _ = db.Exec(`UPDATE findings SET qpath = ? || substr(qpath, ?) WHERE qpath LIKE ?`,
+			dir, len(LegacyStateDir)+1, LegacyStateDir+"/%")
+	}
+	return db, err
+}
+
+// migrateLegacy moves data from the pre-0.3.0 location (/var/lib/xmartguard)
+// into /opt/xmartguard/data once. The install manifest stays where it is so
+// the uninstaller that shipped with that install still works.
+func migrateLegacy(dir string) (moved, ok bool) {
+	if _, err := os.Stat(filepath.Join(dir, "agent.db")); err == nil {
+		return false, true
+	}
+	if _, err := os.Stat(filepath.Join(LegacyStateDir, "agent.db")); err != nil {
+		return false, true
+	}
+	for _, name := range []string{"agent.db", "agent.db-wal", "agent.db-shm", "quarantine", "sigs", "geo"} {
+		src := filepath.Join(LegacyStateDir, name)
+		if _, err := os.Lstat(src); err != nil {
+			continue
+		}
+		if err := os.Rename(src, filepath.Join(dir, name)); err != nil && name == "agent.db" {
+			return false, false
+		}
+	}
+	return true, true
 }
 
 // OpenPath opens a database file directly.

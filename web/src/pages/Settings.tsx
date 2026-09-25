@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, Info, Lock, Settings as SettingsIcon } from 'lucide-react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Bell, Bug, CheckCircle2, Globe2, Info, Lock, Settings as SettingsIcon } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -35,8 +35,13 @@ interface NotificationsS {
   on_ban: boolean;
   on_blacklist: boolean;
 }
+interface IPDBS {
+  enabled: boolean;
+  report: boolean;
+}
 interface AllSettings {
   scanner: ScannerS;
+  ipdb: IPDBS;
   reputation: ReputationS;
   notifications: NotificationsS;
 }
@@ -47,10 +52,11 @@ interface Meta {
   default_rbls: string[];
 }
 
-type Section = 'scanner' | 'rbl' | 'notifications' | 'about';
+type Section = 'scanner' | 'rbl' | 'ipdb' | 'notifications' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
+  { v: 'ipdb', l: 'IPDB Protection', icon: <Globe2 className="h-4 w-4" /> },
   { v: 'waf', l: 'WAF & Bruteforce', icon: <Lock className="h-4 w-4" />, soon: true },
   { v: 'cms', l: 'WordPress and CMS', icon: <Lock className="h-4 w-4" />, soon: true },
   { v: 'suspension', l: 'Automatic Suspension', icon: <Lock className="h-4 w-4" />, soon: true },
@@ -111,6 +117,7 @@ export default function SettingsPage() {
         {!admin && <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">You can view settings; only admins can change them.</div>}
         {section === 'scanner' && <ScannerSection s={st.scanner} meta={meta} admin={admin} busy={busy} onSave={setScanner} />}
         {section === 'rbl' && <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />}
+        {section === 'ipdb' && <IPDBSection s={st.ipdb ?? { enabled: true, report: true }} admin={admin} busy={busy} onSave={(p) => save({ ipdb: p })} />}
         {section === 'notifications' && <NotificationsSection s={st.notifications} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
         {section === 'about' && <About serverId={id!} />}
       </div>
@@ -253,6 +260,25 @@ function RBLSection({ s, meta, admin, busy, onSave }: { s: ReputationS; meta: Me
           <button className="btn-primary" disabled={dis} onClick={() => onSave({ rbls })}>Save RBLs</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function IPDBSection({ s, admin, busy, onSave }: { s: IPDBS; admin: boolean; busy: boolean; onSave: (p: Partial<IPDBS>) => void }) {
+  const dis = !admin || busy;
+  return (
+    <div>
+      <h2 className="text-lg font-semibold text-navy-900">IPDB Protection</h2>
+      <p className="mb-2 text-sm text-slate-500">
+        The IPDB is a blocklist shared by every server on this portal. Attackers banned on one server are blocked on all of
+        them. See the <Link className="text-blue-600 hover:underline" to="/ipdb">IPDB live monitor</Link>.
+      </p>
+      <SettingRow title="Block IPDB-listed addresses" desc="Drop all traffic from IPs in the shared IPDB list at the firewall" recommended>
+        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
+      </SettingRow>
+      <SettingRow title="Report attackers to the IPDB" desc="Share this server's automatic brute-force and DoS bans so other servers can block them" recommended>
+        <Toggle on={s.report} disabled={dis} onChange={(v) => onSave({ report: v })} />
+      </SettingRow>
     </div>
   );
 }

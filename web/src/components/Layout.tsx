@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom';
 import {
-  Activity, ArrowLeft, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
+  Activity, ArrowLeft, Globe2, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
@@ -142,6 +142,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const global: NavItem[] = [
     { to: '/', label: 'Overview', icon: <LayoutDashboard />, end: true },
     { to: '/servers', label: 'Server List', icon: <ServerIcon />, end: true },
+    { to: '/ipdb', label: 'IPDB', icon: <Globe2 /> },
     { to: '/mass-operations', label: 'Mass Operations', icon: <Layers /> },
   ];
   const base = `/servers/${serverId}`;
@@ -189,6 +190,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 items={[
                   { to: `${base}/firewall`, label: 'Firewall', icon: <Flame /> },
                   { to: `${base}/firewall-logs`, label: 'Firewall Logs', icon: <ListX /> },
+                  { to: '/ipdb', label: 'IPDB', icon: <Globe2 /> },
                 ]}
               />
               <NavGroup

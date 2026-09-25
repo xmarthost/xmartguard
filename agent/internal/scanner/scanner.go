@@ -110,7 +110,7 @@ func ValidateTarget(p string) (string, error) {
 	if p == "/" {
 		return "", errors.New("scanning / is not allowed; use a Full scan")
 	}
-	if underAny(p, forbidden) || underAny(p, []string{store.StateDir()}) {
+	if underAny(p, forbidden) || underAny(p, []string{store.StateDir(), store.HomeDir}) {
 		return "", fmt.Errorf("%s is a system path and cannot be scanned", p)
 	}
 	st, err := os.Stat(p)

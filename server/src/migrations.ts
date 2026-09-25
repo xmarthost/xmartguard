@@ -96,4 +96,64 @@ CREATE TABLE audit_events (
 CREATE INDEX audit_account_idx ON audit_events (account_id, created_at DESC);
 `,
   },
+  {
+    version: '002_ipdb',
+    sql: `
+-- Automatic bans reported by agents (brute force, DoS, ...).
+CREATE TABLE ipdb_reports (
+  id          bigserial PRIMARY KEY,
+  ip          inet NOT NULL,
+  server_id   uuid REFERENCES servers(id) ON DELETE CASCADE,
+  account_id  uuid REFERENCES accounts(id) ON DELETE CASCADE,
+  source      text NOT NULL DEFAULT '',
+  reason      text NOT NULL DEFAULT '',
+  reported_at timestamptz NOT NULL DEFAULT now(),
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ipdb_reports_ip_idx ON ipdb_reports (ip, created_at);
+CREATE INDEX ipdb_reports_created_idx ON ipdb_reports (created_at);
+
+-- The distributed list every agent drops.
+CREATE TABLE ipdb_entries (
+  cidr        cidr PRIMARY KEY,
+  source      text NOT NULL CHECK (source IN ('community','manual','feed')),
+  country     text NOT NULL DEFAULT '',
+  reporters   integer NOT NULL DEFAULT 0,
+  reports     integer NOT NULL DEFAULT 0,
+  reason      text NOT NULL DEFAULT '',
+  note        text NOT NULL DEFAULT '',
+  first_seen  timestamptz NOT NULL DEFAULT now(),
+  last_seen   timestamptz NOT NULL DEFAULT now(),
+  expires_at  timestamptz,
+  created_by  uuid REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX ipdb_entries_source_idx ON ipdb_entries (source);
+
+-- Never listed, whatever is reported.
+CREATE TABLE ipdb_whitelist (
+  cidr        cidr PRIMARY KEY,
+  note        text NOT NULL DEFAULT '',
+  created_by  uuid REFERENCES users(id) ON DELETE SET NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Traffic dropped by IPDB entries, per server and day (live monitor + map).
+CREATE TABLE ipdb_hits (
+  server_id   uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  entry       text NOT NULL,
+  day         date NOT NULL,
+  country     text NOT NULL DEFAULT '',
+  hits        bigint NOT NULL DEFAULT 0,
+  last_seen   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (server_id, entry, day)
+);
+CREATE INDEX ipdb_hits_last_idx ON ipdb_hits (last_seen DESC);
+CREATE INDEX ipdb_hits_day_idx ON ipdb_hits (day);
+
+ALTER TABLE servers
+  ADD COLUMN ipdb_cursor  bigint NOT NULL DEFAULT 0,
+  ADD COLUMN ipdb_version text NOT NULL DEFAULT '',
+  ADD COLUMN ipdb_synced_at timestamptz;
+`,
+  },
 ];

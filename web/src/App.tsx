@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import type { ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { AuthProvider, can, useAuth } from './auth';
 import Layout from './components/Layout';
 import { ComingSoon, PageLoader } from './components/ui';
@@ -13,6 +13,7 @@ import { AccountPage, SecurityLogPage, SupportPage, UsersPage } from './pages/Ad
 import { ManualScans, ScannerLogs } from './pages/Scanner';
 import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
 import SettingsPage from './pages/Settings';
+const IPDBPage = lazy(() => import('./pages/IPDB'));
 
 function Protected({ children, role }: { children: ReactNode; role?: 'owner' | 'admin' }) {
   const { user, loading } = useAuth();
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/servers/:id/ip-reputation" element={<Protected><IPReputation /></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
+        <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
         <Route path="/mass-operations" element={<Protected><ComingSoon title="Mass Operations" milestone="milestone M10" /></Protected>} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />

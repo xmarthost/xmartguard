@@ -20,6 +20,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'fw.check': { role: 'viewer', mutates: false },
   'fw.events': { role: 'viewer', mutates: false },
   'reputation.get': { role: 'viewer', mutates: false },
+  'ipdb.status': { role: 'viewer', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },
   'scan.stop': { role: 'operator', mutates: true },

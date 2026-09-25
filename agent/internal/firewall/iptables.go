@@ -20,6 +20,8 @@ type Backend interface {
 	AddTempBan(ip string, seconds int) error
 	TempBanned() ([]string, error)
 	Counters() map[string]uint64
+	// IPDBCounters returns packets dropped per IPDB list entry.
+	IPDBCounters() map[string]uint64
 	// Healthy reports whether our rules are still loaded (CSF/firewalld
 	// restarts can flush them).
 	Healthy() bool
@@ -79,16 +81,17 @@ const (
 
 type ipset struct {
 	name, typ, family string
-	timeout           bool
+	timeout, counters bool
 }
 
 func ipsets() []ipset {
 	return []ipset{
-		{"xg_allow4", "hash:net", "inet", false}, {"xg_allow6", "hash:net", "inet6", false},
-		{"xg_deny4", "hash:net", "inet", false}, {"xg_deny6", "hash:net", "inet6", false},
-		{"xg_tallow4", "hash:ip", "inet", true}, {"xg_tallow6", "hash:ip", "inet6", true},
-		{"xg_tban4", "hash:ip", "inet", true}, {"xg_tban6", "hash:ip", "inet6", true},
-		{"xg_cblock4", "hash:net", "inet", false}, {"xg_callow4", "hash:net", "inet", false},
+		{"xg_allow4", "hash:net", "inet", false, false}, {"xg_allow6", "hash:net", "inet6", false, false},
+		{"xg_deny4", "hash:net", "inet", false, false}, {"xg_deny6", "hash:net", "inet6", false, false},
+		{"xg_tallow4", "hash:ip", "inet", true, false}, {"xg_tallow6", "hash:ip", "inet6", true, false},
+		{"xg_tban4", "hash:ip", "inet", true, false}, {"xg_tban6", "hash:ip", "inet6", true, false},
+		{"xg_cblock4", "hash:net", "inet", false, false}, {"xg_callow4", "hash:net", "inet", false, false},
+		{"xg_ipdb4", "hash:net", "inet", false, true}, {"xg_ipdb6", "hash:net", "inet6", false, true},
 	}
 }
 
@@ -149,6 +152,7 @@ func renderIPSet(r Ruleset) string {
 	d4, d6 := split(r.Deny)
 	cb4, _ := split(r.CountryBlock)
 	ca4, _ := split(r.CountryAllow)
+	p4, p6 := split(r.IPDB)
 	timed := func(m map[string]time.Duration, v6 bool) []string {
 		var out []string
 		for ip, d := range m {
@@ -164,13 +168,16 @@ func renderIPSet(r Ruleset) string {
 		"xg_allow4": a4, "xg_allow6": a6, "xg_deny4": d4, "xg_deny6": d6,
 		"xg_tallow4": timed(r.TempAllow, false), "xg_tallow6": timed(r.TempAllow, true),
 		"xg_tban4": timed(r.TempBan, false), "xg_tban6": timed(r.TempBan, true),
-		"xg_cblock4": cb4, "xg_callow4": ca4,
+		"xg_cblock4": cb4, "xg_callow4": ca4, "xg_ipdb4": p4, "xg_ipdb6": p6,
 	}
 	var b strings.Builder
 	for _, s := range ipsets() {
 		opts := fmt.Sprintf("%s family %s maxelem 1048576", s.typ, s.family)
 		if s.timeout {
 			opts += " timeout 0"
+		}
+		if s.counters {
+			opts += " counters"
 		}
 		fmt.Fprintf(&b, "create %s %s -exist\n", s.name, opts)
 		tmp := s.name + "_n"
@@ -196,6 +203,9 @@ func renderRules(r Ruleset, v6 bool) string {
 	add("-i lo -j RETURN")
 	add("-m set --match-set xg_allow" + sfx + " src -j RETURN")
 	add("-m set --match-set xg_tallow" + sfx + " src -j RETURN")
+	if len(r.IPDB) > 0 {
+		add("-m set --match-set xg_ipdb" + sfx + ` src -m comment --comment "xg-ipdb" -j DROP`)
+	}
 	add("-m set --match-set xg_deny" + sfx + ` src -m comment --comment "xg-deny" -j DROP`)
 	add("-m set --match-set xg_tban" + sfx + ` src -m comment --comment "xg-tempban" -j DROP`)
 	if !v6 && len(r.CountryBlock) > 0 {
@@ -317,6 +327,46 @@ func (t IPTables) setMembers(name string) ([]string, error) {
 		}
 	}
 	return res, nil
+}
+
+// IPDBCounters parses `ipset list` member lines: "1.2.3.0/24 packets 5 bytes 300".
+func (t IPTables) IPDBCounters() map[string]uint64 {
+	out := map[string]uint64{}
+	if t.IPSet == "" {
+		return out
+	}
+	ctx, cancel := ctx60()
+	defer cancel()
+	for _, name := range []string{"xg_ipdb4", "xg_ipdb6"} {
+		raw, err := run(ctx, "", t.IPSet, "list", name)
+		if err != nil {
+			continue
+		}
+		parseIPSetCounters(string(raw), out)
+	}
+	return out
+}
+
+func parseIPSetCounters(raw string, out map[string]uint64) {
+	members := false
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "Members:" {
+			members = true
+			continue
+		}
+		f := strings.Fields(line)
+		if !members || len(f) < 3 {
+			continue
+		}
+		for i := 1; i+1 < len(f); i++ {
+			if f[i] == "packets" {
+				if n, err := strconv.ParseUint(f[i+1], 10, 64); err == nil && n > 0 {
+					out[f[0]] = n
+				}
+			}
+		}
+	}
 }
 
 func (t IPTables) TempBanned() ([]string, error) {

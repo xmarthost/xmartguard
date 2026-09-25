@@ -53,6 +53,7 @@ type Manager struct {
 	NFT      NFT
 	IPT      IPTables
 	Geo      *Geo
+	IPDB     *IPDB
 	// Protected returns IPs that must never be blocked (server + portal IPs).
 	Protected func() []string
 	// OnBan is called for automatic bans (notifications).
@@ -160,6 +161,9 @@ func (m *Manager) Build() (Ruleset, error) {
 	if m.Geo != nil {
 		rs.CountryBlock = m.Geo.CIDRs(cfg.BlockedCountries)
 		rs.CountryAllow = m.Geo.CIDRs(cfg.AllowedCountries)
+	}
+	if m.IPDB != nil && m.Settings.Get().IPDB.Enabled {
+		rs.IPDB = m.ipdbEntries()
 	}
 	return rs, nil
 }
@@ -334,6 +338,15 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 			}
 		}
 	}
+	if best == 0 && m.IPDB != nil && m.Settings.Get().IPDB.Enabled {
+		for _, e := range m.ipdbEntries() {
+			if Contains(e, res.IP) {
+				res.Status = "ipdb-blocked (" + e + ")"
+				best = -1
+				break
+			}
+		}
+	}
 	if best == 0 && m.Geo != nil {
 		cfg := m.Settings.Get().Firewall
 		if cc := m.Geo.Lookup(res.IP, cfg.BlockedCountries); cc != "" && m.Geo.Lookup(res.IP, cfg.AllowedCountries) == "" {
@@ -481,6 +494,9 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 		if cfg.DoS {
 			m.syncDoSBans()
+		}
+		if m.Settings.Get().IPDB.Enabled {
+			m.pollIPDBHits()
 		}
 		if m.Geo != nil && time.Since(lastGeo) > 24*time.Hour && len(cfg.BlockedCountries)+len(cfg.AllowedCountries) > 0 {
 			lastGeo = time.Now()

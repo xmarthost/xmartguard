@@ -15,10 +15,14 @@ import { serverRoutes } from './routes/servers.js';
 import { userRoutes } from './routes/users.js';
 import { downloadRoutes } from './routes/downloads.js';
 import { agentCommandRoutes } from './routes/agent-cmd.js';
+import { ipdbRoutes } from './routes/ipdb.js';
+import { GeoDB, initGeo } from './ipdb/geo.js';
+import { IPDBService } from './ipdb/service.js';
 
 export interface App {
   app: FastifyInstance;
   hub: AgentHub;
+  ipdb: IPDBService;
 }
 
 export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean } = {}): Promise<App> {
@@ -28,6 +32,9 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
     bodyLimit: 256 * 1024,
   });
   const hub = new AgentHub(pool, app.log);
+  const geo = new GeoDB();
+  const ipdb = new IPDBService(pool, cfg, hub, geo, app.log);
+  void initGeo(geo, cfg.dataDir, cfg.geoUrl, app.log).then(() => ipdb.markDirty());
 
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
@@ -42,11 +49,12 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   registerAuth(app, pool);
   app.get('/api/health', async () => ({ ok: true }));
   authRoutes(app, pool, cfg);
-  agentRoutes(app, pool, cfg, hub);
+  agentRoutes(app, pool, cfg, hub, ipdb);
   serverRoutes(app, pool, cfg, hub);
   userRoutes(app, pool);
   downloadRoutes(app, cfg);
   agentCommandRoutes(app, pool, cfg, hub);
+  ipdbRoutes(app, pool, ipdb);
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });
@@ -59,6 +67,10 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
     });
   }
 
-  app.addHook('onClose', async () => hub.closeAll());
-  return { app, hub };
+  ipdb.start();
+  app.addHook('onClose', async () => {
+    ipdb.stop();
+    hub.closeAll();
+  });
+  return { app, hub, ipdb };
 }

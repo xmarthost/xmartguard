@@ -167,6 +167,61 @@ describe('agent end-to-end', () => {
     expect((await c.req('GET', `/api/servers/${serverId}`)).body.server.online).toBe(true);
   });
 
+  it('shares automatic bans through the IPDB and distributes the list', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(path.join(stateDir, 'agent.db'));
+    db.exec('PRAGMA busy_timeout = 5000');
+    const now = Math.floor(Date.now() / 1000);
+    const ins = db.prepare('INSERT INTO fw_events (ip, reason, source, created_at, expires_at, status) VALUES (?,?,?,?,?,?)');
+    for (let i = 0; i < 3; i++) ins.run('203.0.113.50', '5 failed SSH logins', 'bruteforce', now, now + 3600, 'blocked');
+    ins.run('10.0.0.5', 'private', 'bruteforce', now, now + 3600, 'blocked');
+    ins.run('198.51.100.3', 'manual block', 'manual', now, 0, 'blocked');
+    db.prepare('INSERT INTO ipdb_hits (entry, country, hits, pending, first_seen, last_seen) VALUES (?,?,?,?,?,?)')
+      .run('192.0.2.77', 'NL', 9, 9, now, now);
+    db.close();
+
+    await h.ipdb.syncServer(serverId);
+    const rep = await h.pool.query('SELECT host(ip) AS ip, source FROM ipdb_reports WHERE server_id = $1', [serverId]);
+    expect(rep.rows.map((r) => r.ip).sort()).toEqual(['203.0.113.50', '203.0.113.50', '203.0.113.50']);
+    await h.ipdb.rebuild();
+    expect(h.ipdb.entries).toContain('203.0.113.50');
+
+    // Second round: the agent's list is stale, so the portal pushes it.
+    await h.ipdb.syncServer(serverId);
+    expect(fs.readFileSync(path.join(stateDir, 'ipdb.txt'), 'utf8')).toContain('203.0.113.50');
+    const st = await cmd('ipdb.status');
+    expect(st.body.version).toBe(h.ipdb.version);
+    expect(st.body.entries).toBeGreaterThanOrEqual(1);
+
+    const sum = await c.req('GET', '/api/ipdb/summary');
+    expect(sum.body.listed).toBe(h.ipdb.entries.length);
+    expect(sum.body.servers.find((x: { id: string }) => x.id === serverId).synced).toBe(true);
+    expect(sum.body.can_manage).toBe(true);
+    const live = await c.req('GET', '/api/ipdb/live');
+    expect(live.body.events[0]).toMatchObject({ entry: '192.0.2.77', country: 'NL', hits: 9 });
+    expect(sum.body.countries).toEqual([{ country: 'NL', hits: 9, ips: 1 }]);
+
+    const chk = await c.req('GET', '/api/ipdb/check?ip=203.0.113.50');
+    expect(chk.body).toMatchObject({ listed: true, reports: 3, reporters: 1 });
+
+    // Operator management: manual entries, whitelist, protection of own servers.
+    expect((await c.req('POST', '/api/ipdb/entries', { cidr: '198.51.100.0/24', note: 'bad net' })).status).toBe(200);
+    expect(h.ipdb.entries).toContain('198.51.100.0/24');
+    const srv = await c.req('GET', `/api/servers/${serverId}`);
+    const own = srv.body.server.inventory.ips?.[0] ?? srv.body.server.primary_ip;
+    if (own) expect((await c.req('POST', '/api/ipdb/entries', { cidr: own })).status).toBe(400);
+    expect((await c.req('POST', '/api/ipdb/entries', { cidr: '1.2.3.4/4' })).status).toBe(400);
+    expect((await c.req('POST', '/api/ipdb/whitelist', { cidr: '203.0.113.50' })).status).toBe(200);
+    expect(h.ipdb.entries).not.toContain('203.0.113.50');
+    expect((await c.req('GET', '/api/ipdb/check?ip=203.0.113.50')).body.listed).toBe(false);
+    await c.req('DELETE', '/api/ipdb/whitelist?cidr=203.0.113.50');
+    expect(h.ipdb.entries).toContain('203.0.113.50');
+    const list = await c.req('GET', '/api/ipdb/entries?source=manual');
+    expect(list.body.entries.map((e: { cidr: string }) => e.cidr)).toEqual(['198.51.100.0/24']);
+    expect((await c.req('DELETE', '/api/ipdb/entries?cidr=198.51.100.0/24')).status).toBe(200);
+    expect(h.ipdb.entries).not.toContain('198.51.100.0/24');
+  });
+
   it('stops cleanly when the server is removed in the portal', async () => {
     const exited = new Promise<number | null>((r) => proc!.once('exit', (code) => r(code)));
     expect((await c.req('DELETE', `/api/servers/${serverId}`)).status).toBe(200);

@@ -13,22 +13,22 @@ func asm(parts ...string) []byte { return []byte(strings.Join(parts, "")) }
 func TestHeuristicsDetectFamilies(t *testing.T) {
 	php := "<?php "
 	cases := map[string][]byte{
-		"eval-base64":   asm(php, "ev", "al(base", "64_decode('", strings.Repeat("QUJD", 90), "'));"),
-		"eval-input":    asm(php, "@ev", "al($_PO", "ST['x']);"),
-		"assert-input":  asm(php, "as", "sert($_RE", "QUEST['c']);"),
-		"preg-e":        asm(php, "preg_repl", "ace('/.*/e', $_GET['x'], '');"),
-		"create-func":   asm(php, "$f=create_fun", "ction('', $_POST['c']); $f();"),
-		"command-inj":   asm(php, "sys", "tem($_GET['cmd']);"),
-		"backtick":      asm(php, "$o = `", "id $_GET[x]`;"),
-		"var-func":      asm(php, "$a=$_PO", "ST['f']; $a($_POST['c']);"),
-		"globals":       asm(php, "$GLOB", "ALS['x']['y'](base64_decode($_POST['z']));"),
-		"goto":          asm(php, strings.Repeat("goto l1; l1: ", 10), "ev", "al($_GET['x']);"),
-		"gzinflate":     asm(php, "ev", "al(gzinf", "late(base64_decode('", strings.Repeat("QUJD", 90), "')));"),
-		"uploader":      asm(php, "move_uploa", "ded_file($_FILES['f']['tmp_name'], $_FILES['f']['name']);"),
-		"halt":          asm(php, "ev", "al(base64_decode($x)); __halt_com", "piler();DATA"),
-		"chr-decoder":   asm(php, "$s='';", strings.Repeat("$s.=chr(0x41);", 30), " ev", "al($s);"),
-		"filedropper":   asm(php, "file_put_con", "tents('x.php', chr(60).$_POST['c']);"),
-		"js-miner":      []byte("var m = new Coin" + "Hive.Anonymous('key');"),
+		"eval-base64":  asm(php, "ev", "al(base", "64_decode('", strings.Repeat("QUJD", 90), "'));"),
+		"eval-input":   asm(php, "@ev", "al($_PO", "ST['x']);"),
+		"assert-input": asm(php, "as", "sert($_RE", "QUEST['c']);"),
+		"preg-e":       asm(php, "preg_repl", "ace('/.*/e', $_GET['x'], '');"),
+		"create-func":  asm(php, "$f=create_fun", "ction('', $_POST['c']); $f();"),
+		"command-inj":  asm(php, "sys", "tem($_GET['cmd']);"),
+		"backtick":     asm(php, "$o = `", "id $_GET[x]`;"),
+		"var-func":     asm(php, "$a=$_PO", "ST['f']; $a($_POST['c']);"),
+		"globals":      asm(php, "$GLOB", "ALS['x']['y'](base64_decode($_POST['z']));"),
+		"goto":         asm(php, strings.Repeat("goto l1; l1: ", 10), "ev", "al($_GET['x']);"),
+		"gzinflate":    asm(php, "ev", "al(gzinf", "late(base64_decode('", strings.Repeat("QUJD", 90), "')));"),
+		"uploader":     asm(php, "move_uploa", "ded_file($_FILES['f']['tmp_name'], $_FILES['f']['name']);"),
+		"halt":         asm(php, "ev", "al(base64_decode($x)); __halt_com", "piler();DATA"),
+		"chr-decoder":  asm(php, "$s='';", strings.Repeat("$s.=chr(0x41);", 30), " ev", "al($s);"),
+		"filedropper":  asm(php, "file_put_con", "tents('x.php', chr(60).$_POST['c']);"),
+		"js-miner":     []byte("var m = new Coin" + "Hive.Anonymous('key');"),
 	}
 	for name, content := range cases {
 		ext := ".php"

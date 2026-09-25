@@ -70,6 +70,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Firewall = &firewall.Manager{
 		DB: db, Settings: st, Log: log, NFT: firewall.FindNFT(), IPT: firewall.FindIPTables(),
 		Geo:       &firewall.Geo{Dir: filepath.Join(store.StateDir(), "geo"), Log: log},
+		IPDB:      &firewall.IPDB{},
 		Protected: a.protectedIPs,
 	}
 	a.Firewall.OnBan = a.onBan
@@ -326,12 +327,12 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}, nil
 	}
 	h["settings.set"] = func(_ context.Context, p json.RawMessage) (any, error) {
-		before := a.Settings.Get().Firewall
+		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB.Enabled
 		next, err := a.Settings.Patch(p)
 		if err != nil {
 			return nil, err
 		}
-		if fwChanged(before, next.Firewall) {
+		if fwChanged(before, next.Firewall) || beforeIPDB != next.IPDB.Enabled {
 			if err := a.Firewall.Apply(); err != nil {
 				return nil, fmt.Errorf("settings saved, but the firewall could not be applied: %w", err)
 			}
@@ -392,6 +393,46 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	}
 	h["fw.apply"] = func(context.Context, json.RawMessage) (any, error) {
 		return a.Firewall.Status(), a.Firewall.Apply()
+	}
+
+	// ---- IPDB (called by the portal's sync loop, not by users)
+	h["ipdb.sync"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Since int64 `json:"since"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		cfg := a.Settings.Get().IPDB
+		reports := []firewall.IPDBReport{}
+		if cfg.Report {
+			if reports, err = a.Firewall.IPDBReports(in.Since, 1000); err != nil {
+				return nil, err
+			}
+		}
+		hits, err := a.Firewall.TakePendingHits(2000)
+		if err != nil {
+			return nil, err
+		}
+		v, _ := a.Firewall.IPDB.Snapshot()
+		return map[string]any{"enabled": cfg.Enabled, "report": cfg.Report, "version": v, "reports": reports, "hits": hits}, nil
+	}
+	h["ipdb.apply"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Version string   `json:"version"`
+			Entries []string `json:"entries"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if in.Version == "" {
+			return nil, errors.New("version is required")
+		}
+		n, err := a.Firewall.ApplyIPDB(in.Version, in.Entries)
+		return map[string]any{"entries": n, "version": in.Version}, err
+	}
+	h["ipdb.status"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.Firewall.IPDBStatus(), nil
 	}
 
 	// ---- reputation

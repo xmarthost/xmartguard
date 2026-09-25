@@ -57,6 +57,14 @@ type Reputation struct {
 	IntervalHours int      `json:"interval_hours"`
 }
 
+// IPDB is the portal-wide shared blocklist: servers report attackers they
+// ban, the portal aggregates the reports and distributes a list that every
+// server drops at the firewall.
+type IPDB struct {
+	Enabled bool `json:"enabled"` // drop traffic from IPDB-listed addresses
+	Report  bool `json:"report"`  // share this server's automatic bans with the IPDB
+}
+
 type Notifications struct {
 	Email        string `json:"email"`
 	OnVirus      bool   `json:"on_virus"`
@@ -71,6 +79,7 @@ type Settings struct {
 	Scanner       Scanner       `json:"scanner"`
 	Firewall      Firewall      `json:"firewall"`
 	Reputation    Reputation    `json:"reputation"`
+	IPDB          IPDB          `json:"ipdb"`
 	Notifications Notifications `json:"notifications"`
 }
 
@@ -89,6 +98,7 @@ func Defaults() Settings {
 			DoS: false, DoSThreshold: 150, BlockedCountries: []string{}, AllowedCountries: []string{},
 		},
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
+		IPDB:       IPDB{Enabled: true, Report: true},
 		Notifications: Notifications{
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
 		},

@@ -27,6 +27,10 @@ type Ruleset struct {
 	DoS                        bool
 	DoSPerMinute               int
 	DoSBanSeconds              int
+	// IPDB is the shared blocklist from the portal (both families).
+	IPDB []string
+	// NoSetCounters disables per-element counters (old nftables versions).
+	NoSetCounters bool
 }
 
 func split(list []string) (v4, v6 []string) {
@@ -74,6 +78,18 @@ func set(b *strings.Builder, name, typ, flags string, elems []string) {
 	b.WriteString("\t}\n")
 }
 
+// counterSet declares an interval set whose elements count matched packets.
+func counterSet(b *strings.Builder, name, typ string, counters bool, elems []string) {
+	fmt.Fprintf(b, "\tset %s {\n\t\ttype %s\n\t\tflags interval\n", name, typ)
+	if counters {
+		b.WriteString("\t\tcounter\n")
+	}
+	if len(elems) > 0 {
+		fmt.Fprintf(b, "\t\telements = { %s }\n", strings.Join(elems, ", "))
+	}
+	b.WriteString("\t}\n")
+}
+
 // Render produces an atomic nft script that replaces our table.
 func (r Ruleset) Render() string {
 	var b strings.Builder
@@ -96,6 +112,9 @@ func (r Ruleset) Render() string {
 	set(&b, "tempban6", "ipv6_addr", "timeout", tb6)
 	set(&b, "country_allow4", "ipv4_addr", "interval", ca4)
 	set(&b, "country_block4", "ipv4_addr", "interval", cb4)
+	p4, p6 := split(Collapse(r.IPDB))
+	counterSet(&b, "ipdb4", "ipv4_addr", !r.NoSetCounters, p4)
+	counterSet(&b, "ipdb6", "ipv6_addr", !r.NoSetCounters, p6)
 	if r.DoS {
 		b.WriteString("\tset dos4 {\n\t\ttype ipv4_addr\n\t\tflags dynamic,timeout\n\t\ttimeout 1m\n\t}\n")
 		b.WriteString("\tset dos6 {\n\t\ttype ipv6_addr\n\t\tflags dynamic,timeout\n\t\ttimeout 1m\n\t}\n")
@@ -104,6 +123,7 @@ func (r Ruleset) Render() string {
 	b.WriteString("\t\tiifname \"lo\" accept\n")
 	b.WriteString("\t\tip saddr @allow4 accept\n\t\tip6 saddr @allow6 accept\n")
 	b.WriteString("\t\tip saddr @tempallow4 accept\n\t\tip6 saddr @tempallow6 accept\n")
+	b.WriteString("\t\tip saddr @ipdb4 counter drop comment \"xg-ipdb\"\n\t\tip6 saddr @ipdb6 counter drop comment \"xg-ipdb\"\n")
 	b.WriteString("\t\tip saddr @deny4 counter drop comment \"xg-deny\"\n\t\tip6 saddr @deny6 counter drop comment \"xg-deny\"\n")
 	b.WriteString("\t\tip saddr @tempban4 counter drop comment \"xg-tempban\"\n\t\tip6 saddr @tempban6 counter drop comment \"xg-tempban\"\n")
 	if len(cb4) > 0 {
@@ -160,7 +180,12 @@ func (n NFT) Apply(r Ruleset) error {
 	defer cancel()
 	script := r.Render()
 	if _, err := n.run(ctx, script, "-c", "-f", "-"); err != nil {
-		return err
+		// nftables < 0.9.5 cannot count per set element: load without counters.
+		r.NoSetCounters = true
+		script = r.Render()
+		if _, err2 := n.run(ctx, script, "-c", "-f", "-"); err2 != nil {
+			return err
+		}
 	}
 	_, err := n.run(ctx, script, "-f", "-")
 	return err
@@ -223,6 +248,80 @@ func (n NFT) SetElements(setName string) ([]string, error) {
 		}
 	}
 	return res, nil
+}
+
+// IPDBCounters returns packets matched per IPDB set element.
+func (n NFT) IPDBCounters() map[string]uint64 {
+	out := map[string]uint64{}
+	for _, name := range []string{"ipdb4", "ipdb6"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		raw, err := n.run(ctx, "", "-j", "list", "set", "inet", Table, name)
+		cancel()
+		if err == nil {
+			parseNFTSetCounters(raw, out)
+		}
+	}
+	return out
+}
+
+func parseNFTSetCounters(raw []byte, out map[string]uint64) {
+	var doc struct {
+		Nftables []map[string]json.RawMessage `json:"nftables"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return
+	}
+	for _, item := range doc.Nftables {
+		rs, ok := item["set"]
+		if !ok {
+			continue
+		}
+		var s struct {
+			Elem []json.RawMessage `json:"elem"`
+		}
+		_ = json.Unmarshal(rs, &s)
+		for _, e := range s.Elem {
+			var w struct {
+				Elem struct {
+					Val     json.RawMessage `json:"val"`
+					Counter struct {
+						Packets uint64 `json:"packets"`
+					} `json:"counter"`
+				} `json:"elem"`
+			}
+			if json.Unmarshal(e, &w) != nil || w.Elem.Counter.Packets == 0 {
+				continue
+			}
+			if key := nftValue(w.Elem.Val); key != "" {
+				out[key] = w.Elem.Counter.Packets
+			}
+		}
+	}
+}
+
+// nftValue renders an element value ("1.2.3.4", prefix or range) as text.
+func nftValue(v json.RawMessage) string {
+	var plain string
+	if json.Unmarshal(v, &plain) == nil {
+		return plain
+	}
+	var p struct {
+		Prefix *struct {
+			Addr string `json:"addr"`
+			Len  int    `json:"len"`
+		} `json:"prefix"`
+		Range []string `json:"range"`
+	}
+	if json.Unmarshal(v, &p) != nil {
+		return ""
+	}
+	if p.Prefix != nil {
+		return fmt.Sprintf("%s/%d", p.Prefix.Addr, p.Prefix.Len)
+	}
+	if len(p.Range) == 2 {
+		return p.Range[0] + "-" + p.Range[1]
+	}
+	return ""
 }
 
 // Counters returns packets dropped per rule comment (xg-deny, xg-tempban, ...).

@@ -55,6 +55,10 @@ export class AgentHub {
     return this.conns.get(serverId);
   }
 
+  connections(): AgentConn[] {
+    return [...this.conns.values()];
+  }
+
   onlineCount(): number {
     return this.conns.size;
   }
