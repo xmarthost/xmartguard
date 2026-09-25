@@ -82,7 +82,8 @@ CURL=(curl -fsSL --retry 3 --connect-timeout 15 --max-time 300)
 [ "$INSECURE" -eq 1 ] && CURL+=(-k)
 
 # ---------------------------------------------------------------- download
-TMP=$(mktemp -d)
+# Not /tmp: hardened servers (cPanel "securetmp") mount it noexec.
+TMP=$(mktemp -d -p /var/lib xmartguard-install.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT
 FILE="xmartguard-agent-linux-$ARCH"
 "${CURL[@]}" -o "$TMP/$FILE" "$PORTAL_URL/downloads/$FILE" || die "could not download the agent from $PORTAL_URL"

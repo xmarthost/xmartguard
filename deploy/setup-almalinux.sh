@@ -196,7 +196,9 @@ EOF
   ok "Apache proxies $DOMAIN -> 127.0.0.1:$PORTAL_PORT"
 
   step "Getting an SSL certificate with AutoSSL (can take a few minutes)"
-  cert_ok() { curl -fsS --max-time 10 --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/api/health" >/dev/null 2>&1; }
+  # cPanel SSL vhosts are bound to the server's public IP, not 127.0.0.1.
+  CHECK_IP="${MYIP:-$DNSIP}"
+  cert_ok() { curl -fsS --max-time 10 ${CHECK_IP:+--resolve "$DOMAIN:443:$CHECK_IP"} "https://$DOMAIN/api/health" >/dev/null 2>&1; }
   if ! cert_ok; then
     /usr/local/cpanel/bin/autossl_check --user="$CPUSER" >/dev/null 2>&1 || true
     for _ in $(seq 1 40); do
