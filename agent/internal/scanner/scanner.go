@@ -247,6 +247,15 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			return &Detection{CatVirus, "XG-BLACKLIST.FileName"}, nil
 		}
 	}
+	// Known-bad hash lookup: only hash a file whose exact size matches an entry
+	// in our blocklist, so this stays cheap across a full scan.
+	if hashDB.SizeKnown(info.Size()) {
+		if sum := sha256File(path); sum != "" {
+			if label := hashDB.Lookup(info.Size(), sum); label != "" {
+				return &Detection{CatVirus, label}, nil
+			}
+		}
+	}
 	ext := extOf(name)
 	if ScriptExts[ext] {
 		max := int64(cfg.MaxFileSizeMB) << 20
@@ -259,6 +268,9 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 		if ext == "" && IsELF(content) {
 			return binaryCheck(path)
+		}
+		if d := analyze(ext, content); d != nil {
+			return d, nil
 		}
 		if r := Match(ext, content); r != nil {
 			return &Detection{r.Category, r.Name}, nil
@@ -701,4 +713,10 @@ func (c *clamAV) scan(paths []string) map[string]string {
 		out[line[:i]] = strings.TrimSuffix(line[i+2:], " FOUND")
 	}
 	return out
+}
+
+// NewOffline returns a scanner usable for CheckFile without a database
+// (CLI checks and benchmarks).
+func NewOffline() *Scanner {
+	return &Scanner{users: map[uint32]string{}, cancels: map[int64]context.CancelFunc{}}
 }

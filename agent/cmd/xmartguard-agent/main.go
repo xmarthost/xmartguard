@@ -14,9 +14,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	iofs "io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,6 +27,8 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/core"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/identity"
+	"github.com/xmarthost/xmartguard/agent/internal/scanner"
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
 )
@@ -46,6 +50,8 @@ func main() {
 		err = cmdUnenroll()
 	case "info":
 		err = printJSON(sysinfo.Collect())
+	case "check":
+		err = cmdCheck(os.Args[2:])
 	case "cleanup":
 		// Used by uninstall.sh: remove firewall rules from every provider.
 		_ = firewall.FindIPTables().Remove()
@@ -75,6 +81,7 @@ Usage:
   xmartguard-agent unenroll     remove this server from the portal
   xmartguard-agent info         print detected host inventory
   xmartguard-agent cleanup      remove all XMart Guard firewall rules
+  xmartguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses)
   xmartguard-agent version
 `)
 }
@@ -209,5 +216,50 @@ func cmdUnenroll() error {
 		return err
 	}
 	fmt.Println("Server removed from portal.")
+	return nil
+}
+
+// cmdCheck scans paths offline with the default policy (no quarantine).
+func cmdCheck(args []string) error {
+	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "print JSON lines")
+	misses := fs.Bool("misses", false, "print files that were NOT detected instead")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("usage: xmartguard-agent check [--json] [--misses] PATH...")
+	}
+	cfg := settings.Defaults().Scanner
+	cfg.MaxFileSizeMB = 20
+	sc := scanner.NewOffline()
+	var files, found int
+	for _, root := range fs.Args() {
+		_ = filepath.WalkDir(root, func(path string, d iofs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !d.Type().IsRegular() {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			files++
+			det, _ := sc.CheckFile(path, info, cfg)
+			if det != nil {
+				found++
+			}
+			switch {
+			case *misses && det == nil:
+				fmt.Println(path)
+			case !*misses && det != nil && *asJSON:
+				b, _ := json.Marshal(map[string]string{"path": path, "category": det.Category, "signature": det.Signature})
+				fmt.Println(string(b))
+			case !*misses && det != nil:
+				fmt.Printf("%-11s %-40s %s\n", det.Category, det.Signature, path)
+			}
+			return nil
+		})
+	}
+	fmt.Fprintf(os.Stderr, "scanned %d files, %d detected (%.1f%%)\n", files, found, 100*float64(found)/float64(max(files, 1)))
 	return nil
 }
