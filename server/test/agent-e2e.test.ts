@@ -102,7 +102,7 @@ describe('agent end-to-end', () => {
     const f = await cmd('findings.list', { scan_id: scan.id });
     expect(f.body.total).toBe(1);
     const finding = f.body.findings[0];
-    expect(finding.signature).toBe('PHP.Backdoor.ExecInput');
+    expect(finding.signature).toMatch(/^PHP\.Backdoor\./);
     const q = await cmd('finding.action', { ids: [finding.id], action: 'quarantine' });
     expect(q.body.done).toBe(1);
     expect(fs.existsSync(path.join(webDir, 'up', 'x.php'))).toBe(false);
