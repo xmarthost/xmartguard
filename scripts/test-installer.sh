@@ -67,7 +67,7 @@ new_token() {
     "$PORTAL/api/enrollment-tokens" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p'
 }
 server_count() {
-  curl -fsS -b "$CJ" "$PORTAL/api/servers" | grep -o '"id":"' | wc -l
+  curl -fsS -b "$CJ" "$PORTAL/api/servers" | { grep -o '"id":"' || true; } | wc -l
 }
 
 echo "== install =="
