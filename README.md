@@ -28,23 +28,43 @@ The portal's **Add Server** page generates a one-time token (valid 24 h, single 
 curl -fsSL https://xmartguard.com/install.sh | bash -s -- --token XG-XXXX-XXXX-XXXX-XXXX-XXXX
 ```
 
-Uninstall (removes exactly what the installer recorded in `/var/lib/xmartguard/manifest` and prints a residue report):
+Uninstall (removes exactly what the installer recorded in `/opt/xmartguard/manifest`, including the cPanel/WHM plugins, and prints a residue report):
 
 ```bash
 curl -fsSL https://xmartguard.com/uninstall.sh | bash
-# or offline:  bash /var/lib/xmartguard/uninstall.sh [--dry-run] [--keep-logs]
+# or offline:  bash /opt/xmartguard/uninstall.sh [--dry-run] [--keep-logs]
 ```
 
-Files on a managed server:
+Files on a managed server (same `/etc` + `/opt` layout as other hosting security suites):
 
 | Path | Purpose |
 |---|---|
-| `/usr/local/bin/xmartguard-agent` (+ `xmartguard` symlink) | agent binary |
 | `/etc/xmartguard/agent.json` (0600) | portal URL and server ID |
 | `/etc/xmartguard/identity.key` (0600) | Ed25519 private key; never leaves the server |
+| `/etc/xmartguard/settings.json` (0600) | security policy (scanner, firewall, IPDB, notifications) |
+| `/opt/xmartguard/bin/xmartguard-agent` | agent binary (linked as `/usr/local/bin/xmartguard-agent` and `xmartguard`) |
+| `/opt/xmartguard/data/` (0700) | local database, signature updates, IPDB list, `quarantine/` |
+| `/opt/xmartguard/logs/` | `agent.log`, `install.log` |
+| `/opt/xmartguard/manifest`, `uninstall.sh` | install manifest and local uninstaller |
+| `/run/xmartguard/agent.sock` | local control socket (plugins, `xmartguard call`) |
 | `/etc/systemd/system/xmartguard-agent.service` | systemd unit |
-| `/var/lib/xmartguard/` | install manifest and local uninstaller |
-| `/var/log/xmartguard/` | `agent.log`, `install.log` |
+
+Servers installed with 0.2.x (`/var/lib/xmartguard`) are migrated automatically when the agent updates.
+
+### cPanel / WHM plugins
+
+On cPanel servers the agent installs two plugins (and refreshes them on every update):
+
+- **WHM » Plugins » XMart Guard** (root): overview, virus scans (quick/full/path), detected files with quarantine/restore/disable/delete/ignore, firewall block/allow/check, IPDB status.
+- **cPanel » Security » XMart Guard** (every account): scan your own website and quarantine, restore or delete your own detected files.
+
+The plugins have no logic of their own: they talk to the agent's local socket, which identifies the caller by its Unix uid (kernel `SO_PEERCRED`). A cPanel account can only see and act on files inside its own home directory. To disable the plugins: `touch /etc/xmartguard/no-panel-plugin && xmartguard-agent panel uninstall`.
+
+Command line (root): `xmartguard-agent call overview`, `xmartguard-agent call fw.add '{"kind":"deny","addr":"203.0.113.9"}'`, `xmartguard-agent check /home/user/public_html` (offline scan).
+
+## IPDB — shared attacker blocklist
+
+Every server reports the attackers it bans automatically (brute force, DoS). The portal lists an address once it has been reported by `IPDB_MIN_REPORTERS` servers (default 2) or `IPDB_MIN_REPORTS` times (default 3) within `IPDB_WINDOW_DAYS` (7); entries expire `IPDB_TTL_DAYS` (30) after the last report. Public feeds (`IPDB_FEEDS`, default Spamhaus DROP) and operator-managed manual entries and whitelist are merged in. Every agent drops the list in its own ipset/nftables set, counts hits per address and reports them back for the **IPDB** page: world map of attack origins, live monitor, daily chart and top attackers. Addresses of your own servers and private ranges are never listed. Country data: [DB-IP Lite](https://db-ip.com) (CC BY 4.0), downloaded by the portal into `DATA_DIR`.
 
 ## Deploy the portal
 

@@ -31,6 +31,8 @@ services:
       TRUST_PROXY: "true"
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    volumes:
+      - portal_data:/app/data
     ports:
       # Only reachable from this host; the public web server proxies to it.
       - "127.0.0.1:${PORTAL_PORT:-18080}:8080"
@@ -52,5 +54,6 @@ services:
 
 volumes:
   db:
+  portal_data:
   caddy_data:
   caddy_config:

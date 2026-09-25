@@ -2,10 +2,11 @@
 # XMart Guard agent uninstaller.
 #
 #   curl -fsSL __XG_PORTAL_URL__/uninstall.sh | bash
-#   bash /var/lib/xmartguard/uninstall.sh [--dry-run] [--keep-logs] [--no-unenroll]
+#   bash /opt/xmartguard/uninstall.sh [--dry-run] [--keep-logs] [--no-unenroll]
 #
-# Removes exactly what install.sh recorded in /var/lib/xmartguard/manifest,
-# then prints a residue report.
+# Removes exactly what install.sh recorded in /opt/xmartguard/manifest
+# (or /var/lib/xmartguard/manifest for installs before 0.3.0), including the
+# cPanel/WHM plugins, then prints a residue report.
 set -Euo pipefail
 
 DRY=0
@@ -21,10 +22,14 @@ for a in "$@"; do
   esac
 done
 
-BIN=/usr/local/bin/xmartguard-agent
-STATE_DIR=/var/lib/xmartguard
-LOG_DIR=/var/log/xmartguard
+HOME_DIR=/opt/xmartguard
+STATE_DIR=$HOME_DIR
+LOG_DIR=$HOME_DIR/logs
+LEGACY_DIRS=(/var/lib/xmartguard /var/log/xmartguard)
 MANIFEST=$STATE_DIR/manifest
+[ -f "$MANIFEST" ] || MANIFEST=/var/lib/xmartguard/manifest
+BIN=$HOME_DIR/bin/xmartguard-agent
+[ -x "$BIN" ] || BIN=/usr/local/bin/xmartguard-agent
 UNIT_NAME=xmartguard-agent.service
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_ylw=$'\033[33m'; c_bld=$'\033[1m'; c_off=$'\033[0m'
@@ -39,11 +44,14 @@ echo ""
 echo "${c_bld}XMart Guard uninstaller${c_off}$([ "$DRY" -eq 1 ] && echo ' (dry run)')"
 echo ""
 
-# Paths we may remove. Only /etc/xmartguard, /var/lib/xmartguard,
-# /var/log/xmartguard, /usr/local/bin/xmartguard* and our unit are ever touched.
+# Paths we may remove. Only /etc/xmartguard, /opt/xmartguard, the pre-0.3.0
+# /var/lib + /var/log dirs, /run/xmartguard, /usr/local/bin/xmartguard* and our
+# unit are ever touched (panel plugin files are removed by the agent itself).
 safe_path() {
   case "$1" in
     /etc/xmartguard|/etc/xmartguard/*) return 0 ;;
+    /opt/xmartguard|/opt/xmartguard/*) return 0 ;;
+    /run/xmartguard|/run/xmartguard/*) return 0 ;;
     /var/lib/xmartguard|/var/lib/xmartguard/*) return 0 ;;
     /var/log/xmartguard|/var/log/xmartguard/*) return 0 ;;
     /usr/local/bin/xmartguard|/usr/local/bin/xmartguard-agent) return 0 ;;
@@ -64,8 +72,8 @@ if [ -f "$MANIFEST" ]; then
   ok "Loaded install manifest (${#FILES[@]} files, ${#DIRS[@]} directories)"
 else
   warn "No install manifest found; removing the default locations."
-  FILES=("$BIN" /usr/local/bin/xmartguard)
-  DIRS=(/etc/xmartguard "$STATE_DIR" "$LOG_DIR")
+  FILES=("$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard)
+  DIRS=(/etc/xmartguard "$HOME_DIR" "${LEGACY_DIRS[@]}")
   UNITS=("/etc/systemd/system/$UNIT_NAME")
 fi
 
@@ -88,6 +96,12 @@ fi
 if [ -x "$BIN" ]; then
   if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN cleanup"; else "$BIN" cleanup >/dev/null 2>&1 && ok "Firewall rules removed"; fi
 fi
+# cPanel/WHM plugins (before the binary that removes them is deleted).
+if [ -x "$BIN" ] && { [ -d /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ] || [ -f /var/cpanel/apps/xmartguard.conf ]; }; then
+  if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN panel uninstall"
+  elif "$BIN" panel uninstall >/dev/null 2>&1; then ok "cPanel/WHM plugins removed"
+  else warn "cPanel/WHM plugins could not be fully removed"; fi
+fi
 for u in "${UNITS[@]}"; do
   safe_path "$u" || { warn "skipping unexpected path $u"; continue; }
   [ -e "$u" ] && run rm -f "$u"
@@ -104,11 +118,18 @@ done
 ok "Removed agent files"
 
 # The copy of this script lives in STATE_DIR; bash has already read it.
+DIRS+=(/run/xmartguard "$HOME_DIR")
+for d in "${LEGACY_DIRS[@]}"; do [ -e "$d" ] && DIRS+=("$d"); done
 mapfile -t SORTED < <(printf '%s\n' "${DIRS[@]}" | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
 for d in "${SORTED[@]}"; do
   [ -n "$d" ] || continue
   safe_path "$d" || { warn "skipping unexpected path $d"; continue; }
   if [ "$KEEP_LOGS" -eq 1 ] && [ "$d" = "$LOG_DIR" ]; then continue; fi
+  if [ "$KEEP_LOGS" -eq 1 ] && [ "$d" = "$HOME_DIR" ]; then
+    # Keep only the logs directory.
+    [ -d "$d" ] && run find "$d" -mindepth 1 -maxdepth 1 ! -name logs -exec rm -rf -- {} +
+    continue
+  fi
   [ -d "$d" ] && run rm -rf -- "$d"
 done
 ok "Removed configuration and state directories"
@@ -116,7 +137,11 @@ ok "Removed configuration and state directories"
 # 4. Residue report.
 [ "$DRY" -eq 1 ] && { echo ""; echo "Dry run complete; nothing was changed."; exit 0; }
 LEFT=()
-for p in "$BIN" /usr/local/bin/xmartguard /etc/xmartguard "$STATE_DIR" /etc/systemd/system/$UNIT_NAME; do
+KEEP_HOME=()
+[ "$KEEP_LOGS" -eq 0 ] && KEEP_HOME=("$HOME_DIR")
+for p in "$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
+         /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard /usr/local/cpanel/base/frontend/jupiter/xmartguard \
+         "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME; do
   { [ -e "$p" ] || [ -L "$p" ]; } && LEFT+=("$p")
 done
 [ "$KEEP_LOGS" -eq 0 ] && [ -e "$LOG_DIR" ] && LEFT+=("$LOG_DIR")

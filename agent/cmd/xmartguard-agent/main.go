@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	iofs "io/fs"
 	"log/slog"
 	"os"
@@ -27,6 +28,8 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/core"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/identity"
+	"github.com/xmarthost/xmartguard/agent/internal/local"
+	"github.com/xmarthost/xmartguard/agent/internal/panel"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
@@ -57,6 +60,30 @@ func main() {
 		_ = firewall.FindIPTables().Remove()
 		_ = firewall.FindNFT().Remove()
 		fmt.Println("firewall rules removed")
+	case "panel":
+		err = cmdPanel(os.Args[2:])
+	case "panel-cgi":
+		fs := flag.NewFlagSet("panel-cgi", flag.ContinueOnError)
+		mode := fs.String("mode", "whm", "whm | cpanel")
+		fragment := fs.Bool("fragment", false, "omit <html> wrapper")
+		raw := fs.Bool("raw", false, "no CGI headers")
+		if err = fs.Parse(os.Args[2:]); err == nil {
+			if *mode != "whm" && *mode != "cpanel" {
+				err = errors.New("--mode must be whm or cpanel")
+			} else {
+				panel.ServeCGI(*mode, *fragment, *raw, os.Getenv, os.Stdin, os.Stdout)
+			}
+		}
+	case "panel-api":
+		// Used by the cPanel page: request JSON on stdin, response JSON on stdout.
+		body, rerr := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+		if rerr != nil {
+			err = rerr
+		} else {
+			os.Stdout.Write(panel.Relay(body))
+		}
+	case "call":
+		err = cmdCall(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
 	case "help", "--help", "-h":
@@ -82,6 +109,8 @@ Usage:
   xmartguard-agent info         print detected host inventory
   xmartguard-agent cleanup      remove all XMart Guard firewall rules
   xmartguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses)
+  xmartguard-agent panel install|uninstall|status   manage the WHM/cPanel plugins
+  xmartguard-agent call ACTION ['{"json":"params"}']  call the running agent (root)
   xmartguard-agent version
 `)
 }
@@ -162,6 +191,19 @@ func cmdRun() error {
 	// Exit non-zero so systemd (Restart=on-failure) starts the new binary.
 	a.ExitForUpdate = func() { a.Mailer.Flush(); os.Exit(3) }
 	a.Start(ctx)
+	go func() {
+		if err := a.LocalServer().Run(ctx); err != nil {
+			log.Warn("local control socket unavailable", "err", err)
+		}
+	}()
+	// Install the WHM/cPanel plugins (or refresh them for this version).
+	if _, optOut := os.Stat(panel.OptOutPath); panel.Detected() && optOut != nil {
+		if err := panel.EnsureBin(); err != nil {
+			log.Warn("cannot link agent binary for the panel plugins", "err", err)
+		} else if _, err := panel.Install(); err != nil {
+			log.Warn("panel plugin install failed", "err", err)
+		}
+	}
 
 	s := &client.Session{Cfg: cfg, ID: id, Log: log, Collector: sysinfo.NewCollector(), Security: a.SecuritySummary}
 	a.Session = s
@@ -262,4 +304,50 @@ func cmdCheck(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "scanned %d files, %d detected (%.1f%%)\n", files, found, 100*float64(found)/float64(max(files, 1)))
 	return nil
+}
+
+func cmdPanel(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: xmartguard-agent panel install|uninstall|status")
+	}
+	switch args[0] {
+	case "install":
+		done, err := panel.Install()
+		for _, d := range done {
+			fmt.Println("installed:", d)
+		}
+		return err
+	case "uninstall":
+		if err := panel.Uninstall(); err != nil {
+			return err
+		}
+		fmt.Println("panel plugins removed")
+	case "status":
+		fmt.Printf("cpanel detected: %v\nplugin installed: %v\n", panel.Detected(), panel.Installed())
+	default:
+		return errors.New("usage: xmartguard-agent panel install|uninstall|status")
+	}
+	return nil
+}
+
+func cmdCall(args []string) error {
+	if len(args) < 1 || len(args) > 2 {
+		return errors.New("usage: xmartguard-agent call ACTION ['{json params}']")
+	}
+	params := json.RawMessage("{}")
+	if len(args) == 2 {
+		if !json.Valid([]byte(args[1])) {
+			return errors.New("params must be valid JSON")
+		}
+		params = json.RawMessage(args[1])
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	data, err := local.Call(ctx, args[0], params)
+	if err != nil {
+		return err
+	}
+	var v any
+	_ = json.Unmarshal(data, &v)
+	return printJSON(v)
 }

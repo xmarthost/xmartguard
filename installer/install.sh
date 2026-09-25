@@ -9,8 +9,13 @@
 #   --insecure        accept a self-signed portal certificate (testing only)
 #   --force           re-install even if the agent is already installed
 #
+# Layout:
+#   /etc/xmartguard          configuration, identity key, security policy
+#   /opt/xmartguard/bin      agent binary (symlinked into /usr/local/bin)
+#   /opt/xmartguard/data     local database, signatures, IPDB list, quarantine
+#   /opt/xmartguard/logs     agent and install logs
 # Every file and change this script makes is recorded in
-# /var/lib/xmartguard/manifest so uninstall.sh can remove exactly those.
+# /opt/xmartguard/manifest so uninstall.sh can remove exactly those.
 set -Eeuo pipefail
 
 PORTAL_URL="__XG_PORTAL_URL__"
@@ -18,10 +23,12 @@ TOKEN=""
 INSECURE=0
 FORCE=0
 
-BIN=/usr/local/bin/xmartguard-agent
+HOME_DIR=/opt/xmartguard
+BIN=$HOME_DIR/bin/xmartguard-agent
 CONF_DIR=/etc/xmartguard
-STATE_DIR=/var/lib/xmartguard
-LOG_DIR=/var/log/xmartguard
+STATE_DIR=$HOME_DIR
+LOG_DIR=$HOME_DIR/logs
+LEGACY_MANIFEST=/var/lib/xmartguard/manifest
 UNIT=/etc/systemd/system/xmartguard-agent.service
 MANIFEST=$STATE_DIR/manifest
 INSTALL_LOG=$LOG_DIR/install.log
@@ -70,11 +77,12 @@ esac
 OS_NAME="unknown"
 if [ -r /etc/os-release ]; then . /etc/os-release; OS_NAME="${PRETTY_NAME:-$ID}"; fi
 
-if [ -f "$MANIFEST" ] && [ "$FORCE" -ne 1 ]; then
+if { [ -f "$MANIFEST" ] || [ -f "$LEGACY_MANIFEST" ]; } && [ "$FORCE" -ne 1 ]; then
   die "XMart Guard is already installed. Uninstall first, or pass --force to re-install."
 fi
 
-mkdir -p "$LOG_DIR"; chmod 0750 "$LOG_DIR"
+# /opt/xmartguard must be traversable: cPanel accounts run the plugin binary.
+mkdir -p "$HOME_DIR/bin" "$LOG_DIR"; chmod 0755 "$HOME_DIR" "$HOME_DIR/bin"; chmod 0750 "$LOG_DIR"
 : >>"$INSTALL_LOG"
 ok "OS: $OS_NAME ($ARCH)"
 
@@ -93,7 +101,7 @@ fi
 
 # ---------------------------------------------------------------- download
 # Not /tmp: hardened servers (cPanel "securetmp") mount it noexec.
-TMP=$(mktemp -d -p /var/lib xmartguard-install.XXXXXX)
+TMP=$(mktemp -d -p "$HOME_DIR" .install.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT
 FILE="xmartguard-agent-linux-$ARCH"
 "${CURL[@]}" -o "$TMP/$FILE" "$PORTAL_URL/downloads/$FILE" || die "could not download the agent from $PORTAL_URL"
@@ -110,7 +118,6 @@ ok "Agent downloaded and verified ($("$TMP/$FILE" version))"
 #   file   - created by us, delete on uninstall
 #   dir    - created by us, remove if empty on uninstall (rm -rf for our own dirs)
 #   unit   - systemd unit we installed
-mkdir -p "$STATE_DIR"; chmod 0700 "$STATE_DIR"
 if [ ! -f "$MANIFEST" ]; then
   {
     echo "# xmartguard install manifest v1"
@@ -134,7 +141,13 @@ record dir "$CONF_DIR"
 
 install -m 0755 "$TMP/$FILE" "$BIN"
 record file "$BIN"
+record dir "$HOME_DIR/bin"
+record dir "$HOME_DIR/data"
+# A pre-0.3.0 install kept a real binary here; replace it with a link.
+rm -f /usr/local/bin/xmartguard-agent
+ln -sfn "$BIN" /usr/local/bin/xmartguard-agent
 ln -sfn "$BIN" /usr/local/bin/xmartguard
+record file /usr/local/bin/xmartguard-agent
 record file /usr/local/bin/xmartguard
 ok "Installed $BIN"
 
@@ -181,6 +194,16 @@ systemctl enable --now xmartguard-agent >/dev/null 2>&1
 sleep 3
 systemctl is-active --quiet xmartguard-agent || die "the agent service did not start (journalctl -u xmartguard-agent)"
 ok "Service xmartguard-agent is running"
+
+# ---------------------------------------------------------------- panel plugins
+if [ -f /usr/local/cpanel/version ]; then
+  if OUT=$("$BIN" panel install 2>&1); then
+    ok "cPanel/WHM plugins installed (WHM » Plugins » XMart Guard, cPanel » Security » XMart Guard)"
+  else
+    warn "cPanel plugin could not be registered: $OUT"
+  fi
+  record panel cpanel
+fi
 
 # Keep a local copy of the uninstaller so it works without network access.
 "${CURL[@]}" -o "$STATE_DIR/uninstall.sh" "$PORTAL_URL/uninstall.sh" 2>/dev/null && chmod 0700 "$STATE_DIR/uninstall.sh" || true

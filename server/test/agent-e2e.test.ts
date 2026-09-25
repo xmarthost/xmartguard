@@ -38,7 +38,7 @@ afterAll(async () => {
 // Async: the portal runs in this same process, so a sync exec would deadlock.
 const run = async (args: string[], e: NodeJS.ProcessEnv) => (await promisify(execFile)(agentBin, args, { env: e })).stdout;
 
-const env = () => ({ ...process.env, XG_CONFIG_DIR: confDir, XG_STATE_DIR: stateDir });
+const env = () => ({ ...process.env, XG_CONFIG_DIR: confDir, XG_STATE_DIR: stateDir, XG_SOCKET: path.join(stateDir, 'agent.sock') });
 
 const cmd = (action: string, body: unknown = {}) => c.req('POST', `/api/servers/${serverId}/agent/${action}`, body);
 
@@ -151,13 +151,14 @@ describe('agent end-to-end', () => {
   it('rejects a WebSocket session signed with the wrong key', async () => {
     const other = fs.mkdtempSync(path.join(os.tmpdir(), 'xg-conf2-'));
     const { body } = await c.req('POST', '/api/enrollment-tokens', {});
-    await run(['enroll', '--server', h.url, '--token', body.token], { ...process.env, XG_CONFIG_DIR: other });
+    await run(['enroll', '--server', h.url, '--token', body.token], { ...process.env, XG_CONFIG_DIR: other, XG_STATE_DIR: path.join(other, 'state'), XG_SOCKET: path.join(other, 'agent.sock') });
     // Point the second identity at the first server's id: auth must fail.
     const cfgPath = path.join(other, 'agent.json');
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     cfg.server_id = serverId;
     fs.writeFileSync(cfgPath, JSON.stringify(cfg));
-    const imposter = spawn(agentBin, ['run'], { env: { ...process.env, XG_CONFIG_DIR: other }, stdio: ['ignore', 'ignore', 'pipe'] });
+    fs.writeFileSync(path.join(other, 'settings.json'), JSON.stringify({ firewall: { enabled: false }, scanner: { realtime: false } }));
+    const imposter = spawn(agentBin, ['run'], { env: { ...process.env, XG_CONFIG_DIR: other, XG_STATE_DIR: path.join(other, 'state'), XG_SOCKET: path.join(other, 'agent.sock') }, stdio: ['ignore', 'ignore', 'pipe'] });
     let log = '';
     imposter.stderr!.on('data', (d) => (log += d));
     await waitFor(async () => log.includes('authentication failed'), 10_000);

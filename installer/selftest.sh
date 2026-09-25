@@ -40,9 +40,9 @@ check "config present"                  '[ -f /etc/xmartguard/agent.json ]'
 check "config mode 600"                 '[ "$(stat -c %a /etc/xmartguard/agent.json)" = 600 ]'
 check "identity key mode 600"           '[ "$(stat -c %a /etc/xmartguard/identity.key)" = 600 ]'
 check "config dir mode 700"             '[ "$(stat -c %a /etc/xmartguard)" = 700 ]'
-check "install manifest present"        '[ -f /var/lib/xmartguard/manifest ]'
-check "local uninstaller present"       '[ -x /var/lib/xmartguard/uninstall.sh ]'
-echo "--- manifest"; grep -v '^#' /var/lib/xmartguard/manifest 2>/dev/null
+check "install manifest present"        '[ -f /opt/xmartguard/manifest ]'
+check "local uninstaller present"       '[ -x /opt/xmartguard/uninstall.sh ]'
+echo "--- manifest"; grep -v '^#' /opt/xmartguard/manifest 2>/dev/null
 echo "--- status"; /usr/local/bin/xmartguard-agent status 2>&1
 
 section "service"
@@ -52,12 +52,21 @@ systemctl status xmartguard-agent --no-pager -l 2>&1 | head -15
 echo "--- restart test"
 systemctl restart xmartguard-agent; sleep 5
 check "active after restart"            'systemctl is-active xmartguard-agent'
-check "reconnected after restart"       'tail -n 20 /var/log/xmartguard/agent.log | grep -q "connected to portal"'
+check "reconnected after restart"       'tail -n 20 /opt/xmartguard/logs/agent.log | grep -q "connected to portal"'
 echo "--- memory/cpu of agent"
-ps -o pid,rss,pcpu,etime,cmd -p "$(pgrep -d, -f '/usr/local/bin/xmartguard-agent run')" 2>/dev/null
+ps -o pid,rss,pcpu,etime,cmd -p "$(pgrep -d, -f 'xmartguard-agent run')" 2>/dev/null
 echo "--- listening sockets of agent (should be none)"
 ss -ltnp 2>/dev/null | grep xmartguard || echo "(none)"
 check "agent opens no listening port"   '! ss -ltnp | grep -q xmartguard'
+
+section "local control socket and panel plugins"
+check "control socket answers"          '/usr/local/bin/xmartguard-agent call overview >/dev/null'
+if [ -f /usr/local/cpanel/version ]; then
+  check "WHM plugin installed"          '[ -x /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard/index.cgi ]'
+  check "WHM plugin registered"         '[ -f /var/cpanel/apps/xmartguard.conf ]'
+  check "cPanel plugin installed"       '[ -f /usr/local/cpanel/base/frontend/jupiter/xmartguard/index.live.php ]'
+fi
+echo "--- IPDB"; /usr/local/bin/xmartguard-agent call ipdb.status 2>&1 | head -12
 
 section "firewall"
 command -v ipset >/dev/null && echo "ipset:     $(ipset version 2>/dev/null | head -1)" || warn "ipset is not installed"
@@ -69,7 +78,7 @@ command -v csf >/dev/null && echo "CSF present: $(csf -v 2>/dev/null | head -1)"
 check "firewall rules loaded"          'iptables -w -C INPUT -j XMARTGUARD || nft list table inet xmartguard'
 
 section "scanner"
-ls -la /var/lib/xmartguard/ 2>&1 | head
+ls -la /opt/xmartguard/ /opt/xmartguard/data/ 2>&1 | head
 echo "inotify max_user_watches: $(cat /proc/sys/fs/inotify/max_user_watches)"
 echo "ClamAV: $(ls /usr/local/cpanel/3rdparty/bin/clamdscan /usr/bin/clamdscan 2>/dev/null | head -1)"
 
@@ -83,21 +92,21 @@ section "detected inventory"
 /usr/local/bin/xmartguard-agent info 2>&1
 
 section "agent log (last 30 lines)"
-tail -n 30 /var/log/xmartguard/agent.log 2>&1
+tail -n 30 /opt/xmartguard/logs/agent.log 2>&1
 echo "--- install log"
-tail -n 20 /var/log/xmartguard/install.log 2>&1
+tail -n 20 /opt/xmartguard/logs/install.log 2>&1
 
 if [ "$UNINSTALL" -eq 1 ]; then
   section "uninstall"
-  bash /var/lib/xmartguard/uninstall.sh 2>&1 || true
+  bash /opt/xmartguard/uninstall.sh 2>&1 || true
   section "leftovers after uninstall"
-  check "binary removed"          '[ ! -e /usr/local/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard ]'
+  check "binary removed"          '[ ! -e /opt/xmartguard/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard ]'
   check "config removed"          '[ ! -e /etc/xmartguard ]'
-  check "state removed"           '[ ! -e /var/lib/xmartguard ]'
-  check "logs removed"            '[ ! -e /var/log/xmartguard ]'
+  check "state removed"           '[ ! -e /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
+  check "plugins removed"         '[ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ]'
   check "unit removed"            '[ ! -e /etc/systemd/system/xmartguard-agent.service ]'
   check "unit unknown to systemd" '! systemctl cat xmartguard-agent'
-  check "no agent process"        '! pgrep -f "/usr/local/bin/xmartguard-agent run"'
+  check "no agent process"        '! pgrep -f "xmartguard-agent run"'
   check "no iptables chain"       '! iptables -w -S XMARTGUARD'
   check "no ipsets"               '! ipset list -n 2>/dev/null | grep -q "^xg_"'
   check "no nftables table"       '! nft list tables 2>/dev/null | grep -q "inet xmartguard"'

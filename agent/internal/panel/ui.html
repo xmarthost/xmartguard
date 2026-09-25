@@ -1,0 +1,249 @@
+<style>
+#xg{--navy:#132046;--navy2:#1f3a7a;--red:#dc2626;--green:#16a34a;--amber:#d97706;--muted:#64748b;--line:#e2e8f0;
+  font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#0f172a;max-width:1200px;margin:0 auto;padding:16px}
+#xg *{box-sizing:border-box}
+#xg .top{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(90deg,var(--navy),var(--navy2));color:#fff;border-radius:12px;padding:14px 20px;margin-bottom:16px}
+#xg .brand{font-size:20px;font-weight:700}#xg .brand b{color:#4ade80}
+#xg .sub{opacity:.75;font-size:12px}
+#xg .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:16px}
+#xg .tab{border:0;background:none;padding:10px 14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;font-size:14px}
+#xg .tab.on{color:var(--navy);border-color:var(--navy);font-weight:600}
+#xg .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:16px}
+#xg .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+#xg .stat .v{font-size:28px;font-weight:700;color:var(--navy)}#xg .stat .l{color:var(--muted);font-size:13px}
+#xg .red{color:var(--red)!important}#xg .green{color:var(--green)!important}#xg .amber{color:var(--amber)!important}
+#xg h3{margin:0 0 10px;font-size:16px;color:var(--navy)}
+#xg table{width:100%;border-collapse:collapse;font-size:13px}
+#xg th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;padding:8px 6px;border-bottom:1px solid var(--line)}
+#xg td{padding:8px 6px;border-bottom:1px solid #f1f5f9;vertical-align:top;word-break:break-all}
+#xg .btn{border:1px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px}
+#xg .btn.o{background:#fff;color:var(--navy)}#xg .btn.d{background:var(--red);border-color:var(--red)}
+#xg .btn:disabled{opacity:.5;cursor:default}
+#xg input,#xg select{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px}
+#xg .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+#xg .badge{display:inline-block;white-space:nowrap;word-break:normal;border-radius:999px;padding:2px 8px;font-size:11px;background:#f1f5f9;color:#475569}
+#xg .b-detected,#xg .b-virus,#xg .b-failed{background:#fee2e2;color:#b91c1c}#xg .b-quarantined,#xg .b-blocked{background:var(--navy2);color:#fff}
+#xg .b-running,#xg .b-queued{background:#dbeafe;color:#1d4ed8}#xg .b-completed{background:#dcfce7;color:#15803d}#xg .b-suspicious{background:#fef3c7;color:#b45309}
+#xg .msg{padding:10px 14px;border-radius:8px;margin-bottom:12px;display:none}
+#xg .msg.ok{display:block;background:#dcfce7;color:#166534}#xg .msg.err{display:block;background:#fee2e2;color:#991b1b}
+#xg .muted{color:var(--muted)}#xg .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+#xg .empty{padding:24px;text-align:center;color:var(--muted)}
+</style>
+<div id="xg">
+  <div class="top">
+    <div><div class="brand">XMart<b>Guard</b></div><div class="sub" id="xg-sub">Server security</div></div>
+    <div class="sub" id="xg-ver"></div>
+  </div>
+  <div id="xg-msg" class="msg"></div>
+  <div class="tabs" id="xg-tabs"></div>
+  <div id="xg-body"></div>
+</div>
+<script>
+(function () {
+  var MODE = "__MODE__"; // whm | cpanel
+  var ENDPOINT = window.location.pathname;
+  var body = document.getElementById('xg-body');
+  var timer = null;
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : '–'; }
+  function num(n) { return (n || 0).toLocaleString(); }
+  function badge(v) { return '<span class="badge b-' + esc(v) + '">' + esc(v) + '</span>'; }
+  function flash(text, ok) { var m = document.getElementById('xg-msg'); m.className = 'msg ' + (ok ? 'ok' : 'err'); m.textContent = text; setTimeout(function () { m.className = 'msg'; }, 6000); }
+
+  function call(action, params) {
+    return fetch(ENDPOINT, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action, params: params || {} })
+    }).then(function (r) { return r.json(); }).then(function (r) {
+      if (!r.ok) throw new Error(r.error || 'request failed');
+      return r.data;
+    });
+  }
+
+  var TABS = MODE === 'whm'
+    ? [['overview', 'Overview'], ['scan', 'Virus Scanner'], ['findings', 'Detected Files'], ['firewall', 'Firewall'], ['ipdb', 'IPDB']]
+    : [['overview', 'Overview'], ['scan', 'Scan My Account'], ['findings', 'Detected Files']];
+
+  function tabs(cur) {
+    document.getElementById('xg-tabs').innerHTML = TABS.map(function (t) {
+      return '<button class="tab' + (t[0] === cur ? ' on' : '') + '" data-tab="' + t[0] + '">' + t[1] + '</button>';
+    }).join('');
+  }
+  document.getElementById('xg-tabs').addEventListener('click', function (e) {
+    var t = e.target.getAttribute('data-tab'); if (t) show(t);
+  });
+
+  function show(name) {
+    if (timer) { clearInterval(timer); timer = null; }
+    tabs(name);
+    body.innerHTML = '<div class="empty">Loading…</div>';
+    ({ overview: overview, scan: scan, findings: findings, firewall: firewall, ipdb: ipdb })[name]()
+      .catch(function (e) { body.innerHTML = '<div class="card red">' + esc(e.message) + '</div>'; });
+  }
+
+  function stat(v, l, cls) { return '<div class="card stat"><div class="v ' + (cls || '') + '">' + v + '</div><div class="l">' + esc(l) + '</div></div>'; }
+
+  function overview() {
+    return call('overview').then(function (d) {
+      document.getElementById('xg-ver').textContent = 'v' + d.version;
+      if (MODE === 'cpanel') {
+        document.getElementById('xg-sub').textContent = 'Protection for ' + d.user;
+        var f = d.findings, last = d.last_scan && d.last_scan[0];
+        body.innerHTML = '<div class="grid">' +
+          stat(num(f.detected), 'Infected files needing action', f.detected ? 'red' : 'green') +
+          stat(num(f.quarantined), 'Files in quarantine') +
+          stat(d.realtime ? 'On' : 'Off', 'Realtime protection', d.realtime ? 'green' : 'amber') +
+          stat(last ? esc(last.status) : 'never', last ? 'Last scan ' + when(last.started_at) : 'Last scan') + '</div>' +
+          '<div class="card"><h3>Scan your website</h3><p class="muted">Checks every file under ' + esc(d.web_root || d.home) +
+          ' for web shells, backdoors, injected code and other malware.</p><button class="btn" id="xg-go">Scan now</button></div>';
+        document.getElementById('xg-go').onclick = function () { startUserScan(''); };
+        return;
+      }
+      var s = d.summary.scanner, fw = d.summary.firewall, ip = d.ipdb;
+      document.getElementById('xg-sub').textContent = 'Connected to ' + d.portal;
+      body.innerHTML = '<div class="grid">' +
+        stat(num(s.open_findings), 'Open detections', s.open_findings ? 'red' : 'green') +
+        stat(num(s.quarantined), 'Quarantined files') +
+        stat(num(s.threats_30d), 'Threats (30 days)') +
+        stat(num(fw.active_blocks), 'Blocked IPs') +
+        stat(num(ip.entries), 'IPDB addresses') +
+        stat(num(ip.hits_today), 'IPDB drops today', 'red') + '</div>' +
+        '<div class="card"><h3>Status</h3><table>' +
+        '<tr><td>Virus scanner</td><td>' + (d.scanner ? '<span class="green">running</span>' : '<span class="red">disabled</span>') + (d.realtime ? ' · realtime on' : ' · realtime off') + '</td></tr>' +
+        '<tr><td>Firewall</td><td>' + (d.firewall.healthy ? '<span class="green">active</span>' : '<span class="red">' + esc(d.firewall.error || 'inactive') + '</span>') + ' (' + esc(d.firewall.provider) + ')</td></tr>' +
+        '<tr><td>IPDB</td><td>' + (ip.enabled ? '<span class="green">protecting</span>' : '<span class="amber">off</span>') + ' · list ' + esc(ip.version || 'not received yet') + '</td></tr>' +
+        '<tr><td>Portal</td><td><a href="' + esc(d.portal) + '" target="_blank" rel="noreferrer">' + esc(d.portal) + '</a> (full dashboard, settings and history)</td></tr>' +
+        '</table></div>';
+    });
+  }
+
+  function startUserScan(path) {
+    return call('scan.start', { path: path }).then(function (r) { flash('Scan #' + r.id + ' started', true); show('scan'); })
+      .catch(function (e) { flash(e.message); });
+  }
+
+  function scansTable(list) {
+    if (!list.length) return '<div class="empty">No scans yet</div>';
+    return '<table><tr><th>#</th><th>Type</th><th>Target</th><th>Status</th><th>Files</th><th>Infected</th><th>Started</th><th></th></tr>' +
+      list.map(function (s) {
+        return '<tr><td>' + s.id + '</td><td>' + esc(s.kind) + '</td><td class="mono">' + esc(s.target) + '</td><td>' + badge(s.status) +
+          (s.error ? '<div class="muted">' + esc(s.error) + '</div>' : '') + '</td><td>' + num(s.files) + '</td><td class="' + (s.infected ? 'red' : '') + '">' + num(s.infected) +
+          '</td><td>' + when(s.started_at) + '</td><td>' + (s.status === 'running' || s.status === 'queued' ? '<button class="btn o" data-stop="' + s.id + '">Stop</button>' : '') + '</td></tr>';
+      }).join('') + '</table>';
+  }
+
+  function scan() {
+    var form = MODE === 'whm'
+      ? '<div class="row"><select id="xg-kind"><option value="quick">Quick scan (website folders)</option><option value="full">Full scan (all accounts)</option><option value="path">Custom path</option></select>' +
+        '<input id="xg-path" placeholder="/home/user/public_html" style="flex:1;min-width:240px"><button class="btn" id="xg-start">Start scan</button></div>'
+      : '<div class="row"><input id="xg-path" placeholder="public_html (leave empty for your website)" style="flex:1;min-width:240px"><button class="btn" id="xg-start">Start scan</button></div>';
+    var render = function () {
+      return call('scan.list').then(function (d) {
+        document.getElementById('xg-scans').innerHTML = scansTable(d.scans);
+        var busy = d.scans.some(function (s) { return s.status === 'running' || s.status === 'queued'; });
+        if (busy && !timer) timer = setInterval(render, 3000);
+        if (!busy && timer) { clearInterval(timer); timer = null; }
+      });
+    };
+    body.innerHTML = '<div class="card"><h3>Start a scan</h3>' + form + '</div><div class="card"><h3>Scans</h3><div id="xg-scans"></div></div>';
+    document.getElementById('xg-start').onclick = function () {
+      var path = document.getElementById('xg-path').value.trim();
+      if (MODE === 'cpanel') return startUserScan(path);
+      var kind = document.getElementById('xg-kind').value;
+      if (kind === 'quick' && path) kind = 'path';
+      call('scan.start', { kind: kind, path: path, initiator: 'WHM' }).then(function (r) { flash('Scan #' + r.id + ' started', true); render(); })
+        .catch(function (e) { flash(e.message); });
+    };
+    document.getElementById('xg-scans').onclick = function (e) {
+      var id = e.target.getAttribute('data-stop');
+      if (id) call('scan.stop', { ID: Number(id) }).then(render).catch(function (x) { flash(x.message); });
+    };
+    return render();
+  }
+
+  var fState = { status: '', offset: 0 };
+  function findings() {
+    var acts = MODE === 'whm' ? ['quarantine', 'restore', 'disable', 'delete', 'ignore'] : ['quarantine', 'restore', 'delete'];
+    body.innerHTML = '<div class="card"><div class="row"><select id="xg-st"><option value="">All statuses</option><option>detected</option><option>quarantined</option><option>disabled</option><option>restored</option><option>deleted</option></select>' +
+      acts.map(function (a) { return '<button class="btn ' + (a === 'delete' ? 'd' : 'o') + '" data-act="' + a + '">' + a.charAt(0).toUpperCase() + a.slice(1) + '</button>'; }).join('') +
+      '<span class="muted" id="xg-count" style="margin-left:auto"></span></div><div id="xg-list"></div></div>';
+    var st = document.getElementById('xg-st');
+    st.value = fState.status;
+    st.onchange = function () { fState.status = st.value; fState.offset = 0; load(); };
+    body.querySelector('.row').addEventListener('click', function (e) {
+      var act = e.target.getAttribute('data-act'); if (!act) return;
+      var ids = Array.prototype.map.call(body.querySelectorAll('input[data-id]:checked'), function (c) { return Number(c.getAttribute('data-id')); });
+      if (!ids.length) return flash('Select files first');
+      if (act === 'delete' && !confirm('Permanently delete ' + ids.length + ' file(s)?')) return;
+      call('finding.action', { ids: ids, action: act }).then(function (r) {
+        var failed = Object.keys(r.failed || {});
+        flash(r.done + ' file(s): ' + act + ' done' + (failed.length ? ', ' + failed.length + ' failed: ' + r.failed[failed[0]] : ''), !failed.length);
+        load();
+      }).catch(function (x) { flash(x.message); });
+    });
+    function load() {
+      return call('findings.list', { status: fState.status, limit: 100, offset: fState.offset }).then(function (d) {
+        document.getElementById('xg-count').textContent = d.total + ' file(s)';
+        document.getElementById('xg-list').innerHTML = d.findings.length ? '<table><tr><th><input type="checkbox" id="xg-all"></th><th>File</th><th>Detection</th><th>Status</th>' + (MODE === 'whm' ? '<th>Owner</th>' : '') + '<th>Found</th></tr>' +
+          d.findings.map(function (f) {
+            return '<tr><td><input type="checkbox" data-id="' + f.id + '"></td><td class="mono">' + esc(f.path) + '</td><td>' + badge(f.category) + '<div class="muted mono">' + esc(f.signature) + '</div></td><td>' + badge(f.status) + '</td>' +
+              (MODE === 'whm' ? '<td>' + esc(f.owner) + '</td>' : '') + '<td>' + when(f.created_at) + '</td></tr>';
+          }).join('') + '</table>' : '<div class="empty">No detected files 🎉</div>';
+        var all = document.getElementById('xg-all');
+        if (all) all.onchange = function () { body.querySelectorAll('input[data-id]').forEach(function (c) { c.checked = all.checked; }); };
+      });
+    }
+    return load();
+  }
+
+  function firewall() {
+    body.innerHTML = '<div class="card"><h3>Block or allow an IP</h3><div class="row">' +
+      '<input id="xg-ip" placeholder="IP or CIDR"><select id="xg-kind"><option value="deny">Block permanently</option><option value="tempban">Block temporarily</option><option value="allow">Allow (whitelist)</option><option value="ignore">Ignore (never auto-block)</option></select>' +
+      '<input id="xg-min" type="number" value="60" style="width:90px" title="minutes (temporary blocks)"><input id="xg-note" placeholder="comment" style="flex:1">' +
+      '<button class="btn" id="xg-add">Apply</button><button class="btn o" id="xg-chk">Check IP</button><button class="btn o" id="xg-unb">Unblock IP</button></div><div id="xg-res"></div></div>' +
+      '<div class="card"><h3>Recent blocks</h3><div id="xg-ev"></div></div>';
+    var ip = function () { return document.getElementById('xg-ip').value.trim(); };
+    var load = function () {
+      return call('fw.events', { limit: 50 }).then(function (d) {
+        document.getElementById('xg-ev').innerHTML = d.events.length ? '<table><tr><th>IP</th><th>Reason</th><th>Source</th><th>Status</th><th>When</th><th>Expires</th></tr>' + d.events.map(function (e) {
+          return '<tr><td class="mono">' + esc(e.ip) + '</td><td>' + esc(e.reason) + '</td><td>' + esc(e.source) + '</td><td>' + badge(e.status) + '</td><td>' + when(e.created_at) + '</td><td>' + (e.expires_at ? when(e.expires_at) : 'never') + '</td></tr>';
+        }).join('') + '</table>' : '<div class="empty">No blocks yet</div>';
+      });
+    };
+    document.getElementById('xg-add').onclick = function () {
+      call('fw.add', { kind: document.getElementById('xg-kind').value, addr: ip(), comment: document.getElementById('xg-note').value, minutes: Number(document.getElementById('xg-min').value) })
+        .then(function () { flash('Saved', true); load(); }).catch(function (e) { flash(e.message); });
+    };
+    document.getElementById('xg-unb').onclick = function () {
+      call('fw.unblock', { Addr: ip() }).then(function () { flash(ip() + ' unblocked', true); load(); }).catch(function (e) { flash(e.message); });
+    };
+    document.getElementById('xg-chk').onclick = function () {
+      call('fw.check', { IP: ip() }).then(function (r) {
+        document.getElementById('xg-res').innerHTML = '<p><b class="mono">' + esc(r.ip) + '</b>: ' + badge(r.status) + (r.protected ? ' <span class="muted">(this server / portal — never blocked)</span>' : '') + '</p>';
+      }).catch(function (e) { flash(e.message); });
+    };
+    return load();
+  }
+
+  function ipdb() {
+    return call('ipdb.status').then(function (d) {
+      var cc = Object.keys(d.countries || {}).sort(function (a, b) { return d.countries[b] - d.countries[a]; }).slice(0, 10);
+      var rows = function (list) {
+        return list.length ? '<table><tr><th>Address</th><th>Country</th><th>Packets</th><th>Last seen</th></tr>' + list.map(function (h) {
+          return '<tr><td class="mono">' + esc(h.entry) + '</td><td>' + esc(h.country || '??') + '</td><td>' + num(h.hits) + '</td><td>' + when(h.last_seen) + '</td></tr>';
+        }).join('') + '</table>' : '<div class="empty">No blocked traffic yet</div>';
+      };
+      body.innerHTML = '<div class="grid">' + stat(d.enabled ? 'On' : 'Off', 'IPDB protection', d.enabled ? 'green' : 'amber') +
+        stat(num(d.entries), 'Addresses in the list') + stat(num(d.hits_today), 'Packets dropped today', 'red') + stat(num(d.hits_total), 'Packets dropped (total)') + '</div>' +
+        '<div class="card"><h3>Top countries (30 days)</h3>' + (cc.length ? '<table>' + cc.map(function (c) { return '<tr><td>' + esc(c || '??') + '</td><td>' + num(d.countries[c]) + '</td></tr>'; }).join('') + '</table>' : '<div class="empty">No data yet</div>') + '</div>' +
+        '<div class="card"><h3>Recently blocked</h3>' + rows(d.recent || []) + '</div>' +
+        '<p class="muted">Live map and list management are in the portal.</p>';
+      if (!timer) timer = setInterval(function () { ipdb().catch(function () {}); }, 15000);
+    });
+  }
+
+  show('overview');
+})();
+</script>

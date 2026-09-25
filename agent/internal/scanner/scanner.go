@@ -526,8 +526,15 @@ func (s *Scanner) ScanFile(path string) {
 }
 
 // ListScans returns recent scans, newest first.
-func (s *Scanner) ListScans(limit int) ([]Scan, error) {
-	rows, err := s.DB.Query(`SELECT id, kind, target, status, files, infected, initiator, started_at, finished_at, error FROM scans ORDER BY id DESC LIMIT ?`, limit)
+func (s *Scanner) ListScans(limit int) ([]Scan, error) { return s.ListScansUnder("", limit) }
+
+// ListScansUnder lists scans whose target is dir or below it ("" = all).
+func (s *Scanner) ListScansUnder(dir string, limit int) ([]Scan, error) {
+	q, args := `SELECT id, kind, target, status, files, infected, initiator, started_at, finished_at, error FROM scans`, []any{}
+	if dir != "" {
+		q, args = q+` WHERE target = ? OR substr(target, 1, ?) = ?`, append(args, dir, len(dir)+1, dir+"/")
+	}
+	rows, err := s.DB.Query(q+` ORDER BY id DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -563,6 +570,8 @@ type FindingFilter struct {
 	Query    string `json:"q"`
 	Limit    int    `json:"limit"`
 	Offset   int    `json:"offset"`
+	// Under limits results to files below this directory (panel users).
+	Under string `json:"-"`
 }
 
 // ListFindings returns detections, newest first, with the total count.
@@ -580,6 +589,9 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	}
 	if f.Query != "" {
 		where, args = append(where, "(path LIKE ? OR signature LIKE ? OR owner LIKE ?)"), append(args, "%"+f.Query+"%", "%"+f.Query+"%", "%"+f.Query+"%")
+	}
+	if f.Under != "" {
+		where, args = append(where, "substr(path, 1, ?) = ?"), append(args, len(f.Under)+1, f.Under+"/")
 	}
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 50

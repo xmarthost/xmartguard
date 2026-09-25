@@ -171,3 +171,19 @@ func (s *Scanner) Ignore(id int64) (string, error) {
 	}
 	return r.path, s.setStatus(id, "ignored", "")
 }
+
+// FindingPath returns the original path of a finding (for ownership checks).
+func (s *Scanner) FindingPath(id int64) (string, error) {
+	r, err := s.load(id)
+	return r.path, err
+}
+
+// UserWhitelisted reports whether an account is excluded from scanning.
+func (s *Scanner) UserWhitelisted(name string) bool {
+	for _, u := range s.Settings.Get().Scanner.WhitelistUsers {
+		if u == name {
+			return true
+		}
+	}
+	return false
+}
