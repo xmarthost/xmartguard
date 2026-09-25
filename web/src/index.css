@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --color-navy-950: #0f1640;
+  --color-navy-900: #172155;
+  --color-navy-800: #1d2b64;
+  --color-navy-700: #26377a;
+  --color-navy-600: #34479a;
+  --color-navy-100: #e6e9f5;
+  --color-page: #f3f4f7;
+}
+
+body {
+  @apply bg-page text-slate-700 antialiased;
+}
+
+@utility card {
+  @apply rounded-2xl bg-white shadow-[0_1px_2px_rgba(16,24,64,0.04)];
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-navy-800 text-white hover:bg-navy-700;
+}
+@utility btn-outline {
+  @apply btn border border-navy-800 text-navy-800 hover:bg-navy-100;
+}
+@utility btn-danger {
+  @apply btn bg-red-600 text-white hover:bg-red-700;
+}
+@utility input {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-navy-600 focus:ring-2 focus:ring-navy-100;
+}
+@utility label {
+  @apply mb-1 block text-sm font-medium text-navy-900;
+}
+@utility h-title {
+  @apply text-2xl font-semibold text-navy-900;
+}

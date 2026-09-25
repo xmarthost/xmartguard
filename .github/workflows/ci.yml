@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: xg
+          POSTGRES_PASSWORD: xg
+          POSTGRES_DB: xmartguard_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U xg" --health-interval 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://xg:xg@localhost:5432/xmartguard_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Agent tests
+        working-directory: agent
+        run: go vet ./... && go test ./...
+      - name: Build agent binaries
+        run: scripts/build-agent.sh
+      - name: Server tests
+        working-directory: server
+        run: npm ci && npm run typecheck && npm test
+      - name: Web build
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Shell lint
+        run: shellcheck -S warning installer/*.sh scripts/*.sh
+      - name: Installer end-to-end
+        run: |
+          cd server && npm run build
+          PGPASSWORD=xg psql -h localhost -U xg -d xmartguard_test -c 'CREATE DATABASE xmartguard'
+          DATABASE_URL=postgres://xg:xg@localhost:5432/xmartguard ADMIN_EMAIL=ci@example.com ADMIN_PASSWORD=ci-password-123 \
+            PUBLIC_URL=http://localhost:8080 WEB_DIR= nohup node dist/index.js > /tmp/portal.log 2>&1 &
+          for i in $(seq 1 30); do curl -fs localhost:8080/api/health && break; sleep 1; done
+          cd .. && sudo -E env "PATH=$PATH" PORTAL=http://localhost:8080 ADMIN_EMAIL=ci@example.com ADMIN_PASSWORD=ci-password-123 \
+            scripts/test-installer.sh
