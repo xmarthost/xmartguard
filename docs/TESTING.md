@@ -8,46 +8,29 @@ You need two servers:
 
 | Server | Purpose | Suggested spec |
 |---|---|---|
-| **Portal VPS** | runs `xmartguard.com` (portal) | Ubuntu 24.04, 2 GB RAM, Docker installed, DNS A record → this VPS |
+| **Portal VPS** | runs `xmartguard.com` (portal) | AlmaLinux 9, 2 GB RAM, DNS A record → this VPS |
 | **Test server** | a hosting server to protect | AlmaLinux/CloudLinux 8/9 with cPanel (trial is fine) |
 
 ---
 
-## 1. One-time: give the portal VPS read access to the private repo
+## 1. Start the portal (AlmaLinux 9 VPS)
+
+Point the domain's A record at the VPS, then as root:
 
 ```bash
-ssh-keygen -t ed25519 -f ~/.ssh/xmartguard_deploy -N ""
-cat ~/.ssh/xmartguard_deploy.pub
+curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o setup.sh
+bash setup.sh --domain YOUR_DOMAIN --email you@example.com
 ```
 
-GitHub → `xmarthost/xmartguard` → Settings → Deploy keys → **Add deploy key** → paste the key (leave "Allow write access" **off**).
+It installs Docker, opens ports 80/443, clones the repo to `/opt/xmartguard`, generates passwords, starts the portal with automatic HTTPS and prints the login password.
+
+## 2. Update after Claude pushes new code
 
 ```bash
-cat >> ~/.ssh/config <<'EOF'
-Host github.com
-  IdentityFile ~/.ssh/xmartguard_deploy
-EOF
-git clone git@github.com:xmarthost/xmartguard.git /opt/xmartguard-portal
+bash /opt/xmartguard/deploy/setup-almalinux.sh --domain YOUR_DOMAIN --email you@example.com
 ```
 
-## 2. Start the portal (portal VPS)
-
-```bash
-cd /opt/xmartguard-portal
-git checkout claude/dreamy-davinci-10tcgi      # the branch Claude pushes to
-cd deploy && cp .env.example .env && nano .env  # set DOMAIN, POSTGRES_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD
-docker compose up -d --build
-docker compose ps
-curl -fsS https://YOUR_DOMAIN/api/health        # -> {"ok":true}
-```
-
-Open `https://YOUR_DOMAIN`, log in with ADMIN_EMAIL / ADMIN_PASSWORD.
-
-**Updating after Claude pushes new code:**
-
-```bash
-cd /opt/xmartguard-portal && git pull && cd deploy && docker compose up -d --build
-```
+(add `--branch claude/dreamy-davinci-10tcgi` to test unmerged work)
 
 ## 3. Install the agent (test server)
 
