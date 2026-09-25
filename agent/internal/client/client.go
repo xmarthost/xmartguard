@@ -111,6 +111,8 @@ type Session struct {
 	Log       *slog.Logger
 	Collector *sysinfo.Collector
 	Handlers  map[string]Handler
+	// Security, when set, is attached to every metrics sample.
+	Security func() any
 
 	mu        sync.Mutex
 	liveUntil time.Time
@@ -241,7 +243,7 @@ func (s *Session) runOnce(ctx context.Context) error {
 	if err := send(protocol.Envelope{Type: protocol.TypeInventory, Data: sysinfo.Collect()}); err != nil {
 		return err
 	}
-	_ = send(protocol.Envelope{Type: protocol.TypeMetrics, Data: s.Collector.Collect(10)})
+	_ = send(protocol.Envelope{Type: protocol.TypeMetrics, Data: s.sample()})
 
 	errc := make(chan error, 2)
 	go func() { // metrics loop
@@ -259,7 +261,7 @@ func (s *Session) runOnce(ctx context.Context) error {
 				if !now.Before(next) {
 					next = now.Add(interval)
 				}
-				if err := send(protocol.Envelope{Type: protocol.TypeMetrics, Data: s.Collector.Collect(10)}); err != nil {
+				if err := send(protocol.Envelope{Type: protocol.TypeMetrics, Data: s.sample()}); err != nil {
 					errc <- err
 					return
 				}
@@ -288,6 +290,18 @@ func (s *Session) runOnce(ctx context.Context) error {
 	err = <-errc
 	conn.Close(websocket.StatusNormalClosure, "")
 	return err
+}
+
+// sample collects system metrics plus the security summary.
+func (s *Session) sample() any {
+	m := s.Collector.Collect(10)
+	if s.Security == nil {
+		return m
+	}
+	return struct {
+		sysinfo.Sample
+		Security any `json:"security"`
+	}{m, s.Security()}
 }
 
 func (s *Session) handle(ctx context.Context, e protocol.Envelope, send func(protocol.Envelope) error) {

@@ -22,6 +22,8 @@ import (
 
 	"github.com/xmarthost/xmartguard/agent/internal/client"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
+	"github.com/xmarthost/xmartguard/agent/internal/core"
+	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/identity"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
@@ -44,6 +46,11 @@ func main() {
 		err = cmdUnenroll()
 	case "info":
 		err = printJSON(sysinfo.Collect())
+	case "cleanup":
+		// Used by uninstall.sh: remove firewall rules from every provider.
+		_ = firewall.FindIPTables().Remove()
+		_ = firewall.FindNFT().Remove()
+		fmt.Println("firewall rules removed")
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
 	case "help", "--help", "-h":
@@ -67,6 +74,7 @@ Usage:
   xmartguard-agent status       show enrollment status
   xmartguard-agent unenroll     remove this server from the portal
   xmartguard-agent info         print detected host inventory
+  xmartguard-agent cleanup      remove all XMart Guard firewall rules
   xmartguard-agent version
 `)
 }
@@ -138,28 +146,36 @@ func cmdRun() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	log.Info("starting xmartguard-agent", "version", version.Version, "portal", cfg.ServerURL)
-	s := &client.Session{Cfg: cfg, ID: id, Log: log, Collector: sysinfo.NewCollector()}
-	s.Handlers = map[string]client.Handler{
-		"ping": func(context.Context, json.RawMessage) (any, error) {
-			return map[string]any{"pong": true, "version": version.Version, "time": time.Now().Unix()}, nil
-		},
-		"inventory": func(context.Context, json.RawMessage) (any, error) { return sysinfo.Collect(), nil },
-		"metrics": func(context.Context, json.RawMessage) (any, error) {
-			return s.Collector.Collect(10), nil
-		},
-		"live": func(_ context.Context, p json.RawMessage) (any, error) {
-			var in struct {
-				Seconds int `json:"seconds"`
-			}
-			_ = json.Unmarshal(p, &in)
-			if in.Seconds <= 0 || in.Seconds > 900 {
-				in.Seconds = 120
-			}
-			s.SetLive(time.Duration(in.Seconds) * time.Second)
-			return map[string]any{"live_seconds": in.Seconds}, nil
-		},
+
+	a, err := core.New(cfg, log)
+	if err != nil {
+		return err
+	}
+	defer a.DB.Close()
+	// Exit non-zero so systemd (Restart=on-failure) starts the new binary.
+	a.ExitForUpdate = func() { a.Mailer.Flush(); os.Exit(3) }
+	a.Start(ctx)
+
+	s := &client.Session{Cfg: cfg, ID: id, Log: log, Collector: sysinfo.NewCollector(), Security: a.SecuritySummary}
+	a.Session = s
+	s.Handlers = a.Handlers()
+	s.Handlers["ping"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"pong": true, "version": version.Version, "time": time.Now().Unix()}, nil
+	}
+	s.Handlers["inventory"] = func(context.Context, json.RawMessage) (any, error) { return sysinfo.Collect(), nil }
+	s.Handlers["live"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		var in struct {
+			Seconds int `json:"seconds"`
+		}
+		_ = json.Unmarshal(p, &in)
+		if in.Seconds <= 0 || in.Seconds > 900 {
+			in.Seconds = 120
+		}
+		s.SetLive(time.Duration(in.Seconds) * time.Second)
+		return map[string]any{"live_seconds": in.Seconds}, nil
 	}
 	err = s.Run(ctx)
+	a.Mailer.Flush()
 	if errors.Is(err, client.ErrRevoked) {
 		log.Error("this server was removed from the portal; stopping. Re-install to enroll again.")
 		// Exit 0 so systemd does not restart-loop (unit uses Restart=on-failure).

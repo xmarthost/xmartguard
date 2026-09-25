@@ -26,21 +26,21 @@ func exists(parts ...string) bool {
 
 // Inventory is static-ish host information sent on connect.
 type Inventory struct {
-	Hostname      string   `json:"hostname"`
-	OSID          string   `json:"os_id"`
-	OSName        string   `json:"os_name"`
-	OSVersion     string   `json:"os_version"`
-	OSFamily      string   `json:"os_family"` // rhel | debian | other
-	Kernel        string   `json:"kernel"`
-	Arch          string   `json:"arch"`
-	CPUModel      string   `json:"cpu_model"`
-	CPUCores      int      `json:"cpu_cores"`
-	MemTotalBytes uint64   `json:"mem_total_bytes"`
-	ControlPanel  string   `json:"control_panel"`
-	WebServer     string   `json:"web_server"`
-	PrimaryIP     string   `json:"primary_ip"`
-	IPs           []string `json:"ips"`
-	Virtualization string  `json:"virtualization,omitempty"`
+	Hostname       string   `json:"hostname"`
+	OSID           string   `json:"os_id"`
+	OSName         string   `json:"os_name"`
+	OSVersion      string   `json:"os_version"`
+	OSFamily       string   `json:"os_family"` // rhel | debian | other
+	Kernel         string   `json:"kernel"`
+	Arch           string   `json:"arch"`
+	CPUModel       string   `json:"cpu_model"`
+	CPUCores       int      `json:"cpu_cores"`
+	MemTotalBytes  uint64   `json:"mem_total_bytes"`
+	ControlPanel   string   `json:"control_panel"`
+	WebServer      string   `json:"web_server"`
+	PrimaryIP      string   `json:"primary_ip"`
+	IPs            []string `json:"ips"`
+	Virtualization string   `json:"virtualization,omitempty"`
 }
 
 // OSRelease parses /etc/os-release.

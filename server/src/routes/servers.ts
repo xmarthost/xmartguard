@@ -5,6 +5,7 @@ import type { Config } from '../config.js';
 import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { enrollmentToken, sha256 } from '../security.js';
+import { currentRelease } from '../agents/release.js';
 
 const IdParams = z.object({ id: z.string().uuid() });
 const RANGES: Record<string, { interval: string; bucket: number }> = {
@@ -74,7 +75,23 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
       [req.user!.accountId],
     );
     const online = rows.filter((r) => hub.isOnline(r.id)).length;
+    const sec = await pool.query(
+      `SELECT last_metrics->'security' AS s, last_metrics->>'ts' AS ts FROM servers WHERE account_id = $1 AND status = 'active'`,
+      [req.user!.accountId],
+    );
+    const totals = { threats_30d: 0, quarantined: 0, open_findings: 0, blocks_30d: 0, active_blocks: 0, blacklisted_ips: 0, servers_with_alerts: 0 };
+    for (const r of sec.rows) {
+      const s = r.s || {};
+      totals.threats_30d += s.scanner?.threats_30d ?? 0;
+      totals.quarantined += s.scanner?.quarantined ?? 0;
+      totals.open_findings += s.scanner?.open_findings ?? 0;
+      totals.blocks_30d += s.firewall?.blocks_30d ?? 0;
+      totals.active_blocks += s.firewall?.active_blocks ?? 0;
+      totals.blacklisted_ips += s.blacklisted_ips ?? 0;
+      if ((s.scanner?.open_findings ?? 0) > 0 || (s.blacklisted_ips ?? 0) > 0) totals.servers_with_alerts++;
+    }
     return {
+      security: totals,
       servers_total: rows.length,
       servers_online: online,
       servers_offline: rows.length - online,
@@ -102,7 +119,10 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
     const r = await load(req.user!.accountId, id);
     if (!r) return reply.code(404).send({ error: 'server not found' });
     const conn = hub.get(id);
-    return { server: { ...shape(r, !!conn), last_metrics: conn?.lastMetrics ?? r.last_metrics } };
+    return {
+      server: { ...shape(r, !!conn), last_metrics: conn?.lastMetrics ?? r.last_metrics },
+      latest_agent_version: currentRelease(cfg.downloadsDir)?.version ?? null,
+    };
   });
 
   app.get('/api/servers/:id/metrics', viewer, async (req, reply) => {

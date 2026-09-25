@@ -59,6 +59,20 @@ echo "--- listening sockets of agent (should be none)"
 ss -ltnp 2>/dev/null | grep xmartguard || echo "(none)"
 check "agent opens no listening port"   '! ss -ltnp | grep -q xmartguard'
 
+section "firewall"
+command -v ipset >/dev/null && echo "ipset:     $(ipset version 2>/dev/null | head -1)" || warn "ipset is not installed"
+echo "--- XMARTGUARD chain"; iptables -w -S XMARTGUARD 2>&1 | head -20
+echo "--- INPUT jump"; iptables -w -S INPUT 2>/dev/null | grep XMARTGUARD || echo "(no jump)"
+echo "--- ipsets"; ipset list -n 2>/dev/null | grep '^xg_' || echo "(none)"
+nft list tables 2>/dev/null | grep -q 'inet xmartguard' && echo "nftables table inet xmartguard present"
+command -v csf >/dev/null && echo "CSF present: $(csf -v 2>/dev/null | head -1)"
+check "firewall rules loaded"          'iptables -w -C INPUT -j XMARTGUARD || nft list table inet xmartguard'
+
+section "scanner"
+ls -la /var/lib/xmartguard/ 2>&1 | head
+echo "inotify max_user_watches: $(cat /proc/sys/fs/inotify/max_user_watches)"
+echo "ClamAV: $(ls /usr/local/cpanel/3rdparty/bin/clamdscan /usr/bin/clamdscan 2>/dev/null | head -1)"
+
 section "portal connectivity"
 PORTAL=$(sed -n 's/.*"server_url": *"\([^"]*\)".*/\1/p' /etc/xmartguard/agent.json 2>/dev/null)
 echo "portal:    $PORTAL"
@@ -84,6 +98,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
   check "unit removed"            '[ ! -e /etc/systemd/system/xmartguard-agent.service ]'
   check "unit unknown to systemd" '! systemctl cat xmartguard-agent'
   check "no agent process"        '! pgrep -f "/usr/local/bin/xmartguard-agent run"'
+  check "no iptables chain"       '! iptables -w -S XMARTGUARD'
+  check "no ipsets"               '! ipset list -n 2>/dev/null | grep -q "^xg_"'
+  check "no nftables table"       '! nft list tables 2>/dev/null | grep -q "inet xmartguard"'
   echo "--- any file named *xmartguard* left on disk (outside /proc,/sys,/home):"
   find / -xdev \( -path /proc -o -path /sys -o -path /home -o -path /root \) -prune -o -iname '*xmartguard*' -print 2>/dev/null | head -20
 fi

@@ -6,8 +6,8 @@ COPY agent/go.mod agent/go.sum agent/
 RUN cd agent && go mod download
 COPY agent agent
 COPY scripts/build-agent.sh scripts/
-ARG VERSION=0.1.0
-RUN VERSION=$VERSION OUT=/out/downloads bash scripts/build-agent.sh
+COPY VERSION ./
+RUN OUT=/out/downloads bash scripts/build-agent.sh
 
 FROM node:22-bookworm-slim AS web
 WORKDIR /src/web

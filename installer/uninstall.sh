@@ -80,10 +80,13 @@ if [ "$UNENROLL" -eq 1 ] && [ -x "$BIN" ]; then
   fi
 fi
 
-# 2. Stop and disable the service.
+# 2. Stop and disable the service, then remove its firewall rules.
 if systemctl list-unit-files "$UNIT_NAME" >/dev/null 2>&1 && systemctl cat "$UNIT_NAME" >/dev/null 2>&1; then
   run systemctl disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
   ok "Service stopped and disabled"
+fi
+if [ -x "$BIN" ]; then
+  if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN cleanup"; else "$BIN" cleanup >/dev/null 2>&1 && ok "Firewall rules removed"; fi
 fi
 for u in "${UNITS[@]}"; do
   safe_path "$u" || { warn "skipping unexpected path $u"; continue; }
@@ -118,6 +121,9 @@ for p in "$BIN" /usr/local/bin/xmartguard /etc/xmartguard "$STATE_DIR" /etc/syst
 done
 [ "$KEEP_LOGS" -eq 0 ] && [ -e "$LOG_DIR" ] && LEFT+=("$LOG_DIR")
 if pgrep -f "$BIN run" >/dev/null 2>&1; then LEFT+=("running process: $BIN"); fi
+if command -v iptables >/dev/null 2>&1 && iptables -w -S XMARTGUARD >/dev/null 2>&1; then LEFT+=("iptables chain XMARTGUARD"); fi
+if command -v ipset >/dev/null 2>&1 && ipset list -n 2>/dev/null | grep -q '^xg_'; then LEFT+=("ipset sets xg_*"); fi
+if command -v nft >/dev/null 2>&1 && nft list tables 2>/dev/null | grep -q 'inet xmartguard'; then LEFT+=("nftables table inet xmartguard"); fi
 
 echo ""
 if [ ${#LEFT[@]} -eq 0 ]; then

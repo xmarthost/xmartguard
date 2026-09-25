@@ -37,6 +37,7 @@ function TagEditor({ server, onSaved }: { server: Server; onSaved: () => void })
 function ServerCard({ s, onChange }: { s: Server; onChange: () => void }) {
   const { user } = useAuth();
   const m = s.last_metrics;
+  const sec = (m as any)?.security;
   const mem = pct(m?.mem_used, m?.mem_total);
   const disk = pct(m?.disk_used, m?.disk_total);
   return (
@@ -67,6 +68,22 @@ function ServerCard({ s, onChange }: { s: Server; onChange: () => void }) {
           <div className="text-xs text-slate-500">Load</div>
         </div>
       </div>
+      {sec && (
+        <div className="mt-4 grid grid-cols-3 gap-3 border-t pt-3 text-center">
+          <div>
+            <div className={`text-lg font-semibold ${sec.scanner?.threats_30d ? 'text-red-600' : 'text-green-600'}`}>{sec.scanner?.threats_30d ?? 0}</div>
+            <div className="text-xs text-slate-500">Threats (30d)</div>
+          </div>
+          <div>
+            <div className="text-lg font-semibold text-navy-800">{sec.firewall?.blocks_30d ?? 0}</div>
+            <div className="text-xs text-slate-500">IPs blocked</div>
+          </div>
+          <div>
+            <div className={`text-lg font-semibold ${sec.blacklisted_ips ? 'text-red-600' : 'text-green-600'}`}>{sec.blacklisted_ips ?? 0}</div>
+            <div className="text-xs text-slate-500">IP blacklist</div>
+          </div>
+        </div>
+      )}
       <div className="mt-4">
         <div className="mb-1 flex justify-between text-xs text-slate-500">
           <span>Disk</span>

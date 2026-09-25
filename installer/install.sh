@@ -81,6 +81,16 @@ ok "OS: $OS_NAME ($ARCH)"
 CURL=(curl -fsSL --retry 3 --connect-timeout 15 --max-time 300)
 [ "$INSECURE" -eq 1 ] && CURL+=(-k)
 
+# ---------------------------------------------------------------- dependencies
+# ipset is used by the (default) iptables firewall provider.
+if ! command -v ipset >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then dnf -y -q install ipset >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then yum -y -q install ipset >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y -q ipset >/dev/null 2>&1 || true
+  fi
+  command -v ipset >/dev/null 2>&1 && ok "Installed ipset" || warn "ipset could not be installed; the firewall will need it"
+fi
+
 # ---------------------------------------------------------------- download
 # Not /tmp: hardened servers (cPanel "securetmp") mount it noexec.
 TMP=$(mktemp -d -p /var/lib xmartguard-install.XXXXXX)
@@ -141,6 +151,8 @@ record file "$CONF_DIR/identity.key"
 ok "$OUT"
 
 # ---------------------------------------------------------------- systemd
+# The agent manages the firewall, quarantines files anywhere under /home and
+# updates itself, so it runs as root without filesystem sandboxing.
 cat >"$UNIT" <<EOF
 [Unit]
 Description=XMart Guard security agent
@@ -152,14 +164,11 @@ Wants=network-online.target
 Type=simple
 ExecStart=$BIN run
 Restart=on-failure
-RestartSec=10
+RestartSec=5
 StandardOutput=append:$LOG_DIR/agent.log
 StandardError=append:$LOG_DIR/agent.log
 Nice=5
 LimitNOFILE=65536
-NoNewPrivileges=yes
-ProtectSystem=full
-PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

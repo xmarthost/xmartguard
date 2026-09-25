@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Activity, Cpu, HardDrive, MemoryStick, Network, RefreshCw } from 'lucide-react';
+import { Activity, Cpu, HardDrive, MemoryStick, Network, RefreshCw, ScanSearch } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ago, bytes, duration, panelName, pct } from '../format';
 import { Bar, ErrorBox, PageLoader, StatusDot } from '../components/ui';
+import SecurityPanel from '../components/SecurityPanel';
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -33,7 +34,7 @@ function Meter({ icon, label, value, detail }: { icon: React.ReactNode; label: s
 export default function ServerDashboard() {
   const { id } = useParams();
   const { user } = useAuth();
-  const { data, error, loading } = useApi<{ server: Server }>(`/api/servers/${id}`, 15_000);
+  const { data, error, loading } = useApi<{ server: Server; latest_agent_version: string | null }>(`/api/servers/${id}`, 15_000);
   const [ping, setPing] = useState<string>('');
   if (loading && !data) return <PageLoader />;
   if (error && !data) return <ErrorBox message={error} />;
@@ -71,9 +72,12 @@ export default function ServerDashboard() {
               <RefreshCw className="h-4 w-4" /> Test connection
             </button>
           )}
-          <Link to="monitoring" className="btn-primary"><Activity className="h-4 w-4" /> System Monitoring</Link>
+          <Link to="monitoring" className="btn-outline"><Activity className="h-4 w-4" /> System Monitoring</Link>
+          <Link to="scanner" className="btn-primary"><ScanSearch className="h-4 w-4" /> Quick Scan</Link>
         </div>
       </div>
+
+      <SecurityPanel serverId={s.id} online={s.online} agentVersion={s.agent_version} latestVersion={data!.latest_agent_version} />
 
       {m ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -116,7 +120,7 @@ export default function ServerDashboard() {
           <Row k="Memory" v={bytes(inv.mem_total_bytes)} />
           <Row k="Tags" v={s.tags.join(', ')} />
           <p className="mt-4 text-xs text-slate-400">
-            Scanner, firewall, WAF and reputation panels will appear on this dashboard as those modules are released.
+            WAF, CMS and outgoing-spam panels will appear here as those modules are released.
           </p>
         </div>
       </div>

@@ -21,6 +21,7 @@ export interface Config {
   enrollTokenTtlHours: number;
   metricsIntervalSeconds: number;
   metricsRetentionDays: number;
+  autoUpdateAgents: boolean;
   adminEmail?: string;
   adminPassword?: string;
   logLevel: string;
@@ -54,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     enrollTokenTtlHours: int(env.ENROLL_TOKEN_TTL_HOURS, 24),
     metricsIntervalSeconds: int(env.METRICS_INTERVAL_SECONDS, 60),
     metricsRetentionDays: int(env.METRICS_RETENTION_DAYS, 35),
+    autoUpdateAgents: bool(env.AUTO_UPDATE_AGENTS, true),
     adminEmail: env.ADMIN_EMAIL || undefined,
     adminPassword: env.ADMIN_PASSWORD || undefined,
     logLevel: env.LOG_LEVEL || 'info',

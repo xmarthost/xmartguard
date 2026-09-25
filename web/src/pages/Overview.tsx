@@ -1,10 +1,11 @@
 import { Link } from 'react-router-dom';
-import { CircleCheck, CircleX, Server as ServerIcon } from 'lucide-react';
+import { Ban, Bug, CircleCheck, CircleX, Lock, Server as ServerIcon, ShieldAlert, ShieldX } from 'lucide-react';
 import { useApi } from '../hooks';
 import { panelName } from '../format';
 import { ErrorBox, PageLoader, StatCard, StatusDot } from '../components/ui';
 
 interface OverviewData {
+  security: { threats_30d: number; quarantined: number; open_findings: number; blocks_30d: number; active_blocks: number; blacklisted_ips: number; servers_with_alerts: number };
   servers_total: number;
   servers_online: number;
   servers_offline: number;
@@ -47,9 +48,17 @@ export default function Overview() {
         <StatCard icon={<CircleCheck />} value={d.servers_online} label="Online" accent="text-green-600" />
         <StatCard icon={<CircleX />} value={d.servers_offline} label="Offline" accent={d.servers_offline ? 'text-red-600' : 'text-navy-900'} />
       </section>
-      <p className="text-sm text-slate-400">
-        Threat, web-attack and firewall statistics appear here once the scanner and firewall modules are enabled on your servers.
-      </p>
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <StatCard icon={<Bug />} value={d.security.threats_30d} label="Threats detected (30 days)" accent={d.security.threats_30d ? 'text-red-600' : 'text-green-600'} />
+        <StatCard icon={<Lock />} value={d.security.quarantined} label="Quarantined files" />
+        <StatCard icon={<Ban />} value={d.security.blocks_30d} label="IPs blocked (30 days)" />
+        <StatCard icon={<ShieldX />} value={d.security.blacklisted_ips} label="Blacklisted server IPs" accent={d.security.blacklisted_ips ? 'text-red-600' : 'text-green-600'} />
+      </section>
+      {d.security.servers_with_alerts > 0 && (
+        <div className="card flex items-center gap-3 p-4 text-sm text-red-700">
+          <ShieldAlert className="h-5 w-5" /> {d.security.servers_with_alerts} server(s) have open alerts. Open the server list to review them.
+        </div>
+      )}
     </div>
   );
 }

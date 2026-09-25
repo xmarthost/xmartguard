@@ -22,7 +22,7 @@ export async function startHarness(overrides: Partial<Config> = {}): Promise<Har
   await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
   await migrate(pool);
   await createOwner(pool, OWNER.email, OWNER.password);
-  const cfg: Config = { ...loadConfig({}), databaseUrl: TEST_DB, webDir: '', ...overrides };
+  const cfg: Config = { ...loadConfig({}), databaseUrl: TEST_DB, webDir: '', autoUpdateAgents: false, ...overrides };
   const built = await buildApp(cfg, pool, { logger: false });
   await built.app.listen({ host: '127.0.0.1', port: 0 });
   const port = (built.app.server.address() as AddressInfo).port;

@@ -7,6 +7,7 @@ import type { Config } from '../config.js';
 import type { AgentHub, MetricsSample } from '../agents/hub.js';
 import { audit } from '../auth.js';
 import { parseEd25519PublicKey, sha256, verifyEd25519 } from '../security.js';
+import { currentRelease, versionLess } from '../agents/release.js';
 
 const uuid = z.string().uuid();
 
@@ -36,6 +37,22 @@ function s(v: unknown): string {
 }
 
 export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: AgentHub): void {
+  /** Pushes the bundled release to agents that are older than it. */
+  function maybeAutoUpdate(serverId: string, agentVersion: string) {
+    const rel = currentRelease(cfg.downloadsDir);
+    if (!cfg.autoUpdateAgents || !rel || !agentVersion || !versionLess(agentVersion, rel.version)) return;
+    setTimeout(async () => {
+      try {
+        const { rows } = await pool.query('SELECT inventory FROM servers WHERE id = $1', [serverId]);
+        const arch = rows[0]?.inventory?.arch ?? 'amd64';
+        await hub.command(serverId, 'agent.update', { sha256: rel.sha256[arch] ?? '' }, 180_000);
+        app.log.info({ serverId, from: agentVersion, to: rel.version }, 'agent auto-updated');
+      } catch (err) {
+        app.log.warn({ serverId, err: (err as Error).message }, 'agent auto-update failed');
+      }
+    }, 3000);
+  }
+
   app.post(
     '/api/agent/enroll',
     { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
@@ -159,7 +176,8 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
             clearTimeout(authTimer);
             conn = await hub.attach(serverId, socket, s(msg.version));
             socket.send(JSON.stringify({ type: 'welcome', config: { metrics_interval: cfg.metricsIntervalSeconds } }));
-            log.info('agent connected');
+            log.info({ version: s(msg.version) }, 'agent connected');
+            maybeAutoUpdate(serverId, s(msg.version));
             return;
           }
           if (!conn) return;

@@ -14,6 +14,7 @@ import { agentRoutes } from './routes/agent.js';
 import { serverRoutes } from './routes/servers.js';
 import { userRoutes } from './routes/users.js';
 import { downloadRoutes } from './routes/downloads.js';
+import { agentCommandRoutes } from './routes/agent-cmd.js';
 
 export interface App {
   app: FastifyInstance;
@@ -45,6 +46,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   serverRoutes(app, pool, cfg, hub);
   userRoutes(app, pool);
   downloadRoutes(app, cfg);
+  agentCommandRoutes(app, pool, cfg, hub);
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });
