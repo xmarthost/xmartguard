@@ -77,6 +77,10 @@ esac
 OS_NAME="unknown"
 if [ -r /etc/os-release ]; then . /etc/os-release; OS_NAME="${PRETTY_NAME:-$ID}"; fi
 
+if [ -d "$HOME_DIR/.git" ]; then
+  die "$HOME_DIR holds the XMart Guard portal code from an older portal setup. Re-run deploy/setup-almalinux.sh on this server first (it moves the portal to /opt/xmartguard-portal)."
+fi
+
 if { [ -f "$MANIFEST" ] || [ -f "$LEGACY_MANIFEST" ]; } && [ "$FORCE" -ne 1 ]; then
   die "XMart Guard is already installed. Uninstall first, or pass --force to re-install."
 fi

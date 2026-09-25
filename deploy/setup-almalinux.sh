@@ -14,7 +14,9 @@ set -Eeuo pipefail
 
 DOMAIN=""; EMAIL=""; BRANCH="main"; TOKEN="${GITHUB_TOKEN:-}"
 REPO="github.com/xmarthost/xmartguard.git"
-DIR=/opt/xmartguard
+DIR=/opt/xmartguard-portal
+# Portal setups before 0.3.0 used /opt/xmartguard, which now belongs to the agent.
+OLD_DIR=/opt/xmartguard
 PORTAL_PORT=18080
 
 while [ $# -gt 0 ]; do
@@ -80,6 +82,21 @@ if [ "$MODE" = caddy ]; then
   else
     warn "firewalld not running; make sure ports 80/443 are open at your provider"
   fi
+fi
+
+if [ ! -e "$DIR" ] && [ -d "$OLD_DIR/.git" ] && [ -f "$OLD_DIR/deploy/docker-compose.yml" ]; then
+  step "Moving the portal from $OLD_DIR to $DIR"
+  # Same compose project name ("deploy"), so the database volume is kept.
+  (cd "$OLD_DIR/deploy" && docker compose down --remove-orphans >/dev/null 2>&1) || true
+  mkdir -p "$DIR"
+  shopt -s dotglob
+  for f in "$OLD_DIR"/*; do
+    case "$(basename "$f")" in bin|data|logs|manifest|uninstall.sh|.install.*) continue ;; esac
+    mv "$f" "$DIR/"
+  done
+  shopt -u dotglob
+  rmdir "$OLD_DIR" 2>/dev/null || true
+  ok "portal moved; its data and settings are unchanged"
 fi
 
 step "Getting the code ($BRANCH)"

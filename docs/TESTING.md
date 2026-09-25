@@ -22,12 +22,12 @@ curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/se
 bash setup.sh --domain YOUR_DOMAIN --email you@example.com
 ```
 
-It installs Docker, opens ports 80/443, clones the repo to `/opt/xmartguard`, generates passwords, starts the portal with automatic HTTPS and prints the login password.
+It installs Docker, opens ports 80/443, clones the repo to `/opt/xmartguard-portal`, generates passwords, starts the portal with automatic HTTPS and prints the login password.
 
 ## 2. Update after Claude pushes new code
 
 ```bash
-bash /opt/xmartguard/deploy/setup-almalinux.sh --domain YOUR_DOMAIN --email you@example.com
+bash /opt/xmartguard-portal/deploy/setup-almalinux.sh --domain YOUR_DOMAIN --email you@example.com
 ```
 
 (add `--branch claude/dreamy-davinci-10tcgi` to test unmerged work)

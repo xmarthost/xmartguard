@@ -119,6 +119,14 @@ ok "Removed agent files"
 
 # The copy of this script lives in STATE_DIR; bash has already read it.
 DIRS+=(/run/xmartguard "$HOME_DIR")
+# Never delete a portal checkout that an old portal setup left in /opt/xmartguard:
+# remove only the agent's own entries there.
+if [ -d "$HOME_DIR/.git" ]; then
+  keep=()
+  for d in "${DIRS[@]}"; do [ "$d" = "$HOME_DIR" ] || keep+=("$d"); done
+  DIRS=("${keep[@]}" "$HOME_DIR/bin" "$HOME_DIR/data" "$HOME_DIR/logs")
+  for f in "$HOME_DIR/manifest" "$HOME_DIR/uninstall.sh"; do [ -e "$f" ] && run rm -f "$f"; done
+fi
 for d in "${LEGACY_DIRS[@]}"; do [ -e "$d" ] && DIRS+=("$d"); done
 mapfile -t SORTED < <(printf '%s\n' "${DIRS[@]}" | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
 for d in "${SORTED[@]}"; do
@@ -138,7 +146,7 @@ ok "Removed configuration and state directories"
 [ "$DRY" -eq 1 ] && { echo ""; echo "Dry run complete; nothing was changed."; exit 0; }
 LEFT=()
 KEEP_HOME=()
-[ "$KEEP_LOGS" -eq 0 ] && KEEP_HOME=("$HOME_DIR")
+[ "$KEEP_LOGS" -eq 0 ] && [ ! -d "$HOME_DIR/.git" ] && KEEP_HOME=("$HOME_DIR")
 for p in "$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard /usr/local/cpanel/base/frontend/jupiter/xmartguard \
          "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME; do
