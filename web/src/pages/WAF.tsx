@@ -21,7 +21,7 @@ interface WafEvent {
 }
 
 interface WafStatus {
-  status: { available: boolean; enabled: boolean; web_server: string; error: string; rules: number };
+  status: { available: boolean; enabled: boolean; web_server: string; error: string; warning: string; rules: number };
   stats: { blocked_24h: number; bots_24h: number; logins_24h: number; total: number };
 }
 
@@ -112,6 +112,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
         </div>
       )}
       {st?.error && <ErrorBox message={st.error} />}
+      {st?.warning && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">{st.warning}</div>}
       {st && st.available && !st.enabled && (
         <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">The WAF is disabled in Settings » WAF &amp; Bruteforce.</div>
       )}

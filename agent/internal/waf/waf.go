@@ -42,6 +42,7 @@ type Status struct {
 	WebServer string `json:"web_server"`
 	Panel     string `json:"panel"`
 	Error     string `json:"error"`
+	Warning   string `json:"warning"`
 	Rules     int    `json:"rules"`
 }
 
@@ -56,8 +57,15 @@ func (m *Manager) Status() Status {
 			n++
 		}
 	}
+	warn := ""
+	switch t.Engine {
+	case "DetectionOnly":
+		warn = "ModSecurity is in detection-only mode on this server: XMart Guard rules log attacks but do not block them. Set SecRuleEngine On to enforce."
+	case "Off":
+		warn = "ModSecurity's rule engine is turned off on this server (SecRuleEngine Off): the WAF rules are inactive."
+	}
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
-		Panel: t.Name, Error: e, Rules: n}
+		Panel: t.Name, Error: e, Warning: warn, Rules: n}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {

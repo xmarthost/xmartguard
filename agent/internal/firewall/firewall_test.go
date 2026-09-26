@@ -395,7 +395,16 @@ func TestIPDBOnKernel(t *testing.T) {
 				return
 			}
 		}
-		_ = sh("ip", "netns", "exec", "xgtest", "ping", "-c", "3", "-i", "0.2", "-W", "1", "10.99.0.1")
+		// Follow the kernel log so the live monitor sees the drops too.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go m.RunConnLog(ctx)
+		time.Sleep(300 * time.Millisecond)
+		// Real TCP connection attempts from the listed address (bash /dev/tcp,
+		// so no ping binary is needed); the SYNs are dropped by the IPDB set.
+		for i := 0; i < 3; i++ {
+			_ = sh("ip", "netns", "exec", "xgtest", "timeout", "1", "bash", "-c", "exec 3<>/dev/tcp/10.99.0.1/2222")
+		}
 		m.pollIPDBHits()
 		st := m.IPDBStatus()
 		if st.HitsTotal < 1 || len(st.Recent) == 0 || st.Recent[0].Entry != "10.99.0.2" || st.Countries["ZZ"] < 1 {
@@ -407,6 +416,24 @@ func TestIPDBOnKernel(t *testing.T) {
 		}
 		if again, _ := m.TakePendingHits(10); len(again) != 0 {
 			t.Fatalf("pending not cleared: %+v", again)
+		}
+		// The sampled drops reach the live monitor through /dev/kmsg.
+		if _, err := os.Stat(KmsgPath); err == nil {
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				live := m.IPDBLive(0)
+				if len(live.Events) > 0 {
+					e := live.Events[0]
+					if e.Src != "10.99.0.2" || e.Dst != "10.99.0.1" || e.DstPort != 2222 || e.Country != "ZZ" || e.Entry != "10.99.0.2" {
+						t.Fatalf("live event %+v", e)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("no live event from the kernel log")
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
 		}
 	})
 }

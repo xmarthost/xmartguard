@@ -94,7 +94,7 @@ if systemctl list-unit-files "$UNIT_NAME" >/dev/null 2>&1 && systemctl cat "$UNI
   ok "Service stopped and disabled"
 fi
 if [ -x "$BIN" ]; then
-  if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN cleanup"; else "$BIN" cleanup >/dev/null 2>&1 && ok "Firewall rules removed"; fi
+  if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN cleanup"; else "$BIN" cleanup >/dev/null 2>&1 && ok "Firewall rules and WAF rules removed"; fi
 fi
 # cPanel/WHM plugins (before the binary that removes them is deleted).
 if [ -x "$BIN" ] && { [ -d /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ] || [ -f /var/cpanel/apps/xmartguard.conf ]; }; then
@@ -153,6 +153,9 @@ for p in "$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /etc/x
   { [ -e "$p" ] || [ -L "$p" ]; } && LEFT+=("$p")
 done
 [ "$KEEP_LOGS" -eq 0 ] && [ -e "$LOG_DIR" ] && LEFT+=("$LOG_DIR")
+for w in /etc/apache2/conf.d/includes/xmartguard-waf.conf /etc/apache2/conf-available/xmartguard-waf.conf /etc/httpd/conf.d/xmartguard-waf.conf; do
+  [ -e "$w" ] && LEFT+=("WAF include $w")
+done
 if pgrep -f "$BIN run" >/dev/null 2>&1; then LEFT+=("running process: $BIN"); fi
 if command -v iptables >/dev/null 2>&1 && iptables -w -S XMARTGUARD >/dev/null 2>&1; then LEFT+=("iptables chain XMARTGUARD"); fi
 if command -v ipset >/dev/null 2>&1 && ipset list -n 2>/dev/null | grep -q '^xg_'; then LEFT+=("ipset sets xg_*"); fi

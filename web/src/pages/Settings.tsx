@@ -326,7 +326,7 @@ interface WafRule {
 }
 
 function WAFSection({ serverId, s, admin, busy, onSave }: { serverId: string; s: WAFS; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void }) {
-  const info = useAgent<{ status: { available: boolean; web_server: string; error: string }; rules: WafRule[] }>(serverId, 'waf.status');
+  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string }; rules: WafRule[] }>(serverId, 'waf.status');
   const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
   useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
   const dis = !admin || busy;
@@ -346,6 +346,7 @@ function WAFSection({ serverId, s, admin, busy, onSave }: { serverId: string; s:
             {st && !st.available && <span className="text-amber-600">ModSecurity is not installed (cPanel: EasyApache 4 » ea-apache24-mod_security2).</span>}
           </p>
           {st?.error && <p className="mt-1 text-sm text-red-600">{st.error}</p>}
+          {st?.warning && <p className="mt-1 text-sm text-amber-700">{st.warning}</p>}
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>

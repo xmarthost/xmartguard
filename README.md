@@ -62,6 +62,22 @@ The plugins have no logic of their own: they talk to the agent's local socket, w
 
 Command line (root): `xmartguard-agent call overview`, `xmartguard-agent call fw.add '{"kind":"deny","addr":"203.0.113.9"}'`, `xmartguard-agent check /home/user/public_html` (offline scan).
 
+## What it protects (0.4.0)
+
+| Module | What it does |
+|---|---|
+| Malware scanner | Realtime (inotify), quick/full/path, daily and weekly scans; own heuristic analyzer + known-bad hash database + ClamAV; quarantine/restore/disable/delete |
+| WAF | Own ModSecurity rules for Apache/LiteSpeed: **uploads are scanned by the malware engine before they are saved**, PHP uploads and PHP inside `wp-content/uploads` blocked, sensitive files (`.env`, `.git`, backups, logs, SQL dumps) protected, XML-RPC multicall, bad/SEO/AI/custom bots; per-rule disable (also vendor rules) and IP whitelist. Installed with a config test and automatic rollback |
+| Brute force | SSH, cPanel/WHM/Webmail, Dovecot, Postfix, Exim (auth and abuse), FTP, Apache denials and failed WordPress/Joomla/OpenCart logins (via the WAF) |
+| Firewall | iptables+ipset (default) or nftables: allow/deny/temp lists, countries, DoS, self-healing; live log of blocked connections |
+| IPDB | Shared attacker blocklist across all servers with live monitor, hourly/live charts and world map (per server and portal-wide) |
+| CMS | WordPress/Joomla/OpenCart discovery, outdated core/plugins/themes, WordPress core checksum verification, WP-CLI updates and core repair |
+| DB scanner | Read-only scan of WordPress databases for injected scripts, hidden iframes and PHP |
+| Outgoing spam | Exim per-sender limits per minute/hour, spam-subject checks, hold/suspend outgoing mail (cPanel) |
+| Reputation | Server IPs on DNS blocklists; hosted domains on Spamhaus DBL/SURBL/URIBL and optionally Google Safe Browsing |
+| Automatic suspension | Suspend cPanel accounts after repeated malware detections |
+| Portal | Server dashboard, Mass Operations across many servers, roles, audit log, email alerts |
+
 ## IPDB — shared attacker blocklist
 
 Every server reports the attackers it bans automatically (brute force, DoS). The portal lists an address once it has been reported by `IPDB_MIN_REPORTERS` servers (default 2) or `IPDB_MIN_REPORTS` times (default 3) within `IPDB_WINDOW_DAYS` (7); entries expire `IPDB_TTL_DAYS` (30) after the last report. Public feeds (`IPDB_FEEDS`, default Spamhaus DROP) and operator-managed manual entries and whitelist are merged in. Every agent drops the list in its own ipset/nftables set, counts hits per address and reports them back for the **IPDB** page: world map of attack origins, live monitor, daily chart and top attackers. Addresses of your own servers and private ranges are never listed. Country data: [DB-IP Lite](https://db-ip.com) (CC BY 4.0), downloaded by the portal into `DATA_DIR`.

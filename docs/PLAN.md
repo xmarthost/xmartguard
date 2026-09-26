@@ -18,12 +18,12 @@ Clean-room security platform for hosting servers, inspired by the capability set
 | M2 | Monitoring | System Monitoring (CPU/load/memory/swap/disk/connections/top processes, live mode, history charts), web traffic, alerts on offline/high load | Core done; web traffic pending |
 | M3 | Malware scanner | Local SQLite, full/quick/path scans, realtime (inotify), own heuristic analyzer + known-bad hash DB + ClamAV, quarantine/restore/disable/delete, whitelist/blacklist, daily/weekly scans, Scanner Logs, Virus Scanner settings, email alerts | **Done (v0.2.0; heuristics + hash DB v0.3.0: 99.3% on a real 2,162-file malware corpus, 0 false positives on vendor libraries)** |
 | M4 | Firewall | iptables+ipset (default) or nftables: allow/deny/temp ban/temp allow/ignore/country, LFD-style brute force (SSH/cPanel/WHM/mail/FTP), DoS, Firewall Logs, self-heal after CSF flush | **Done (v0.2.0)**; DDNS + port filter pending |
-| M5 | WAF | ModSecurity include with own rules (+ optional OWASP CRS), WAF Logs, bad-bot blocker, CAPTCHA protected URLs, webshell protection, Bot Attacks | |
-| M6 | Reputation | IP Reputation (DNSBL, configurable RBL list), Domain Reputation (Safe Browsing/URLhaus), IPDB distributed blocklist + live monitor + world map | IP Reputation (v0.2.0), **IPDB done (v0.3.0)**; domain reputation pending |
-| M7 | CMS | WordPress/Joomla/OpenCart discovery, plugins/themes, CVE feed, core checksum repair, auto-update policy, DB scanner | |
-| M8 | Mail & accounts | Outgoing Spam Monitor (Exim), automatic account suspension, proactive process monitor, cron monitor | |
+| M5 | WAF | ModSecurity include with own rules (+ optional OWASP CRS), WAF Logs, bad-bot blocker, CAPTCHA protected URLs, webshell protection, Bot Attacks | **Done (v0.4.0)**: own rules incl. upload malware scanning, WAF Logs, Bot Attacks, CMS login brute force; CAPTCHA pending |
+| M6 | Reputation | IP Reputation (DNSBL, configurable RBL list), Domain Reputation (Safe Browsing/URLhaus), IPDB distributed blocklist + live monitor + world map | **Done**: IP reputation (v0.2.0), IPDB (v0.3.0), per-server IPDB live connection log and domain reputation (v0.4.0) |
+| M7 | CMS | WordPress/Joomla/OpenCart discovery, plugins/themes, CVE feed, core checksum repair, auto-update policy, DB scanner | **Done (v0.4.0)** except CVE feed and auto-update policy |
+| M8 | Mail & accounts | Outgoing Spam Monitor (Exim), automatic account suspension, proactive process monitor, cron monitor | **OSM and automatic suspension done (v0.4.0)**; process and cron monitors pending |
 | M9 | Hardening & alerts | Lynis integration, notifications (Email/Slack/Telegram), daily reports | Email alerts done (v0.2.0) |
-| M10 | Fleet ops & billing | Mass Operations with preview/canary/rollback, plans/entitlements | |
+| M10 | Fleet ops & billing | Mass Operations with preview/canary/rollback, plans/entitlements | **Mass Operations done (v0.4.0)**; canary/rollback pending |
 | M11 | Panels | cPanel/WHM plugin, DirectAdmin, Plesk, CyberPanel, standalone adapters | **cPanel/WHM plugins done (v0.3.0)** |
 
 ## Testing strategy

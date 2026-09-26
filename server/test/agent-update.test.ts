@@ -30,10 +30,10 @@ it('auto-updates an outdated agent', async () => {
   const c = new Client(h.url);
   await c.login();
   const { body } = await c.req('POST', '/api/enrollment-tokens', {});
-  const env = { ...process.env, XG_CONFIG_DIR: path.join(tmp, 'conf'), XG_STATE_DIR: path.join(tmp, 'state') };
+  const env = { ...process.env, XG_CONFIG_DIR: path.join(tmp, 'conf'), XG_STATE_DIR: path.join(tmp, 'state'), XG_SOCKET: path.join(tmp, 'agent.sock') };
   const bin = path.join(tmp, 'agent');
   await promisify(execFile)(bin, ['enroll', '--server', h.url, '--token', body.token], { env });
-  fs.writeFileSync(path.join(tmp, 'conf', 'settings.json'), JSON.stringify({ firewall: { enabled: false }, scanner: { realtime: false } }));
+  fs.writeFileSync(path.join(tmp, 'conf', 'settings.json'), JSON.stringify({ firewall: { enabled: false }, scanner: { realtime: false, daily_scan: false, weekly_scan: false }, waf: { enabled: false }, cms: { enabled: false }, domain_reputation: { enabled: false }, osm: { enabled: false } }));
   expect((await promisify(execFile)(bin, ['version'])).stdout.trim()).toBe('0.1.0');
 
   const proc = spawn(bin, ['run'], { env, stdio: 'ignore' });

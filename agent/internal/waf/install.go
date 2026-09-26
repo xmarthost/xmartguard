@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -18,8 +19,36 @@ type Target struct {
 	WebServer   string   `json:"web_server"`
 	ErrorLogs   []string `json:"error_logs"`
 
+	// Engine is the SecRuleEngine the server configures itself: On,
+	// DetectionOnly, Off, or "" when nothing sets it (ModSecurity then
+	// defaults to Off, so XMart Guard turns it on for its own include).
+	Engine string `json:"engine"`
+
 	configTest []string // command that validates the config
 	reload     []string // command that reloads the web server
+}
+
+var reEngine = regexp.MustCompile(`(?mi)^\s*SecRuleEngine\s+(On|Off|DetectionOnly)\b`)
+
+// engineSetting finds the SecRuleEngine configured in the given files/globs.
+func engineSetting(globs ...string) string {
+	engine := ""
+	for _, g := range globs {
+		files, _ := filepath.Glob(g)
+		for _, f := range files {
+			if strings.Contains(f, "xmartguard") {
+				continue
+			}
+			b, err := os.ReadFile(f)
+			if err != nil {
+				continue
+			}
+			if m := reEngine.FindAllStringSubmatch(string(b), -1); m != nil {
+				engine = m[len(m)-1][1]
+			}
+		}
+	}
+	return engine
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
@@ -74,6 +103,7 @@ func Detect() Target {
 			configTest:  []string{firstBin("/scripts/restartsrv_httpd"), "--check"},
 			reload:      []string{firstBin("/scripts/restartsrv_httpd")},
 		}
+		t.Engine = engineSetting("/etc/apache2/conf.d/modsec2.conf", "/etc/apache2/conf.d/modsec/*.conf")
 		if t.configTest[0] == "" {
 			t.configTest = []string{firstBin("/usr/local/apache/bin/httpd", "httpd"), "-t"}
 			t.reload = []string{firstBin("/usr/local/apache/bin/apachectl", "apachectl"), "graceful"}
@@ -82,11 +112,14 @@ func Detect() Target {
 	case exists("/etc/httpd/conf.d") && hasModule(firstBin("/usr/sbin/httpd", "httpd")):
 		return Target{Name: "rhel", ModSec: true, IncludeFile: "/etc/httpd/conf.d/xmartguard-waf.conf",
 			WebServer: "Apache", ErrorLogs: []string{"/var/log/httpd/error_log"},
+			Engine:     engineSetting("/etc/httpd/conf.d/mod_security.conf", "/etc/httpd/modsecurity.d/*.conf"),
 			configTest: []string{firstBin("/usr/sbin/httpd", "httpd"), "-t"},
 			reload:     []string{firstBin("apachectl", "/usr/sbin/apachectl"), "graceful"}}
-	case exists("/etc/apache2/conf-available") && hasModule(firstBin("/usr/sbin/apache2", "apache2ctl")):
+	// Debian/Ubuntu: apache2ctl loads /etc/apache2/envvars; plain "apache2 -M" fails without them.
+	case exists("/etc/apache2/conf-available") && hasModule(firstBin("apache2ctl", "/usr/sbin/apache2ctl")):
 		return Target{Name: "debian", ModSec: true, IncludeFile: "/etc/apache2/conf-available/xmartguard-waf.conf",
 			WebServer: "Apache", ErrorLogs: []string{"/var/log/apache2/error.log"},
+			Engine:     engineSetting("/etc/modsecurity/*.conf", "/etc/apache2/mods-enabled/security2.conf"),
 			configTest: []string{firstBin("apache2ctl", "/usr/sbin/apache2ctl"), "-t"},
 			reload:     []string{firstBin("apache2ctl", "/usr/sbin/apache2ctl"), "graceful"}}
 	}
@@ -149,7 +182,13 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 	if err := writeIfChanged(rulesFile, rules, 0o644); err != nil {
 		return err
 	}
-	include := fmt.Sprintf("%s\n# Managed by xmartguard-agent. Configure in the XMart Guard portal.\n<IfModule security2_module>\nInclude %s\n</IfModule>\n%s\n", markBegin, rulesFile, markEnd)
+	engine := ""
+	if t.Engine == "" {
+		// Nothing turns ModSecurity on (Debian/Ubuntu without modsecurity.conf):
+		// enable it with body access, which the upload and XML-RPC rules need.
+		engine = "SecRuleEngine On\nSecRequestBodyAccess On\n"
+	}
+	include := fmt.Sprintf("%s\n# Managed by xmartguard-agent. Configure in the XMart Guard portal.\n<IfModule security2_module>\n%sIncludeOptional %s\n</IfModule>\n%s\n", markBegin, engine, rulesFile, markEnd)
 	prev, _ := os.ReadFile(t.IncludeFile)
 	if string(prev) == include {
 		return nil // already current; don't reload
@@ -180,13 +219,25 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 
 // remove deletes the include and rules and reloads.
 func (m *Manager) uninstall(t Target) error {
-	if t.IncludeFile != "" {
-		if exists(t.IncludeFile) {
-			_ = os.Remove(t.IncludeFile)
-			_, _ = m.runTimeout(t.reload, 120*time.Second)
-		}
-	}
+	RemoveInclude(t)
 	return os.RemoveAll(m.RulesDir)
+}
+
+// RemoveInclude unhooks the rules from the web server and reloads it. The
+// uninstaller calls it (through "xmartguard-agent cleanup") before deleting
+// /etc/xmartguard, so Apache never references a missing file.
+func RemoveInclude(t Target) {
+	if t.IncludeFile == "" || !exists(t.IncludeFile) {
+		return
+	}
+	if t.Name == "debian" {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		_ = exec.CommandContext(ctx, firstBin("a2disconf", "/usr/sbin/a2disconf"), "-q", "xmartguard-waf").Run()
+		cancel()
+	}
+	_ = os.Remove(t.IncludeFile)
+	m := &Manager{}
+	_, _ = m.runTimeout(t.reload, 120*time.Second)
 }
 
 func (m *Manager) runTimeout(argv []string, d time.Duration) (string, error) {

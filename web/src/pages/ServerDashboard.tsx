@@ -6,7 +6,6 @@ import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ago, bytes, duration, panelName, pct } from '../format';
 import { Bar, ErrorBox, PageLoader, StatusDot } from '../components/ui';
-import SecurityPanel from '../components/SecurityPanel';
 import AttackOverview from '../components/AttackOverview';
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
@@ -80,7 +79,11 @@ export default function ServerDashboard() {
 
       <AttackOverview serverId={s.id} online={s.online} />
 
-      <SecurityPanel serverId={s.id} online={s.online} agentVersion={s.agent_version} latestVersion={data!.latest_agent_version} />
+      {data!.latest_agent_version && s.agent_version !== data!.latest_agent_version && (
+        <Link to="settings?s=about" className="block rounded-lg bg-amber-50 p-3 text-sm text-amber-800 hover:bg-amber-100">
+          This server runs agent {s.agent_version}; version {data!.latest_agent_version} is available (it installs automatically when the agent reconnects, or update it from Settings » About).
+        </Link>
+      )}
 
       {m ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

@@ -50,7 +50,7 @@ describe('agent end-to-end', () => {
     const cfg = JSON.parse(fs.readFileSync(path.join(confDir, 'agent.json'), 'utf8'));
     serverId = cfg.server_id;
     // Keep the dev/CI host's firewall untouched by the test agent.
-    fs.writeFileSync(path.join(confDir, 'settings.json'), JSON.stringify({ firewall: { enabled: false }, scanner: { realtime: false } }));
+    fs.writeFileSync(path.join(confDir, 'settings.json'), JSON.stringify({ firewall: { enabled: false }, scanner: { realtime: false, daily_scan: false, weekly_scan: false }, waf: { enabled: false }, cms: { enabled: false }, domain_reputation: { enabled: false }, osm: { enabled: false } }));
     expect(fs.statSync(path.join(confDir, 'identity.key')).mode & 0o777).toBe(0o600);
     // Token is single-use: a second enroll must fail.
     await expect(run(['enroll', '--force', '--server', h.url, '--token', body.token], env())).rejects.toThrow(/already used/);
@@ -157,7 +157,7 @@ describe('agent end-to-end', () => {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     cfg.server_id = serverId;
     fs.writeFileSync(cfgPath, JSON.stringify(cfg));
-    fs.writeFileSync(path.join(other, 'settings.json'), JSON.stringify({ firewall: { enabled: false }, scanner: { realtime: false } }));
+    fs.writeFileSync(path.join(other, 'settings.json'), JSON.stringify({ firewall: { enabled: false }, scanner: { realtime: false, daily_scan: false, weekly_scan: false }, waf: { enabled: false }, cms: { enabled: false }, domain_reputation: { enabled: false }, osm: { enabled: false } }));
     const imposter = spawn(agentBin, ['run'], { env: { ...process.env, XG_CONFIG_DIR: other, XG_STATE_DIR: path.join(other, 'state'), XG_SOCKET: path.join(other, 'agent.sock') }, stdio: ['ignore', 'ignore', 'pipe'] });
     let log = '';
     imposter.stderr!.on('data', (d) => (log += d));

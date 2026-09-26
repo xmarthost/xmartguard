@@ -34,6 +34,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
+	"github.com/xmarthost/xmartguard/agent/internal/waf"
 )
 
 func main() {
@@ -59,10 +60,12 @@ func main() {
 		// Used by the WAF upload approver: exit 1 if the file is malware.
 		os.Exit(cmdScanUpload(os.Args[2:]))
 	case "cleanup":
-		// Used by uninstall.sh: remove firewall rules from every provider.
+		// Used by uninstall.sh: remove firewall rules from every provider and
+		// unhook the WAF rules from the web server.
 		_ = firewall.FindIPTables().Remove()
 		_ = firewall.FindNFT().Remove()
-		fmt.Println("firewall rules removed")
+		waf.RemoveInclude(waf.Detect())
+		fmt.Println("firewall rules and WAF include removed")
 	case "panel":
 		err = cmdPanel(os.Args[2:])
 	case "panel-cgi":
