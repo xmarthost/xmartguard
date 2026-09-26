@@ -85,6 +85,34 @@ type CMS struct {
 	IntervalHours int  `json:"interval_hours"`
 }
 
+// OSM is the Outgoing Spam Monitor (Exim).
+type OSM struct {
+	Enabled          bool     `json:"enabled"`
+	PerMinute        int      `json:"per_minute"` // messages per sender per minute
+	PerHour          int      `json:"per_hour"`   // messages per sender per hour
+	Action           string   `json:"action"`     // notify | hold | suspend (cPanel outgoing mail)
+	CheckSubjects    bool     `json:"check_subjects"`
+	SpamPatterns     []string `json:"spam_patterns"` // subject fragments (case-insensitive)
+	WhitelistSenders []string `json:"whitelist_senders"`
+	WhitelistIPs     []string `json:"whitelist_ips"`
+	WhitelistPaths   []string `json:"whitelist_paths"` // script directories (cwd prefixes)
+}
+
+// AutoSuspend suspends cPanel accounts that keep getting infected.
+type AutoSuspend struct {
+	Enabled      bool     `json:"enabled"`
+	Detections   int      `json:"detections"`   // malware detections...
+	WindowHours  int      `json:"window_hours"` // ...within this many hours
+	ExcludeUsers []string `json:"exclude_users"`
+}
+
+// DomainReputation checks hosted domains against domain blocklists.
+type DomainReputation struct {
+	Enabled         bool   `json:"enabled"`
+	IntervalHours   int    `json:"interval_hours"`
+	SafeBrowsingKey string `json:"safe_browsing_key"` // optional Google Safe Browsing API key
+}
+
 // IPDB is the portal-wide shared blocklist: servers report attackers they
 // ban, the portal aggregates the reports and distributes a list that every
 // server drops at the firewall.
@@ -104,13 +132,16 @@ type Notifications struct {
 
 // Settings is the full policy document.
 type Settings struct {
-	Scanner       Scanner       `json:"scanner"`
-	Firewall      Firewall      `json:"firewall"`
-	Reputation    Reputation    `json:"reputation"`
-	IPDB          IPDB          `json:"ipdb"`
-	WAF           WAF           `json:"waf"`
-	CMS           CMS           `json:"cms"`
-	Notifications Notifications `json:"notifications"`
+	Scanner       Scanner          `json:"scanner"`
+	Firewall      Firewall         `json:"firewall"`
+	Reputation    Reputation       `json:"reputation"`
+	IPDB          IPDB             `json:"ipdb"`
+	WAF           WAF              `json:"waf"`
+	CMS           CMS              `json:"cms"`
+	OSM           OSM              `json:"osm"`
+	AutoSuspend   AutoSuspend      `json:"auto_suspend"`
+	DomainRep     DomainReputation `json:"domain_reputation"`
+	Notifications Notifications    `json:"notifications"`
 }
 
 // Defaults are safe: detections are reported, not acted on, until an admin
@@ -130,6 +161,10 @@ func Defaults() Settings {
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
 		IPDB:       IPDB{Enabled: true, Report: true},
 		CMS:        CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 24},
+		OSM: OSM{Enabled: true, PerMinute: 50, PerHour: 300, Action: "notify", CheckSubjects: true,
+			SpamPatterns: []string{}, WhitelistSenders: []string{}, WhitelistIPs: []string{}, WhitelistPaths: []string{}},
+		AutoSuspend: AutoSuspend{Enabled: false, Detections: 10, WindowHours: 24, ExcludeUsers: []string{}},
+		DomainRep:   DomainReputation{Enabled: true, IntervalHours: 12},
 		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
 			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{}},
 		Notifications: Notifications{
@@ -233,6 +268,30 @@ func normalize(s *Settings) {
 	if s.WAF.DisabledRules == nil {
 		s.WAF.DisabledRules = []int{}
 	}
+	s.OSM.SpamPatterns = clean(s.OSM.SpamPatterns, false)
+	s.OSM.WhitelistSenders = clean(s.OSM.WhitelistSenders, false)
+	s.OSM.WhitelistIPs = clean(s.OSM.WhitelistIPs, false)
+	s.OSM.WhitelistPaths = clean(s.OSM.WhitelistPaths, false)
+	s.AutoSuspend.ExcludeUsers = clean(s.AutoSuspend.ExcludeUsers, false)
+	if s.OSM.PerMinute <= 0 {
+		s.OSM.PerMinute = 50
+	}
+	if s.OSM.PerHour <= 0 {
+		s.OSM.PerHour = 300
+	}
+	if s.OSM.Action == "" {
+		s.OSM.Action = "notify"
+	}
+	if s.AutoSuspend.Detections <= 0 {
+		s.AutoSuspend.Detections = 10
+	}
+	if s.AutoSuspend.WindowHours <= 0 {
+		s.AutoSuspend.WindowHours = 24
+	}
+	if s.DomainRep.IntervalHours <= 0 {
+		s.DomainRep.IntervalHours = 12
+	}
+	s.DomainRep.SafeBrowsingKey = strings.TrimSpace(s.DomainRep.SafeBrowsingKey)
 	if s.CMS.IntervalHours <= 0 {
 		s.CMS.IntervalHours = 24
 	}
@@ -295,6 +354,19 @@ func validate(s Settings) error {
 		if id <= 0 || id > 99999999 {
 			return fmt.Errorf("invalid rule id %d", id)
 		}
+	}
+	switch s.OSM.Action {
+	case "notify", "hold", "suspend":
+	default:
+		return fmt.Errorf("invalid outgoing spam action %q", s.OSM.Action)
+	}
+	for _, ip := range s.OSM.WhitelistIPs {
+		if !validIPorCIDR(ip) {
+			return fmt.Errorf("invalid IP address %q", ip)
+		}
+	}
+	if len(s.DomainRep.SafeBrowsingKey) > 200 || strings.ContainsAny(s.DomainRep.SafeBrowsingKey, " \t\n/?&") {
+		return errors.New("invalid Safe Browsing API key")
 	}
 	for _, ip := range s.WAF.WhitelistIPs {
 		if !validIPorCIDR(ip) {

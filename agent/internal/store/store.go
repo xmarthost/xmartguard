@@ -182,6 +182,33 @@ CREATE TABLE IF NOT EXISTS db_findings (
   status      TEXT NOT NULL DEFAULT 'detected',
   UNIQUE(site_path, tbl, row_ref, signature)
 );
+CREATE TABLE IF NOT EXISTS osm_events (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  at        INTEGER NOT NULL,
+  msg_id    TEXT NOT NULL DEFAULT '',
+  sender    TEXT NOT NULL,
+  source    TEXT NOT NULL DEFAULT '',
+  remarks   TEXT NOT NULL DEFAULT '',
+  interval  TEXT NOT NULL DEFAULT '',
+  count     INTEGER NOT NULL DEFAULT 0,
+  action    TEXT NOT NULL DEFAULT '',
+  user      TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS domain_reputation (
+  domain      TEXT PRIMARY KEY,
+  user        TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL,           -- clean | listed | error
+  reasons     TEXT NOT NULL DEFAULT '',
+  checked_at  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS suspensions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         INTEGER NOT NULL,
+  user       TEXT NOT NULL,
+  reason     TEXT NOT NULL,
+  status     TEXT NOT NULL,           -- suspended | lifted | failed
+  lifted_at  INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS kv (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

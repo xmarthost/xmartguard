@@ -23,6 +23,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
+	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/notify"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
@@ -45,6 +46,7 @@ type Agent struct {
 	Firewall *firewall.Manager
 	WAF      *waf.Manager
 	CMS      *cms.Manager
+	OSM      *mail.Monitor
 	Mailer   *notify.Mailer
 	Session  *client.Session
 
@@ -91,6 +93,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		Docroots:  func() map[string]string { return cms.CPanelDocroots("/var/cpanel/userdata") },
 		OnFinding: a.onDBFinding,
 	}
+	a.OSM = &mail.Monitor{DB: db, Settings: st, Log: log, Owner: a.mailOwner, OnEvent: a.onOSMEvent}
 	return a, nil
 }
 
@@ -106,6 +109,8 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.reputationLoop(ctx)
 	go a.WAF.Run(ctx)
 	go a.CMS.Run(ctx)
+	go a.OSM.Run(ctx)
+	go a.domainRepLoop(ctx)
 }
 
 func (a *Agent) onDBFinding(s cms.Site, f cms.DBFinding) {
@@ -145,6 +150,7 @@ func (a *Agent) protectedIPs() []string {
 }
 
 func (a *Agent) onFinding(f scanner.Finding) {
+	a.maybeSuspend(f)
 	n := a.Settings.Get().Notifications
 	if n.Email == "" {
 		return
@@ -568,6 +574,92 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		n, err := a.CMS.ArchiveDBFindings(in.IDs)
 		return map[string]any{"done": n}, err
+	}
+
+	// ---- outgoing spam monitor
+	h["osm.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		f, err := decode[mail.EventFilter](p)
+		if err != nil {
+			return nil, err
+		}
+		evs, total, err := a.OSM.Events(f)
+		return map[string]any{"events": evs, "total": total}, err
+	}
+	h["osm.transaction"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			MsgID string `json:"msg_id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		lines, err := mail.Transaction(in.MsgID)
+		return map[string]any{"lines": lines}, err
+	}
+	h["osm.delete"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IDs []int64 `json:"ids"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		n, err := a.OSM.Delete(in.IDs)
+		return map[string]any{"done": n}, err
+	}
+	h["osm.release"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			User string `json:"user"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, a.OSM.Release(in.User)
+	}
+
+	// ---- domain reputation
+	h["domainrep.get"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Q      string `json:"q"`
+			Limit  int    `json:"limit"`
+			Offset int    `json:"offset"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		sum, rows, total, err := reputation.LoadDomains(a.DB, in.Q, in.Limit, in.Offset)
+		return map[string]any{"summary": sum, "domains": rows, "total": total}, err
+	}
+	h["domainrep.check"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		err := a.checkDomains(ctx)
+		sum, _, _, _ := reputation.LoadDomains(a.DB, "", 1, 0)
+		if err != nil {
+			return map[string]any{"summary": sum, "warning": err.Error()}, nil
+		}
+		return map[string]any{"summary": sum}, nil
+	}
+
+	// ---- automatic suspension
+	h["suspend.list"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"suspensions": a.suspensions()}, nil
+	}
+	h["suspend.lift"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID int64 `json:"id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, a.liftSuspension(in.ID)
+	}
+
+	// ---- dashboard
+	h["dashboard.get"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Days int `json:"days"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		return a.Dashboard(in.Days), nil
 	}
 
 	// ---- reputation
