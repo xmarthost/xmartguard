@@ -77,8 +77,16 @@ if ! systemctl list-unit-files docker.service 2>/dev/null | grep -q '^docker.ser
     die "Docker CE could not be installed (see the dnf output above)"
   fi
 fi
+# podman-docker leaves DOCKER_HOST=unix:///run/podman/podman.sock in login
+# shells (and a /run/docker.sock symlink to it); talk to the real daemon.
+case "${DOCKER_HOST:-}" in *podman*) unset DOCKER_HOST ;; esac
+rm -f /etc/profile.d/podman-docker.sh /etc/profile.d/podman-docker.csh
+if [ -L /run/docker.sock ] && ! systemctl is-active -q docker; then rm -f /run/docker.sock; fi
 systemctl enable --now docker >/dev/null
+docker context use default >/dev/null 2>&1 || true
 docker compose version >/dev/null 2>&1 || dnf -y install docker-compose-plugin
+for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+docker info >/dev/null 2>&1 || die "the Docker daemon is not answering (systemctl status docker)"
 ok "$(docker --version)"
 
 # Building the image needs ~2 GB RAM; add swap on small servers.
