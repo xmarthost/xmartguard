@@ -21,7 +21,6 @@ XMart Guard combines several engines. Order of checks for a script file:
 4. **Linux Malware Detect hex patterns** (suspicious → confirmed by the AI).
 5. **YARA**: the administrator's rules in `/etc/xmartguard/yara/*.yar`
    (virus) and public feed rules in `/etc/xmartguard/yara/feeds/` (suspicious).
-6. **ClamAV**, when installed.
 
 Measured on all 13,186 distinct script files of WordPress 5.8 – 7.1.2: **0
 detections**, including before the known-good list applies.

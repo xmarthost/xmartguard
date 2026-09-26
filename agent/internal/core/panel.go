@@ -179,7 +179,7 @@ func (a *Agent) userHandlers(u *user.User) map[string]local.Handler {
 				case "quarantine":
 					err = a.Scanner.Quarantine(id)
 				case "restore":
-					err = a.Scanner.Restore(id)
+					err = a.restoreFinding(id)
 				case "delete":
 					err = a.Scanner.Delete(id)
 				default:

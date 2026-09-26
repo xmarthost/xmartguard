@@ -59,11 +59,18 @@ const AI_STYLE: Record<string, string> = {
   error: 'bg-slate-100 text-slate-500',
 };
 
-function AIBadge({ v, reason }: { v?: string; reason?: string }) {
+/** The AI verdict with its confidence; a "clean" verdict below the restore
+ * threshold says why the file stayed in quarantine. */
+function AIBadge({ v, reason, confidence, status }: { v?: string; reason?: string; confidence?: number; status?: string }) {
   if (!v) return <span className="text-xs text-slate-300">–</span>;
+  const held = v === 'clean' && (status === 'quarantined' || status === 'disabled') && (confidence ?? 0) < 90;
+  const tip = [reason, held ? `Kept in ${status}: the AI must be at least 90% sure to restore a file automatically. Use Restore or False positive if you agree.` : '']
+    .filter(Boolean)
+    .join('\n\n');
   return (
-    <span title={reason} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${AI_STYLE[v] ?? AI_STYLE.error}`}>
+    <span title={tip} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${AI_STYLE[v] ?? AI_STYLE.error} ${held ? 'ring-1 ring-amber-300' : ''}`}>
       <Sparkles className="h-3 w-3" /> {v}
+      {confidence ? <span className="font-normal opacity-70">{confidence}%</span> : null}
     </span>
   );
 }
@@ -99,11 +106,6 @@ function ScanProgress({ s }: { s: Scan }) {
         {rate.toLocaleString()} files/s
         {total > 0 && rate > 0 && ` · about ${Math.max(1, Math.ceil((total - s.files) / rate / 60))} min left`}
       </div>
-      {s.current && (
-        <div className="truncate text-[11px] text-slate-400" title={s.current}>
-          {s.current}
-        </div>
-      )}
     </div>
   );
 }
@@ -212,20 +214,35 @@ export function ManualScans() {
                     {s.error && <div className="text-xs text-red-500">{s.error}</div>}
                   </td>
                   <td className="py-3 whitespace-nowrap">{fmtTime(s.finished_at || s.started_at)}</td>
-                  <td className="py-3 text-right whitespace-nowrap text-slate-400">
-                    <Link to={`../scanner-logs?scan=${s.id}`} relative="path" title="View detections" className="mr-3 inline-block hover:text-navy-700">
-                      <FileSearch className="h-4 w-4" />
-                    </Link>
-                    {canRun && (s.status === 'running' || s.status === 'queued') && (
-                      <button title="Stop scan" className="mr-3 hover:text-amber-600" onClick={() => run(() => agentCall(id!, 'scan.stop', { id: s.id }).then(scans.reload), 'Stopping scan')}>
-                        <Square className="h-4 w-4" />
-                      </button>
-                    )}
-                    {canRun && s.status !== 'running' && s.status !== 'queued' && (
-                      <button title="Delete record" className="hover:text-red-600" onClick={() => run(() => agentCall(id!, 'scan.delete', { id: s.id }).then(scans.reload))}>
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
+                  <td className="py-3 text-right whitespace-nowrap">
+                    <div className="inline-flex items-center gap-1.5">
+                      <Link
+                        to={`../scanner-logs?scan=${s.id}`}
+                        relative="path"
+                        title="View detections"
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-navy-800 shadow-sm transition hover:border-navy-300 hover:bg-navy-50"
+                      >
+                        <FileSearch className="h-[18px] w-[18px]" />
+                      </Link>
+                      {canRun && (s.status === 'running' || s.status === 'queued') && (
+                        <button
+                          title="Stop scan"
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-amber-200 bg-amber-50 text-amber-700 shadow-sm transition hover:bg-amber-100"
+                          onClick={() => run(() => agentCall(id!, 'scan.stop', { id: s.id }).then(scans.reload), 'Stopping scan')}
+                        >
+                          <Square className="h-4 w-4 fill-current" />
+                        </button>
+                      )}
+                      {canRun && s.status !== 'running' && s.status !== 'queued' && (
+                        <button
+                          title="Delete record"
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+                          onClick={() => run(() => agentCall(id!, 'scan.delete', { id: s.id }).then(scans.reload))}
+                        >
+                          <Trash2 className="h-[18px] w-[18px]" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -394,7 +411,7 @@ export function ScannerLogs() {
                     </td>
                     <td className="py-3"><Badge value={f.category} /></td>
                     <td className="py-3 font-mono text-xs">{f.signature}</td>
-                    <td className="py-3"><AIBadge v={f.ai_verdict} reason={f.ai_reason} /></td>
+                    <td className="py-3"><AIBadge v={f.ai_verdict} reason={f.ai_reason} confidence={f.ai_confidence} status={f.status} /></td>
                     <td className="py-3">{f.owner}</td>
                     <td className="py-3"><Badge value={f.status} /></td>
                     <td className="py-3 whitespace-nowrap">{fmtTime(f.created_at)}</td>

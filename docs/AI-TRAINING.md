@@ -93,3 +93,37 @@ For the model itself, published work on PHP web shells points to:
   AI's "clean" verdicts on detections (hard negatives) are the most useful
   training material; send quarantine archives to retrain the shipped model
   with `xmartguard-agent ai-train`.
+
+## How verdicts feed back into detection
+
+| Signal | Where it is stored | Effect |
+|---|---|---|
+| Administrator restores a file | Agent: `ai_verdicts` (source `admin`, sha256) | That exact content is never flagged again on this server; any change is scanned again |
+| "Clear (false positive)" | Portal: `ai_kb` clean, overridden | Every server skips that content; the fleet model retrains on it |
+| Online AI says clean (≥90%) | Agent + portal `ai_kb` | File restored automatically; hash known clean on all servers |
+| Online AI says malicious (≥90%) | Portal `ai_kb` | Becomes a hash detection on every server within 10 minutes |
+| Every AI verdict with features | Portal `ai_samples` | Hourly retraining of the fleet update of the built-in model |
+
+The AI's *reason* text is kept for people (Scanner Logs, AI Scanner »
+Shared knowledge, MCP). The learning itself uses the verdict, the
+confidence and the file's features; the reason is not parsed.
+
+## Roadmap for better detection
+
+1. **Labelled corpus** — keep collecting quarantine samples (malicious) and
+   restored/cleared files (clean) from real servers; restored files are the
+   most valuable clean samples because they are exactly the false positives.
+2. **FP regression suite** — every reported false positive becomes a case in
+   `families_test.go`/`heuristics` tests before the rule is changed.
+3. **Clean-code baseline** — official plugin/theme checksums from
+   WordPress.org (already used for core and plugins), extended to popular
+   premium plugins by hashing the copies seen on many servers with no
+   detections (fleet reputation).
+4. **Retrain on reasons** — group AI reasons by family (loader, uploader,
+   SEO spam…) and turn frequent families into behaviour rules with tests.
+5. **Measure** — `xmartguard-agent check --misses --no-hash` on the malware
+   corpus (target >95% rules-only) and on clean corpora (target 0 virus
+   hits) before every release.
+6. **AI review over MCP** — an assistant connected through the AI Connector
+   reviews low-confidence verdicts and new detections across the fleet and
+   proposes rule changes, which are released only after the tests above.

@@ -1,6 +1,6 @@
 // Package scanner implements XMart Guard's malware scanner: manual, scheduled
-// and realtime scans, detection with built-in signatures (plus ClamAV when the
-// server has it), and a reversible quarantine.
+// and realtime scans, detection with XMart Guard's own engine (behaviour
+// rules, heuristics, signatures, YARA), and a reversible quarantine.
 package scanner
 
 import (
@@ -16,7 +16,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
@@ -316,8 +315,8 @@ type Detection struct {
 
 // ErrTrusted is returned (with a nil detection) for content that must not be
 // flagged by any engine: official WordPress core files and files the AI or
-// an administrator found clean. Callers treat it as clean and skip YARA and
-// ClamAV for the file.
+// an administrator found clean. Callers treat it as clean and skip YARA for
+// the file.
 var ErrTrusted = errors.New("trusted content")
 
 // CheckFile applies whitelist/blacklist rules and signatures to one file.
@@ -602,22 +601,8 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	_, _ = s.DB.Exec(`UPDATE scans SET status='running', started_at=? WHERE id=?`, store.Now(), id)
 
 	cfg := s.Settings.Get().Scanner
-	clam := newClam(cfg.UseClamAV)
 	var files int64
 	var infected atomic.Int64
-	var batch []string
-	flushClam := func() {
-		for path, sig := range clam.scan(batch) {
-			info, err := os.Lstat(path)
-			if err != nil {
-				continue
-			}
-			if _, err := s.Record(id, "manual", path, info, Detection{CatVirus, "ClamAV." + sig}); err == nil {
-				infected.Add(1)
-			}
-		}
-		batch = batch[:0]
-	}
 	qdir := QuarantineDir()
 	homeMap := homes()
 	skipDir := func(root, path string, d fs.DirEntry) bool {
@@ -661,7 +646,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	maxSize := int64(cfg.MaxFileSizeMB) << 20
 
 	// Files are checked by a worker pool (half the CPUs, so websites stay
-	// fast); one collector records results, so the ClamAV and YARA batches
+	// fast); one collector records results, so the YARA batch
 	// need no locking.
 	type job struct {
 		path string
@@ -703,12 +688,6 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				scripts = append(scripts, r.path)
 			}
 			if r.err != nil || r.det == nil {
-				if clam.ok && ScriptExts[extOf(filepath.Base(r.path))] && r.info.Size() <= maxSize {
-					batch = append(batch, r.path)
-					if len(batch) >= 200 {
-						flushClam()
-					}
-				}
 				continue
 			}
 			if _, err := s.Record(id, "manual", r.path, r.info, *r.det); err == nil {
@@ -773,7 +752,6 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	close(results)
 	<-collected
 	if ctx.Err() == nil {
-		flushClam()
 		for path, rule := range yaraScan(ctx, scripts) {
 			// Public feed rules are broad: suspicious, confirmed by the AI.
 			cat := CatVirus
@@ -961,65 +939,6 @@ func (s *Scanner) DailyCounts(days int) []map[string]any {
 		day := start.AddDate(0, 0, i).UTC().Format("2006-01-02")
 		c := counts[day]
 		out = append(out, map[string]any{"day": day, "virus": c[CatVirus], "suspicious": c[CatSuspicious], "binary": c[CatBinary]})
-	}
-	return out
-}
-
-// ---------------------------------------------------------------- ClamAV
-
-type clamAV struct {
-	ok  bool
-	bin string
-}
-
-// newClam enables ClamAV when clamdscan (preferred) or clamscan exists.
-func newClam(enabled bool) *clamAV {
-	if !enabled {
-		return &clamAV{}
-	}
-	for _, p := range []string{"/usr/local/cpanel/3rdparty/bin/clamdscan", "/usr/bin/clamdscan", "/usr/local/bin/clamdscan"} {
-		if _, err := os.Stat(p); err == nil {
-			return &clamAV{ok: true, bin: p}
-		}
-	}
-	return &clamAV{}
-}
-
-// ClamAvailable reports the ClamAV binary in use, if any.
-func ClamAvailable() string { return newClam(true).bin }
-
-// scan runs clamdscan over a batch and returns path -> signature.
-func (c *clamAV) scan(paths []string) map[string]string {
-	out := map[string]string{}
-	if !c.ok || len(paths) == 0 {
-		return out
-	}
-	list, err := os.CreateTemp(store.StateDir(), "clamlist-*")
-	if err != nil {
-		return out
-	}
-	defer os.Remove(list.Name())
-	_, _ = list.WriteString(strings.Join(paths, "\n") + "\n")
-	list.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, c.bin, "--no-summary", "--infected", "--fdpass", "--file-list="+list.Name())
-	raw, err := cmd.Output()
-	// Exit code 1 means "virus found"; 2 means an error (e.g. clamd not running).
-	var ee *exec.ExitError
-	if err != nil && (!errors.As(err, &ee) || ee.ExitCode() != 1) {
-		c.ok = false
-		return out
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if !strings.HasSuffix(line, " FOUND") {
-			continue
-		}
-		i := strings.LastIndex(line, ": ")
-		if i < 0 {
-			continue
-		}
-		out[line[:i]] = strings.TrimSuffix(line[i+2:], " FOUND")
 	}
 	return out
 }

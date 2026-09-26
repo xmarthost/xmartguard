@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"math"
 	"regexp"
 	"strings"
@@ -35,16 +36,17 @@ var (
 	reConcatChar    = regexp.MustCompile(`['"]\s*\.\s*['"]`)
 	reLongB64       = regexp.MustCompile(`['"][A-Za-z0-9+/]{260,}={0,2}['"]`)
 	reB64Blob       = regexp.MustCompile(`[A-Za-z0-9+/]{120,}={0,2}`)
-	reHalt          = regexp.MustCompile(`(?i)__halt_compiler\s*\(\s*\)\s*;`)
-	reGzUncompress  = regexp.MustCompile(`(?i)\bgz(?:inflate|uncompress|decode)\s*\(`)
-	reDynInclude    = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\s*\(?\s*\$`)
-	reMailInput     = regexp.MustCompile(`(?i)\bmail\s*\(`)
-	reGlobalsCall   = regexp.MustCompile(`\$GLOBALS\s*\[[^\]]+\]\s*(?:\[[^\]]+\]\s*)*\(`)
-	reAssertVar     = regexp.MustCompile(`(?i)\bassert\s*\(\s*(?:@\s*)?\$`)
-	reOrdChr        = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
-	reStrReplace    = regexp.MustCompile(`(?i)\bstr_replace\s*\(`)
-	reDefineArr     = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
-	reEvalGz        = regexp.MustCompile(`(?i)\b(?:eval|assert|create_function)\s*\(`)
+	// A real statement, not the text "__halt_compiler();" inside a string.
+	reHalt         = regexp.MustCompile(`(?im)(?:^|[;{}\s])__halt_compiler\s*\(\s*\)\s*;`)
+	reGzUncompress = regexp.MustCompile(`(?i)\bgz(?:inflate|uncompress|decode)\s*\(`)
+	reDynInclude   = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\s*\(?\s*\$`)
+	reMailInput    = regexp.MustCompile(`(?i)\bmail\s*\(`)
+	reGlobalsCall  = regexp.MustCompile(`\$GLOBALS\s*\[[^\]]+\]\s*(?:\[[^\]]+\]\s*)*\(`)
+	reAssertVar    = regexp.MustCompile(`(?i)\bassert\s*\(\s*(?:@\s*)?\$`)
+	reOrdChr       = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
+	reStrReplace   = regexp.MustCompile(`(?i)\bstr_replace\s*\(`)
+	reDefineArr    = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
+	reEvalGz       = regexp.MustCompile(`(?i)\b(?:eval|assert|create_function)\s*\(`)
 	// A function name taken straight from request data: $_POST['f'](...) or
 	// call_user_func($_GET['f'], ...).
 	reInputCall     = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|SERVER)\s*\[[^\]]+\]\s*\(`)
@@ -113,11 +115,12 @@ func analyzePHP(content []byte) *verdict {
 		(cnt(reFuncDef) >= 4 && m(reClassDef) && !longBlob && goto_ < 4)
 
 	// 1. preg_replace with the /e modifier (executes its replacement).
-	if m(rePregE) {
+	// (Old libraries such as phpseclib still carry /e code paths for PHP 5.)
+	if m(rePregE) && !library {
 		return &verdict{CatVirus, "PHP.Backdoor.PregReplaceEval"}
 	}
 	// 2. create_function with attacker input.
-	if m(reCreateFunc) && hasInput {
+	if m(reCreateFunc) && hasInput && argOnInput(reCreateFuncArg, s) {
 		return &verdict{CatVirus, "PHP.Backdoor.CreateFunction"}
 	}
 	// 3. eval/assert of a decoded payload: a long encoded blob, or a decoder
@@ -177,7 +180,9 @@ func analyzePHP(content []byte) *verdict {
 	}
 	// 13. Spam mailer: mail() fed attacker input, in a small standalone script
 	// (not a mail library, which defines classes).
-	if m(reMailInput) && hasInput && nr(reMailInput, reInput, 200) && !library && n < 60000 {
+	// Only when the recipient comes from the request: a contact form sends
+	// visitor text to a fixed address, a spam relay sends to anyone.
+	if m(reMailInput) && hasInput && argOnInput(reMailTo, s) && !library && n < 60000 {
 		return &verdict{CatSuspicious, "PHP.Spam.Mailer"}
 	}
 
@@ -204,7 +209,10 @@ func analyzePHP(content []byte) *verdict {
 	if evalOrAssert && longestLine(s) > 2000 && n < 300000 && (decoders >= 1 || concat >= 15 || varFunc) {
 		return &verdict{CatVirus, "PHP.Obfuscated.PackedOneLiner"}
 	}
-	if v := families(s, low, n, library, evalOrAssert, varFunc, hasInput, decoders); v != nil {
+	// Laravel compiled Blade views end with /**PATH … ENDPATH**/ and use
+	// hash-named variables ($__componentOriginal<md5>).
+	compiledView := bytes.Contains(content, []byte("ENDPATH**/"))
+	if v := families(s, low, n, library, compiledView, evalOrAssert, varFunc, hasInput, decoders); v != nil {
 		return v
 	}
 	// ---- weaker signals -> suspicious (report only) ----
@@ -248,7 +256,8 @@ func analyzeJS(content []byte) *verdict {
 func taintedCall(s []byte) bool {
 	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
 		name := regexp.QuoteMeta(string(m[1]))
-		re := regexp.MustCompile(`(?:\$` + name + `\s*\(|(?i:call_user_func(?:_array)?)\s*\(\s*\$` + name + `\b)`)
+		// $f(…), not $this->$f(…) or Class::$f(…) (dispatch to own methods).
+		re := regexp.MustCompile(`(?:(?:^|[^>:\w$])\$` + name + `\s*\(|(?i:call_user_func(?:_array)?)\s*\(\s*\$` + name + `\b)`)
 		if re.Match(s) {
 			return true
 		}
@@ -353,16 +362,24 @@ func pregEvalModifier() *regexp.Regexp {
 	return regexp.MustCompile(`(?i:\bpreg_replace)\s*\(\s*(?:` + strings.Join(alts, "|") + `)`)
 }
 
-var reEvalArg = regexp.MustCompile(`(?i)\b(?:eval|assert)\s*\(([^;]{0,300})`)
+var (
+	reEvalArg       = regexp.MustCompile(`(?i)\b(?:eval|assert)\s*\(([^;]{0,300})`)
+	reCreateFuncArg = regexp.MustCompile(`(?i)\bcreate_function\s*\(([^;]{0,300})`)
+	reMailTo        = regexp.MustCompile(`(?i)\bmail\s*\(([^,;]{0,200})`)
+)
 
 // evalOnInput reports eval/assert whose argument contains request data or a
 // variable assigned from it.
-func evalOnInput(s []byte) bool {
+func evalOnInput(s []byte) bool { return argOnInput(reEvalArg, s) }
+
+// argOnInput reports a call (captured argument text in group 1) that takes
+// request data or a variable assigned from it.
+func argOnInput(call *regexp.Regexp, s []byte) bool {
 	var tainted []string
 	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
 		tainted = append(tainted, string(m[1]))
 	}
-	for _, m := range reEvalArg.FindAllSubmatch(s, 50) {
+	for _, m := range call.FindAllSubmatch(s, 50) {
 		arg := m[1]
 		if reInput.Match(arg) {
 			return true

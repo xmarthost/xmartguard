@@ -361,6 +361,12 @@ func baseName(p string) string {
 	return p
 }
 
+// SourceAdmin marks content an administrator restored from quarantine on
+// this server: it is not flagged again here while it is unchanged (a
+// changed file has another hash and is scanned normally). Unlike "clear"
+// (false positive), it is not shared with other servers.
+const SourceAdmin = "admin"
+
 // ClearMinConfidence is how sure the AI must be that a file is clean before
 // it is restored from quarantine and never flagged again.
 const ClearMinConfidence = 90
@@ -374,12 +380,12 @@ var cleared struct {
 }
 
 func isClearedVerdict(v Verdict) bool {
-	return v.Verdict == Clean && v.Confidence >= ClearMinConfidence && (v.Source == "ai" || v.Source == "fleet")
+	return v.Verdict == Clean && v.Confidence >= ClearMinConfidence && (v.Source == "ai" || v.Source == "fleet" || v.Source == SourceAdmin)
 }
 
 func loadCleared(db *sql.DB) {
 	set := map[string]bool{}
-	rows, err := db.Query(`SELECT sha256 FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND source IN ('ai','fleet')`, ClearMinConfidence)
+	rows, err := db.Query(`SELECT sha256 FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND source IN ('ai','fleet','admin')`, ClearMinConfidence)
 	if err == nil {
 		for rows.Next() {
 			var s string

@@ -278,7 +278,37 @@ func (a *Agent) SecuritySummary() any {
 			listed++
 		}
 	}
-	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": listed}
+	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": listed, "card": a.serverCard()}
+}
+
+// serverCard holds the numbers of the portal's server list card: all-time
+// virus and web attacks, the IPDB hourly blocks of the last 24 hours (the
+// sparkline), blacklisted domains and the number of hosted domains.
+func (a *Agent) serverCard() map[string]any {
+	var virus, web int64
+	_ = a.DB.QueryRow(`SELECT count(*) FROM findings`).Scan(&virus)
+	_ = a.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot')`).Scan(&web)
+	now := store.Now()
+	from := now - now%3600 - 23*3600
+	hourly := make([]int64, 24)
+	if rows, err := a.DB.Query(`SELECT (minute - ?) / 3600 AS h, sum(packets) FROM drop_stats WHERE kind = 'ipdb' AND minute >= ? GROUP BY h`, from, from); err == nil {
+		for rows.Next() {
+			var h, n int64
+			if rows.Scan(&h, &n) == nil && h >= 0 && h < 24 {
+				hourly[h] = n
+			}
+		}
+		rows.Close()
+	}
+	domSum, _, _, _ := reputation.LoadDomains(a.DB, "", 1, 0)
+	domains := len(cms.CPanelDocroots("/var/cpanel/userdata"))
+	if domains == 0 {
+		domains = domSum.Total
+	}
+	return map[string]any{
+		"virus_attacks": virus, "web_attacks": web, "ipdb_hourly": hourly,
+		"domains_blacklisted": domSum.Flagged, "domains": domains,
+	}
 }
 
 // ------------------------------------------------------------------ reputation
@@ -363,7 +393,6 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return map[string]any{
 			"summary":  a.SecuritySummary(),
 			"daily":    a.Scanner.DailyCounts(30),
-			"clamav":   scanner.ClamAvailable(),
 			"firewall": a.Firewall.Status(),
 			"version":  version.Version,
 		}, nil
@@ -432,7 +461,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			case "quarantine":
 				err = a.Scanner.Quarantine(id)
 			case "restore":
-				err = a.Scanner.Restore(id)
+				err = a.restoreFinding(id)
 			case "disable":
 				err = a.Scanner.Disable(id)
 			case "delete":
@@ -468,7 +497,6 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return map[string]any{
 			"settings": masked(a.Settings.Get()),
 			"meta": map[string]any{
-				"clamav":       scanner.ClamAvailable(),
 				"firewall":     a.Firewall.Status(),
 				"users":        scanner.Users(),
 				"server_ips":   sysinfo.IPs(),
@@ -1093,6 +1121,24 @@ func (a *Agent) clearFalsePositive(j ai.Job, v ai.Verdict) {
 		a.Mailer.Enqueue(n.Email, "false positive restored",
 			fmt.Sprintf("[AI %d%% clean] %s\n  file: %s\n  reason: %s\n  action: restored from %s; the scanner will not flag this content again.\n", v.Confidence, f.Signature, f.Path, v.Reason, f.Status))
 	}
+}
+
+// restoreFinding puts a file back and remembers its content as restored by
+// an administrator, so later scans on this server do not flag the same,
+// unchanged file again.
+func (a *Agent) restoreFinding(id int64) error {
+	f, err := a.Scanner.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := a.Scanner.Restore(id); err != nil {
+		return err
+	}
+	if f.SHA256 != "" {
+		ai.Save(a.DB, ai.Verdict{SHA256: f.SHA256, Verdict: ai.Clean, Confidence: 100, Reason: "Restored from quarantine by an administrator.",
+			Model: "admin", Source: ai.SourceAdmin, At: store.Now(), Size: f.Size})
+	}
+	return nil
 }
 
 // clearFinding marks a detection as a false positive by hand.

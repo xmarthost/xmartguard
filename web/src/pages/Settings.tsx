@@ -15,7 +15,6 @@ interface ScannerS {
   binary_action: string;
   daily_scan: boolean;
   weekly_scan: boolean;
-  use_clamav: boolean;
   max_file_size_mb: number;
   whitelist_users: string[];
   whitelist_paths: string[];
@@ -153,7 +152,6 @@ interface AllSettings {
   rootkit: { enabled: boolean };
 }
 interface Meta {
-  clamav: string;
   users: { name: string }[];
   server_ips: string[];
   default_rbls: string[];
@@ -253,7 +251,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
           <div className="mt-1 flex items-center gap-2 text-sm text-slate-500">
             <CheckCircle2 className={`h-4 w-4 ${s.enabled ? 'text-green-600' : 'text-slate-300'}`} />
             {s.enabled ? 'XMart Guard scanner engine is running.' : 'The scanner is disabled.'}
-            {meta.clamav ? ` ClamAV detected (${meta.clamav}).` : ' ClamAV not installed; built-in signatures only.'}
+            {' XMart Guard\'s own engine: behaviour rules, heuristics, signatures and YARA.'}
           </div>
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
@@ -291,9 +289,6 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         </SettingRow>
         <SettingRow title="Weekly scan" desc="Scan all files modified in the last 7 days (Sunday night)" recommended>
           <Toggle on={s.weekly_scan} disabled={dis} onChange={(v) => onSave({ weekly_scan: v })} />
-        </SettingRow>
-        <SettingRow title="Use ClamAV" desc="Also scan with ClamAV (clamdscan) when it is installed on the server">
-          <Toggle on={s.use_clamav} disabled={dis} onChange={(v) => onSave({ use_clamav: v })} />
         </SettingRow>
         <SettingRow title="Delete insecure symbolic links" desc="Remove links that point into another account's files, or to files the user could not read otherwise" recommended>
           <Toggle on={s.delete_symlinks} disabled={dis} onChange={(v) => onSave({ delete_symlinks: v })} />

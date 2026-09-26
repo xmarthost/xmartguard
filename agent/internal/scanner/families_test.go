@@ -17,7 +17,7 @@ func TestFamiliesDetect(t *testing.T) {
 		{"ua cloaking", ".php", `<?php $ua=$_SERVER['HTTP_USER_AGENT']; if (preg_match('/googlebot|bingbot/i',$ua)) { include 'page.html'; exit; }`, "PHP.SEO.UserAgentCloaking"},
 		{"remote content hook", ".php", `<?php add_action('template_redirect', function(){ $r = wp_remote_get($u, ['sslverify' => false]); echo wp_remote_retrieve_body($r); exit; });`, "PHP.Injector.RemoteContent"},
 		{"user.ini loader", ".ini", "auto_prepend_file = \"/home/u/public_html/wp-content/.x.ico\"\n", "PHP.Config.AutoPrependLoader"},
-		{"html in png", ".png", "<!DOCTYPE html><html><body>spam</body></html>", "Disguised.MarkupInImage"},
+		{"html in png", ".png", "<!DOCTYPE html><html><body>spam<script src=x.js></script></body></html>", "Disguised.MarkupInImage"},
 	}
 	for _, c := range cases {
 		d := analyze(c.ext, []byte(c.src))
@@ -44,6 +44,18 @@ func TestFamiliesNoFalsePositives(t *testing.T) {
 		"json php suffix": `<?php return require($rulesetPath . $fileName . '.json.php');`,
 		// Wordfence firewall bootstrap.
 		"wordfence ini": "auto_prepend_file = '/home/u/public_html/wordfence-waf.php'\n",
+		// Freemius SDK: two-piece names that dodge the WordPress.org scanner.
+		"freemius split": `<?php $fn = 'base64' . '_decode'; $data = $fn( $payload ); $inc = 'requir' . 'e_once';`,
+		// PhpParser pretty printer: the statement only inside a string.
+		"halt in string": `<?php function p($node){ if ($x) { eval($y); } return '__halt_compiler();' . $node->remaining; }`,
+		// create_function on the plugin's own data.
+		"create_function local": `<?php $page = $_GET['page']; $all = array_map(create_function('$a', 'return $a[0];'), $rows);`,
+		// Ajax dispatch to the object's own methods.
+		"method dispatch": `<?php $method = $_POST['subaction']; if (method_exists($this, $method)) { $this->$method($_POST); }`,
+		// Contact form to a fixed address.
+		"contact form": `<?php $name = $_POST['name']; $msg = $_POST['message']; mail('info@example.com', 'Contact from ' . $name, $msg);`,
+		// Laravel compiled Blade view with hash-named variables.
+		"blade view": "<?php $__componentOriginal2dde6d1a8d73f7e3c7a0c5dc4bb3c3a2 = $component; $__componentOriginal8e1a2b3c4d5e6f708192a3b4c5d6e7f8 = $x; $__componentOriginal1a2b3c4d5e6f70812a3b4c5d6e7f8091 = $y; $__componentOriginala1b2c3d4e5f60718293a4b5c6d7e8f90 = $z; eval($q); ?>\n<?php /**PATH /home/u/app/resources/views/home.blade.php ENDPATH**/ ?>",
 		// Inline CSS/SVG includes in themes.
 		"inline svg": `<?php include get_template_directory() . '/icons/menu.svg'; include __DIR__ . '/inline.css';`,
 	}
@@ -55,6 +67,14 @@ func TestFamiliesNoFalsePositives(t *testing.T) {
 		if d := analyze(ext, []byte(src)); d != nil {
 			t.Errorf("%s: false positive %+v", name, d)
 		}
+	}
+	// A stats cache (no extension) holding logged attack URLs.
+	if d := analyze("", []byte("GET /x.php?c=<?php eval($_POST[1]); ?> 404\nGET /y 200\n")); d != nil {
+		t.Errorf("stats cache flagged: %+v", d)
+	}
+	// A cached 404 page saved as an avatar image.
+	if d := analyze(".jpg", []byte("<!DOCTYPE html><html><body>Not Found</body></html>")); d != nil {
+		t.Errorf("cached error page flagged: %+v", d)
 	}
 	// A real PNG header is never markup.
 	if d := markupInImage(".png", []byte("\x89PNG\r\n\x1a\n....")); d != nil {

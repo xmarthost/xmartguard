@@ -32,7 +32,6 @@ type Scanner struct {
 	BinaryAction     string   `json:"binary_action"`
 	DailyScan        bool     `json:"daily_scan"`
 	WeeklyScan       bool     `json:"weekly_scan"`
-	UseClamAV        bool     `json:"use_clamav"`
 	MaxFileSizeMB    int      `json:"max_file_size_mb"`
 	WhitelistUsers   []string `json:"whitelist_users"`
 	WhitelistPaths   []string `json:"whitelist_paths"`
@@ -306,7 +305,7 @@ func Defaults() Settings {
 		Scanner: Scanner{
 			Enabled: true, Realtime: true,
 			VirusAction: ActionQuarantine, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
-			DailyScan: true, WeeklyScan: true, UseClamAV: true, MaxFileSizeMB: 10,
+			DailyScan: true, WeeklyScan: true, MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
 			DeleteSymlinks: false, AutoClean: false, Feeds: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
 		},

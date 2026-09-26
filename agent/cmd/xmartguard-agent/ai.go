@@ -64,7 +64,6 @@ func cmdAITrain(args []string) error {
 	}
 	engine := scanner.NewOffline()
 	cfg := settings.Defaults().Scanner
-	cfg.UseClamAV = false
 	keep := func(p string) bool {
 		name := strings.TrimLeft(filepath.Base(p), "0123456789")
 		name = strings.TrimPrefix(name, "-")

@@ -1,12 +1,17 @@
 import { useState, type ReactNode } from 'react';
 import { Check, Copy, Inbox, Loader2 } from 'lucide-react';
 
+/** XMart Guard mark (shield with an interlocked X) and wordmark. */
 export function Logo({ light = false }: { light?: boolean }) {
   return (
-    <div className="flex items-center gap-2">
-      <img src="/favicon.svg" alt="" className="h-8 w-8" />
-      <span className={`text-xl font-bold tracking-tight ${light ? 'text-white' : 'text-navy-900'}`}>
-        XMart<span className="text-green-400">Guard</span>
+    <div className="flex items-center gap-2.5">
+      <img src="/favicon.svg" alt="" className="h-9 w-9 drop-shadow-[0_2px_6px_rgba(6,182,212,0.35)]" />
+      <span className="flex flex-col leading-none">
+        <span className={`text-[19px] font-extrabold tracking-tight ${light ? 'text-white' : 'text-navy-900'}`}>
+          XMart
+          <span className="bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent"> Guard</span>
+        </span>
+        <span className={`mt-1 text-[9px] font-semibold tracking-[0.28em] uppercase ${light ? 'text-white/50' : 'text-slate-400'}`}>Server Security</span>
       </span>
     </div>
   );

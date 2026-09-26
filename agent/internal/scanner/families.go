@@ -54,7 +54,9 @@ var (
 	reSelfDelete = regexp.MustCompile(`(?i)\bunlink\s*\(\s*(?:__FILE__|\$_SERVER\s*\[\s*['"]SCRIPT_FILENAME)`)
 	reUpload     = regexp.MustCompile(`(?i)\bmove_uploaded_file\s*\(`)
 	// 'gz'.'in'.'fla'.'te': string pieces joined into one literal.
-	reStrPieces = regexp.MustCompile(`(?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")(?:\s*\.\s*(?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")){1,8}`)
+	// Three or more pieces: 'base64' . '_decode' (two) is how some plugins
+	// (Freemius) avoid the WordPress.org review scanner.
+	reStrPieces = regexp.MustCompile(`(?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")(?:\s*\.\s*(?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")){2,8}`)
 	splitNames  = []string{"base64_decode", "base64", "gzinflate", "gzuncompress", "gzdecode", "str_rot13", "create_function", "shell_exec", "passthru", "assert", "eval", "system", "file_put_contents", "move_uploaded_file", "call_user_func", "preg_replace"}
 	// A hook that prints remote content: add_action('template_redirect'/'init' …
 	// wp_remote_get(…'sslverify' => false…) … echo wp_remote_retrieve_body.
@@ -68,7 +70,7 @@ var (
 
 // families runs the behavioural rules. s is the comment-stripped source,
 // n its length, library whether it looks like a legitimate library.
-func families(s, low []byte, n int, library, evalOrAssert, varFunc, hasInput bool, decoders int) *verdict {
+func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc, hasInput bool, decoders int) *verdict {
 	m := func(re *regexp.Regexp) bool { return may(re, low) && re.Match(s) }
 	count := func(re *regexp.Regexp) int {
 		if !may(re, low) {
@@ -109,10 +111,10 @@ func families(s, low []byte, n int, library, evalOrAssert, varFunc, hasInput boo
 		return &verdict{CatVirus, "PHP.Dropper.WritableDirs"}
 	}
 	// Machine-generated identifiers around an executor.
-	if gibberish(s) && (evalOrAssert || varFunc || decoders >= 1 || count(reXorConst) >= 5) {
+	if !compiledView && gibberish(s) && (evalOrAssert || varFunc || decoders >= 1 || count(reXorConst) >= 5) {
 		return &verdict{CatVirus, "PHP.Obfuscated.RandomIdentifiers"}
 	}
-	if count(reHashVar) >= 4 && (m(reRemoteFetch) || evalOrAssert) {
+	if !compiledView && count(reHashVar) >= 4 && (m(reRemoteFetch) || evalOrAssert) {
 		return &verdict{CatVirus, "PHP.Obfuscated.HashNamedVariables"}
 	}
 	// eval("?>" . decoded): runs a decoded page or PHP payload.
@@ -200,8 +202,9 @@ func randomName(name string) bool {
 var (
 	reAutoPrepend = regexp.MustCompile(`(?im)^\s*(?:php_value\s+)?auto_(?:prepend|append)_file\s*=?\s*["']?([^"'\s]+)`)
 	// Security plugins that legitimately load through auto_prepend_file.
-	knownPrepend = []string{"wordfence-waf.php", "ninjafirewall", "nfwlog", "malcare", "bv-", "sucuri", "wp-defender", "patchstack", "/usr/local/", "/opt/"}
-	imageExts    = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".ico": true, ".bmp": true, ".tif": true, ".tiff": true, ".webp": true}
+	knownPrepend   = []string{"wordfence-waf.php", "ninjafirewall", "nfwlog", "malcare", "bv-", "sucuri", "wp-defender", "patchstack", "/usr/local/", "/opt/"}
+	reActiveMarkup = regexp.MustCompile(`(?i)<script|<iframe|http-equiv\s*=\s*["']?refresh|window\.location|document\.location`)
+	imageExts      = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".ico": true, ".bmp": true, ".tif": true, ".tiff": true, ".webp": true}
 )
 
 // configLoader flags php.ini, .user.ini and .htaccess files that make PHP
@@ -243,7 +246,12 @@ func markupInImage(ext string, content []byte) *Detection {
 		if bytes.HasPrefix(low, []byte("<svg")) || bytes.HasPrefix(low, []byte("<?xml")) {
 			return nil // an SVG saved with the wrong extension
 		}
-		return &Detection{CatSuspicious, "Disguised.MarkupInImage"}
+		// A cached HTML error page (a CDN or avatar cache saving a 404 page as
+		// .jpg) is harmless; spam and phishing pages carry scripts,
+		// frames or redirects.
+		if reActiveMarkup.Match(content) {
+			return &Detection{CatSuspicious, "Disguised.MarkupInImage"}
+		}
 	}
 	return nil
 }

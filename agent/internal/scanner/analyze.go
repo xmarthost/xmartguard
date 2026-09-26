@@ -1,6 +1,9 @@
 package scanner
 
-import "strings"
+import (
+	"bytes"
+	"strings"
+)
 
 // analyze runs the heuristic analyzers appropriate for the file extension.
 func analyze(ext string, content []byte) *Detection {
@@ -14,6 +17,11 @@ func analyze(ext string, content []byte) *Detection {
 			return &Detection{CatSuspicious, "PHP.Suspicious.CodeInNonScript"}
 		}
 		return d
+	}
+	// A file without an extension is only a PHP script if it starts like one
+	// (stats caches such as tmp/analog/cache hold logged attack URLs as text).
+	if ext == "" && !startsLikeScript(content) {
+		return nil
 	}
 	switch {
 	case ext == ".js":
@@ -47,4 +55,9 @@ func AnalyzeScript(kind string, content []byte) *Detection {
 		return nil
 	}
 	return &Detection{v.category, v.signature}
+}
+
+func startsLikeScript(content []byte) bool {
+	head := bytes.TrimLeft(content[:min(len(content), 256)], " \t\r\n\ufeff")
+	return bytes.HasPrefix(head, []byte("<?")) || bytes.HasPrefix(head, []byte("#!"))
 }

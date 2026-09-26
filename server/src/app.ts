@@ -24,6 +24,7 @@ import { AIGateway } from './ai/gateway.js';
 import { WPCoreService } from './wpcore/service.js';
 import { SignatureService } from './signatures/service.js';
 import { wpcoreRoutes } from './routes/wpcore.js';
+import { mcpRoutes } from './routes/mcp.js';
 
 export interface App {
   app: FastifyInstance;
@@ -70,6 +71,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   massRoutes(app, pool, cfg, hub);
   aiRoutes(app, pool, ai);
   wpcoreRoutes(app, pool, wp, sigs);
+  mcpRoutes(app, pool, cfg, hub);
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });

@@ -84,11 +84,11 @@ xgcli config --export settings.json            # and --import FILE|URL on anothe
 
 Also: `scanner`, `dailyscan`, `weeklyscan`, `watch`, `blacklist`, `file-action`, `cleanup`, `lfd`, `bot-check`, `account-suspend`, `rootkit`, `process-monitor`, `cron-monitor`, `osm`, `ip-reputation`, `dbscan`, `notification`, `cms`, `upload-scanner`, `cloud`. Low level: `xmartguard-agent call ACTION '{json}'`, `xmartguard-agent check PATH` (offline scan).
 
-## What it protects (0.7.3)
+## What it protects (0.7.4)
 
 | Module | What it does |
 |---|---|
-| Malware scanner | Accounts on any partition (`/home`, `/home2`, `/home3`, …, from `/etc/passwd` and cPanel), addon-domain document roots, `/tmp`, `/var/tmp` and `/dev/shm`. Realtime (inotify on every account's home, extracted archives and moved folders caught instantly, worker pool with overflow catch-up; the AI check runs in the background), quick/full/path with **live progress** (files, %, ETA, current file), daily and weekly scans; own heuristic analyzer with **behaviour families** (silent loaders, XOR/char decoders, function tables, admin-login backdoors, cloaking, `.user.ini` loaders, HTML disguised as images — 91% of real malware caught without any hash) + known-bad hash database + fleet-learned hashes + **Linux Malware Detect** signatures + **web shell YARA rules** (signature-base) + ClamAV + own YARA rules; **official WordPress core files (every release and beta since 5.8) and WordPress.org plugin files are never flagged**; infected core files are **replaced with the official file** of the site's version; quarantine/restore/disable/delete/trim/false positive; view detected files from the logs; insecure symlink detection. See [docs/SIGNATURES.md](docs/SIGNATURES.md) |
+| Malware scanner | Accounts on any partition (`/home`, `/home2`, `/home3`, …, from `/etc/passwd` and cPanel), addon-domain document roots, `/tmp`, `/var/tmp` and `/dev/shm`. Realtime (inotify on every account's home, extracted archives and moved folders caught instantly, worker pool with overflow catch-up; the AI check runs in the background), quick/full/path with **live progress** (files, %, ETA), daily and weekly scans; own heuristic analyzer with **behaviour families** (silent loaders, XOR/char decoders, function tables, admin-login backdoors, cloaking, `.user.ini` loaders, HTML disguised as images — 91% of real malware caught without any hash) + known-bad hash database + fleet-learned hashes + **Linux Malware Detect** signatures + **web shell YARA rules** (signature-base) + own YARA rules (own engine only, no ClamAV); **official WordPress core files (every release and beta since 5.8) and WordPress.org plugin files are never flagged**; infected core files are **replaced with the official file** of the site's version; quarantine/restore/disable/delete/trim/false positive (a restored file is remembered and not flagged again until its content changes); view detected files from the logs; insecure symlink detection. See [docs/SIGNATURES.md](docs/SIGNATURES.md) |
 | AI scanner | **Free AI APIs** (Gemini, Groq, OpenRouter, Cerebras, Mistral, GitHub Models, NVIDIA, Hugging Face, Cloudflare, any OpenAI-compatible) configured once in the portal for all servers, many keys per provider with automatic failover; batched, compact requests; **shared knowledge base** (a file judged on one server is known on all); **fleet training** of every server's built-in model; checks detections only or every new file; **Trim** removes only injected code and keeps the site live. Offline default: built-in model |
 | WAF | Own ModSecurity rules for Apache and **LiteSpeed** (cPanel+LiteSpeed automatic incl. restart and LiteSpeed log format; standalone LiteSpeed/Enhance/CyberPanel via one WebAdmin WAF rule set, see the portal's Knowledge Base; tested on ModSecurity 2.9): uploads scanned by the malware engine, web shell and exploit-probe blocking (PHPUnit eval-stdin, Laravel Ignition, leaked credentials), PHP-upload blocking, sensitive files, WordPress hardening incl. user enumeration, bad/SEO/AI/custom bots, protected login URLs, whitelisted domains; **on/off per rule**, config test with automatic rollback |
 | Brute force | SSH, cPanel/WHM/Webmail, Dovecot, Postfix, Exim, FTP, Apache denials and CMS logins; per-rule exclusion; addresses the WAF keeps blocking are banned ("N WAF blocked") |
@@ -101,7 +101,8 @@ Also: `scanner`, `dailyscan`, `weeklyscan`, `watch`, `blacklist`, `file-action`,
 | Reputation | Server IPs on DNS blocklists; hosted domains on Spamhaus DBL/SURBL/URIBL and optionally Google Safe Browsing |
 | Automatic suspension | Suspend cPanel accounts after repeated malware detections or a blacklisted domain |
 | Notifications | Email (+ additional address, custom From), Slack, Telegram, daily report; user notifications (infected files, suspension, CMS patches, outdated CMS digest) |
-| Portal | cPGuard-style collapsible sidebar with group flyouts, server dashboard with **protection status** (realtime scanner, firewall, IPDB, WAF: running / not running alerts), Knowledge Base with setup guides and third-party attributions, Firewall Logs with flags/CSV, Mass Operations, roles, audit log |
+| AI connector (MCP) | Connect Claude (Settings » Connectors » Add custom connector) or any MCP client to the portal: live dashboards, findings and file contents, firewall/WAF/IPDB logs, settings and the AI knowledge base of every server; read & write connectors can also scan, act on findings, change settings and correct verdicts (audited). See **AI Connector** in the portal |
+| Portal | cPGuard-style server cards (virus/web attacks, IPDB sparkline, blacklists, domains), live IPDB chart with sliding new entries, collapsible sidebar with group flyouts, server dashboard with **protection status** (realtime scanner, firewall, IPDB, WAF: running / not running alerts), Knowledge Base with setup guides and third-party attributions, Firewall Logs with flags/CSV, Mass Operations, roles, audit log |
 
 ## IPDB — shared attacker blocklist
 
@@ -117,6 +118,10 @@ bash /root/setup.sh --domain xmartguard.com --email you@example.com
 ```
 
 The script installs Docker, builds the portal, sets up HTTPS and prints the first admin password. Re-run the same two lines to update.
+
+### AI connector (MCP)
+
+Open **AI Connector** (admins), create a connector and copy its URL (`https://your-portal/mcp/xgm_…`, shown once). In Claude: **Settings » Connectors » Add custom connector**, paste the URL, no OAuth. Other clients: `claude mcp add --transport http xmartguard https://your-portal/mcp/<token>` or `POST /mcp` with `Authorization: Bearer <token>`. Read-only connectors see everything; read & write connectors can also run actions, recorded in the Security Log as `mcp.*`. Revoke a connector to cut access at once.
 
 ### AI scanner (free AI APIs)
 

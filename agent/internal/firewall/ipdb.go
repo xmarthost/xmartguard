@@ -434,6 +434,10 @@ type IPDBLive struct {
 	Hourly    []TimePoint      `json:"hourly"`    // last 24 hours
 	Countries map[string]int64 `json:"countries"` // last 7 days
 	Logging   bool             `json:"logging"`
+	// Packets is the running total of packets the IPDB rule dropped, read
+	// from the firewall counters now; the live chart plots its growth.
+	Packets uint64 `json:"packets"`
+	Now     int64  `json:"now"`
 }
 
 func (m *Manager) IPDBLive(sinceID int64) IPDBLive {
@@ -445,6 +449,8 @@ func (m *Manager) IPDBLive(sinceID int64) IPDBLive {
 		Hourly:    m.DropTimeline("ipdb", now-24*3600, 3600),
 		Countries: map[string]int64{},
 		Logging:   m.Settings.Get().Firewall.LogBlocked,
+		Packets:   m.Backend().Counters()["xg-ipdb"],
+		Now:       now,
 	}
 	from := time.Unix(now-7*86400, 0).UTC().Format("2006-01-02")
 	if rows, err := m.DB.Query(`SELECT country, sum(hits) FROM ipdb_country WHERE day >= ? GROUP BY country`, from); err == nil {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
   BookOpen,
-  Activity, BrainCircuit, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
+  Activity, BrainCircuit, Cable, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
@@ -56,8 +56,22 @@ interface RailEntry {
 function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }) {
   const loc = useLocation();
   const [open, setOpen] = useState<string | null>(null);
+  // Hover intent: expand only when the pointer rests on the rail, not when it
+  // passes over it on the way to something near the left edge (a checkbox).
+  const [expanded, setExpanded] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  const enter = () => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setExpanded(true), 350);
+  };
+  const leave = () => {
+    window.clearTimeout(timer.current);
+    setExpanded(false);
+    setOpen(null);
+  };
+  useEffect(() => () => window.clearTimeout(timer.current), []);
   const isActive = (e: RailEntry) =>
-    e.children ? e.children.some((c) => loc.pathname === c.to || loc.pathname.startsWith(c.to + '/')) : e.end ? loc.pathname === e.to : loc.pathname.startsWith(e.to!);
+    e.children ? e.children.some((c) => loc.pathname === c.to || loc.pathname.startsWith(c.to + '/')) : e.end ? loc.pathname === e.to : loc.pathname === e.to || loc.pathname.startsWith(e.to + '/');
   const item = (e: RailEntry) => {
     const active = isActive(e);
     const cls = `relative mx-2 my-1 flex h-12 items-center gap-4 rounded-l-full rounded-r-2xl px-5 text-sm transition ${
@@ -66,7 +80,7 @@ function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }
     const body = (
       <>
         <span className="h-5 w-5 shrink-0 [&>svg]:h-5 [&>svg]:w-5">{e.icon}</span>
-        <span className="whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100">{e.label}</span>
+        <span className={`whitespace-nowrap transition-opacity duration-150 ${expanded ? 'opacity-100' : 'opacity-0'}`}>{e.label}</span>
       </>
     );
     if (!e.children) {
@@ -80,10 +94,10 @@ function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }
       <div key={e.label} className="relative" onMouseEnter={() => setOpen(e.label)}>
         <div className={`${cls} cursor-default`}>
           {body}
-          {open === e.label && <span className="absolute top-1/2 -right-2 hidden -translate-y-1/2 border-y-8 border-r-8 border-y-transparent border-r-navy-800 group-hover/rail:block" />}
+          {expanded && open === e.label && <span className="absolute top-1/2 -right-2 -translate-y-1/2 border-y-8 border-r-8 border-y-transparent border-r-navy-800" />}
         </div>
-        {open === e.label && (
-          <div className="absolute top-0 left-full z-40 ml-0 hidden w-64 rounded-2xl bg-navy-800 p-3 shadow-2xl group-hover/rail:block">
+        {expanded && open === e.label && (
+          <div className="absolute top-0 left-full z-40 ml-0 w-64 rounded-2xl bg-navy-800 p-3 shadow-2xl">
             {e.children.map((c) => (
               <NavLink
                 key={c.to}
@@ -105,8 +119,11 @@ function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }
   };
   return (
     <aside
-      className="group/rail fixed top-16 bottom-0 left-0 z-30 hidden w-20 flex-col bg-gradient-to-b from-navy-900 to-navy-700 py-4 transition-[width] duration-200 hover:w-60 hover:shadow-2xl md:flex"
-      onMouseLeave={() => setOpen(null)}
+      className={`fixed top-16 bottom-0 left-0 z-30 hidden flex-col bg-gradient-to-b from-navy-900 to-navy-700 py-4 transition-[width] duration-200 md:flex ${
+        expanded ? 'w-60 shadow-2xl' : 'w-20'
+      }`}
+      onMouseEnter={enter}
+      onMouseLeave={leave}
     >
       <nav className="flex-1">{entries.map(item)}</nav>
       <div className="border-t border-white/10 pt-3">{bottom.map(item)}</div>
@@ -256,6 +273,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
         { label: 'AI Scanner', icon: <BrainCircuit />, to: '/ai' },
+        { label: 'AI Connector', icon: <Cable />, to: '/ai-connector' },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
       ];
   const bottom: RailEntry[] = [

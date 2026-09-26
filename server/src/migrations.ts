@@ -257,4 +257,24 @@ CREATE TABLE sig_feeds (
 );
 `,
   },
+  {
+    version: '005_mcp_tokens',
+    sql: `
+-- Tokens for AI assistants connecting over MCP (Model Context Protocol).
+CREATE TABLE mcp_tokens (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id    uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_by    uuid REFERENCES users(id) ON DELETE SET NULL,
+  label         text NOT NULL DEFAULT '',
+  token_hash    text NOT NULL UNIQUE,
+  prefix        text NOT NULL,
+  scope         text NOT NULL CHECK (scope IN ('read','write')),
+  last_used_at  timestamptz,
+  calls         bigint NOT NULL DEFAULT 0,
+  revoked_at    timestamptz,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX mcp_tokens_account_idx ON mcp_tokens (account_id, created_at DESC);
+`,
+  },
 ];

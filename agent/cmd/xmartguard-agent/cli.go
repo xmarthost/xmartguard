@@ -440,7 +440,7 @@ func cliScanner(c *cli) error {
 		return nil
 	}
 	return c.printSection("scanner", "enabled", "realtime", "daily_scan", "weekly_scan", "virus_action", "suspicious_action", "binary_action",
-		"use_clamav", "yara", "feeds", "wp_core_repair", "trim", "trim_max_percent", "max_file_size_mb", "keep_days")
+		"yara", "feeds", "wp_core_repair", "trim", "trim_max_percent", "max_file_size_mb", "keep_days")
 }
 
 func cliAIScan(c *cli) error {

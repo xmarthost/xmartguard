@@ -80,7 +80,6 @@ check "firewall rules loaded"          'iptables -w -C INPUT -j XMARTGUARD || nf
 section "scanner"
 ls -la /opt/xmartguard/ /opt/xmartguard/data/ 2>&1 | head
 echo "inotify max_user_watches: $(cat /proc/sys/fs/inotify/max_user_watches)"
-echo "ClamAV: $(ls /usr/local/cpanel/3rdparty/bin/clamdscan /usr/bin/clamdscan 2>/dev/null | head -1)"
 
 section "portal connectivity"
 PORTAL=$(sed -n 's/.*"server_url": *"\([^"]*\)".*/\1/p' /etc/xmartguard/agent.json 2>/dev/null)

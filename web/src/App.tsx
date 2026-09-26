@@ -20,6 +20,7 @@ import { CMSThreats, DBScanner } from './pages/CMS';
 import { DomainReputation, OutgoingSpam } from './pages/Mail';
 import MassOperations from './pages/MassOperations';
 import KnowledgeBase from './pages/KnowledgeBase';
+import AIConnector from './pages/AIConnector';
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
         <Route path="/ai" element={<Protected><AIScanner /></Protected>} />
+        <Route path="/ai-connector" element={<Protected role="admin"><AIConnector /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />

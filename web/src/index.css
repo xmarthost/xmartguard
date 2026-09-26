@@ -40,3 +40,14 @@ body {
 @utility h-title {
   @apply text-2xl font-semibold text-navy-900;
 }
+
+/* IPDB live monitor: a newly blocked connection slides in at the top with a
+   short green flash, then settles to the normal row colour. */
+@keyframes xg-live-new {
+  0% { opacity: 0; transform: translateY(-10px); background-color: #bbf7d0; }
+  25% { opacity: 1; transform: none; background-color: #dcfce7; }
+  100% { background-color: #f8fafc; }
+}
+.xg-live-new {
+  animation: xg-live-new 1.6s ease-out;
+}

@@ -115,6 +115,43 @@ xmartguard-agent check /home/user/public_html/folder --misses --no-hash   # rule
     ),
   },
   {
+    id: 'mcp',
+    title: 'Connect an AI assistant (MCP)',
+    body: (
+      <>
+        <p>
+          <b>AI Connector</b> (admins) creates a connector URL for Claude or any Model Context Protocol client. A read-only connector can see every
+          server's dashboard, findings and file contents, logs, settings and the AI knowledge base; a read &amp; write connector can also start scans,
+          act on findings, change settings and correct AI verdicts. Actions are recorded in the Security Log as <code>mcp.*</code>.
+        </p>
+        <Steps
+          items={[
+            <>Portal: <b>AI Connector » Create connector</b>, copy the URL (<code>https://portal/mcp/xgm_…</code>).</>,
+            <>Claude: <b>Settings » Connectors » Add custom connector</b>, paste the URL, no OAuth.</>,
+            <>Revoke the connector in the portal to cut access immediately.</>,
+          ]}
+        />
+      </>
+    ),
+  },
+  {
+    id: 'restore',
+    title: 'Restored files and AI “clean” verdicts',
+    body: (
+      <>
+        <p>
+          When an administrator restores a file, the agent remembers that exact content (by its SHA-256). Later scans skip it until the file changes;
+          changed content is scanned again like any new file.
+        </p>
+        <p className="mt-2">
+          The AI restores a quarantined file by itself only when an online AI provider says <b>clean</b> with at least 90% confidence. Lower-confidence
+          clean verdicts show an amber ring on the AI badge in Scanner Logs; review them and restore by hand, or use <b>Clear (false positive)</b> to tell
+          every server that this content is clean.
+        </p>
+      </>
+    ),
+  },
+  {
     id: 'cli',
     title: 'Command line (xgcli)',
     body: (
@@ -146,7 +183,7 @@ const credits: Credit[] = [
   { name: 'WordPress.org checksums API', use: 'Known-good WordPress core and plugin files, core file repair', license: 'GPL v2+ (WordPress)', url: 'https://wordpress.org' },
   { name: 'WPVulnerability', use: 'Vulnerable plugin and theme database', license: 'Public API', url: 'https://www.wpvulnerability.net' },
   { name: 'OWASP ModSecurity / ModSecurity', use: 'WAF engine the rules run in', license: 'Apache 2.0', url: 'https://github.com/owasp-modsecurity/ModSecurity' },
-  { name: 'ClamAV, YARA, rkhunter, Lynis', use: 'Optional engines used when installed on the server', license: 'GPL v2 / BSD-3', url: 'https://www.clamav.net' },
+  { name: 'YARA, rkhunter, Lynis', use: 'Optional tools used when installed on the server', license: 'BSD-3 / GPL v2', url: 'https://virustotal.github.io/yara/' },
   { name: 'Spamhaus DBL, SURBL, URIBL', use: 'Domain and IP reputation lookups', license: 'Free for low-volume use, provider terms', url: 'https://www.spamhaus.org' },
   { name: 'Natural Earth / world-atlas', use: 'World map', license: 'Public domain / ISC', url: 'https://github.com/topojson/world-atlas' },
   { name: 'React, Recharts, Lucide, D3, Fastify, PostgreSQL, SQLite (modernc), golang.org/x/sys', use: 'Portal and agent software', license: 'MIT / ISC / BSD / PostgreSQL', url: 'https://github.com/xmarthost/xmartguard' },

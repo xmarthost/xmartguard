@@ -27,7 +27,12 @@ interface Live {
   hourly: { at: number; packets: number }[];
   countries: Record<string, number>;
   logging: boolean;
+  packets?: number;
+  now?: number;
 }
+
+/** Points of the rolling live chart (one per refresh, ~1.5 s). */
+const LIVE_POINTS = 40;
 
 interface Status {
   enabled: boolean;
@@ -54,32 +59,62 @@ export default function ServerIPDB() {
   const [reloaded, setReloaded] = useState<Date | null>(null);
   const [check, setCheck] = useState(false);
   const lastId = useRef(0);
+  // Rows that arrived in the latest refresh slide in and flash green.
+  const [fresh, setFresh] = useState<Set<number>>(new Set());
+  // Rolling live series: packets dropped between refreshes.
+  const [series, setSeries] = useState<{ k: number; t: string; v: number }[]>([]);
+  const prev = useRef<{ packets: number; at: number } | null>(null);
 
   useEffect(() => {
     let alive = true;
+    let busy = false;
+    let tick = 0;
     lastId.current = 0;
+    prev.current = null;
     setEvents([]);
+    setSeries([]);
     const load = async () => {
+      if (busy) return; // never stack requests on a slow link
+      busy = true;
       try {
+        const wantStatus = tick++ % 10 === 0;
         const [l, s] = await Promise.all([
           agentCall<Live>(id!, 'ipdb.live', { since_id: lastId.current }),
-          agentCall<Status>(id!, 'ipdb.status'),
+          wantStatus ? agentCall<Status>(id!, 'ipdb.status') : Promise.resolve(null),
         ]);
         if (!alive) return;
         setLive(l);
-        setStatus(s);
+        if (s) setStatus(s);
+        const first = lastId.current === 0;
         if (l.events.length) {
           lastId.current = Math.max(lastId.current, ...l.events.map((e) => e.id));
           setEvents((cur) => [...l.events, ...cur].slice(0, 150));
+          setFresh(first ? new Set() : new Set(l.events.map((e) => e.id)));
+        } else {
+          setFresh(new Set());
         }
+        // Live chart: growth of the IPDB drop counter since the last refresh
+        // (sampled log rows as a fallback when counters are unavailable).
+        const now = Date.now();
+        let v = l.events.length && !first ? l.events.length : 0;
+        if (l.packets !== undefined && prev.current) v = Math.max(0, l.packets - prev.current.packets);
+        if (l.packets !== undefined) prev.current = { packets: l.packets, at: now };
+        const d = new Date(now);
+        const label = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+        setSeries((cur) => {
+          const base = cur.length ? cur : Array.from({ length: LIVE_POINTS - 1 }, (_, i) => ({ k: now - (LIVE_POINTS - i) * 1500, t: '', v: 0 }));
+          return [...base, { k: now, t: label, v }].slice(-LIVE_POINTS);
+        });
         setReloaded(new Date());
         setError(null);
       } catch (e: any) {
         if (alive) setError(e.message);
+      } finally {
+        busy = false;
       }
     };
     load();
-    const t = setInterval(load, 3000);
+    const t = setInterval(load, 1500);
     return () => {
       alive = false;
       clearInterval(t);
@@ -129,17 +164,30 @@ export default function ServerIPDB() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)]">
         <div className="space-y-5">
-          <Card title="Attacks Blocked - Live" desc="Packets dropped per minute, last 10 minutes">
+          <Card title="Attacks Blocked - Live" desc="Blocked packets, updated every 1.5 seconds">
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={minutes}>
+                <AreaChart data={series}>
+                  <defs>
+                    <linearGradient id="liveFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#1e2a5a" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#1e2a5a" stopOpacity={0.04} />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="t" fontSize={11} />
+                  <XAxis dataKey="t" fontSize={11} interval="preserveEnd" minTickGap={40} tickLine={false} />
                   <YAxis fontSize={11} width={40} allowDecimals={false} />
-                  <Tooltip />
-                  <Area type="monotone" dataKey="v" name="Packets" stroke="#1e2a5a" fill="#1e2a5a33" strokeWidth={2} isAnimationActive={false} />
+                  <Tooltip formatter={(v) => [Number(v).toLocaleString(), 'Packets']} labelFormatter={(l) => l || ''} />
+                  <Area type="monotone" dataKey="v" name="Packets" stroke="#1e2a5a" fill="url(#liveFill)" strokeWidth={2} isAnimationActive animationDuration={600} dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
+            </div>
+            <div className="mt-1 flex items-center justify-end gap-1.5 text-[11px] text-slate-400">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+              </span>
+              live · {minutes.reduce((a, p) => a + p.v, 0).toLocaleString()} packets in the last 10 minutes
             </div>
           </Card>
           <Card title="Attacks Blocked - Hourly" desc="Last 24 hours">
@@ -170,7 +218,9 @@ export default function ServerIPDB() {
                 {events.map((e) => (
                   <div
                     key={e.id}
-                    className="grid grid-cols-[10px_9.5rem_minmax(0,1fr)_8.5rem_4.5rem] items-center gap-x-3 rounded-md bg-slate-50 px-3 py-2 text-[13px] whitespace-nowrap"
+                    className={`grid grid-cols-[10px_9.5rem_minmax(0,1fr)_8.5rem_4.5rem] items-center gap-x-3 rounded-md bg-slate-50 px-3 py-2 text-[13px] whitespace-nowrap ${
+                      fresh.has(e.id) ? 'xg-live-new' : ''
+                    }`}
                   >
                     <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
                     <span className="truncate" title={e.entry ? `${e.src} · listed as ${e.entry}` : e.src}>

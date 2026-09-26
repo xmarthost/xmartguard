@@ -1,19 +1,20 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, Gauge, Plus, Tag, Trash2 } from 'lucide-react';
+import { Bell, Gauge, Info, LayoutGrid, Plus, Server as ServerIcon, Tag, Trash2 } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ago, panelName, pct } from '../format';
-import { Bar, Empty, ErrorBox, PageLoader, StatusDot } from '../components/ui';
+import { Empty, ErrorBox, PageLoader, StatusDot } from '../components/ui';
+import { compact } from '../components/AttackOverview';
 
 function TagEditor({ server, onSaved }: { server: Server; onSaved: () => void }) {
   const [value, setValue] = useState(server.tags.join(', '));
   const [open, setOpen] = useState(false);
   if (!open) {
     return (
-      <button className="flex items-center gap-1 text-xs text-slate-400 hover:text-navy-700" onClick={() => setOpen(true)}>
-        <Tag className="h-3.5 w-3.5" /> {server.tags.length ? 'Edit tags' : 'Assign tag'}
+      <button className="flex items-center gap-2 text-slate-400 transition hover:text-navy-700" onClick={() => setOpen(true)}>
+        <Tag className="h-5 w-5" /> {server.tags.length ? 'Edit Tags' : 'Assign Tag'}
       </button>
     );
   }
@@ -34,91 +35,116 @@ function TagEditor({ server, onSaved }: { server: Server; onSaved: () => void })
   );
 }
 
+interface Card {
+  virus_attacks?: number;
+  web_attacks?: number;
+  ipdb_hourly?: number[];
+  domains_blacklisted?: number;
+  domains?: number;
+}
+
+/** 24-hour IPDB blocks as a small area sparkline. */
+function Sparkline({ points }: { points: number[] }) {
+  const w = 96;
+  const h = 34;
+  const max = Math.max(1, ...points);
+  const step = w / Math.max(1, points.length - 1);
+  const y = (v: number) => h - 3 - (v / max) * (h - 8);
+  const line = points.map((v, i) => `${i ? 'L' : 'M'}${(i * step).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="h-9 w-24" aria-hidden>
+      <path d={`${line} L${w},${h} L0,${h} Z`} fill="#dcfce7" />
+      <path d={line} fill="none" stroke="#4ade80" strokeWidth="2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PanelBadge({ panel }: { panel: string }) {
+  if (panel === 'cpanel') return <span className="text-[22px] leading-none font-black tracking-tighter text-orange-500 italic">cP</span>;
+  return <ServerIcon className="h-6 w-6 text-navy-700" />;
+}
+
+function Stat({ value, label, tone }: { value: React.ReactNode; label: string; tone: 'green' | 'amber' | 'navy' | 'red' }) {
+  const color = { green: 'text-green-500', amber: 'text-amber-500', navy: 'text-navy-800', red: 'text-red-500' }[tone];
+  return (
+    <div>
+      <div className={`text-[26px] leading-tight font-medium ${color}`}>{value}</div>
+      <div className="mt-1 text-sm text-slate-500">{label}</div>
+    </div>
+  );
+}
+
 function ServerCard({ s, onChange }: { s: Server; onChange: () => void }) {
   const { user } = useAuth();
+  const [info, setInfo] = useState(false);
   const m = s.last_metrics;
   const sec = (m as any)?.security;
-  const mem = pct(m?.mem_used, m?.mem_total);
-  const disk = pct(m?.disk_used, m?.disk_total);
+  const card: Card = sec?.card ?? {};
+  const alerts = (sec?.scanner?.open_findings ?? 0) + (sec?.blacklisted_ips ?? 0) + (card.domains_blacklisted ?? 0);
+  const iconBtn = 'text-slate-400 transition hover:text-navy-700 [&>svg]:h-5 [&>svg]:w-5';
   return (
-    <div className="card flex flex-col p-5">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="text-xs font-medium text-orange-500">{panelName(s.control_panel)}</div>
-          <Link to={`/servers/${s.id}`} className="block truncate text-lg font-semibold text-navy-900 hover:underline">
-            {s.hostname || '(unknown host)'}
-          </Link>
-          <div className="text-sm text-slate-500">
-            {s.primary_ip} · {s.os_name}
-          </div>
-        </div>
-        <StatusDot online={s.online} />
+    <div className={`card flex flex-col p-6 transition hover:shadow-md ${s.online ? '' : 'opacity-80'}`}>
+      <div className="flex items-start gap-3">
+        <PanelBadge panel={s.control_panel} />
+        <Link to={`/servers/${s.id}`} className="min-w-0 flex-1 truncate text-lg font-medium text-navy-900 hover:underline" title={s.hostname}>
+          {s.hostname || '(unknown host)'}
+        </Link>
+        <Link to={`/servers/${s.id}`} title={alerts ? `${alerts} alert(s)` : 'No alerts'} className="relative text-amber-400 hover:text-amber-500">
+          <Bell className="h-6 w-6" />
+          {alerts > 0 && <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />}
+        </Link>
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-3 text-center">
-        <div>
-          <div className="text-xl font-semibold text-green-600">{m ? `${m.cpu_percent}%` : '–'}</div>
-          <div className="text-xs text-slate-500">CPU</div>
-        </div>
-        <div>
-          <div className="text-xl font-semibold text-green-600">{m ? `${mem}%` : '–'}</div>
-          <div className="text-xs text-slate-500">Memory</div>
-        </div>
-        <div>
-          <div className="text-xl font-semibold text-navy-800">{m ? m.load1.toFixed(2) : '–'}</div>
-          <div className="text-xs text-slate-500">Load</div>
-        </div>
-      </div>
-      {sec && (
-        <div className="mt-4 grid grid-cols-3 gap-3 border-t pt-3 text-center">
-          <div>
-            <div className={`text-lg font-semibold ${sec.scanner?.threats_30d ? 'text-red-600' : 'text-green-600'}`}>{sec.scanner?.threats_30d ?? 0}</div>
-            <div className="text-xs text-slate-500">Threats (30d)</div>
-          </div>
-          <div>
-            <div className="text-lg font-semibold text-navy-800">{sec.firewall?.blocks_30d ?? 0}</div>
-            <div className="text-xs text-slate-500">IPs blocked</div>
-          </div>
-          <div>
-            <div className={`text-lg font-semibold ${sec.blacklisted_ips ? 'text-red-600' : 'text-green-600'}`}>{sec.blacklisted_ips ?? 0}</div>
-            <div className="text-xs text-slate-500">IP blacklist</div>
-          </div>
+      {!s.online && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-slate-400">
+          <StatusDot online={false} /> offline · last seen {ago(s.last_seen_at)}
         </div>
       )}
-      <div className="mt-4">
-        <div className="mb-1 flex justify-between text-xs text-slate-500">
-          <span>Disk</span>
-          <span>{disk}%</span>
+      <div className="mt-6 grid grid-cols-3 gap-x-4 gap-y-6">
+        <Stat value={compact(card.virus_attacks ?? sec?.scanner?.threats_30d ?? 0)} label="Virus Attacks" tone="green" />
+        <Stat value={compact(card.web_attacks ?? 0)} label="Web Attacks" tone="green" />
+        <div>
+          <Sparkline points={card.ipdb_hourly ?? Array(24).fill(0)} />
+          <div className="mt-1 text-sm text-slate-500">IPDB Firewall</div>
         </div>
-        <Bar value={disk} className={disk > 90 ? 'bg-red-500' : disk > 75 ? 'bg-amber-500' : 'bg-green-500'} />
+        <Stat value={sec?.blacklisted_ips ?? 0} label="IP Blacklist" tone={sec?.blacklisted_ips ? 'red' : 'amber'} />
+        <Stat value={card.domains_blacklisted ?? 0} label="Domain Blacklist" tone={card.domains_blacklisted ? 'red' : 'amber'} />
+        <Stat value={compact(card.domains ?? 0)} label="Domains" tone="navy" />
       </div>
       {s.tags.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1">
+        <div className="mt-4 flex flex-wrap gap-1">
           {s.tags.map((t) => (
             <span key={t} className="rounded-full bg-navy-100 px-2 py-0.5 text-xs text-navy-800">{t}</span>
           ))}
         </div>
       )}
-      <div className="mt-auto flex items-center justify-between border-t pt-3 text-slate-400">
-        <div className="flex items-center gap-3">
-          <Link to={`/servers/${s.id}`} title="Dashboard" className="hover:text-navy-700"><Gauge className="h-4 w-4" /></Link>
-          <Link to={`/servers/${s.id}/monitoring`} title="System Monitoring" className="hover:text-navy-700"><Activity className="h-4 w-4" /></Link>
+      <div className="mt-auto flex items-center justify-between pt-6">
+        <div className="flex items-center gap-5">
+          <Link to={`/servers/${s.id}`} title="Dashboard" className={iconBtn}><LayoutGrid /></Link>
+          <button title="Server information" className={iconBtn} onClick={() => setInfo(!info)}><Info /></button>
+          <Link to={`/servers/${s.id}/monitoring`} title="System Monitoring" className={iconBtn}><Gauge /></Link>
+        </div>
+        {can(user, 'operator') ? <TagEditor server={s} onSaved={onChange} /> : null}
+      </div>
+      {info && (
+        <div className="mt-4 space-y-1 border-t pt-3 text-xs text-slate-500">
+          <div>{panelName(s.control_panel)} · {s.web_server || 'web server unknown'}</div>
+          <div>{s.primary_ip} · {s.os_name}</div>
+          <div>Agent {s.agent_version} · {s.online ? 'online' : `last seen ${ago(s.last_seen_at)}`}</div>
+          {m && <div>CPU {m.cpu_percent}% · memory {pct(m.mem_used, m.mem_total)}% · disk {pct(m.disk_used, m.disk_total)}%</div>}
           {can(user, 'admin') && (
             <button
-              title="Remove server"
-              className="hover:text-red-600"
+              className="mt-1 inline-flex items-center gap-1 text-red-500 hover:text-red-700"
               onClick={async () => {
                 if (!confirm(`Remove ${s.hostname} from XMart Guard? The agent on the server will stop.`)) return;
                 await api('DELETE', `/api/servers/${s.id}`);
                 onChange();
               }}
             >
-              <Trash2 className="h-4 w-4" />
+              <Trash2 className="h-3.5 w-3.5" /> Remove server
             </button>
           )}
         </div>
-        {can(user, 'operator') ? <TagEditor server={s} onSaved={onChange} /> : <span className="text-xs">seen {ago(s.last_seen_at)}</span>}
-      </div>
-      {!s.online && <div className="mt-2 text-xs text-slate-400">Last seen {ago(s.last_seen_at)}</div>}
+      )}
     </div>
   );
 }
@@ -137,10 +163,10 @@ export default function ServerList() {
       {loading && !data ? (
         <PageLoader />
       ) : (
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           {data?.servers.map((s) => <ServerCard key={s.id} s={s} onChange={reload} />)}
           {can(user, 'admin') && (
-            <Link to="/servers/add" className="card flex min-h-60 flex-col items-center justify-center gap-2 text-slate-500 transition hover:text-navy-800 hover:shadow-md">
+            <Link to="/servers/add" className="card flex min-h-72 flex-col items-center justify-center gap-2 text-slate-500 transition hover:text-navy-800 hover:shadow-md">
               <Plus className="h-10 w-10" />
               Add Server
             </Link>
