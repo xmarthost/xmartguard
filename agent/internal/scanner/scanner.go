@@ -43,6 +43,9 @@ type Finding struct {
 	Status    string `json:"status"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
+	// AI scanner opinion, when one exists for this file content.
+	AIVerdict string `json:"ai_verdict,omitempty"`
+	AIReason  string `json:"ai_reason,omitempty"`
 }
 
 // Scan is one scan job.
@@ -316,8 +319,12 @@ func sha256File(path string) string {
 // Record stores a detection and applies the configured action.
 func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d Detection) (Finding, error) {
 	now := store.Now()
+	sum := ""
+	if d.Category != CatSymlink {
+		sum = sha256File(path)
+	}
 	f := Finding{ScanID: scanID, Source: source, Path: path, Category: d.Category, Signature: d.Signature,
-		SHA256: sha256File(path), Size: info.Size(), Status: "detected", CreatedAt: now, UpdatedAt: now}
+		SHA256: sum, Size: info.Size(), Status: "detected", CreatedAt: now, UpdatedAt: now}
 	uid, gid := -1, -1
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		f.Owner = s.owner(st.Uid)
@@ -341,6 +348,14 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		action = cfg.SuspiciousAction
 	case CatBinary:
 		action = cfg.BinaryAction
+	case CatSymlink:
+		action = settings.ActionNotify
+		if cfg.DeleteSymlinks {
+			if err := os.Remove(path); err == nil {
+				f.Status = "deleted"
+				_ = s.setStatus(f.ID, "deleted", "")
+			}
+		}
 	}
 	switch action {
 	case settings.ActionQuarantine:
@@ -450,6 +465,9 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 		batch = batch[:0]
 	}
 	qdir := QuarantineDir()
+	homeMap := homes()
+	var scripts []string // for YARA
+	useYARA := cfg.YARA && YARABin() != "" && len(YARARules()) > 0
 	var walkErr error
 	for _, root := range roots {
 		walkErr = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -465,7 +483,17 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				}
 				return nil
 			}
-			if d.Type()&fs.ModeSymlink != 0 || !d.Type().IsRegular() {
+			if d.Type()&fs.ModeSymlink != 0 {
+				if target, bad := InsecureSymlink(path, homeMap); bad {
+					if info, err := os.Lstat(path); err == nil {
+						if _, err := s.Record(id, "manual", path, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + target}); err == nil {
+							infected++
+						}
+					}
+				}
+				return nil
+			}
+			if !d.Type().IsRegular() {
 				return nil
 			}
 			info, err := d.Info()
@@ -480,6 +508,9 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=? WHERE id=?`, files, infected, id)
 			}
 			det, err := s.CheckFile(path, info, cfg)
+			if useYARA && (err != nil || det == nil) && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
+				scripts = append(scripts, path)
+			}
 			if err != nil || det == nil {
 				if clam.ok && ScriptExts[extOf(d.Name())] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
 					batch = append(batch, path)
@@ -500,6 +531,13 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	}
 	if ctx.Err() == nil {
 		flushClam()
+		for path, rule := range yaraScan(ctx, scripts) {
+			if info, err := os.Lstat(path); err == nil {
+				if _, err := s.Record(id, "manual", path, info, Detection{CatVirus, "YARA." + rule}); err == nil {
+					infected++
+				}
+			}
+		}
 	}
 	status, errText := "completed", ""
 	if errors.Is(walkErr, context.Canceled) {
@@ -601,8 +639,10 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	if err := s.DB.QueryRow(`SELECT count(*) FROM findings WHERE `+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(`SELECT id, scan_id, source, path, owner, category, signature, sha256, size, status, created_at, updated_at
-		FROM findings WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
+	rows, err := s.DB.Query(`SELECT id, scan_id, source, path, owner, category, signature, findings.sha256, size, status, created_at, updated_at,
+		coalesce(v.verdict, ''), coalesce(v.reason, '')
+		FROM findings LEFT JOIN ai_verdicts v ON v.sha256 = findings.sha256 AND findings.sha256 != ''
+		WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -610,7 +650,7 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	out := []Finding{}
 	for rows.Next() {
 		var x Finding
-		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt); err != nil {
+		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt, &x.AIVerdict, &x.AIReason); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, x)

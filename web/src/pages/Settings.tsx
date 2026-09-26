@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, Globe2, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX } from 'lucide-react';
+import { Bell, Bug, CheckCircle2, Globe2, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -20,6 +20,31 @@ interface ScannerS {
   whitelist_users: string[];
   whitelist_paths: string[];
   blacklist_names: string[];
+  delete_symlinks: boolean;
+  auto_clean: boolean;
+  user_scans: boolean;
+  yara: boolean;
+  db_whitelist: { id: string; reason: string }[];
+  keep_days: number;
+}
+interface AIS {
+  enabled: boolean;
+  provider: 'builtin' | 'ollama' | 'anthropic';
+  api_key: string;
+  ollama_url: string;
+  model: string;
+  max_kb: number;
+  act: boolean;
+}
+interface ProcS {
+  enabled: boolean;
+  kill: boolean;
+  whitelist_users: string[];
+  whitelist_strings: string[];
+}
+interface CronS {
+  enabled: boolean;
+  whitelist_users: string[];
 }
 interface ReputationS {
   enabled: boolean;
@@ -34,6 +59,17 @@ interface NotificationsS {
   on_binary: boolean;
   on_ban: boolean;
   on_blacklist: boolean;
+  extra_email: string;
+  from: string;
+  slack_webhook: string;
+  telegram_token: string;
+  telegram_chat: string;
+  daily_report: boolean;
+  user_infected: boolean;
+  user_suspension: boolean;
+  user_patches: boolean;
+  user_outdated: 'never' | 'weekly' | 'monthly';
+  exclude_users: string[];
 }
 interface WAFS {
   enabled: boolean;
@@ -49,12 +85,24 @@ interface WAFS {
   bf_window_minutes: number;
   disabled_rules: number[];
   whitelist_ips: string[];
+  login_urls: string[];
+  webshell: boolean;
+  block_php_upload: boolean;
+  whitelist_domains: string[];
 }
 interface CMSS {
   enabled: boolean;
   core_check: boolean;
   db_scan: boolean;
   interval_hours: number;
+  vulns: boolean;
+  auto_update: boolean;
+  auto_update_cvss: number;
+  auto_update_days: number;
+  blacklist_plugins: string[];
+  exclude_users: string[];
+  wp_cron: boolean;
+  wp_cron_hours: number;
 }
 interface OSMS {
   enabled: boolean;
@@ -72,6 +120,8 @@ interface SuspendS {
   detections: number;
   window_hours: number;
   exclude_users: string[];
+  on_domain_blacklist: boolean;
+  whitelist_domains: string[];
 }
 interface DomainRepS {
   enabled: boolean;
@@ -92,6 +142,10 @@ interface AllSettings {
   domain_reputation: DomainRepS;
   reputation: ReputationS;
   notifications: NotificationsS;
+  ai: AIS;
+  processes: ProcS;
+  cron: CronS;
+  rootkit: { enabled: boolean };
 }
 interface Meta {
   clamav: string;
@@ -100,7 +154,7 @@ interface Meta {
   default_rbls: string[];
 }
 
-type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'ipdb' | 'notifications' | 'about';
+type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'ipdb' | 'additional' | 'notifications' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
@@ -108,6 +162,7 @@ const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[]
   { v: 'waf', l: 'WAF & Bruteforce', icon: <Shield className="h-4 w-4" /> },
   { v: 'cms', l: 'WordPress and CMS', icon: <LayoutTemplate className="h-4 w-4" /> },
   { v: 'suspension', l: 'Automatic Suspension', icon: <UserX className="h-4 w-4" /> },
+  { v: 'additional', l: 'Additional Settings', icon: <Wrench className="h-4 w-4" /> },
   { v: 'osm', l: 'Outgoing Spam Monitor', icon: <Mail className="h-4 w-4" /> },
   { v: 'notifications', l: 'Notifications', icon: <Bell className="h-4 w-4" /> },
   { v: 'about', l: 'About', icon: <Info className="h-4 w-4" /> },
@@ -164,14 +219,18 @@ export default function SettingsPage() {
       <div className="card p-6">
         {!admin && <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">You can view settings; only admins can change them.</div>}
         {section === 'scanner' && <ScannerSection s={st.scanner} meta={meta} admin={admin} busy={busy} onSave={setScanner} />}
+        {section === 'scanner' && st.ai && <AISection s={st.ai} admin={admin} busy={busy} onSave={(p) => save({ ai: p })} />}
+        {section === 'additional' && st.processes && (
+          <AdditionalSection serverId={id!} st={st} meta={meta} admin={admin} busy={busy} save={save} />
+        )}
         {section === 'rbl' && <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />}
         {section === 'rbl' && st.domain_reputation && <DomainRepSection s={st.domain_reputation} admin={admin} busy={busy} onSave={(p) => save({ domain_reputation: p })} />}
         {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} />}
-        {section === 'cms' && st.cms && <CMSSection s={st.cms} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
+        {section === 'cms' && st.cms && <CMSSection s={st.cms} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
         {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
         {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
         {section === 'ipdb' && <IPDBSection s={st.ipdb ?? { enabled: true, report: true }} admin={admin} busy={busy} onSave={(p) => save({ ipdb: p })} />}
-        {section === 'notifications' && <NotificationsSection s={st.notifications} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
+        {section === 'notifications' && <NotificationsSection s={st.notifications} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
         {section === 'about' && <About serverId={id!} />}
       </div>
     </div>
@@ -231,6 +290,15 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         <SettingRow title="Use ClamAV" desc="Also scan with ClamAV (clamdscan) when it is installed on the server">
           <Toggle on={s.use_clamav} disabled={dis} onChange={(v) => onSave({ use_clamav: v })} />
         </SettingRow>
+        <SettingRow title="Delete insecure symbolic links" desc="Remove links that point into another account's files, or to files the user could not read otherwise" recommended>
+          <Toggle on={s.delete_symlinks} disabled={dis} onChange={(v) => onSave({ delete_symlinks: v })} />
+        </SettingRow>
+        <SettingRow title="Auto clean infected files" desc="When an infected file is a WordPress core file, restore the original from the official WordPress release (content, plugins and themes are not touched)" recommended>
+          <Toggle on={s.auto_clean} disabled={dis} onChange={(v) => onSave({ auto_clean: v })} />
+        </SettingRow>
+        <SettingRow title="YARA rules" desc="Also run YARA rules placed in /etc/xmartguard/yara/*.yar (requires the yara package)">
+          <Toggle on={s.yara} disabled={dis} onChange={(v) => onSave({ yara: v })} />
+        </SettingRow>
         <SettingRow title="Maximum file size" desc="Larger files are skipped (MB)">
           <input className="input w-24" type="number" min={1} max={100} defaultValue={s.max_file_size_mb} disabled={dis} onBlur={(e) => Number(e.target.value) !== s.max_file_size_mb && onSave({ max_file_size_mb: Number(e.target.value) })} />
         </SettingRow>
@@ -251,6 +319,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
           empty="No whitelisted files"
           onChange={(v) => onSave({ whitelist_paths: v })}
         />
+        <DBWhitelistEditor items={s.db_whitelist ?? []} disabled={dis} onChange={(v) => onSave({ db_whitelist: v })} />
         <ListEditor
           title="Blacklist Files"
           desc="File names that are always treated as malware"
@@ -260,6 +329,146 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
           onChange={(v) => onSave({ blacklist_names: v })}
         />
       </div>
+    </div>
+  );
+}
+
+function DBWhitelistEditor({ items, disabled, onChange }: { items: { id: string; reason: string }[]; disabled: boolean; onChange: (v: { id: string; reason: string }[]) => void }) {
+  const [sig, setSig] = useState('');
+  const [reason, setReason] = useState('');
+  return (
+    <div className="border-b border-slate-100 py-4">
+      <div className="font-medium text-navy-900">Whitelist DB scan signatures</div>
+      <div className="mb-3 text-sm text-slate-500">Signature ids you wish to exclude from the database scanner</div>
+      <div className="flex flex-wrap gap-3">
+        <input className="input flex-1" placeholder="Type signature id here" value={sig} disabled={disabled} onChange={(e) => setSig(e.target.value)} />
+        <input className="input flex-1" placeholder="Enter reason" value={reason} disabled={disabled} onChange={(e) => setReason(e.target.value)} />
+        <button
+          className="btn-primary px-6"
+          disabled={disabled || !sig.trim()}
+          onClick={() => {
+            onChange([...items.filter((x) => x.id !== sig.trim()), { id: sig.trim().replace(/^DB\./, ''), reason: reason.trim() }]);
+            setSig('');
+            setReason('');
+          }}
+        >
+          Add
+        </button>
+      </div>
+      <div className="mt-3">
+        {items.length === 0 ? (
+          <div className="text-sm text-slate-400">No whitelisted signatures</div>
+        ) : (
+          items.map((x) => (
+            <div key={x.id} className="flex items-center justify-between border-b border-slate-100 py-2 text-sm last:border-0">
+              <span>
+                <span className="font-mono">{x.id}</span> <span className="text-slate-500">{x.reason && `— ${x.reason}`}</span>
+              </span>
+              <button className="text-red-600 hover:underline" disabled={disabled} onClick={() => onChange(items.filter((y) => y.id !== x.id))}>
+                Remove
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+const AI_PROVIDERS = [
+  { v: 'builtin', l: 'Built-in AI model (free)', d: 'XMart Guard’s own model runs on the server. Free, private, nothing is sent anywhere. Retrained from real quarantine data with every release.' },
+  { v: 'ollama', l: 'Ollama (free, self-hosted LLM)', d: 'A language model you run yourself with Ollama (e.g. qwen2.5-coder). Free; files are sent only to your Ollama server.' },
+  { v: 'anthropic', l: 'Claude (Anthropic API, paid)', d: 'Uses your own Anthropic API key. File contents are sent to Anthropic; billed per use.' },
+] as const;
+
+function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: boolean; onSave: (p: Partial<AIS>) => void }) {
+  const dis = !admin || busy;
+  const [f, setF] = useState(s);
+  useEffect(() => setF(s), [s]);
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-6">
+      <SettingRow title="AI scanner" desc="Check suspicious files with the AI scanner. A confident “malicious” verdict can apply the virus action automatically." recommended>
+        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
+      </SettingRow>
+      <div className="space-y-2 py-3">
+        {AI_PROVIDERS.map((p) => (
+          <label key={p.v} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${f.provider === p.v ? 'border-navy-600 bg-navy-100/40' : 'border-slate-200'}`}>
+            <input type="radio" className="mt-1" disabled={dis} checked={f.provider === p.v} onChange={() => setF({ ...f, provider: p.v, model: p.v === 'anthropic' ? 'claude-opus-5' : p.v === 'ollama' ? 'qwen2.5-coder:7b' : '' })} />
+            <div>
+              <div className="text-sm font-medium text-navy-900">{p.l}</div>
+              <div className="text-xs text-slate-500">{p.d}</div>
+            </div>
+          </label>
+        ))}
+      </div>
+      {f.provider === 'ollama' && (
+        <div className="grid gap-3 pb-3 sm:grid-cols-2">
+          <input className="input" placeholder="http://127.0.0.1:11434" value={f.ollama_url} disabled={dis} onChange={(e) => setF({ ...f, ollama_url: e.target.value })} />
+          <input className="input" placeholder="model, e.g. qwen2.5-coder:7b" value={f.model} disabled={dis} onChange={(e) => setF({ ...f, model: e.target.value })} />
+        </div>
+      )}
+      {f.provider === 'anthropic' && (
+        <div className="grid gap-3 pb-3 sm:grid-cols-2">
+          <input className="input" type="password" placeholder="Anthropic API key (sk-ant-…)" value={f.api_key} disabled={dis} onChange={(e) => setF({ ...f, api_key: e.target.value })} />
+          <input className="input" placeholder="claude-opus-5" value={f.model} disabled={dis} onChange={(e) => setF({ ...f, model: e.target.value })} />
+        </div>
+      )}
+      <SettingRow title="Act on AI verdicts" desc="Quarantine or disable (per the virus action) suspicious files the AI is at least 80% sure are malicious">
+        <Toggle on={f.act} disabled={dis} onChange={(v) => setF({ ...f, act: v })} />
+      </SettingRow>
+      <div className="flex justify-end">
+        <button className="btn-primary" disabled={dis || JSON.stringify(f) === JSON.stringify(s)} onClick={() => onSave(f)}>
+          Save AI scanner
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId: string; st: AllSettings; meta: Meta; admin: boolean; busy: boolean; save: (p: Partial<Record<keyof AllSettings, any>>, msg?: string) => Promise<unknown> }) {
+  const dis = !admin || busy;
+  const users = meta.users.map((u) => u.name);
+  const mon = useAgent<{ status: { rkhunter: boolean; rkhunter_last: number; rkhunter_warnings: number } }>(serverId, 'monitor.events', { limit: 1 });
+  const rk = mon.data?.status;
+  return (
+    <div>
+      <h2 className="mb-2 text-lg font-semibold text-navy-900">Additional Settings</h2>
+      <SettingRow
+        title="Rootkit Scanner"
+        desc={rk?.rkhunter ? `Weekly rkhunter check${rk.rkhunter_last ? ` · last run ${new Date(rk.rkhunter_last * 1000).toLocaleString()}, ${rk.rkhunter_warnings} warning(s)` : ''}` : 'Weekly rkhunter check (install rkhunter to enable: dnf install rkhunter)'}
+        recommended
+      >
+        <Toggle on={st.rootkit.enabled} disabled={dis} onChange={(v) => save({ rootkit: { enabled: v } })} />
+      </SettingRow>
+      <SettingRow title="Manual scan access" desc="Allow cPanel users to start manual scans from the user panel">
+        <Toggle on={st.scanner.user_scans} disabled={dis} onChange={(v) => save({ scanner: { user_scans: v } })} />
+      </SettingRow>
+      <div className="my-3 rounded-xl border border-slate-200 p-4">
+        <SettingRow title="Proactive process monitor" desc="Periodically check processes running under hosting users for miners, reverse shells and programs run from temporary or hidden folders">
+          <Toggle on={st.processes.enabled} disabled={dis} onChange={(v) => save({ processes: { enabled: v } })} />
+        </SettingRow>
+        <SettingRow title="Kill malicious processes" desc="Terminate detected processes instead of only alerting">
+          <Toggle on={st.processes.kill} disabled={dis || !st.processes.enabled} onChange={(v) => save({ processes: { kill: v } })} />
+        </SettingRow>
+        <ListEditor title="Whitelist Users" desc="Processes running under these users will not be monitored or terminated" items={st.processes.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ processes: { whitelist_users: v } })} />
+        <ListEditor title="Whitelist Strings" desc="Skip processes whose path or command line contains these strings" items={st.processes.whitelist_strings} disabled={dis} onChange={(v) => void save({ processes: { whitelist_strings: v } })} />
+      </div>
+      <div className="my-3 rounded-xl border border-slate-200 p-4">
+        <SettingRow title="Cron monitor" desc="Monitor cron jobs and alert on suspicious cron activities">
+          <Toggle on={st.cron.enabled} disabled={dis} onChange={(v) => save({ cron: { enabled: v } })} />
+        </SettingRow>
+        <ListEditor title="Whitelist Users" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />
+      </div>
+      <SettingRow title="Block PHP files upload" desc="Prevent uploading PHP files through website forms (WAF rule)">
+        <Toggle on={st.waf.block_php_upload} disabled={dis} onChange={(v) => save({ waf: { block_php_upload: v } })} />
+      </SettingRow>
+      <SettingRow title="Keep logs for" desc="How long to keep XMart Guard logs and quarantined files on the server">
+        <select className="input w-40" value={st.scanner.keep_days} disabled={dis} onChange={(e) => save({ scanner: { keep_days: Number(e.target.value) } })}>
+          {[[7, '1 Week'], [30, '1 Month'], [60, '2 Months'], [90, '3 Months'], [180, '6 Months'], [365, '1 Year']].map(([d, l]) => (
+            <option key={d} value={d}>{l}</option>
+          ))}
+        </select>
+      </SettingRow>
     </div>
   );
 }
@@ -370,6 +579,10 @@ function WAFSection({ serverId, s, admin, busy, onSave }: { serverId: string; s:
           Save
         </button>
       </div>
+      {row('webshell', 'WEBSHELL protection', 'Block requests to well-known web shell files and their working folders', true)}
+      {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
+      <ListEditor title="Protected login URLs" desc="Failed logins on these URLs count towards brute-force bans (with CAPTCHA on, banned visitors can unblock themselves)" items={s.login_urls ?? []} disabled={dis} placeholder="/wp-login.php" validate={(v) => (v.startsWith('/') ? null : 'Enter a path starting with /')} onChange={(v) => onSave({ login_urls: v })} />
+      <ListEditor title="Whitelisted domains" desc="Websites XMart Guard's WAF rules never inspect (*.example.com allowed)" items={s.whitelist_domains ?? []} disabled={dis} placeholder="example.com" onChange={(v) => onSave({ whitelist_domains: v.map((x) => x.toLowerCase()) })} />
       <ListEditor title="Custom bots" desc="Block requests whose User-Agent contains any of these" items={s.custom_bots} disabled={dis} placeholder="e.g. badcrawler" onChange={(v) => onSave({ custom_bots: v })} />
       <ListEditor title="WAF whitelist" desc="These IPs are never inspected by XMart Guard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
       <ListEditor
@@ -402,8 +615,11 @@ function WAFSection({ serverId, s, admin, busy, onSave }: { serverId: string; s:
   );
 }
 
-function CMSSection({ s, admin, busy, onSave }: { s: CMSS; admin: boolean; busy: boolean; onSave: (p: Partial<CMSS>) => void }) {
+function CMSSection({ s, meta, admin, busy, onSave }: { s: CMSS; meta: Meta; admin: boolean; busy: boolean; onSave: (p: Partial<CMSS>) => void }) {
   const dis = !admin || busy;
+  const [cvss, setCvss] = useState(s.auto_update_cvss);
+  const [days, setDays] = useState(s.auto_update_days);
+  useEffect(() => (setCvss(s.auto_update_cvss), setDays(s.auto_update_days)), [s.auto_update_cvss, s.auto_update_days]);
   return (
     <div>
       <div className="mb-2 flex items-start justify-between">
@@ -419,6 +635,45 @@ function CMSSection({ s, admin, busy, onSave }: { s: CMSS; admin: boolean; busy:
       <SettingRow title="Scan WordPress databases" desc="Look for injected scripts, hidden iframes and PHP code in posts and options (read-only)" recommended>
         <Toggle on={s.db_scan} disabled={dis || !s.enabled} onChange={(v) => onSave({ db_scan: v })} />
       </SettingRow>
+      <SettingRow title="Vulnerability database" desc="Look plugins, themes and WordPress core up in the free WPVulnerability database (CVE ids and CVSS scores)" recommended>
+        <Toggle on={s.vulns} disabled={dis || !s.enabled} onChange={(v) => onSave({ vulns: v })} />
+      </SettingRow>
+      <SettingRow title="Override wordpress wp-cron.php" desc="Adds DISABLE_WP_CRON to wp-config and creates a cron job for the site owner">
+        <Toggle on={s.wp_cron} disabled={dis || !s.enabled} onChange={(v) => onSave({ wp_cron: v })} />
+      </SettingRow>
+      <SettingRow title="Interval for running wp-cron.php" desc="How frequently wp-cron.php is executed">
+        <select className="input w-40" value={s.wp_cron_hours} disabled={dis || !s.wp_cron} onChange={(e) => onSave({ wp_cron_hours: Number(e.target.value) })}>
+          {[1, 2, 6, 12, 24].map((h) => (
+            <option key={h} value={h}>Every {h} Hour{h > 1 ? 's' : ''}</option>
+          ))}
+        </select>
+      </SettingRow>
+      <div className="border-b border-slate-100 py-4">
+        <div className="flex items-start justify-between gap-6">
+          <div>
+            <div className="font-medium text-navy-900">Auto Update Vulnerable WordPress Plugin or Theme</div>
+            <div className="text-sm text-slate-500">Forcefully update plugins or themes that meet the conditions below (needs WP-CLI)</div>
+          </div>
+          <Toggle on={s.auto_update} disabled={dis || !s.enabled || !s.vulns} onChange={(v) => onSave({ auto_update: v })} />
+        </div>
+        <div className="mt-3 space-y-2 text-sm text-slate-600">
+          <div className="flex flex-wrap items-center gap-2">
+            if there are vulnerabilities with a CVSS score greater than
+            <input className="input w-20" type="number" min={0} max={10} step={0.1} value={cvss} disabled={dis} onChange={(e) => setCvss(Number(e.target.value))} />
+            (0 = any)
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            and it has been more than
+            <input className="input w-20" type="number" min={0} value={days} disabled={dis} onChange={(e) => setDays(Number(e.target.value))} />
+            days since the vulnerability was published
+          </div>
+          <button className="btn-outline" disabled={dis || (cvss === s.auto_update_cvss && days === s.auto_update_days)} onClick={() => onSave({ auto_update_cvss: cvss, auto_update_days: days })}>
+            Save conditions
+          </button>
+        </div>
+      </div>
+      <ListEditor title="Blacklisted WordPress plugins" desc="Automatically deactivate these plugins (slug) during CMS checks" items={s.blacklist_plugins ?? []} disabled={dis} placeholder="plugin-slug" onChange={(v) => onSave({ blacklist_plugins: v.map((x) => x.toLowerCase()) })} />
+      <ListEditor title="Exclude users from auto patches" desc="CMSs of these users won't be updated, patched or have plugins auto-disabled" items={s.exclude_users ?? []} options={meta.users.map((u) => u.name)} disabled={dis} onChange={(v) => onSave({ exclude_users: v })} />
       <SettingRow title="Scan interval" desc="How often all websites are re-checked">
         <select className="input w-40" value={s.interval_hours} disabled={dis || !s.enabled} onChange={(e) => onSave({ interval_hours: Number(e.target.value) })}>
           {[6, 12, 24, 48, 168].map((h) => (
@@ -518,6 +773,10 @@ function SuspendSection({ serverId, s, admin, busy, onSave }: { serverId: string
         disabled={dis}
         onChange={(v) => onSave({ exclude_users: v })}
       />
+      <SettingRow title="Suspend on domain blacklist" desc="Automatically suspend an account when one of its domains becomes blacklisted">
+        <Toggle on={s.on_domain_blacklist} disabled={dis} onChange={(v) => onSave({ on_domain_blacklist: v })} />
+      </SettingRow>
+      <ListEditor title="Whitelisted Domains" desc="Domains excluded from triggering automatic suspension" items={s.whitelist_domains ?? []} disabled={dis || !s.on_domain_blacklist} placeholder="example.com" onChange={(v) => onSave({ whitelist_domains: v.map((x) => x.toLowerCase()) })} />
       <div className="py-4">
         <div className="mb-2 font-medium text-navy-900">Suspension history</div>
         {!list.data?.suspensions.length ? (
@@ -590,32 +849,90 @@ function IPDBSection({ s, admin, busy, onSave }: { s: IPDBS; admin: boolean; bus
   );
 }
 
-function NotificationsSection({ s, admin, busy, onSave }: { s: NotificationsS; admin: boolean; busy: boolean; onSave: (p: Partial<NotificationsS>) => void }) {
-  const [email, setEmail] = useState(s.email);
+function NotificationsSection({ s, meta, admin, busy, onSave }: { s: NotificationsS; meta: Meta; admin: boolean; busy: boolean; onSave: (p: Partial<NotificationsS>) => void }) {
+  const [f, setF] = useState(s);
+  const [tab, setTab] = useState<'email' | 'slack' | 'telegram'>('email');
+  useEffect(() => setF(s), [s]);
   const dis = !admin || busy;
+  const changed = (keys: (keyof NotificationsS)[]) => keys.some((k) => f[k] !== s[k]);
+  const pick = (keys: (keyof NotificationsS)[]) => Object.fromEntries(keys.map((k) => [k, f[k]])) as Partial<NotificationsS>;
+  const emailKeys: (keyof NotificationsS)[] = ['email', 'extra_email', 'from'];
   return (
     <div>
       <h2 className="text-lg font-semibold text-navy-900">Notifications</h2>
-      <p className="mb-4 text-sm text-slate-500">Alerts are sent by the server's own mail system (sendmail/Exim). Bursts are combined into one email every 2 minutes.</p>
-      <div className="flex gap-2 border-b border-slate-100 pb-4">
-        <input className="input" type="email" placeholder="alerts@example.com" value={email} disabled={dis} onChange={(e) => setEmail(e.target.value)} />
-        <button className="btn-primary" disabled={dis || email === s.email} onClick={() => onSave({ email })}>Save</button>
+      <p className="mb-4 text-sm text-slate-500">Settings to manage all notifications from XMart Guard. Email goes through the server's own mail system; bursts are combined every 2 minutes.</p>
+      <Tabs value={tab} onChange={setTab} tabs={[{ v: 'email', l: 'Email' }, { v: 'slack', l: 'Slack' }, { v: 'telegram', l: 'Telegram' }]} />
+      <div className="mt-4 border-b border-slate-100 pb-4">
+        {tab === 'email' && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-sm">
+              <div className="label">Main email address</div>
+              <input className="input" type="email" placeholder="alerts@example.com" value={f.email} disabled={dis} onChange={(e) => setF({ ...f, email: e.target.value })} />
+            </label>
+            <label className="text-sm">
+              <div className="label">Additional email address</div>
+              <input className="input" type="email" placeholder="optional" value={f.extra_email ?? ''} disabled={dis} onChange={(e) => setF({ ...f, extra_email: e.target.value })} />
+            </label>
+            <label className="text-sm">
+              <div className="label">From address</div>
+              <input className="input" type="email" placeholder="xmartguard@hostname (default)" value={f.from ?? ''} disabled={dis} onChange={(e) => setF({ ...f, from: e.target.value })} />
+            </label>
+            <div className="flex items-end justify-end">
+              <button className="btn-primary" disabled={dis || !changed(emailKeys)} onClick={() => onSave(pick(emailKeys))}>Save</button>
+            </div>
+          </div>
+        )}
+        {tab === 'slack' && (
+          <div className="flex gap-2">
+            <input className="input" type="password" placeholder="https://hooks.slack.com/services/…" value={f.slack_webhook ?? ''} disabled={dis} onChange={(e) => setF({ ...f, slack_webhook: e.target.value })} />
+            <button className="btn-primary" disabled={dis || !changed(['slack_webhook'])} onClick={() => onSave(pick(['slack_webhook']))}>Save</button>
+          </div>
+        )}
+        {tab === 'telegram' && (
+          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+            <input className="input" type="password" placeholder="Bot token (from @BotFather)" value={f.telegram_token ?? ''} disabled={dis} onChange={(e) => setF({ ...f, telegram_token: e.target.value })} />
+            <input className="input" placeholder="Chat id" value={f.telegram_chat ?? ''} disabled={dis} onChange={(e) => setF({ ...f, telegram_chat: e.target.value })} />
+            <button className="btn-primary" disabled={dis || !changed(['telegram_token', 'telegram_chat'])} onClick={() => onSave(pick(['telegram_token', 'telegram_chat']))}>Save</button>
+          </div>
+        )}
       </div>
       <SettingRow title="Virus detections">
         <Toggle on={s.on_virus} disabled={dis} onChange={(v) => onSave({ on_virus: v })} />
       </SettingRow>
-      <SettingRow title="Suspicious pattern detections">
-        <Toggle on={s.on_suspicious} disabled={dis} onChange={(v) => onSave({ on_suspicious: v })} />
-      </SettingRow>
       <SettingRow title="Binary file detections">
         <Toggle on={s.on_binary} disabled={dis} onChange={(v) => onSave({ on_binary: v })} />
       </SettingRow>
-      <SettingRow title="On IP blacklist" desc="When a server IP appears on a DNS blocklist">
+      <SettingRow title="Suspicious pattern detections">
+        <Toggle on={s.on_suspicious} disabled={dis} onChange={(v) => onSave({ on_suspicious: v })} />
+      </SettingRow>
+      <SettingRow title="On IP Blacklist" desc="When a server IP or hosted domain appears on a blocklist">
         <Toggle on={s.on_blacklist} disabled={dis} onChange={(v) => onSave({ on_blacklist: v })} />
       </SettingRow>
       <SettingRow title="On automatic IP ban" desc="Brute-force and DoS bans (can be noisy)">
         <Toggle on={s.on_ban} disabled={dis} onChange={(v) => onSave({ on_ban: v })} />
       </SettingRow>
+      <SettingRow title="Daily Reports" desc="A summary of the last 24 hours every morning">
+        <Toggle on={s.daily_report} disabled={dis} onChange={(v) => onSave({ daily_report: v })} />
+      </SettingRow>
+      <h3 className="mt-6 text-base font-semibold text-navy-900">User Notifications</h3>
+      <p className="text-sm text-slate-500">Sent to the contact email of the cPanel account.</p>
+      <SettingRow title="Infected files" desc="Send email notification to users when infected files are detected under their account">
+        <Toggle on={s.user_infected} disabled={dis} onChange={(v) => onSave({ user_infected: v })} />
+      </SettingRow>
+      <SettingRow title="Account suspension" desc="Notify users when their account is auto suspended">
+        <Toggle on={s.user_suspension} disabled={dis} onChange={(v) => onSave({ user_suspension: v })} />
+      </SettingRow>
+      <SettingRow title="Automatic CMS patches" desc="Notify users when automatic updates, security patches or plugin changes are applied">
+        <Toggle on={s.user_patches} disabled={dis} onChange={(v) => onSave({ user_patches: v })} />
+      </SettingRow>
+      <SettingRow title="Outdated CMS" desc="Notify users about outdated CMS, plugins and themes under their account">
+        <select className="input w-36" value={s.user_outdated ?? 'never'} disabled={dis} onChange={(e) => onSave({ user_outdated: e.target.value as NotificationsS['user_outdated'] })}>
+          <option value="never">Never</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </SettingRow>
+      <ListEditor title="Excluded users" desc="Selected users will not receive notifications" items={s.exclude_users ?? []} options={meta.users.map((u) => u.name)} disabled={dis} onChange={(v) => onSave({ exclude_users: v })} />
     </div>
   );
 }

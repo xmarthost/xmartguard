@@ -11,6 +11,7 @@ const (
 	CatVirus      = "virus"
 	CatSuspicious = "suspicious"
 	CatBinary     = "binary"
+	CatSymlink    = "symlink" // symbolic link to another account's files
 )
 
 // Rule is one content signature. Rules are XMart Guard's own, written from

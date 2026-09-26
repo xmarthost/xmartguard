@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +61,14 @@ type Manager struct {
 	Protected func() []string
 	// OnBan is called for automatic bans (notifications).
 	OnBan func(Event)
+	// EssentialTCPOut are outgoing TCP ports the agent itself needs (the
+	// portal); the port filter always allows them.
+	EssentialTCPOut []int
+	// Lookup resolves DDNS hostnames (overridable in tests).
+	Lookup func(ctx context.Context, host string) ([]string, error)
+
+	ddnsMu sync.Mutex
+	ddns   map[string][]string // hostname -> resolved addresses
 
 	mu        sync.Mutex
 	lastError string
@@ -163,9 +174,20 @@ func (m *Manager) Build() (Ruleset, error) {
 	if m.Geo != nil {
 		rs.CountryBlock = m.Geo.CIDRs(cfg.BlockedCountries)
 		rs.CountryAllow = m.Geo.CIDRs(cfg.AllowedCountries)
+		rs.Ignore = append(rs.Ignore, m.Geo.CIDRs(cfg.IgnoredCountries)...)
 	}
-	if m.IPDB != nil && m.Settings.Get().IPDB.Enabled {
+	rs.Allow = append(rs.Allow, m.ddnsAddrs()...)
+	all2 := m.Settings.Get()
+	if m.IPDB != nil && all2.IPDB.Enabled {
 		rs.IPDB = m.ipdbEntries()
+		rs.LogIPDB = cfg.LogBlocked && all2.IPDB.Log
+	}
+	if cfg.PortFilter {
+		rs.Ports = m.portFilter(cfg)
+	}
+	if cfg.Captcha || (all2.IPDB.Enabled && all2.IPDB.Captcha) {
+		rs.Captcha = &CaptchaRedirect{HTTPPort: all2.Captcha.HTTPPort, HTTPSPort: all2.Captcha.HTTPSPort,
+			TempBan: cfg.Captcha, IPDB: all2.IPDB.Enabled && all2.IPDB.Captcha}
 	}
 	return rs, nil
 }
@@ -309,6 +331,28 @@ func (m *Manager) Unblock(addr string) error {
 	return nil
 }
 
+// CaptchaSolved lifts temporary bans on ip and allows it for the given
+// time, after its visitor solved the CAPTCHA. Permanent (manual) blocks
+// stay: only automatic bans and the IPDB can be passed with a CAPTCHA.
+func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
+	c, err := ParseAddr(ip)
+	if err != nil || strings.Contains(c, "/") {
+		return fmt.Errorf("invalid address %q", ip)
+	}
+	for _, r := range mustRules(m) {
+		if r.Kind == KindDeny && Contains(r.CIDR, c) {
+			return fmt.Errorf("%s is blocked permanently", c)
+		}
+	}
+	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempban' AND cidr = ?`, c)
+	_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'captcha' WHERE ip = ? AND status = 'blocked'`, c)
+	if allow < time.Minute {
+		allow = time.Hour
+	}
+	_, err = m.Add(KindTempAllow, c, "solved CAPTCHA", allow)
+	return err
+}
+
 // CheckResult explains how the firewall treats an address.
 type CheckResult struct {
 	IP        string  `json:"ip"`
@@ -402,6 +446,22 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 	return out, total, rows.Err()
 }
 
+// DeleteEvent removes a log entry and, when it is still an active ban,
+// lifts that ban (the delete button on Firewall Logs).
+func (m *Manager) DeleteEvent(id int64) error {
+	var ip, status string
+	if err := m.DB.QueryRow(`SELECT ip, status FROM fw_events WHERE id = ?`, id).Scan(&ip, &status); err != nil {
+		return fmt.Errorf("log entry %d not found", id)
+	}
+	if status == "blocked" {
+		if err := m.Unblock(ip); err != nil {
+			return err
+		}
+	}
+	_, err := m.DB.Exec(`DELETE FROM fw_events WHERE id = ?`, id)
+	return err
+}
+
 // expire marks finished temp bans and drops expired rules.
 func (m *Manager) expire() {
 	now := store.Now()
@@ -474,10 +534,14 @@ func (m *Manager) Stats() Stats {
 // rules, recording DoS auto-bans made inside nftables, and refreshing
 // country lists daily.
 func (m *Manager) Run(ctx context.Context) {
+	if len(m.Settings.Get().Firewall.DDNS) > 0 {
+		m.RefreshDDNS(ctx)
+	}
 	_ = m.Apply()
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
 	lastGeo := time.Now()
+	lastDDNS := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -488,6 +552,12 @@ func (m *Manager) Run(ctx context.Context) {
 		cfg := m.Settings.Get().Firewall
 		if !cfg.Enabled {
 			continue
+		}
+		if len(cfg.DDNS) > 0 && time.Since(lastDDNS) > 5*time.Minute {
+			lastDDNS = time.Now()
+			if m.RefreshDDNS(ctx) {
+				_ = m.Apply()
+			}
 		}
 		m.stats.record(m.DB, m.Backend().Counters(), store.Now())
 		// Another firewall (e.g. `csf -r`) may have flushed our rules: reload them.
@@ -501,9 +571,9 @@ func (m *Manager) Run(ctx context.Context) {
 		if m.Settings.Get().IPDB.Enabled {
 			m.pollIPDBHits()
 		}
-		if m.Geo != nil && time.Since(lastGeo) > 24*time.Hour && len(cfg.BlockedCountries)+len(cfg.AllowedCountries) > 0 {
+		if m.Geo != nil && time.Since(lastGeo) > 24*time.Hour && len(cfg.BlockedCountries)+len(cfg.AllowedCountries)+len(cfg.IgnoredCountries) > 0 {
 			lastGeo = time.Now()
-			m.Geo.Refresh(append(cfg.BlockedCountries, cfg.AllowedCountries...), true)
+			m.Geo.Refresh(append(append(cfg.BlockedCountries, cfg.AllowedCountries...), cfg.IgnoredCountries...), true)
 			_ = m.Apply()
 		}
 	}
@@ -541,4 +611,109 @@ func (m *Manager) syncDoSBans() {
 			}
 		}
 	}
+}
+
+// portFilter builds the port lists, always keeping SSH reachable and the
+// portal reachable from the agent, so the filter cannot lock anyone out.
+func (m *Manager) portFilter(cfg settings.Firewall) *PortFilter {
+	pf := &PortFilter{
+		TCPIn: settings.SplitPorts(cfg.TCPIn), UDPIn: settings.SplitPorts(cfg.UDPIn),
+		TCPOut: settings.SplitPorts(cfg.TCPOut), UDPOut: settings.SplitPorts(cfg.UDPOut),
+	}
+	for _, p := range SSHPorts() {
+		if !settings.PortListed(cfg.TCPIn, p) {
+			pf.TCPIn = append(pf.TCPIn, strconv.Itoa(p))
+		}
+	}
+	for _, p := range m.EssentialTCPOut {
+		if p > 0 && !settings.PortListed(strings.Join(pf.TCPOut, ","), p) {
+			pf.TCPOut = append(pf.TCPOut, strconv.Itoa(p))
+		}
+	}
+	if cfg.Captcha || m.Settings.Get().IPDB.Captcha {
+		c := m.Settings.Get().Captcha
+		pf.TCPIn = append(pf.TCPIn, strconv.Itoa(c.HTTPPort), strconv.Itoa(c.HTTPSPort))
+	}
+	return pf
+}
+
+// SSHConfig is the sshd configuration read for the port filter.
+var SSHConfig = "/etc/ssh/sshd_config"
+
+// SSHPorts returns the ports sshd listens on (22 when not configured).
+func SSHPorts() []int {
+	var out []int
+	if raw, err := os.ReadFile(SSHConfig); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			f := strings.Fields(line)
+			if len(f) == 2 && strings.EqualFold(f[0], "Port") {
+				if p, err := strconv.Atoi(f[1]); err == nil && p > 0 && p < 65536 {
+					out = append(out, p)
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		out = []int{22}
+	}
+	return out
+}
+
+func (m *Manager) ddnsAddrs() []string {
+	m.ddnsMu.Lock()
+	defer m.ddnsMu.Unlock()
+	var out []string
+	for _, h := range m.Settings.Get().Firewall.DDNS {
+		out = append(out, m.ddns[h]...)
+	}
+	return out
+}
+
+// DDNSStatus lists each DDNS hostname with the addresses it resolved to.
+func (m *Manager) DDNSStatus() map[string][]string {
+	m.ddnsMu.Lock()
+	defer m.ddnsMu.Unlock()
+	out := map[string][]string{}
+	for _, h := range m.Settings.Get().Firewall.DDNS {
+		out[h] = append([]string{}, m.ddns[h]...)
+	}
+	return out
+}
+
+// RefreshDDNS resolves the DDNS hostnames and reports whether any changed.
+func (m *Manager) RefreshDDNS(ctx context.Context) bool {
+	lookup := m.Lookup
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupHost
+	}
+	next := map[string][]string{}
+	for _, h := range m.Settings.Get().Firewall.DDNS {
+		c, cancel := context.WithTimeout(ctx, 10*time.Second)
+		addrs, err := lookup(c, h)
+		cancel()
+		if err != nil {
+			m.ddnsMu.Lock()
+			next[h] = m.ddns[h] // keep the last good answer on DNS errors
+			m.ddnsMu.Unlock()
+			continue
+		}
+		var ok []string
+		for _, a := range addrs {
+			if ip := net.ParseIP(a); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+				ok = append(ok, ip.String())
+			}
+		}
+		sort.Strings(ok)
+		next[h] = ok
+	}
+	m.ddnsMu.Lock()
+	defer m.ddnsMu.Unlock()
+	changed := len(next) != len(m.ddns)
+	for h, v := range next {
+		if strings.Join(v, ",") != strings.Join(m.ddns[h], ",") {
+			changed = true
+		}
+	}
+	m.ddns = next
+	return changed
 }

@@ -149,6 +149,18 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
     return { total: total.rows[0].n, entries: rows.map((r) => ({ ...r, cidr: entryText(r.cidr) })) };
   });
 
+  /** Country codes for a batch of addresses (flags in log tables). */
+  app.post('/api/geo/lookup', viewer, async (req, reply) => {
+    const b = z.object({ ips: z.array(z.string().max(64)).max(500) }).safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'invalid request' });
+    const out: Record<string, string> = {};
+    for (const raw of b.data.ips) {
+      const ip = raw.split('/')[0].trim();
+      if (net.isIP(ip)) out[raw] = ipdb.geo.lookup(ip) || '';
+    }
+    return { countries: out };
+  });
+
   /** What the IPDB knows about one address. */
   app.get('/api/ipdb/check', viewer, async (req, reply) => {
     const ip = String((req.query as Record<string, string>).ip ?? '').trim();

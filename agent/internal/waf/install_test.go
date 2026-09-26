@@ -37,7 +37,9 @@ func TestInstallIntoRealApache(t *testing.T) {
 	db, _ := store.Open()
 	defer db.Close()
 	st, _ := settings.Load()
-	st.Patch([]byte(`{"waf":{"upload_scan":false}}`))
+	if _, err := st.Patch([]byte(`{"waf":{"upload_scan":false,"block_php_upload":true,"webshell":true,"login_urls":["/wp-login.php","/my-login"],"whitelist_domains":["*.example.org"]}}`)); err != nil {
+		t.Fatal(err)
+	}
 	m := &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), RulesDir: filepath.Join(dir, "waf")}
 	os.MkdirAll("/var/www/html", 0o755)
 	os.WriteFile("/var/www/html/xg-ok.html", []byte("ok"), 0o644)
@@ -59,8 +61,8 @@ func TestInstallIntoRealApache(t *testing.T) {
 		t.Fatalf("status %+v", s)
 	}
 	time.Sleep(time.Second)
-	get := func(ua string) int {
-		req, _ := http.NewRequest("GET", "http://127.0.0.1/xg-ok.html", nil)
+	getPath := func(path, ua string) int {
+		req, _ := http.NewRequest("GET", "http://127.0.0.1"+path, nil)
 		req.Header.Set("User-Agent", ua)
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -69,11 +71,15 @@ func TestInstallIntoRealApache(t *testing.T) {
 		res.Body.Close()
 		return res.StatusCode
 	}
+	get := func(ua string) int { return getPath("/xg-ok.html", ua) }
 	if c := get("Mozilla/5.0"); c != 200 {
 		t.Fatalf("normal request %d", c)
 	}
 	if c := get("sqlmap/1.7"); c != 403 {
 		t.Fatalf("bad bot not blocked: %d", c)
+	}
+	if c := getPath("/wp-content/wso.php", "Mozilla/5.0"); c != 403 {
+		t.Fatalf("web shell request not blocked: %d", c)
 	}
 	// A rule that makes the config invalid must be rolled back.
 	st.Patch([]byte(`{"waf":{"custom_bots":["okbot"]}}`))

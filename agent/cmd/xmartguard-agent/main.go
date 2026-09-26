@@ -59,6 +59,10 @@ func main() {
 	case "scan-upload":
 		// Used by the WAF upload approver: exit 1 if the file is malware.
 		os.Exit(cmdScanUpload(os.Args[2:]))
+	case "ai-train":
+		err = cmdAITrain(os.Args[2:])
+	case "ai-score":
+		err = cmdAIScore(os.Args[2:])
 	case "cleanup":
 		// Used by uninstall.sh: remove firewall rules from every provider and
 		// unhook the WAF rules from the web server.

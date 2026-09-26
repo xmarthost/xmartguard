@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,10 +95,13 @@ func TestRenderIsValidNFT(t *testing.T) {
 		TempBan:      map[string]time.Duration{"198.51.100.9": time.Hour, "2001:db8::9": time.Minute},
 		TempAllow:    map[string]time.Duration{"192.0.2.99": time.Hour},
 		CountryBlock: []string{"1.0.0.0/24", "1.0.1.0/24"}, CountryAllow: []string{"5.0.0.0/16"},
-		DoS: true, DoSPerMinute: 150, DoSBanSeconds: 600,
+		DoS: true, DoSPerMinute: 150, DoSBanSeconds: 600, LogDrops: true, LogIPDB: true, IPDB: []string{"198.51.100.0/24"},
+		Ports:   &PortFilter{TCPIn: []string{"22", "80", "8000-8100"}, UDPIn: []string{"53"}, TCPOut: []string{"443"}, UDPOut: []string{"53"}},
+		Captcha: &CaptchaRedirect{HTTPPort: 7780, HTTPSPort: 7743, TempBan: true, IPDB: true},
 	}
 	script := rs.Render()
-	for _, want := range []string{"delete table inet xmartguard", "@deny4 counter drop", "update @dos4", "198.51.100.9 timeout 3600s"} {
+	for _, want := range []string{"delete table inet xmartguard", "@deny4 counter jump drop_deny", "update @dos4", "198.51.100.9 timeout 3600s",
+		"tcp dport { 22, 80, 8000-8100 } accept", "chain output", "redirect to :7780", "ct status dnat tcp dport { 7780, 7743 } accept"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script missing %q", want)
 		}
@@ -155,7 +160,11 @@ func kernelDump(m *Manager) string {
 		return string(out)
 	}
 	a, _ := exec.Command(m.IPT.IPSet, "list").CombinedOutput()
-	b, _ := exec.Command(m.IPT.IPT, "-S", ChainMain).CombinedOutput()
+	var b []byte
+	for _, c := range allChains() {
+		x, _ := exec.Command(m.IPT.IPT, "-S", c).CombinedOutput()
+		b = append(b, x...)
+	}
 	c, _ := exec.Command(m.IPT.IPT, "-S", "INPUT").CombinedOutput()
 	return string(a) + string(b) + string(c)
 }
@@ -320,6 +329,31 @@ func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), d)
 }
 
+func TestRenderIPTables(t *testing.T) {
+	rs := Ruleset{IPDB: []string{"198.51.100.0/24"}, LogIPDB: true,
+		Ports:   &PortFilter{TCPIn: []string{"20-22", "25", "53", "80", "110", "143", "443", "465", "587", "993", "995", "2082-2083", "2086-2087", "2095-2096"}, TCPOut: []string{"443"}, UDPOut: []string{"53"}},
+		Captcha: &CaptchaRedirect{HTTPPort: 7780, HTTPSPort: 7743, TempBan: true}}
+	out := renderRules(rs, false)
+	for _, want := range []string{
+		`--comment "xg-ipdb" -j XMARTGUARD_IPDB`,
+		`-A XMARTGUARD_IPDB -m limit`,
+		`-A XMARTGUARD_OUT -p udp -m multiport --dports 53 -j RETURN`,
+		`--dports 7780,7743 -m conntrack --ctstate DNAT -j ACCEPT`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	// 14 items with 5 ranges = 19 multiport slots: split into two rules.
+	if n := strings.Count(out, "-A XMARTGUARD -p tcp -m multiport --dports"); n != 3 { // 2 + captcha rule
+		t.Errorf("multiport chunks: %d\n%s", n, out)
+	}
+	nat := renderNAT(rs, false)
+	if !strings.Contains(nat, "--dport 443 -m set --match-set xg_tban4 src -j REDIRECT --to-ports 7743") {
+		t.Errorf("nat: %s", nat)
+	}
+}
+
 func TestCollapse(t *testing.T) {
 	got := Collapse([]string{"198.51.100.9", "198.51.100.0/24", "198.51.0.0/16", "203.0.113.7", "203.0.113.7", "2001:db8::1", "2001:db8::/48", "10.0.0.1"})
 	want := []string{"10.0.0.1", "198.51.0.0/16", "2001:db8::/48", "203.0.113.7"}
@@ -404,6 +438,15 @@ func TestIPDBOnKernel(t *testing.T) {
 		// so no ping binary is needed); the SYNs are dropped by the IPDB set.
 		for i := 0; i < 3; i++ {
 			_ = sh("ip", "netns", "exec", "xgtest", "timeout", "1", "bash", "-c", "exec 3<>/dev/tcp/10.99.0.1/2222")
+		}
+		// The set is matched once per packet: the element counter equals the
+		// rule counter (no double counting through the log rule).
+		var elems uint64
+		for _, n := range m.Backend().IPDBCounters() {
+			elems += n
+		}
+		if rule := m.Backend().Counters()["xg-ipdb"]; rule == 0 || rule != elems {
+			t.Fatalf("counters differ: rule %d, elements %d", rule, elems)
 		}
 		m.pollIPDBHits()
 		st := m.IPDBStatus()
@@ -507,4 +550,88 @@ func TestDropStats(t *testing.T) {
 	if tot["ipdb"] != 40 || tot["deny"] != 0 {
 		t.Fatalf("totals %v", tot)
 	}
+}
+
+// netns creates a namespace "xgtest" at 10.99.0.2 linked to the host at
+// 10.99.0.1, returning a function that runs a command inside it.
+func netns(t *testing.T) func(args ...string) ([]byte, error) {
+	t.Helper()
+	sh := func(args ...string) error { return exec.Command(args[0], args[1:]...).Run() }
+	_ = sh("ip", "netns", "del", "xgtest")
+	_ = sh("ip", "link", "del", "xgv0")
+	if sh("ip", "netns", "add", "xgtest") != nil {
+		t.Skip("no netns support")
+	}
+	t.Cleanup(func() { _ = sh("ip", "link", "del", "xgv0"); _ = sh("ip", "netns", "del", "xgtest") })
+	for _, c := range [][]string{
+		{"ip", "link", "add", "xgv0", "type", "veth", "peer", "name", "xgv1"},
+		{"ip", "link", "set", "xgv1", "netns", "xgtest"},
+		{"ip", "addr", "add", "10.99.0.1/30", "dev", "xgv0"},
+		{"ip", "link", "set", "xgv0", "up"},
+		{"ip", "netns", "exec", "xgtest", "ip", "addr", "add", "10.99.0.2/30", "dev", "xgv1"},
+		{"ip", "netns", "exec", "xgtest", "ip", "link", "set", "xgv1", "up"},
+	} {
+		if err := sh(c...); err != nil {
+			t.Skipf("netns setup failed: %v", c)
+		}
+	}
+	return func(args ...string) ([]byte, error) {
+		return exec.Command("ip", append([]string{"netns", "exec", "xgtest"}, args...)...).CombinedOutput()
+	}
+}
+
+func TestCaptchaAndPortFilterOnKernel(t *testing.T) {
+	if os.Getenv("XG_DESTRUCTIVE_TESTS") != "1" {
+		t.Skip("changes OUTPUT/nat rules of this machine; set XG_DESTRUCTIVE_TESTS=1")
+	}
+	providers(t, func(t *testing.T, provider string) {
+		m := newManager(t, provider)
+		in := netns(t)
+		// A fake CAPTCHA server on the host.
+		ln, err := net.Listen("tcp", "0.0.0.0:7780")
+		if err != nil {
+			t.Skip("port 7780 busy")
+		}
+		defer ln.Close()
+		go http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "captcha-page") }))
+		web, err := net.Listen("tcp", "0.0.0.0:8081")
+		if err != nil {
+			t.Skip("port 8081 busy")
+		}
+		defer web.Close()
+		go http.Serve(web, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "site") }))
+
+		if _, err := m.Settings.Patch([]byte(`{"firewall":{"captcha":true,"port_filter":true,"tcp_in":"22,80,443","udp_in":"53","tcp_out":"443","udp_out":"53"}}`)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := m.Add(KindTempBan, "10.99.0.2", "test", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		// Banned: port 80 is redirected to the CAPTCHA server.
+		out, err := in("curl", "-s", "-m", "3", "http://10.99.0.1/")
+		if err != nil || string(out) != "captcha-page" {
+			t.Fatalf("captcha redirect: %v %q\n%s", err, out, kernelDump(m))
+		}
+		// Unbanned: port 80 is not redirected any more (nothing listens: refused, not captcha).
+		if err := m.Unblock("10.99.0.2"); err != nil {
+			t.Fatal(err)
+		}
+		if out, _ := in("curl", "-s", "-m", "3", "http://10.99.0.1/"); string(out) == "captcha-page" {
+			t.Fatal("still redirected after unblock")
+		}
+		// Port filter: 8081 is not listed, so it is dropped (timeout).
+		if out, err := in("curl", "-s", "-m", "2", "http://10.99.0.1:8081/"); err == nil {
+			t.Fatalf("port filter let 8081 through: %q", out)
+		}
+		// ...and allowed once listed.
+		if _, err := m.Settings.Patch([]byte(`{"firewall":{"tcp_in":"22,80,443,8081"}}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Apply(); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := in("curl", "-s", "-m", "3", "http://10.99.0.1:8081/"); err != nil || string(out) != "site" {
+			t.Fatalf("listed port blocked: %v %q", err, out)
+		}
+	})
 }

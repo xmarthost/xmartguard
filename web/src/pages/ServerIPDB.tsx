@@ -127,7 +127,7 @@ export default function ServerIPDB() {
       </div>
       {error && <ErrorBox message={error} />}
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)]">
         <div className="space-y-5">
           <Card title="Attacks Blocked - Live" desc="Packets dropped per minute, last 10 minutes">
             <div className="h-56">
@@ -165,24 +165,31 @@ export default function ServerIPDB() {
           {events.length === 0 ? (
             <Empty text="No blocked connections yet. They appear here within seconds." />
           ) : (
-            <div className="max-h-[470px] space-y-1.5 overflow-y-auto pr-1">
-              {events.map((e) => (
-                <div key={e.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                  <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
-                  <span className="w-36 font-semibold text-red-600" title={e.entry ? `listed as ${e.entry}` : ''}>
-                    {e.src}
-                  </span>
-                  <span className="w-8" title={countryName(e.country)}>
-                    {flag(e.country)}
-                  </span>
-                  <span className="flex-1 text-slate-500">
-                    {e.proto} {e.src_port ? `Port ${e.src_port}` : ''} → <span className="text-blue-600">{e.dst}</span>
-                    {e.dst_port ? ` : ${e.dst_port}` : ''}
-                  </span>
-                  <span className="text-xs text-slate-500">{fmtClock(e.at)}</span>
-                  <span className="text-xs font-semibold text-green-600">● BLOCKED</span>
-                </div>
-              ))}
+            <div className="max-h-[520px] overflow-auto pr-1">
+              <div className="min-w-[540px] space-y-1">
+                {events.map((e) => (
+                  <div
+                    key={e.id}
+                    className="grid grid-cols-[10px_9.5rem_minmax(0,1fr)_8.5rem_4.5rem] items-center gap-x-3 rounded-md bg-slate-50 px-3 py-2 text-[13px] whitespace-nowrap"
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
+                    <span className="truncate" title={e.entry ? `${e.src} · listed as ${e.entry}` : e.src}>
+                      <span className="font-semibold text-red-600">{e.src}</span>
+                      {e.country && (
+                        <span className="ml-1.5 text-[11px] text-slate-400" title={countryName(e.country)}>
+                          {e.country}
+                        </span>
+                      )}
+                    </span>
+                    <span className="truncate text-slate-500" title={`${e.proto} ${e.src}:${e.src_port} → ${e.dst}:${e.dst_port}`}>
+                      {e.src_port ? `Port ${e.src_port}` : e.proto} → <span className="text-blue-600">{e.dst}</span>
+                      {e.dst_port ? ` : ${e.dst_port}` : ''}
+                    </span>
+                    <span className="text-xs text-slate-500 tabular-nums">{fmtClock(e.at)}</span>
+                    <span className="text-xs font-semibold text-green-600">● BLOCKED</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </Card>
@@ -190,7 +197,7 @@ export default function ServerIPDB() {
 
       <Card title="Attacks by country" desc="Last 7 days">
         <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-          <WorldMap values={live.countries} live={events.slice(0, 20).map((e) => e.country)} />
+          <WorldMap values={Object.fromEntries(Object.entries(live.countries).filter(([cc]) => cc))} live={events.slice(0, 20).map((e) => e.country).filter(Boolean)} />
           <div>
             <h3 className="font-semibold text-navy-900">Top Countries by Attacks Blocked</h3>
             <p className="mb-3 text-sm text-slate-500">Showing data for the last 7 days</p>

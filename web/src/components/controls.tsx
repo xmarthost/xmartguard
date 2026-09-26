@@ -274,6 +274,7 @@ const BADGE: Record<string, string> = {
   restored: 'bg-slate-100 text-slate-600', deleted: 'bg-slate-200 text-slate-600', ignored: 'bg-slate-100 text-slate-500',
   blocked: 'bg-navy-600 text-white', unblocked: 'bg-slate-100 text-slate-600', expired: 'bg-slate-100 text-slate-500',
   virus: 'bg-red-50 text-red-700', suspicious: 'bg-amber-50 text-amber-700', binary: 'bg-purple-50 text-purple-700',
+  symlink: 'bg-indigo-50 text-indigo-700', cleaned: 'bg-green-100 text-green-700',
 };
 
 export function Badge({ value }: { value: string }) {

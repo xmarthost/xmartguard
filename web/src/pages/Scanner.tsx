@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Download, FileSearch, FolderSearch, RefreshCw, ScanSearch, Square, Trash2 } from 'lucide-react';
+import { Download, FileSearch, FolderSearch, RefreshCw, ScanSearch, Sparkles, Square, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { bytes } from '../format';
 import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
@@ -33,6 +33,24 @@ interface Finding {
   size: number;
   status: string;
   created_at: number;
+  ai_verdict?: string;
+  ai_reason?: string;
+}
+
+const AI_STYLE: Record<string, string> = {
+  malicious: 'bg-red-100 text-red-700',
+  suspicious: 'bg-amber-100 text-amber-800',
+  clean: 'bg-green-100 text-green-700',
+  error: 'bg-slate-100 text-slate-500',
+};
+
+function AIBadge({ v, reason }: { v?: string; reason?: string }) {
+  if (!v) return <span className="text-xs text-slate-300">–</span>;
+  return (
+    <span title={reason} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${AI_STYLE[v] ?? AI_STYLE.error}`}>
+      <Sparkles className="h-3 w-3" /> {v}
+    </span>
+  );
 }
 
 interface HostingUser {
@@ -195,6 +213,7 @@ export function ScannerLogs() {
   const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState<number[]>([]);
   const [detail, setDetail] = useState<Finding | null>(null);
+  const [aiRes, setAiRes] = useState<{ verdict: string; confidence: number; reason: string; model: string } | null>(null);
   const limit = 25;
   const params = { scan_id: scanId, category, status, q: query, limit, offset };
   const list = useAgent<{ findings: Finding[]; total: number }>(id, 'findings.list', params, 15_000);
@@ -235,10 +254,11 @@ export function ScannerLogs() {
             <option value="virus">Virus</option>
             <option value="suspicious">Suspicious</option>
             <option value="binary">Binary</option>
+            <option value="symlink">Symbolic link</option>
           </select>
           <select className="input w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
-            {['detected', 'quarantined', 'disabled', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s}</option>)}
+            {['detected', 'quarantined', 'disabled', 'cleaned', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <form onSubmit={(e) => (e.preventDefault(), setQuery(q))}>
             <input className="input w-56" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -288,6 +308,7 @@ export function ScannerLogs() {
                   <th className="py-3 font-medium">Filename</th>
                   <th className="py-3 font-medium">Category</th>
                   <th className="py-3 font-medium">Signature</th>
+                  <th className="py-3 font-medium">AI</th>
                   <th className="py-3 font-medium">User</th>
                   <th className="py-3 font-medium">Action</th>
                   <th className="py-3 font-medium">Time</th>
@@ -307,6 +328,7 @@ export function ScannerLogs() {
                     </td>
                     <td className="py-3"><Badge value={f.category} /></td>
                     <td className="py-3 font-mono text-xs">{f.signature}</td>
+                    <td className="py-3"><AIBadge v={f.ai_verdict} reason={f.ai_reason} /></td>
                     <td className="py-3">{f.owner}</td>
                     <td className="py-3"><Badge value={f.status} /></td>
                     <td className="py-3 whitespace-nowrap">{fmtTime(f.created_at)}</td>
@@ -320,7 +342,7 @@ export function ScannerLogs() {
       </div>
 
       {detail && (
-        <Modal title="Detection details" onClose={() => setDetail(null)}>
+        <Modal title="Detection details" onClose={() => (setDetail(null), setAiRes(null))}>
           <dl className="grid grid-cols-[140px_1fr] gap-y-2 text-sm">
             {[
               ['File', detail.path], ['Owner', detail.owner], ['Category', detail.category], ['Signature', detail.signature],
@@ -333,6 +355,27 @@ export function ScannerLogs() {
               </div>
             ))}
           </dl>
+          <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 font-medium text-navy-900">
+                <Sparkles className="h-4 w-4" /> AI scanner
+                {(aiRes?.verdict ?? detail.ai_verdict) && <AIBadge v={aiRes?.verdict ?? detail.ai_verdict} />}
+                {aiRes && <span className="text-xs text-slate-500">{aiRes.confidence}% · {aiRes.model}</span>}
+              </div>
+              {canAct && detail.status !== 'deleted' && detail.category !== 'symlink' && (
+                <button className="btn-outline px-3 py-1 text-xs" disabled={busy} onClick={async () => {
+                  const r = await run(() => agentCall<{ verdict: string; confidence: number; reason: string; model: string }>(id!, 'ai.check', { id: detail.id }));
+                  if (r) {
+                    setAiRes(r);
+                    list.reload();
+                  }
+                }}>
+                  {busy ? 'Checking…' : 'Check with AI'}
+                </button>
+              )}
+            </div>
+            {(aiRes?.reason ?? detail.ai_reason) && <p className="mt-2 text-slate-600">{aiRes?.reason ?? detail.ai_reason}</p>}
+          </div>
           {canAct && (
             <div className="mt-6 flex flex-wrap gap-2">
               {ACTIONS.map((a) => (

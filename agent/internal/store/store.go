@@ -76,6 +76,29 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 CREATE INDEX IF NOT EXISTS findings_created ON findings(created_at);
 CREATE INDEX IF NOT EXISTS findings_path ON findings(path);
+CREATE TABLE IF NOT EXISTS cms_vulns (
+  key        TEXT PRIMARY KEY,
+  body       TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS monitor_events (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  at      INTEGER NOT NULL,
+  kind    TEXT NOT NULL,               -- process | cron | rootkit
+  user    TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  reason  TEXT NOT NULL DEFAULT '',
+  action  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS monitor_events_at ON monitor_events(at);
+CREATE TABLE IF NOT EXISTS ai_verdicts (
+  sha256     TEXT PRIMARY KEY,
+  verdict    TEXT NOT NULL,             -- malicious | suspicious | clean | error
+  confidence INTEGER NOT NULL DEFAULT 0,
+  reason     TEXT NOT NULL DEFAULT '',
+  model      TEXT NOT NULL DEFAULT '',
+  at         INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS fw_rules (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   kind        TEXT NOT NULL,           -- allow | deny | tempban | tempallow | ignore

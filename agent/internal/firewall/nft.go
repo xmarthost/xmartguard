@@ -31,8 +31,29 @@ type Ruleset struct {
 	IPDB []string
 	// NoSetCounters disables per-element counters (old nftables versions).
 	NoSetCounters bool
-	// LogDrops writes rate-limited kernel log samples of dropped packets.
+	// LogDrops writes rate-limited kernel log samples of dropped packets;
+	// LogIPDB does the same for IPDB drops (the "IPDB log switch").
 	LogDrops bool
+	LogIPDB  bool
+	// Ports restricts traffic to the listed ports when set.
+	Ports *PortFilter
+	// Captcha sends web traffic of banned addresses to the CAPTCHA page
+	// instead of dropping it, when set.
+	Captcha *CaptchaRedirect
+}
+
+// PortFilter lists the ports (e.g. "22", "20-21") open in each direction.
+// Established connections and loopback traffic are always allowed.
+type PortFilter struct {
+	TCPIn, UDPIn, TCPOut, UDPOut []string
+}
+
+// CaptchaRedirect sends HTTP/HTTPS from banned addresses to the agent's
+// CAPTCHA server, so a person behind a banned IP can unblock themselves.
+type CaptchaRedirect struct {
+	HTTPPort, HTTPSPort int  // local ports of the CAPTCHA server
+	TempBan             bool // temporary bans (brute force, DoS, WAF)
+	IPDB                bool // IPDB-listed addresses
 }
 
 // Kernel log prefixes of dropped-packet samples (read back from /dev/kmsg).
@@ -114,8 +135,9 @@ func (r Ruleset) Render() string {
 	tb4, tb6 := splitTimed(r.TempBan)
 	cb4, _ := split(r.CountryBlock)
 	ca4, _ := split(r.CountryAllow)
-	set(&b, "allow4", "ipv4_addr", "interval", append(a4, i4...))
-	set(&b, "allow6", "ipv6_addr", "interval", append(a6, i6...))
+	// Ignored countries can overlap user entries; interval sets reject overlaps.
+	set(&b, "allow4", "ipv4_addr", "interval", Collapse(append(a4, i4...)))
+	set(&b, "allow6", "ipv6_addr", "interval", Collapse(append(a6, i6...)))
 	set(&b, "deny4", "ipv4_addr", "interval", d4)
 	set(&b, "deny6", "ipv6_addr", "interval", d6)
 	set(&b, "tempallow4", "ipv4_addr", "timeout", ta4)
@@ -131,27 +153,64 @@ func (r Ruleset) Render() string {
 		b.WriteString("\tset dos4 {\n\t\ttype ipv4_addr\n\t\tflags dynamic,timeout\n\t\ttimeout 1m\n\t}\n")
 		b.WriteString("\tset dos6 {\n\t\ttype ipv6_addr\n\t\tflags dynamic,timeout\n\t\ttimeout 1m\n\t}\n")
 	}
+	// Each drop kind has its own chain, so the set is matched once per
+	// packet (per-element counters stay exact) and the jump rule counts it.
+	chains := []struct {
+		name, prefix string
+		log          bool
+	}{
+		{"drop_ipdb", LogPrefixIPDB, r.LogIPDB}, {"drop_deny", LogPrefixDeny, r.LogDrops},
+		{"drop_tempban", LogPrefixTempBan, r.LogDrops}, {"drop_country", LogPrefixCountry, r.LogDrops},
+	}
+	for _, c := range chains {
+		fmt.Fprintf(&b, "\tchain %s {\n", c.name)
+		if c.log {
+			fmt.Fprintf(&b, "\t\tlimit rate %d/second burst %d packets log prefix \"%s\" level debug\n", LogRate, LogRate*2, c.prefix)
+		}
+		b.WriteString("\t\tdrop\n\t}\n")
+	}
+	if cp := r.Captcha; cp != nil {
+		b.WriteString("\tchain captcha {\n\t\ttype nat hook prerouting priority dstnat - 5; policy accept;\n")
+		// Allowed addresses (e.g. after solving the CAPTCHA) reach the site.
+		b.WriteString("\t\tip saddr @allow4 return\n\t\tip6 saddr @allow6 return\n")
+		b.WriteString("\t\tip saddr @tempallow4 return\n\t\tip6 saddr @tempallow6 return\n")
+		for _, fam := range [][2]string{{"ip", "4"}, {"ip6", "6"}} {
+			var sets []string
+			if cp.TempBan {
+				sets = append(sets, "tempban"+fam[1])
+			}
+			if cp.IPDB {
+				sets = append(sets, "ipdb"+fam[1])
+			}
+			for _, st := range sets {
+				fmt.Fprintf(&b, "\t\t%s saddr @%s tcp dport 80 redirect to :%d\n", fam[0], st, cp.HTTPPort)
+				fmt.Fprintf(&b, "\t\t%s saddr @%s tcp dport 443 redirect to :%d\n", fam[0], st, cp.HTTPSPort)
+			}
+		}
+		b.WriteString("\t}\n")
+	}
 	b.WriteString("\tchain input {\n\t\ttype filter hook input priority filter - 5; policy accept;\n")
 	b.WriteString("\t\tiifname \"lo\" accept\n")
 	b.WriteString("\t\tip saddr @allow4 accept\n\t\tip6 saddr @allow6 accept\n")
 	b.WriteString("\t\tip saddr @tempallow4 accept\n\t\tip6 saddr @tempallow6 accept\n")
-	drop := func(match, comment, prefix string) {
-		if r.LogDrops {
-			fmt.Fprintf(&b, "\t\t%s limit rate %d/second burst %d packets log prefix \"%s\" level debug\n", match, LogRate, LogRate*2, prefix)
-		}
-		fmt.Fprintf(&b, "\t\t%s counter drop comment \"%s\"\n", match, comment)
+	if cp := r.Captcha; cp != nil {
+		// Only connections the captcha chain redirected reach these ports from banned addresses.
+		fmt.Fprintf(&b, "\t\tct status dnat tcp dport { %d, %d } accept\n", cp.HTTPPort, cp.HTTPSPort)
 	}
-	drop("ip saddr @ipdb4", "xg-ipdb", LogPrefixIPDB)
-	drop("ip6 saddr @ipdb6", "xg-ipdb", LogPrefixIPDB)
-	drop("ip saddr @deny4", "xg-deny", LogPrefixDeny)
-	drop("ip6 saddr @deny6", "xg-deny", LogPrefixDeny)
-	drop("ip saddr @tempban4", "xg-tempban", LogPrefixTempBan)
-	drop("ip6 saddr @tempban6", "xg-tempban", LogPrefixTempBan)
+	jump := func(match, chain, comment string) {
+		fmt.Fprintf(&b, "\t\t%s counter jump %s comment \"%s\"\n", match, chain, comment)
+	}
+	jump("ip saddr @ipdb4", "drop_ipdb", "xg-ipdb")
+	jump("ip6 saddr @ipdb6", "drop_ipdb", "xg-ipdb")
+	jump("ip saddr @deny4", "drop_deny", "xg-deny")
+	jump("ip6 saddr @deny6", "drop_deny", "xg-deny")
+	jump("ip saddr @tempban4", "drop_tempban", "xg-tempban")
+	jump("ip6 saddr @tempban6", "drop_tempban", "xg-tempban")
 	if len(cb4) > 0 {
 		if len(ca4) > 0 {
 			b.WriteString("\t\tip saddr @country_allow4 accept\n")
 		}
-		drop("ip saddr @country_block4", "xg-country", LogPrefixCountry)
+		jump("ip saddr @country_block4", "drop_country", "xg-country")
 	}
 	if r.DoS {
 		ban := r.DoSBanSeconds
@@ -161,8 +220,28 @@ func (r Ruleset) Render() string {
 		fmt.Fprintf(&b, "\t\tct state new update @dos4 { ip saddr limit rate over %d/minute burst %d packets } add @tempban4 { ip saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
 		fmt.Fprintf(&b, "\t\tct state new update @dos6 { ip6 saddr limit rate over %d/minute burst %d packets } add @tempban6 { ip6 saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
 	}
-	b.WriteString("\t}\n}\n")
+	if pf := r.Ports; pf != nil {
+		b.WriteString("\t\tct state established,related accept\n")
+		nftPorts(&b, "tcp", pf.TCPIn)
+		nftPorts(&b, "udp", pf.UDPIn)
+		b.WriteString("\t\tmeta l4proto { tcp, udp } counter drop comment \"xg-port\"\n")
+	}
+	b.WriteString("\t}\n")
+	if pf := r.Ports; pf != nil {
+		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter - 5; policy accept;\n")
+		b.WriteString("\t\toifname \"lo\" accept\n\t\tct state established,related accept\n")
+		nftPorts(&b, "tcp", pf.TCPOut)
+		nftPorts(&b, "udp", pf.UDPOut)
+		b.WriteString("\t\tmeta l4proto { tcp, udp } counter drop comment \"xg-port-out\"\n\t}\n")
+	}
+	b.WriteString("}\n")
 	return b.String()
+}
+
+func nftPorts(b *strings.Builder, proto string, ports []string) {
+	if len(ports) > 0 {
+		fmt.Fprintf(b, "\t\t%s dport { %s } accept\n", proto, strings.Join(ports, ", "))
+	}
 }
 
 // NFT runs the nft binary.
@@ -204,7 +283,11 @@ func (n NFT) Apply(r Ruleset) error {
 		// Old nftables cannot count per set element, and some kernels lack
 		// the log expression: fall back step by step.
 		ok := false
-		for _, fix := range []func(){func() { r.NoSetCounters = true }, func() { r.LogDrops = false }} {
+		for _, fix := range []func(){
+			func() { r.NoSetCounters = true },
+			func() { r.Captcha = nil }, // inet nat needs Linux 5.2+
+			func() { r.LogDrops, r.LogIPDB = false, false },
+		} {
 			fix()
 			script = r.Render()
 			if _, err2 := n.run(ctx, script, "-c", "-f", "-"); err2 == nil {

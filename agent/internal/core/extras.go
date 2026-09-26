@@ -7,11 +7,14 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
+	"github.com/xmarthost/xmartguard/agent/internal/monitor"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
@@ -61,16 +64,25 @@ func (a *Agent) maybeSuspend(f scanner.Finding) {
 	if active > 0 {
 		return
 	}
-	reason := fmt.Sprintf("XMart Guard: %d malware detections in %d hours", n, cfg.WindowHours)
+	a.suspendAccount(f.Owner, fmt.Sprintf("XMart Guard: %d malware detections in %d hours", n, cfg.WindowHours))
+}
+
+// suspendAccount suspends a cPanel account and notifies the admin and,
+// when enabled, the account owner.
+func (a *Agent) suspendAccount(user, reason string) {
 	status := "suspended"
-	if err := runScript("/scripts/suspendacct", f.Owner, reason); err != nil {
+	if err := runScript("/scripts/suspendacct", user, reason); err != nil {
 		status = "failed"
 		reason += " (suspend failed: " + err.Error() + ")"
 	}
-	_, _ = a.DB.Exec(`INSERT INTO suspensions (at, user, reason, status) VALUES (?,?,?,?)`, store.Now(), f.Owner, reason, status)
-	a.Log.Warn("automatic account suspension", "user", f.Owner, "status", status)
+	_, _ = a.DB.Exec(`INSERT INTO suspensions (at, user, reason, status) VALUES (?,?,?,?)`, store.Now(), user, reason, status)
+	a.Log.Warn("automatic account suspension", "user", user, "status", status)
 	if nc := a.Settings.Get().Notifications; nc.Email != "" {
-		a.Mailer.Enqueue(nc.Email, "account suspended", fmt.Sprintf("cPanel account %s: %s (%s)\n", f.Owner, reason, status))
+		a.Mailer.Enqueue(nc.Email, "account suspended", fmt.Sprintf("cPanel account %s: %s (%s)\n", user, reason, status))
+	}
+	if status == "suspended" && a.Settings.Get().Notifications.UserSuspension {
+		a.notifyUser(user, "your hosting account was suspended",
+			"Your hosting account was suspended automatically for security reasons:\n  "+reason+"\nPlease contact your hosting provider.")
 	}
 }
 
@@ -169,8 +181,43 @@ func (a *Agent) checkDomains(ctx context.Context) error {
 		if r.Status == "listed" && !before[r.Domain] && n.Email != "" && n.OnBlacklist {
 			a.Mailer.Enqueue(n.Email, "domain blacklisted", fmt.Sprintf("%s (account %s) is listed: %s\n", r.Domain, r.User, strings.Join(r.Reasons, "; ")))
 		}
+		if r.Status == "listed" && !before[r.Domain] {
+			a.maybeSuspendDomain(r.Domain, r.User, strings.Join(r.Reasons, "; "))
+		}
 	}
 	return err
+}
+
+// maybeSuspendDomain suspends the account of a newly blacklisted domain
+// ("Suspend on domain blacklist"), unless the domain or user is excluded.
+func (a *Agent) maybeSuspendDomain(domain, user, reasons string) {
+	cfg := a.Settings.Get().AutoSuspend
+	if !cfg.OnDomainBlacklist || user == "" || user == "root" || slices.Contains(cfg.ExcludeUsers, user) {
+		return
+	}
+	for _, w := range cfg.WhitelistDomains {
+		if domain == w || strings.HasSuffix(domain, "."+w) {
+			return
+		}
+	}
+	var n int
+	_ = a.DB.QueryRow(`SELECT count(*) FROM suspensions WHERE user = ? AND status = 'suspended'`, user).Scan(&n)
+	if n > 0 {
+		return
+	}
+	a.suspendAccount(user, fmt.Sprintf("XMart Guard: domain %s is blacklisted (%s)", domain, reasons))
+}
+
+// onCMSAutoAction reports automatic plugin/theme updates and deactivations.
+func (a *Agent) onCMSAutoAction(s cms.Site, actions []string) {
+	text := fmt.Sprintf("%s (%s):\n  %s\n", s.Domain, s.Path, strings.Join(actions, "\n  "))
+	if n := a.Settings.Get().Notifications; n.Email != "" {
+		a.Mailer.Enqueue(n.Email, "automatic CMS patches", text)
+	}
+	if a.Settings.Get().Notifications.UserPatches {
+		a.notifyUser(s.User, "security updates applied to your website",
+			"XMart Guard applied these security changes to your website:\n"+text)
+	}
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -231,7 +278,7 @@ func (a *Agent) Dashboard(days int) map[string]any {
 	attacks := a.daily(`SELECT `+dayExpr("minute")+` AS d, sum(packets) FROM drop_stats WHERE minute >= ? GROUP BY d`, days)
 	webDaily := a.daily(`SELECT `+dayExpr("at")+` AS d, count(*) FROM waf_events WHERE category IN ('waf','bot') AND at >= ? GROUP BY d`, days)
 	infections := map[string][]dayPoint{}
-	for _, cat := range []string{scanner.CatVirus, scanner.CatSuspicious, scanner.CatBinary} {
+	for _, cat := range []string{scanner.CatVirus, scanner.CatSuspicious, scanner.CatBinary, scanner.CatSymlink} {
 		infections[cat] = a.daily(`SELECT `+dayExpr("created_at")+` AS d, count(*) FROM findings WHERE category = '`+cat+`' AND created_at >= ? GROUP BY d`, days)
 	}
 
@@ -239,22 +286,37 @@ func (a *Agent) Dashboard(days int) map[string]any {
 	var cmsIssues int64
 	_ = a.DB.QueryRow(`SELECT coalesce(sum(core_issues + db_issues + outdated_plugins + outdated_themes),0) FROM cms_sites`).Scan(&cmsIssues)
 	ipsListed := 0
+	var listedIPs []string
 	for _, ip := range a.repIPs() {
 		if r := reputation.Load(a.DB, ip); r != nil && r.ListedOn > 0 {
 			ipsListed++
+			listedIPs = append(listedIPs, fmt.Sprintf("%s — listed on %d blocklist(s)", ip, r.ListedOn))
 		}
 	}
 	domSum, _, _, _ := reputation.LoadDomains(a.DB, "", 1, 0)
 
-	var alerts []map[string]string
-	add := func(level, text, link string) {
-		alerts = append(alerts, map[string]string{"level": level, "text": text, "link": link})
+	type alert struct {
+		Level   string   `json:"level"`
+		Text    string   `json:"text"`
+		Link    string   `json:"link"`
+		Details []string `json:"details"`
+	}
+	alerts := []alert{}
+	add := func(level, text, link string, details ...string) {
+		if len(details) > 10 {
+			details = append(details[:10], fmt.Sprintf("… and %d more", len(details)-10))
+		}
+		alerts = append(alerts, alert{level, text, link, details})
 	}
 	if domSum.Flagged > 0 {
-		add("danger", fmt.Sprintf("%d blacklisted domain(s) found", domSum.Flagged), "domain-reputation")
+		var names []string
+		for _, d := range domSum.Listed {
+			names = append(names, d.Domain+" — "+strings.Join(d.Reasons, ", "))
+		}
+		add("danger", fmt.Sprintf("%d Blacklisted Domain%s found", domSum.Flagged, plural(domSum.Flagged)), "domain-reputation", names...)
 	}
 	if ipsListed > 0 {
-		add("danger", fmt.Sprintf("%d server IP(s) on DNS blocklists", ipsListed), "ip-reputation")
+		add("danger", fmt.Sprintf("%d server IP%s on DNS blocklists", ipsListed, plural(ipsListed)), "ip-reputation", listedIPs...)
 	}
 	if open := a.Scanner.Stats().OpenFindings; open > 0 {
 		add("danger", fmt.Sprintf("%d infected file(s) need action", open), "scanner-logs")
@@ -278,9 +340,6 @@ func (a *Agent) Dashboard(days int) map[string]any {
 	if osmRecent > 0 {
 		add("warning", fmt.Sprintf("%d outgoing spam alert(s) in the last 24 hours", osmRecent), "osm")
 	}
-	if alerts == nil {
-		alerts = []map[string]string{}
-	}
 	return map[string]any{
 		"days":                days,
 		"threats":             threats,
@@ -298,4 +357,116 @@ func (a *Agent) Dashboard(days int) map[string]any {
 		},
 		"alerts": alerts,
 	}
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func (a *Agent) onMonitorEvent(e monitor.Event) {
+	n := a.Settings.Get().Notifications
+	if n.Email != "" && n.OnVirus {
+		a.Mailer.Enqueue(n.Email, e.Kind+" alert",
+			fmt.Sprintf("[%s] %s\n  user: %s\n  %s\n  action: %s\n", e.Kind, e.Reason, e.User, e.Subject, e.Action))
+	}
+}
+
+// retentionLoop deletes logs and quarantined files older than the
+// configured retention ("Keep logs for").
+func (a *Agent) retentionLoop(ctx context.Context) {
+	t := time.NewTicker(6 * time.Hour)
+	defer t.Stop()
+	for {
+		a.pruneOld()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+func (a *Agent) pruneOld() {
+	days := a.Settings.Get().Scanner.KeepDays
+	if days <= 0 {
+		return
+	}
+	cut := store.Now() - int64(days)*86400
+	// Quarantined files past retention are deleted for good.
+	rows, err := a.DB.Query(`SELECT id FROM findings WHERE status = 'quarantined' AND updated_at < ?`, cut)
+	if err == nil {
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if rows.Scan(&id) == nil {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
+		for _, id := range ids {
+			if err := a.Scanner.Delete(id); err != nil {
+				a.Log.Warn("retention: delete quarantined file", "id", id, "err", err)
+			}
+		}
+	}
+	for _, q := range []string{
+		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored') AND updated_at < ?`,
+		`DELETE FROM fw_events WHERE status != 'blocked' AND created_at < ?`,
+		`DELETE FROM waf_events WHERE at < ?`,
+		`DELETE FROM osm_events WHERE at < ?`,
+		`DELETE FROM monitor_events WHERE at < ?`,
+		`DELETE FROM scans WHERE status NOT IN ('queued','running') AND started_at < ?`,
+	} {
+		_, _ = a.DB.Exec(q, cut)
+	}
+}
+
+// maybeAutoClean restores an infected WordPress core file from the official
+// release ("Auto clean infected files"): wp-cli re-downloads the site's core
+// files (content untouched) and the finding is marked cleaned when the file
+// is clean afterwards.
+func (a *Agent) maybeAutoClean(f scanner.Finding) {
+	if !a.Settings.Get().Scanner.AutoClean || f.Category != scanner.CatVirus || (f.Status != "detected" && f.Status != "quarantined") {
+		return
+	}
+	var site string
+	rows, err := a.DB.Query(`SELECT path FROM cms_sites WHERE type = 'wordpress'`)
+	if err != nil {
+		return
+	}
+	for rows.Next() {
+		var p string
+		if rows.Scan(&p) == nil && strings.HasPrefix(f.Path, p+"/") && len(p) > len(site) {
+			site = p
+		}
+	}
+	rows.Close()
+	if site == "" {
+		return
+	}
+	rel := strings.TrimPrefix(f.Path, site+"/")
+	core := strings.HasPrefix(rel, "wp-admin/") || strings.HasPrefix(rel, "wp-includes/") ||
+		(!strings.Contains(rel, "/") && strings.HasPrefix(rel, "wp-") && rel != "wp-config.php") || rel == "index.php" || rel == "xmlrpc.php"
+	if !core {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		if _, err := a.CMS.Update(ctx, site, "core-repair", ""); err != nil {
+			a.Log.Warn("auto clean failed", "file", f.Path, "err", err)
+			return
+		}
+		info, err := os.Lstat(f.Path)
+		if err != nil {
+			return
+		}
+		if d, _ := a.Scanner.CheckFile(f.Path, info, a.Settings.Get().Scanner); d == nil {
+			_, _ = a.DB.Exec(`UPDATE findings SET status = 'cleaned', updated_at = ? WHERE id = ?`, store.Now(), f.ID)
+			a.Log.Info("infected core file restored from the official release", "file", f.Path)
+		}
+	}()
 }

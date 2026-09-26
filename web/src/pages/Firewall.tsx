@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
-import { CheckCircle2, Globe, RefreshCw, Settings as Gear, ShieldAlert, XCircle } from 'lucide-react';
+import { CheckCircle2, Download, Globe, RefreshCw, Search, Settings as Gear, ShieldAlert, Trash2, XCircle } from 'lucide-react';
+import { downloadCSV, useCountries } from '../components/geo';
+import { flag } from '../components/WorldMap';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
-import { Badge, Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
+import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
 import { useServerName } from './Scanner';
 
 // ISO 3166-1 alpha-2 codes; names come from the browser (Intl.DisplayNames).
@@ -39,6 +41,34 @@ interface FwSettings {
   log_blocked: boolean;
   blocked_countries: string[];
   allowed_countries: string[];
+  ignored_countries: string[];
+  ddns: string[];
+  excluded_jails: string[];
+  waf_ban: boolean;
+  waf_ban_threshold: number;
+  captcha: boolean;
+  port_filter: boolean;
+  tcp_in: string;
+  udp_in: string;
+  tcp_out: string;
+  udp_out: string;
+}
+
+interface CaptchaSettings {
+  provider: 'builtin' | 'turnstile' | 'recaptcha';
+  site_key: string;
+  secret_key: string;
+  allow_minutes: number;
+  http_port: number;
+  https_port: number;
+}
+
+interface FwMeta {
+  jails: string[];
+  ddns: Record<string, string[]>;
+  ssh_ports: number[];
+  portal: number[];
+  captcha: boolean;
 }
 
 interface FwStatus {
@@ -216,7 +246,14 @@ export function FirewallPage() {
   const { id } = useParams();
   const host = useServerName(id);
   const { user } = useAuth();
-  const s = useAgent<{ settings: { firewall: FwSettings }; meta: { firewall: FwStatus } }>(id, 'settings.get');
+  const s = useAgent<{
+    settings: { firewall: FwSettings; ipdb: { enabled: boolean; report: boolean; log: boolean; captcha: boolean }; waf: { ai_bots: boolean; enabled: boolean }; captcha: CaptchaSettings };
+    meta: { firewall: FwStatus };
+  }>(id, 'settings.get');
+  const meta = useAgent<FwMeta>(id, 'fw.meta');
+  const [cap, setCap] = useState<CaptchaSettings | null>(null);
+  const [ddnsHost, setDdnsHost] = useState('');
+  const [jail, setJail] = useState('');
   const [fw, setFw] = useState<FwSettings | null>(null);
   const [check, setCheck] = useState('');
   const [checkRes, setCheckRes] = useState<any>(null);
@@ -228,6 +265,7 @@ export function FirewallPage() {
   useEffect(() => {
     if (s.data) {
       setFw(s.data.settings.firewall);
+      setCap(s.data.settings.captcha);
       setProvider(s.data.settings.firewall.provider);
     }
   }, [s.data]);
@@ -236,12 +274,14 @@ export function FirewallPage() {
   if (!fw || !s.data) return null;
   const status = s.data.meta.firewall;
 
-  const save = (patch: Partial<FwSettings>, msg = 'Firewall settings saved') =>
+  const save = (patch: Partial<FwSettings>, msg = 'Firewall settings saved') => saveAny({ firewall: patch }, msg);
+  const saveAny = (patch: Record<string, unknown>, msg = 'Settings saved') =>
     run(async () => {
-      const r = await agentCall(id!, 'settings.set', { firewall: patch });
-      await s.reload();
+      const r = await agentCall(id!, 'settings.set', patch);
+      await Promise.all([s.reload(), meta.reload()]);
       return r;
     }, msg);
+  const all = s.data.settings;
 
   return (
     <div className="space-y-6">
@@ -310,6 +350,13 @@ export function FirewallPage() {
       <Section title="Temporary ban" desc="Manage temporarily blocked IP addresses">
         <AddRemove serverId={id!} kind="tempban" label="Block IP" removeLabel="Unblock IP" withDuration withComment />
         <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'tempban', title: 'Temporarily blocked' })}>View temporary list</button></div>
+        <SettingRow title="Show CAPTCHA for blocked IPs" desc="Temporarily blocked visitors see a CAPTCHA page on the websites instead of a dead connection; solving it lifts the ban for their address">
+          <Toggle on={fw.captcha} disabled={!isAdmin || busy} onChange={(v) => save({ captcha: v }, v ? 'CAPTCHA enabled' : 'CAPTCHA disabled')} />
+        </SettingRow>
+        <SettingRow title="WAF Temporary IP Ban" desc={`Temporarily block addresses that the Web Application Firewall blocks ${fw.waf_ban_threshold} times within ${fw.bf_window_minutes} minutes`}>
+          <input className="input w-20" type="number" min={3} value={fw.waf_ban_threshold} disabled={!isAdmin} onChange={(e) => setFw({ ...fw, waf_ban_threshold: Number(e.target.value) })} onBlur={() => fw.waf_ban_threshold !== all.firewall.waf_ban_threshold && save({ waf_ban_threshold: fw.waf_ban_threshold })} />
+          <Toggle on={fw.waf_ban} disabled={!isAdmin || busy} onChange={(v) => save({ waf_ban: v })} />
+        </SettingRow>
       </Section>
 
       <Section title="Temporary allow" desc="Manage temporarily allowed IP addresses">
@@ -317,15 +364,101 @@ export function FirewallPage() {
         <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'tempallow', title: 'Temporarily allowed' })}>View temporary list</button></div>
       </Section>
 
+      <Section title="Dynamic DNS (DDNS) Allowlist" desc="Automatically update the IP allowlist using a Dynamic DNS hostname (resolved every 5 minutes)">
+        <Row title="Allow Dynamic DNS hostname" desc="Enter your fully qualified DDNS hostname">
+          <div className="flex gap-2">
+            <input className="input" value={ddnsHost} onChange={(e) => setDdnsHost(e.target.value)} placeholder="Enter DDNS hostname" />
+            <button
+              className="btn-primary px-6"
+              disabled={!isAdmin || busy || !ddnsHost.trim()}
+              onClick={async () => {
+                const r = await save({ ddns: [...fw.ddns, ddnsHost.trim().toLowerCase()] }, `${ddnsHost.trim()} added`);
+                if (r) setDdnsHost('');
+              }}
+            >
+              Add
+            </button>
+          </div>
+        </Row>
+        {fw.ddns.map((h) => (
+          <div key={h} className="flex items-center justify-between border-b border-slate-100 py-2 text-sm last:border-0">
+            <span>
+              <span className="font-mono">{h}</span>
+              <span className="ml-3 text-slate-500">{meta.data?.ddns[h]?.length ? meta.data.ddns[h].join(', ') : 'not resolved yet'}</span>
+            </span>
+            {isAdmin && (
+              <button className="text-sm text-red-600 hover:underline" onClick={() => save({ ddns: fw.ddns.filter((x) => x !== h) }, `${h} removed`)}>
+                Remove
+              </button>
+            )}
+          </div>
+        ))}
+      </Section>
+
       <Section title="Ignore IPs" desc="IPs excluded from automatic blocking (brute force, DoS)">
         <AddRemove serverId={id!} kind="ignore" label="Ignore IP" removeLabel="Remove ignored IP" withComment />
         <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'ignore', title: 'Ignored IPs' })}>View ignored list</button></div>
+        <Row title="Ignore Countries" desc="IPs of these countries are never blocked by any firewall rule">
+          <CountryPicker value={fw.ignored_countries} disabled={!isAdmin} onChange={(v) => setFw({ ...fw, ignored_countries: v })} />
+          <div className="flex justify-end gap-2">
+            <button className="btn-outline" disabled={!isAdmin} onClick={() => setFw({ ...fw, ignored_countries: all.firewall.ignored_countries })}>Reset</button>
+            <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => save({ ignored_countries: fw.ignored_countries }, 'Ignored countries saved')}>Save</button>
+          </div>
+        </Row>
       </Section>
 
-      <Section title="Brute-force protection (LFD)" desc="Watch SSH, cPanel/WHM/Webmail, mail and FTP logins and temporarily ban abusive IPs">
-        <SettingRow title="Intrusion Defense" desc="Temporarily block IPs with repeated failed logins" recommended>
+      <Section title="IPDB distributed firewall" desc="IPDB is the shared blocklist of all your servers: an attacker banned on one server is dropped on every server">
+        <SettingRow title="IPDB Switch" desc="Enable or disable the IPDB firewall" recommended>
+          <Toggle on={all.ipdb.enabled} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { enabled: v } })} />
+        </SettingRow>
+        <SettingRow title="IPDB Log Switch" desc="Enable or disable logging for the IPDB firewall (the live monitor)">
+          <Toggle on={all.ipdb.log} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { log: v } })} />
+        </SettingRow>
+        <SettingRow title="IPDB CAPTCHA" desc="Show a CAPTCHA challenge for IPDB-blocked IP addresses on the websites">
+          <Toggle on={all.ipdb.captcha} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { captcha: v } })} />
+        </SettingRow>
+        <SettingRow title="Share bans" desc="Report this server's automatic bans to the IPDB">
+          <Toggle on={all.ipdb.report} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { report: v } })} />
+        </SettingRow>
+      </Section>
+
+      <Section title="AI Bots" desc="Configure AI bot protection settings">
+        <SettingRow title="AI Bots" desc="Block AI training crawlers (GPTBot, CCBot, Bytespider…) with the WAF">
+          <Toggle on={all.waf.ai_bots} disabled={!isAdmin || busy} onChange={(v) => saveAny({ waf: { ai_bots: v } })} />
+        </SettingRow>
+      </Section>
+
+      <Section title="Intrusion Defense (LFD)" desc="Monitor logs for suspicious activity and automatically temporary-ban abusive IP addresses">
+        <SettingRow title="Intrusion Defense" desc="Detect and temporarily block abusive IP addresses based on log activity and security thresholds" recommended>
           <Toggle on={fw.bruteforce} disabled={!isAdmin || busy} onChange={(v) => save({ bruteforce: v })} />
         </SettingRow>
+        <Row title="Excluded Protection Rules" desc="Exclude selected detection rules from monitoring and temporary bans">
+          <div className="flex gap-2">
+            <select className="input" value={jail} onChange={(e) => setJail(e.target.value)} disabled={!isAdmin}>
+              <option value="">Select rules to exclude</option>
+              {(meta.data?.jails ?? []).filter((j) => !fw.excluded_jails.includes(j)).map((j) => (
+                <option key={j}>{j}</option>
+              ))}
+            </select>
+            <button className="btn-primary px-5" disabled={!isAdmin || busy || !jail} onClick={async () => (await save({ excluded_jails: [...fw.excluded_jails, jail] }, `${jail} excluded`)) && setJail('')}>
+              Exclude
+            </button>
+          </div>
+          {fw.excluded_jails.length === 0 ? (
+            <div className="text-sm text-slate-400">No rules excluded.</div>
+          ) : (
+            fw.excluded_jails.map((j) => (
+              <div key={j} className="flex items-center justify-between text-sm">
+                {j}
+                {isAdmin && (
+                  <button className="text-red-600 hover:underline" onClick={() => save({ excluded_jails: fw.excluded_jails.filter((x) => x !== j) }, `${j} monitored again`)}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            ))
+          )}
+        </Row>
         <div className="grid gap-3 py-4 sm:grid-cols-3">
           <label className="text-sm">
             <span className="label">Failed logins</span>
@@ -374,6 +507,58 @@ export function FirewallPage() {
           </button>
         </div>
       </Section>
+
+      <Section title="Port filter configuration" desc="Set allowed TCP/UDP ports for in/out traffic">
+        <SettingRow title="Port filter" desc="Enable or disable firewall port filtering">
+          <Toggle on={fw.port_filter} disabled={!isAdmin || busy} onChange={(v) => {
+            if (v && !confirm('Enable the port filter? Every port not listed below will be closed.')) return;
+            save({ port_filter: v, tcp_in: fw.tcp_in, udp_in: fw.udp_in, tcp_out: fw.tcp_out, udp_out: fw.udp_out }, v ? 'Port filter enabled' : 'Port filter disabled');
+          }} />
+        </SettingRow>
+        {([
+          ['tcp_in', 'TCP IN', 'Allowed incoming TCP ports'],
+          ['udp_in', 'UDP IN', 'Allowed incoming UDP ports'],
+          ['tcp_out', 'TCP OUT', 'Allowed outgoing TCP ports'],
+          ['udp_out', 'UDP OUT', 'Allowed outgoing UDP ports'],
+        ] as const).map(([k, t, d]) => (
+          <Row key={k} title={t} desc={d}>
+            <textarea className="input h-20 font-mono text-sm" value={fw[k]} disabled={!isAdmin} onChange={(e) => setFw({ ...fw, [k]: e.target.value })} />
+          </Row>
+        ))}
+        <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          Warning: you are about to change critical network port configurations (TCP/UDP). This can affect network connectivity and security.
+          SSH port{(meta.data?.ssh_ports.length ?? 0) > 1 ? 's' : ''} {meta.data?.ssh_ports.join(', ')} and the portal port {meta.data?.portal.join(', ')} always stay open.
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button className="btn-outline" disabled={!isAdmin} onClick={() => setFw({ ...fw, tcp_in: all.firewall.tcp_in, udp_in: all.firewall.udp_in, tcp_out: all.firewall.tcp_out, udp_out: all.firewall.udp_out })}>Reset</button>
+          <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => save({ tcp_in: fw.tcp_in, udp_in: fw.udp_in, tcp_out: fw.tcp_out, udp_out: fw.udp_out }, 'Ports saved')}>Save</button>
+        </div>
+      </Section>
+
+      {cap && (
+        <Section title="CAPTCHA page" desc="The page banned visitors see when CAPTCHA is on. The built-in challenge needs no third-party service.">
+          <Row title="Provider" desc="Built-in image challenge, Cloudflare Turnstile or Google reCAPTCHA v2">
+            <select className="input" value={cap.provider} disabled={!isAdmin} onChange={(e) => setCap({ ...cap, provider: e.target.value as CaptchaSettings['provider'] })}>
+              <option value="builtin">Built-in (no third party)</option>
+              <option value="turnstile">Cloudflare Turnstile</option>
+              <option value="recaptcha">Google reCAPTCHA v2</option>
+            </select>
+            {cap.provider !== 'builtin' && (
+              <>
+                <input className="input" placeholder="Site key" value={cap.site_key} onChange={(e) => setCap({ ...cap, site_key: e.target.value })} />
+                <input className="input" placeholder="Secret key" value={cap.secret_key} onChange={(e) => setCap({ ...cap, secret_key: e.target.value })} />
+              </>
+            )}
+          </Row>
+          <Row title="Allow after solving" desc="How long an address stays allowed after solving the CAPTCHA (minutes)">
+            <input className="input w-28" type="number" min={5} value={cap.allow_minutes} onChange={(e) => setCap({ ...cap, allow_minutes: Number(e.target.value) })} />
+          </Row>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm text-slate-500">{meta.data?.captcha ? `CAPTCHA server running on ports ${cap.http_port}/${cap.https_port}` : 'CAPTCHA server is off (no CAPTCHA option enabled)'}</span>
+            <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => saveAny({ captcha: cap }, 'CAPTCHA settings saved')}>Save</button>
+          </div>
+        </Section>
+      )}
 
       {view && <ListModal serverId={id!} kind={view.kind} title={view.title} onClose={() => setView(null)} />}
 
@@ -429,6 +614,21 @@ interface FwEvent {
   status: string;
 }
 
+const FW_FILTERS = [
+  { v: '', l: 'Filter All' },
+  { v: 'blocked', l: 'Blocked' },
+  { v: 'captcha', l: 'Captcha solved' },
+  { v: 'expired', l: 'Expired' },
+  { v: 'unblocked', l: 'Unblocked' },
+];
+
+const STATUS_STYLE: Record<string, string> = {
+  blocked: 'bg-navy-600 text-white',
+  captcha: 'bg-amber-200 text-amber-900',
+  expired: 'bg-slate-100 text-slate-500',
+  unblocked: 'bg-slate-100 text-slate-600',
+};
+
 export function FirewallLogs() {
   const { id } = useParams();
   const host = useServerName(id);
@@ -437,72 +637,97 @@ export function FirewallLogs() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('');
   const [offset, setOffset] = useState(0);
-  const limit = 25;
+  const [limit, setLimit] = useState(25);
   const list = useAgent<{ events: FwEvent[]; total: number }>(id, 'fw.events', { q: query, status, limit, offset }, 15_000);
-  const { run } = useAction();
+  const cc = useCountries(list.data?.events.map((e) => e.ip) ?? []);
+  const { run, busy } = useAction();
+  const del = (e: FwEvent) => {
+    if (e.status === 'blocked' && !confirm(`${e.ip} is still blocked. Delete the entry and unblock it?`)) return;
+    run(() => agentCall(id!, 'fw.event_delete', { id: e.id }).then(list.reload), e.status === 'blocked' ? `${e.ip} unblocked` : 'Entry deleted');
+  };
+  const csv = async () => {
+    const r = await run(() => agentCall<{ events: FwEvent[] }>(id!, 'fw.events', { q: query, status, limit: 500, offset: 0 }));
+    if (r)
+      downloadCSV(`firewall-logs-${host}.csv`, ['ip', 'country', 'reason', 'source', 'expiry', 'time', 'status'],
+        r.events.map((e) => [e.ip, cc[e.ip] ?? '', e.reason, e.source, e.expires_at ? new Date(e.expires_at * 1000).toISOString() : 'permanent', new Date(e.created_at * 1000).toISOString(), e.status]));
+  };
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <Breadcrumb items={[host, 'Firewall Logs']} />
-          <h1 className="h-title">Firewall Logs</h1>
-        </div>
-        <div className="flex gap-2">
-          <select className="input w-40" value={status} onChange={(e) => (setStatus(e.target.value), setOffset(0))}>
-            <option value="">All</option>
-            <option value="blocked">Blocked</option>
-            <option value="expired">Expired</option>
-            <option value="unblocked">Unblocked</option>
-          </select>
-          <form onSubmit={(e) => (e.preventDefault(), setQuery(q), setOffset(0))}>
-            <input className="input w-56" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />
-          </form>
+      <Breadcrumb items={[host, 'Firewall Logs']} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="h-title">Firewall Logs</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center rounded-lg border border-slate-300 bg-white">
+            <select className="rounded-l-lg bg-transparent px-3 py-2 text-sm outline-none" value={status} onChange={(e) => (setStatus(e.target.value), setOffset(0))}>
+              {FW_FILTERS.map((f) => (
+                <option key={f.v} value={f.v}>{f.l}</option>
+              ))}
+            </select>
+            <form className="flex items-center border-l border-slate-200" onSubmit={(e) => (e.preventDefault(), setQuery(q.trim()), setOffset(0))}>
+              <input className="w-56 bg-transparent px-3 py-2 text-sm outline-none" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />
+              <button className="px-3 text-slate-500" aria-label="search"><Search className="h-4 w-4" /></button>
+            </form>
+          </div>
+          <button className="btn-outline" title="Download CSV" disabled={busy || !list.data?.events.length} onClick={csv}>
+            <Download className="h-4 w-4" />
+          </button>
         </div>
       </div>
-      <div className="card overflow-x-auto p-5">
-        {list.error && <ErrorBox message={list.error} />}
+      <div className="card overflow-x-auto p-0">
+        {list.error && <div className="p-4"><ErrorBox message={list.error} /></div>}
         {list.loading && !list.data ? (
           <PageLoader />
         ) : !list.data?.events.length ? (
           <Empty text="No blocked addresses yet" />
         ) : (
-          <>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left text-slate-500">
-                  <th className="py-3 font-medium">IP Address</th>
-                  <th className="py-3 font-medium">Reason</th>
-                  <th className="py-3 font-medium">Source</th>
-                  <th className="py-3 font-medium">Expiry</th>
-                  <th className="py-3 font-medium">Time</th>
-                  <th className="py-3 font-medium">Status</th>
-                  <th />
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-slate-600">
+              <tr>
+                <th className="px-5 py-3 font-medium">IP Address</th>
+                <th className="py-3 font-medium">Reason</th>
+                <th className="py-3 font-medium">Expiry</th>
+                <th className="py-3 font-medium">Time</th>
+                <th className="py-3 font-medium">Status</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.events.map((e) => (
+                <tr key={e.id} className="border-b border-slate-100 last:border-0">
+                  <td className="px-5 py-3.5 whitespace-nowrap">
+                    <span className="mr-2" title={cc[e.ip] ? countryName(cc[e.ip]) : ''}>{cc[e.ip] ? flag(cc[e.ip]) : '🏳️'}</span>
+                    <span className="font-mono">{e.ip}</span>
+                  </td>
+                  <td className="py-3.5" title={`source: ${e.source}`}>{e.reason}</td>
+                  <td className="py-3.5 whitespace-nowrap">{e.expires_at ? fmtTime(e.expires_at) : e.status === 'blocked' ? 'permanent' : ''}</td>
+                  <td className="py-3.5 whitespace-nowrap">{fmtTime(e.created_at)}</td>
+                  <td className="py-3.5">
+                    <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${STATUS_STYLE[e.status] ?? 'bg-slate-100 text-slate-600'}`}>{e.status}</span>
+                  </td>
+                  <td className="px-4 py-3.5 text-right">
+                    {can(user, 'operator') && (
+                      <button className="text-slate-400 hover:text-red-600" title={e.status === 'blocked' ? 'Unblock and delete' : 'Delete'} disabled={busy} onClick={() => del(e)}>
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {list.data.events.map((e) => (
-                  <tr key={e.id} className="border-b border-slate-100 last:border-0">
-                    <td className="py-3 font-mono">{e.ip}</td>
-                    <td className="py-3">{e.reason}</td>
-                    <td className="py-3 capitalize">{e.source}</td>
-                    <td className="py-3 whitespace-nowrap">{e.expires_at ? fmtTime(e.expires_at) : 'permanent'}</td>
-                    <td className="py-3 whitespace-nowrap">{fmtTime(e.created_at)}</td>
-                    <td className="py-3"><Badge value={e.status} /></td>
-                    <td className="py-3 text-right">
-                      {e.status === 'blocked' && can(user, 'operator') && (
-                        <button className="text-sm text-navy-700 hover:underline" onClick={() => run(() => agentCall(id!, 'fw.unblock', { addr: e.ip }).then(list.reload), `${e.ip} unblocked`)}>
-                          Unblock
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <Pager total={list.data.total} limit={limit} offset={offset} onChange={setOffset} />
-          </>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
+      {list.data && (
+        <div className="flex flex-wrap items-center justify-end gap-3 text-sm">
+          <label className="flex items-center gap-2 text-slate-500">
+            Items per page:
+            <select className="input w-20" value={limit} onChange={(e) => (setOffset(0), setLimit(Number(e.target.value)))}>
+              {[25, 50, 100].map((n) => <option key={n}>{n}</option>)}
+            </select>
+          </label>
+          <Pager total={list.data.total} limit={limit} offset={offset} onChange={setOffset} />
+        </div>
+      )}
     </div>
   );
 }
@@ -529,7 +754,19 @@ export function IPReputation() {
   const rep = useAgent<{ ips: string[]; reports: Record<string, Report | null>; rbls: string[] }>(id, 'reputation.get');
   const [sel, setSel] = useState('');
   const [q, setQ] = useState('');
+  const [newIP, setNewIP] = useState('');
   const { run, busy } = useAction();
+  const addIP = async () => {
+    const ip = newIP.trim();
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) return alert('Enter an IPv4 address');
+    // An explicit list replaces "all public IPs", so keep the current ones.
+    const ips = Array.from(new Set([...(rep.data?.ips ?? []), ip]));
+    const r = await run(() => agentCall(id!, 'settings.set', { reputation: { ips } }).then(() => agentCall(id!, 'reputation.check', { ip })).then(rep.reload), `${ip} added and checked`);
+    if (r !== undefined) {
+      setNewIP('');
+      setSel(ip);
+    }
+  };
   useEffect(() => {
     if (rep.data && !sel && rep.data.ips.length) setSel(rep.data.ips[0]);
   }, [rep.data, sel]);
@@ -563,7 +800,16 @@ export function IPReputation() {
               </button>
             );
           })}
-          {rep.data!.ips.length === 0 && <p className="text-sm text-slate-500">No public IPv4 addresses found. Add IPs under Settings → RBL &amp; IP Reputation.</p>}
+          {rep.data!.ips.length === 0 && <p className="text-sm text-slate-500">No public IPv4 addresses found.</p>}
+          {can(user, 'admin') && (
+            <form className="mt-4 border-t border-slate-100 pt-3" onSubmit={(e) => (e.preventDefault(), addIP())}>
+              <div className="mb-2 text-sm font-medium text-navy-900">Add a new IP to monitor</div>
+              <div className="flex gap-2">
+                <input className="input" placeholder="IPv4 address" value={newIP} onChange={(e) => setNewIP(e.target.value)} />
+                <button className="btn-primary px-3" disabled={busy || !newIP.trim()}>Add</button>
+              </div>
+            </form>
+          )}
         </div>
         <div className="space-y-5">
           {!r ? (

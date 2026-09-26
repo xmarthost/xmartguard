@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -52,6 +53,17 @@ var LogRules = []LogRule{
 		regexp.MustCompile(`FAIL LOGIN: Client "(?:::ffff:)?` + ipRe + `"`)},
 	{"Web (denied)", []string{"/usr/local/apache/logs/error_log", "/etc/apache2/logs/error_log", "/var/log/httpd/error_log", "/var/log/apache2/error.log"},
 		regexp.MustCompile(`\[client ` + ipRe + `(?::\d+)?\] (?:AH01630|AH01797|AH01618|AH01617)`)},
+}
+
+// Jails lists the Intrusion Defense rule names (services) that can be excluded.
+func Jails() []string {
+	var out []string
+	for _, r := range LogRules {
+		if !slices.Contains(out, r.Service) {
+			out = append(out, r.Service)
+		}
+	}
+	return out
 }
 
 // ParseLine returns the offending IP if the line is a failed login for rule.
@@ -159,6 +171,9 @@ func (m *Manager) RunBruteForce(ctx context.Context) {
 		case h := <-hits:
 			cfg := m.Settings.Get().Firewall
 			if !cfg.Enabled || !cfg.BruteForce {
+				continue
+			}
+			if slices.Contains(cfg.ExcludedJails, h.rule.Service) {
 				continue
 			}
 			ip, ok := h.rule.ParseLine(h.line)

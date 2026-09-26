@@ -62,21 +62,24 @@ The plugins have no logic of their own: they talk to the agent's local socket, w
 
 Command line (root): `xmartguard-agent call overview`, `xmartguard-agent call fw.add '{"kind":"deny","addr":"203.0.113.9"}'`, `xmartguard-agent check /home/user/public_html` (offline scan).
 
-## What it protects (0.4.0)
+## What it protects (0.5.0)
 
 | Module | What it does |
 |---|---|
-| Malware scanner | Realtime (inotify), quick/full/path, daily and weekly scans; own heuristic analyzer + known-bad hash database + ClamAV; quarantine/restore/disable/delete |
-| WAF | Own ModSecurity rules for Apache/LiteSpeed: **uploads are scanned by the malware engine before they are saved**, PHP uploads and PHP inside `wp-content/uploads` blocked, sensitive files (`.env`, `.git`, backups, logs, SQL dumps) protected, XML-RPC multicall, bad/SEO/AI/custom bots; per-rule disable (also vendor rules) and IP whitelist. Installed with a config test and automatic rollback |
-| Brute force | SSH, cPanel/WHM/Webmail, Dovecot, Postfix, Exim (auth and abuse), FTP, Apache denials and failed WordPress/Joomla/OpenCart logins (via the WAF) |
-| Firewall | iptables+ipset (default) or nftables: allow/deny/temp lists, countries, DoS, self-healing; live log of blocked connections |
-| IPDB | Shared attacker blocklist across all servers with live monitor, hourly/live charts and world map (per server and portal-wide) |
-| CMS | WordPress/Joomla/OpenCart discovery, outdated core/plugins/themes, WordPress core checksum verification, WP-CLI updates and core repair |
-| DB scanner | Read-only scan of WordPress databases for injected scripts, hidden iframes and PHP |
+| Malware scanner | Realtime (inotify), quick/full/path, daily and weekly scans; own heuristic analyzer + known-bad hash database + ClamAV + optional YARA rules (`/etc/xmartguard/yara/*.yar`); quarantine/restore/disable/delete; insecure symlink detection; auto clean of infected WordPress core files from the official release |
+| AI scanner | Second opinion on suspicious files. Default: **built-in model, free and local** (logistic regression over code features, trained on real quarantine data; retrain with `xmartguard-agent ai-train`). Optional: Ollama (free, self-hosted LLM) or Claude (own Anthropic API key) |
+| WAF | Own ModSecurity rules for Apache/LiteSpeed: uploads scanned by the malware engine, web shell protection, PHP-upload blocking, sensitive files, WordPress hardening, bad/SEO/AI/custom bots, protected login URLs, whitelisted domains; per-rule disable, config test with automatic rollback |
+| Brute force | SSH, cPanel/WHM/Webmail, Dovecot, Postfix, Exim, FTP, Apache denials and CMS logins; per-rule exclusion; addresses the WAF keeps blocking are banned ("N WAF blocked") |
+| Firewall | iptables+ipset (default) or nftables: allow/deny/temp ban/temp allow/ignore lists, ignored/allowed/blocked countries, DDNS allowlist, port filter (TCP/UDP in/out), DoS, self-healing; **CAPTCHA page for banned visitors** (built-in image challenge, or Turnstile/reCAPTCHA); live log of blocked connections |
+| IPDB | Shared attacker blocklist across all servers with live monitor, hourly/live charts and world map; IPDB log switch and IPDB CAPTCHA |
+| CMS | WordPress/Joomla/OpenCart discovery, outdated core/plugins/themes, core checksum verification, **known vulnerabilities (WPVulnerability, CVE + CVSS)**, automatic updates of vulnerable plugins/themes, blacklisted plugins, wp-cron override |
+| DB scanner | Read-only scan of WordPress databases for injected scripts, hidden iframes and PHP; signature whitelist |
+| Process & cron monitor | Miners, reverse shells and programs run from temporary/hidden folders (alert or kill); malicious user crontabs; weekly rkhunter rootkit check |
 | Outgoing spam | Exim per-sender limits per minute/hour, spam-subject checks, hold/suspend outgoing mail (cPanel) |
 | Reputation | Server IPs on DNS blocklists; hosted domains on Spamhaus DBL/SURBL/URIBL and optionally Google Safe Browsing |
-| Automatic suspension | Suspend cPanel accounts after repeated malware detections |
-| Portal | Server dashboard, Mass Operations across many servers, roles, audit log, email alerts |
+| Automatic suspension | Suspend cPanel accounts after repeated malware detections or a blacklisted domain |
+| Notifications | Email (+ additional address, custom From), Slack, Telegram, daily report; user notifications (infected files, suspension, CMS patches, outdated CMS digest) |
+| Portal | cPGuard-style server dashboard, Firewall Logs with flags/CSV, Mass Operations, roles, audit log |
 
 ## IPDB — shared attacker blocklist
 

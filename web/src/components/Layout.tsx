@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom';
 import {
-  Activity, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
+  Activity, Cpu, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
@@ -202,6 +202,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 onNavigate={close}
                 items={[
                   { to: `${base}/monitoring`, label: 'System Monitoring', icon: <Activity /> },
+                  { to: `${base}/security-monitor`, label: 'Process & Cron Monitor', icon: <Cpu /> },
                   { to: `${base}/ip-reputation`, label: 'IP Reputation', icon: <Radar /> },
                   { to: `${base}/domain-reputation`, label: 'Domain Reputation', icon: <Globe /> },
                   { to: `${base}/osm`, label: 'Outgoing Spam', icon: <MailWarning /> },

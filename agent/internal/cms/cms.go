@@ -31,6 +31,10 @@ type Manager struct {
 	Docroots func() map[string]string
 	// OnFinding is called for new database infections (notifications).
 	OnFinding func(site Site, f DBFinding)
+	// Vulns looks up known vulnerabilities (nil = off).
+	Vulns *VulnDB
+	// OnAutoAction reports automatic updates/deactivations (notifications).
+	OnAutoAction func(site Site, actions []string)
 
 	mu      sync.Mutex
 	running bool
@@ -55,8 +59,10 @@ type Site struct {
 	Core            CoreReport  `json:"core"`
 	CoreIssues      int         `json:"core_issues"`
 	DBIssues        int         `json:"db_issues"`
-	Risk            string      `json:"risk"`
-	ScannedAt       int64       `json:"scanned_at"`
+	// Vulnerable counts plugins/themes/core with known vulnerabilities.
+	Vulnerable int    `json:"vulnerable"`
+	Risk       string `json:"risk"`
+	ScannedAt  int64  `json:"scanned_at"`
 }
 
 // Status reports scan progress.
@@ -130,6 +136,10 @@ func risk(s *Site) string {
 	switch {
 	case s.CoreIssues > 0 || s.DBIssues > 0:
 		return "critical"
+	case s.Vulnerable > 0 && s.maxCVSS() >= 7:
+		return "critical" // a known high-severity hole
+	case s.Vulnerable > 0:
+		return "high"
 	case s.Latest != "" && s.Version != "" && leadingInt(s.Version) < leadingInt(s.Latest):
 		return "critical" // a whole major version behind
 	case (s.Latest != "" && CompareVersions(s.Version, s.Latest) < 0) || s.OutdatedPlugins >= 5:
@@ -194,7 +204,13 @@ func (m *Manager) scan(ctx context.Context) error {
 		case Joomla:
 			s.Latest = m.Versions.Latest(ctx, "joomla", "")
 		}
+		if s.Type == WordPress && cfg.Vulns && m.Vulns != nil {
+			m.lookupVulns(ctx, &s)
+		}
 		s.Risk = risk(&s)
+		if acts := m.autoActions(ctx, &s); len(acts) > 0 && m.OnAutoAction != nil {
+			m.OnAutoAction(s, acts)
+		}
 		s.ScannedAt = store.Now()
 		m.save(s)
 	}
@@ -227,6 +243,21 @@ func (m *Manager) scanDB(ctx context.Context, s Site) int {
 	if err != nil {
 		m.Log.Info("database scan skipped", "site", s.Path, "err", err)
 		return 0
+	}
+	// Signatures the admin whitelisted (false positives) are dropped.
+	if wl := m.Settings.Get().Scanner.DBWhitelist; len(wl) > 0 {
+		skip := map[string]bool{}
+		for _, x := range wl {
+			skip[x.ID] = true
+			skip["DB."+x.ID] = true
+		}
+		kept := found[:0]
+		for _, f := range found {
+			if !skip[f.Signature] {
+				kept = append(kept, f)
+			}
+		}
+		found = kept
 	}
 	// Remember what was already known so only new infections notify.
 	known := map[string]bool{}
@@ -341,6 +372,7 @@ func (m *Manager) Sites(f SiteFilter) ([]Site, int, error) {
 		_ = json.Unmarshal([]byte(th), &s.Themes)
 		_ = json.Unmarshal([]byte(mu), &s.MUPlugins)
 		_ = json.Unmarshal([]byte(core), &s.Core)
+		s.countVulns()
 		out = append(out, s)
 	}
 	return out, total, rows.Err()
@@ -432,14 +464,6 @@ func wpCLI() ([]string, error) {
 // Update updates a WordPress component as the site owner. what is
 // core | plugin | theme; slug is required for plugin/theme.
 func (m *Manager) Update(ctx context.Context, path, what, slug string) (string, error) {
-	var owner string
-	if err := m.DB.QueryRow(`SELECT user FROM cms_sites WHERE path = ? AND type = 'wordpress'`, path).Scan(&owner); err != nil {
-		return "", errors.New("WordPress site not found (run a CMS scan first)")
-	}
-	wp, err := wpCLI()
-	if err != nil {
-		return "", err
-	}
 	var args []string
 	switch what {
 	case "core":
@@ -456,6 +480,24 @@ func (m *Manager) Update(ctx context.Context, path, what, slug string) (string, 
 	default:
 		return "", fmt.Errorf("unknown update %q", what)
 	}
+	return m.WPCLI(ctx, path, args...)
+}
+
+// WPCLI runs a wp-cli command as the site owner.
+func (m *Manager) WPCLI(ctx context.Context, path string, args ...string) (string, error) {
+	var owner string
+	if err := m.DB.QueryRow(`SELECT user FROM cms_sites WHERE path = ? AND type = 'wordpress'`, path).Scan(&owner); err != nil || owner == "" {
+		return "", errors.New("WordPress site not found (run a CMS scan first)")
+	}
+	for _, a := range args {
+		if strings.ContainsAny(a, "\n;&|$`") {
+			return "", errors.New("invalid argument")
+		}
+	}
+	wp, err := wpCLI()
+	if err != nil {
+		return "", err
+	}
 	argv := append([]string{"-u", owner, "--"}, append(wp, append(args, "--path="+path, "--no-color")...)...)
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
@@ -468,4 +510,41 @@ func (m *Manager) Update(ctx context.Context, path, what, slug string) (string, 
 		return text, fmt.Errorf("wp-cli failed: %s", text)
 	}
 	return text, nil
+}
+
+func (s *Site) countVulns() {
+	s.Vulnerable = 0
+	if len(s.Core.Vulns) > 0 {
+		s.Vulnerable++
+	}
+	for _, c := range append(append([]Component{}, s.Plugins...), s.Themes...) {
+		if len(c.Vulns) > 0 {
+			s.Vulnerable++
+		}
+	}
+}
+
+func (s *Site) maxCVSS() float64 {
+	m := maxCVSS(s.Core.Vulns)
+	for _, c := range append(append([]Component{}, s.Plugins...), s.Themes...) {
+		m = max(m, maxCVSS(c.Vulns))
+	}
+	return m
+}
+
+func (m *Manager) lookupVulns(ctx context.Context, s *Site) {
+	for i := range s.Plugins {
+		if v, err := m.Vulns.Affecting(ctx, "plugin", s.Plugins[i].Slug, s.Plugins[i].Version); err == nil {
+			s.Plugins[i].Vulns = v
+		}
+	}
+	for i := range s.Themes {
+		if v, err := m.Vulns.Affecting(ctx, "theme", s.Themes[i].Slug, s.Themes[i].Version); err == nil {
+			s.Themes[i].Vulns = v
+		}
+	}
+	if v, err := m.Vulns.Affecting(ctx, "core", "", s.Version); err == nil {
+		s.Core.Vulns = v
+	}
+	s.countVulns()
 }

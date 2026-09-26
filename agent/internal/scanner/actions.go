@@ -187,3 +187,27 @@ func (s *Scanner) UserWhitelisted(name string) bool {
 	}
 	return false
 }
+
+// ContentPath returns where a finding's content can be read now (the
+// quarantine copy for quarantined files) and its status.
+func (s *Scanner) ContentPath(id int64) (string, string, error) {
+	r, err := s.load(id)
+	if err != nil {
+		return "", "", err
+	}
+	if r.status == "quarantined" && r.qpath != "" {
+		return r.qpath, r.status, nil
+	}
+	return r.path, r.status, nil
+}
+
+// Get returns one finding.
+func (s *Scanner) Get(id int64) (Finding, error) {
+	var f Finding
+	err := s.DB.QueryRow(`SELECT id, scan_id, source, path, owner, category, signature, sha256, size, status, created_at, updated_at FROM findings WHERE id = ?`, id).
+		Scan(&f.ID, &f.ScanID, &f.Source, &f.Path, &f.Owner, &f.Category, &f.Signature, &f.SHA256, &f.Size, &f.Status, &f.CreatedAt, &f.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return f, errors.New("finding not found")
+	}
+	return f, err
+}

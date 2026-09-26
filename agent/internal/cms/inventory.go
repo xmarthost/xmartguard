@@ -17,6 +17,8 @@ type Component struct {
 	Latest   string `json:"latest"`
 	Outdated bool   `json:"outdated"`
 	Active   bool   `json:"active,omitempty"`
+	// Known vulnerabilities of the installed version.
+	Vulns []Vuln `json:"vulns,omitempty"`
 }
 
 func readHead(path string, n int64) string {

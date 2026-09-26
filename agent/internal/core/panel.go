@@ -106,6 +106,9 @@ func (a *Agent) userHandlers(u *user.User) map[string]local.Handler {
 		if !a.Settings.Get().Scanner.Enabled {
 			return nil, errors.New("the virus scanner is disabled by the server administrator")
 		}
+		if !a.Settings.Get().Scanner.UserScans {
+			return nil, errors.New("manual scans are disabled by the server administrator")
+		}
 		target := in.Path
 		switch {
 		case target == "" && web != "":

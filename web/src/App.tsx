@@ -12,6 +12,7 @@ import Monitoring from './pages/Monitoring';
 import { AccountPage, SecurityLogPage, SupportPage, UsersPage } from './pages/Admin';
 import { ManualScans, ScannerLogs } from './pages/Scanner';
 import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
+import SecurityMonitor from './pages/SecurityMonitor';
 import SettingsPage from './pages/Settings';
 import { BotAttacks, WafLogs } from './pages/WAF';
 import { CMSThreats, DBScanner } from './pages/CMS';
@@ -52,6 +53,7 @@ export default function App() {
         <Route path="/servers/:id/bot-attacks" element={<Protected><BotAttacks /></Protected>} />
         <Route path="/servers/:id/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><ServerIPDB /></Suspense></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
+        <Route path="/servers/:id/security-monitor" element={<Protected><SecurityMonitor /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />

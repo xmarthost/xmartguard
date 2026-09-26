@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -66,9 +67,14 @@ func TestDashboardAggregates(t *testing.T) {
 	if sum["domains_blacklisted"].(int) != 1 {
 		t.Fatalf("summary %+v", sum)
 	}
-	alerts := d["alerts"].([]map[string]string)
-	if len(alerts) == 0 || alerts[0]["text"] != "1 blacklisted domain(s) found" {
-		t.Fatalf("alerts %+v", alerts)
+	raw, _ := json.Marshal(d["alerts"])
+	var alerts []struct {
+		Text    string   `json:"text"`
+		Details []string `json:"details"`
+	}
+	json.Unmarshal(raw, &alerts)
+	if len(alerts) == 0 || alerts[0].Text != "1 Blacklisted Domain found" || len(alerts[0].Details) != 1 {
+		t.Fatalf("alerts %s", raw)
 	}
 }
 

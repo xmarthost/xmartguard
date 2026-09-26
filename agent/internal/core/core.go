@@ -19,11 +19,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/ai"
+	"github.com/xmarthost/xmartguard/agent/internal/captcha"
 	"github.com/xmarthost/xmartguard/agent/internal/client"
 	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
+	"github.com/xmarthost/xmartguard/agent/internal/monitor"
 	"github.com/xmarthost/xmartguard/agent/internal/notify"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
@@ -47,6 +50,9 @@ type Agent struct {
 	WAF      *waf.Manager
 	CMS      *cms.Manager
 	OSM      *mail.Monitor
+	Captcha  *captcha.Server
+	AI       *ai.Analyzer
+	Monitor  *monitor.Monitor
 	Mailer   *notify.Mailer
 	Session  *client.Session
 
@@ -80,6 +86,21 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		Protected: a.protectedIPs,
 	}
 	a.Firewall.OnBan = a.onBan
+	a.Firewall.EssentialTCPOut = portalPorts(cfg.ServerURL)
+	a.Mailer.Channels = a.channels
+	a.Mailer.Admin = func() string { return a.Settings.Get().Notifications.Email }
+	a.AI = &ai.Analyzer{DB: db, Settings: st, Log: log, OnVerdict: a.onAIVerdict}
+	a.Monitor = &monitor.Monitor{DB: db, Settings: st, Log: log, OnEvent: a.onMonitorEvent,
+		Users: func() map[string]string {
+			out := map[string]string{}
+			for _, u := range scanner.Users() {
+				out[u.Name] = u.Home
+			}
+			return out
+		}}
+	a.Captcha = &captcha.Server{Settings: st, Log: log, Solved: func(ip string) error {
+		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
+	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
 		AgentBin: selfPath(), Firewall: a.Firewall}
 	a.CMS = &cms.Manager{DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
@@ -90,8 +111,10 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			}
 			return out
 		},
-		Docroots:  func() map[string]string { return cms.CPanelDocroots("/var/cpanel/userdata") },
-		OnFinding: a.onDBFinding,
+		Docroots:     func() map[string]string { return cms.CPanelDocroots("/var/cpanel/userdata") },
+		OnFinding:    a.onDBFinding,
+		Vulns:        cms.NewVulnDB(db),
+		OnAutoAction: a.onCMSAutoAction,
 	}
 	a.OSM = &mail.Monitor{DB: db, Settings: st, Log: log, Owner: a.mailOwner, OnEvent: a.onOSMEvent}
 	return a, nil
@@ -111,6 +134,26 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.CMS.Run(ctx)
 	go a.OSM.Run(ctx)
 	go a.domainRepLoop(ctx)
+	go a.Captcha.Run(ctx)
+	go a.AI.Run(ctx)
+	go a.Monitor.Run(ctx)
+	go a.retentionLoop(ctx)
+	go a.reportLoop(ctx)
+}
+
+// portalPorts returns the TCP port the agent uses to reach the portal.
+func portalPorts(serverURL string) []int {
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		return []int{443}
+	}
+	if p, err := strconv.Atoi(u.Port()); err == nil {
+		return []int{p}
+	}
+	if u.Scheme == "http" {
+		return []int{80}
+	}
+	return []int{443}
 }
 
 func (a *Agent) onDBFinding(s cms.Site, f cms.DBFinding) {
@@ -151,9 +194,19 @@ func (a *Agent) protectedIPs() []string {
 
 func (a *Agent) onFinding(f scanner.Finding) {
 	a.maybeSuspend(f)
+	a.maybeAutoClean(f)
+	if f.Category == scanner.CatSuspicious {
+		if p, _, err := a.Scanner.ContentPath(f.ID); err == nil {
+			a.AI.Enqueue(ai.Job{FindingID: f.ID, Path: p, SHA256: f.SHA256, Signature: f.Signature})
+		}
+	}
 	n := a.Settings.Get().Notifications
 	if n.Email == "" {
 		return
+	}
+	if n.UserInfected && (f.Category == scanner.CatVirus || f.Category == scanner.CatSymlink) && f.Owner != "" {
+		a.notifyUser(f.Owner, "malware found in your account",
+			fmt.Sprintf("A malicious file was found in your hosting account:\n  %s\n  detection: %s\n  action taken: %s\n", f.Path, f.Signature, f.Status))
 	}
 	if (f.Category == scanner.CatVirus && n.OnVirus) || (f.Category == scanner.CatSuspicious && n.OnSuspicious) || (f.Category == scanner.CatBinary && n.OnBinary) {
 		a.Mailer.Enqueue(n.Email, "malware detected",
@@ -371,15 +424,18 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			},
 		}, nil
 	}
-	h["settings.set"] = func(_ context.Context, p json.RawMessage) (any, error) {
-		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB.Enabled
-		beforeWAF := a.Settings.Get().WAF
+	h["settings.set"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB
+		beforeWAF, beforeCaptcha := a.Settings.Get().WAF, a.Settings.Get().Captcha
 		p = keepSecrets(p, a.Settings.Get())
 		next, err := a.Settings.Patch(p)
 		if err != nil {
 			return nil, err
 		}
-		if fwChanged(before, next.Firewall) || beforeIPDB != next.IPDB.Enabled {
+		if strings.Join(before.DDNS, ",") != strings.Join(next.Firewall.DDNS, ",") {
+			a.Firewall.RefreshDDNS(ctx)
+		}
+		if fwChanged(before, next.Firewall) || beforeIPDB != next.IPDB || beforeCaptcha != next.Captcha {
 			if err := a.Firewall.Apply(); err != nil {
 				return nil, fmt.Errorf("settings saved, but the firewall could not be applied: %w", err)
 			}
@@ -445,6 +501,66 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	}
 	h["fw.apply"] = func(context.Context, json.RawMessage) (any, error) {
 		return a.Firewall.Status(), a.Firewall.Apply()
+	}
+	// fw.meta describes options the firewall page needs.
+	h["fw.meta"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{
+			"jails":     firewall.Jails(),
+			"ddns":      a.Firewall.DDNSStatus(),
+			"ssh_ports": firewall.SSHPorts(),
+			"portal":    a.Firewall.EssentialTCPOut,
+			"captcha":   captcha.Wanted(a.Settings.Get()),
+		}, nil
+	}
+	// ai.check judges one finding now (the "Check with AI" button).
+	h["ai.check"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID int64 `json:"id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		f, err := a.Scanner.Get(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		path, _, err := a.Scanner.ContentPath(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		if f.Status == "deleted" {
+			return nil, errors.New("the file was deleted")
+		}
+		v, err := a.AI.Analyze(ctx, ai.Job{FindingID: f.ID, Path: path, SHA256: f.SHA256, Signature: f.Signature})
+		if err != nil {
+			return nil, err
+		}
+		return v, nil
+	}
+	h["monitor.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Kind   string `json:"kind"`
+			Limit  int    `json:"limit"`
+			Offset int    `json:"offset"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		evs, total, err := a.Monitor.Events(in.Kind, in.Limit, in.Offset)
+		return map[string]any{"events": evs, "total": total, "status": a.Monitor.Status()}, err
+	}
+	h["monitor.rootkit"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		n, err := a.Monitor.RunRootkit(ctx)
+		return map[string]any{"warnings": n}, err
+	}
+	h["fw.event_delete"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID int64 `json:"id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, a.Firewall.DeleteEvent(in.ID)
 	}
 
 	// ---- IPDB (called by the portal's sync loop, not by users)
@@ -711,39 +827,64 @@ func (a *Agent) Handlers() map[string]client.Handler {
 const secretMask = "********"
 
 // masked hides API keys from portal users.
-func masked(s settings.Settings) settings.Settings {
-	if k := s.DomainRep.SafeBrowsingKey; k != "" {
-		tail := k
-		if len(k) > 4 {
-			tail = k[len(k)-4:]
-		}
-		s.DomainRep.SafeBrowsingKey = secretMask + tail
+// secretFields are settings values never sent back to the portal in full.
+var secretFields = [][2]string{
+	{"domain_reputation", "safe_browsing_key"},
+	{"ai", "api_key"},
+	{"captcha", "secret_key"},
+	{"notifications", "telegram_token"},
+	{"notifications", "slack_webhook"},
+}
+
+func maskValue(k string) string {
+	if k == "" {
+		return ""
 	}
+	tail := k
+	if len(k) > 4 {
+		tail = k[len(k)-4:]
+	}
+	return secretMask + tail
+}
+
+func masked(s settings.Settings) settings.Settings {
+	s.DomainRep.SafeBrowsingKey = maskValue(s.DomainRep.SafeBrowsingKey)
+	s.AI.APIKey = maskValue(s.AI.APIKey)
+	s.Captcha.SecretKey = maskValue(s.Captcha.SecretKey)
+	s.Notifications.TelegramToken = maskValue(s.Notifications.TelegramToken)
+	s.Notifications.SlackWebhook = maskValue(s.Notifications.SlackWebhook)
 	return s
 }
 
-// keepSecrets drops a masked key sent back by the portal so the stored key is kept.
-func keepSecrets(p json.RawMessage, cur settings.Settings) json.RawMessage {
+// keepSecrets drops masked values sent back by the portal so the stored
+// secrets are kept.
+func keepSecrets(p json.RawMessage, _ settings.Settings) json.RawMessage {
 	var doc map[string]json.RawMessage
 	if json.Unmarshal(p, &doc) != nil {
 		return p
 	}
-	raw, ok := doc["domain_reputation"]
-	if !ok {
+	changed := false
+	for _, f := range secretFields {
+		raw, ok := doc[f[0]]
+		if !ok {
+			continue
+		}
+		var sec map[string]json.RawMessage
+		if json.Unmarshal(raw, &sec) != nil {
+			continue
+		}
+		var v string
+		if k, ok := sec[f[1]]; ok && json.Unmarshal(k, &v) == nil && strings.HasPrefix(v, secretMask) {
+			delete(sec, f[1])
+			doc[f[0]], _ = json.Marshal(sec)
+			changed = true
+		}
+	}
+	if !changed {
 		return p
 	}
-	var dr map[string]json.RawMessage
-	if json.Unmarshal(raw, &dr) != nil {
-		return p
-	}
-	var key string
-	if k, ok := dr["safe_browsing_key"]; ok && json.Unmarshal(k, &key) == nil && strings.HasPrefix(key, secretMask) {
-		delete(dr, "safe_browsing_key")
-		doc["domain_reputation"], _ = json.Marshal(dr)
-		out, _ := json.Marshal(doc)
-		return out
-	}
-	return p
+	out, _ := json.Marshal(doc)
+	return out
 }
 
 func wafChanged(a, b settings.WAF) bool {
@@ -756,4 +897,34 @@ func fwChanged(a, b settings.Firewall) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) != string(y)
+}
+
+// onAIVerdict applies the virus action to a suspicious file the AI scanner
+// is confident is malicious, when the admin allowed it to act.
+func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
+	st := a.Settings.Get()
+	a.Log.Info("AI verdict", "path", j.Path, "verdict", v.Verdict, "confidence", v.Confidence, "model", v.Model)
+	if v.Verdict != ai.Malicious || v.Confidence < 80 || !st.AI.Act {
+		return
+	}
+	f, err := a.Scanner.Get(j.FindingID)
+	if err != nil || f.Status != "detected" {
+		return
+	}
+	switch st.Scanner.VirusAction {
+	case settings.ActionQuarantine:
+		err = a.Scanner.Quarantine(f.ID)
+	case settings.ActionDisable:
+		err = a.Scanner.Disable(f.ID)
+	default:
+		return
+	}
+	if err != nil {
+		a.Log.Warn("AI action failed", "path", f.Path, "err", err)
+		return
+	}
+	if n := st.Notifications; n.Email != "" && n.OnVirus {
+		a.Mailer.Enqueue(n.Email, "AI scanner confirmed malware",
+			fmt.Sprintf("[AI %d%%] %s\n  file: %s\n  reason: %s\n  action: %s\n", v.Confidence, f.Signature, f.Path, v.Reason, st.Scanner.VirusAction))
+	}
 }

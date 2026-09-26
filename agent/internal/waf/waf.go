@@ -203,7 +203,7 @@ func ParseLine(line string) (Event, bool) {
 
 func classify(id int, msg string) string {
 	switch {
-	case id >= IDLoginWP && id <= IDLoginOpenCart:
+	case id >= IDLoginWP && id <= IDLoginCustom:
 		return "login"
 	case id >= IDBadBots && id <= IDCustomBots:
 		return "bot"
@@ -216,6 +216,7 @@ func classify(id int, msg string) string {
 
 var loginRuleName = map[int]string{
 	IDLoginWP: "WordPress", IDLoginXMLRPC: "WordPress XML-RPC", IDLoginJoomla: "Joomla", IDLoginOpenCart: "OpenCart",
+	IDLoginCustom: "protected URL",
 }
 
 // Run tails the error logs, records events and bans brute-force login sources.
@@ -254,7 +255,7 @@ func (m *Manager) tailLogs(ctx context.Context) {
 	// Periodically discover new log files (cPanel writes per-domain logs).
 	rescan := time.NewTicker(2 * time.Minute)
 	defer rescan.Stop()
-	counter := newCounter()
+	counter, blocks := newCounter(), newCounter()
 	for {
 		select {
 		case <-ctx.Done():
@@ -271,6 +272,8 @@ func (m *Manager) tailLogs(ctx context.Context) {
 			m.record(ev)
 			if ev.Category == "login" {
 				m.maybeBan(ev, counter)
+			} else if strings.HasPrefix(ev.Action, "Access denied") {
+				m.maybeBanBlocked(ev, blocks)
 			}
 		}
 	}
@@ -295,6 +298,21 @@ func (m *Manager) maybeBan(e Event, c *counter) {
 		c.reset(e.IP)
 		name := loginRuleName[e.RuleID]
 		m.Firewall.AutoBan(e.IP, "WAF: "+strconv.Itoa(n)+" failed "+name+" logins", "waf")
+	}
+}
+
+// maybeBanBlocked temporarily bans addresses the WAF keeps blocking
+// ("WAF Temporary IP Ban"): a scanner probing many URLs gets dropped at the
+// firewall instead of costing a web server request each time.
+func (m *Manager) maybeBanBlocked(e Event, c *counter) {
+	fw := m.Settings.Get().Firewall
+	if !fw.WAFBan || m.Firewall == nil {
+		return
+	}
+	n := c.hit(e.IP, time.Duration(m.Settings.Get().WAF.BFWindowMin)*time.Minute)
+	if n >= fw.WAFBanThreshold {
+		c.reset(e.IP)
+		m.Firewall.AutoBan(e.IP, strconv.Itoa(n)+" WAF blocked", "waf")
 	}
 }
 

@@ -126,6 +126,8 @@ type CoreReport struct {
 	Modified []string `json:"modified"`
 	Unknown  []string `json:"unknown"` // PHP files in wp-admin/wp-includes that are not part of WordPress
 	Error    string   `json:"error,omitempty"`
+	// Vulns are known vulnerabilities of this WordPress version.
+	Vulns []Vuln `json:"vulns,omitempty"`
 }
 
 var reLocale = regexp.MustCompile(`\$wp_local_package\s*=\s*'([^']+)'`)

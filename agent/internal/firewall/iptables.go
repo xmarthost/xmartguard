@@ -190,6 +190,46 @@ func renderIPSet(r Ruleset) string {
 	return b.String()
 }
 
+// Drop sub-chains, one per kind: the main chain matches a set once and
+// jumps (its rule counter counts the packet); the sub-chain logs a
+// rate-limited sample and drops.
+const (
+	ChainIPDB    = "XMARTGUARD_IPDB"
+	ChainDeny    = "XMARTGUARD_DENY"
+	ChainTempBan = "XMARTGUARD_TBAN"
+	ChainCountry = "XMARTGUARD_CTRY"
+	ChainOut     = "XMARTGUARD_OUT"
+	ChainCaptcha = "XMARTGUARD_CAPTCHA" // nat table
+)
+
+func allChains() []string {
+	return []string{ChainMain, ChainDoS, ChainIPDB, ChainDeny, ChainTempBan, ChainCountry, ChainOut}
+}
+
+// multiport splits a port list into chunks iptables accepts (15 ports per
+// rule, a range counting as two) in iptables syntax ("20:22").
+func multiport(ports []string) []string {
+	var out []string
+	var cur []string
+	n := 0
+	for _, p := range ports {
+		w := 1
+		if strings.Contains(p, "-") {
+			w = 2
+		}
+		if n+w > 15 {
+			out = append(out, strings.Join(cur, ","))
+			cur, n = nil, 0
+		}
+		cur = append(cur, strings.ReplaceAll(p, "-", ":"))
+		n += w
+	}
+	if len(cur) > 0 {
+		out = append(out, strings.Join(cur, ","))
+	}
+	return out
+}
+
 // renderRules builds an iptables-restore --noflush script for one family.
 func renderRules(r Ruleset, v6 bool) string {
 	sfx := "4"
@@ -198,29 +238,40 @@ func renderRules(r Ruleset, v6 bool) string {
 	}
 	var b strings.Builder
 	b.WriteString("*filter\n")
-	fmt.Fprintf(&b, ":%s - [0:0]\n:%s - [0:0]\n", ChainMain, ChainDoS)
+	for _, c := range allChains() {
+		fmt.Fprintf(&b, ":%s - [0:0]\n", c)
+	}
 	add := func(rule string) { fmt.Fprintf(&b, "-A %s %s\n", ChainMain, rule) }
+	sub := func(chain, prefix string, log bool) {
+		if log {
+			fmt.Fprintf(&b, "-A %s -m limit --limit %d/sec --limit-burst %d -j LOG --log-prefix \"%s\" --log-level 7\n", chain, LogRate, LogRate*2, prefix)
+		}
+		fmt.Fprintf(&b, "-A %s -j DROP\n", chain)
+	}
+	sub(ChainIPDB, LogPrefixIPDB, r.LogIPDB)
+	sub(ChainDeny, LogPrefixDeny, r.LogDrops)
+	sub(ChainTempBan, LogPrefixTempBan, r.LogDrops)
+	sub(ChainCountry, LogPrefixCountry, r.LogDrops)
+	jump := func(match, comment, chain string) {
+		add(fmt.Sprintf(`%s -m comment --comment "%s" -j %s`, match, comment, chain))
+	}
 	add("-i lo -j RETURN")
 	add("-m set --match-set xg_allow" + sfx + " src -j RETURN")
 	add("-m set --match-set xg_tallow" + sfx + " src -j RETURN")
-	// drop logs a rate-limited sample (kernel debug level, so syslog does not
-	// store it by default) for the live monitors, then drops.
-	drop := func(match, comment, prefix string) {
-		if r.LogDrops {
-			add(fmt.Sprintf(`%s -m limit --limit %d/sec --limit-burst %d -j LOG --log-prefix "%s" --log-level 7`, match, LogRate, LogRate*2, prefix))
-		}
-		add(fmt.Sprintf(`%s -m comment --comment "%s" -j DROP`, match, comment))
+	if cp := r.Captcha; cp != nil {
+		// Only redirected connections from banned addresses reach these ports.
+		add(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -m conntrack --ctstate DNAT -j ACCEPT", cp.HTTPPort, cp.HTTPSPort))
 	}
 	if len(r.IPDB) > 0 {
-		drop("-m set --match-set xg_ipdb"+sfx+" src", "xg-ipdb", LogPrefixIPDB)
+		jump("-m set --match-set xg_ipdb"+sfx+" src", "xg-ipdb", ChainIPDB)
 	}
-	drop("-m set --match-set xg_deny"+sfx+" src", "xg-deny", LogPrefixDeny)
-	drop("-m set --match-set xg_tban"+sfx+" src", "xg-tempban", LogPrefixTempBan)
+	jump("-m set --match-set xg_deny"+sfx+" src", "xg-deny", ChainDeny)
+	jump("-m set --match-set xg_tban"+sfx+" src", "xg-tempban", ChainTempBan)
 	if !v6 && len(r.CountryBlock) > 0 {
 		if len(r.CountryAllow) > 0 {
 			add("-m set --match-set xg_callow4 src -j RETURN")
 		}
-		drop("-m set --match-set xg_cblock4 src", "xg-country", LogPrefixCountry)
+		jump("-m set --match-set xg_cblock4 src", "xg-country", ChainCountry)
 	}
 	if r.DoS {
 		ban := r.DoSBanSeconds
@@ -231,6 +282,56 @@ func renderRules(r Ruleset, v6 bool) string {
 			r.DoSPerMinute, r.DoSPerMinute/2+1, sfx, ChainDoS))
 		fmt.Fprintf(&b, "-A %s -j SET --add-set xg_tban%s src --exist --timeout %d\n", ChainDoS, sfx, ban)
 		fmt.Fprintf(&b, "-A %s -m comment --comment \"xg-dos\" -j DROP\n", ChainDoS)
+	}
+	if pf := r.Ports; pf != nil {
+		add("-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN")
+		for _, c := range multiport(pf.TCPIn) {
+			add("-p tcp -m multiport --dports " + c + " -j RETURN")
+		}
+		for _, c := range multiport(pf.UDPIn) {
+			add("-p udp -m multiport --dports " + c + " -j RETURN")
+		}
+		add(`-p tcp -m comment --comment "xg-port" -j DROP`)
+		add(`-p udp -m comment --comment "xg-port" -j DROP`)
+		out := func(rule string) { fmt.Fprintf(&b, "-A %s %s\n", ChainOut, rule) }
+		out("-o lo -j RETURN")
+		out("-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN")
+		for _, c := range multiport(pf.TCPOut) {
+			out("-p tcp -m multiport --dports " + c + " -j RETURN")
+		}
+		for _, c := range multiport(pf.UDPOut) {
+			out("-p udp -m multiport --dports " + c + " -j RETURN")
+		}
+		out(`-p tcp -m comment --comment "xg-port-out" -j DROP`)
+		out(`-p udp -m comment --comment "xg-port-out" -j DROP`)
+	}
+	b.WriteString("COMMIT\n")
+	return b.String()
+}
+
+// renderNAT builds the nat-table script for the CAPTCHA redirect.
+func renderNAT(r Ruleset, v6 bool) string {
+	sfx := "4"
+	if v6 {
+		sfx = "6"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "*nat\n:%s - [0:0]\n", ChainCaptcha)
+	if cp := r.Captcha; cp != nil {
+		var sets []string
+		if cp.TempBan {
+			sets = append(sets, "xg_tban"+sfx)
+		}
+		if cp.IPDB && len(r.IPDB) > 0 {
+			sets = append(sets, "xg_ipdb"+sfx)
+		}
+		for _, st := range sets {
+			// Allowed addresses never reach the CAPTCHA.
+			fmt.Fprintf(&b, "-A %s -m set --match-set xg_allow%s src -j RETURN\n", ChainCaptcha, sfx)
+			fmt.Fprintf(&b, "-A %s -m set --match-set xg_tallow%s src -j RETURN\n", ChainCaptcha, sfx)
+			fmt.Fprintf(&b, "-A %s -p tcp --dport 80 -m set --match-set %s src -j REDIRECT --to-ports %d\n", ChainCaptcha, st, cp.HTTPPort)
+			fmt.Fprintf(&b, "-A %s -p tcp --dport 443 -m set --match-set %s src -j REDIRECT --to-ports %d\n", ChainCaptcha, st, cp.HTTPSPort)
+		}
 	}
 	b.WriteString("COMMIT\n")
 	return b.String()
@@ -264,22 +365,45 @@ func (t IPTables) Apply(r Ruleset) error {
 	}
 	for _, f := range t.families() {
 		if _, err := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err != nil {
-			if !r.LogDrops {
+			if !r.LogDrops && !r.LogIPDB {
 				return err
 			}
 			// The LOG target is unavailable (some containers): load without it.
-			r.LogDrops = false
+			r.LogDrops, r.LogIPDB = false, false
 			if _, err2 := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err2 != nil {
 				return err
 			}
 		}
-		if _, err := run(ctx, "", f.ipt, "-w", "-C", "INPUT", "-j", ChainMain); err != nil {
-			if _, err := run(ctx, "", f.ipt, "-w", "-I", "INPUT", "1", "-j", ChainMain); err != nil {
-				return err
-			}
+		ensureJump(ctx, f.ipt, "INPUT", ChainMain, true)
+		ensureJump(ctx, f.ipt, "OUTPUT", ChainOut, r.Ports != nil)
+		// CAPTCHA redirect (nat table). Failure only disables the redirect:
+		// banned addresses are then dropped like before.
+		if _, err := run(ctx, renderNAT(r, f.v6), f.restore, "--noflush"); err == nil {
+			natIPT := []string{f.ipt, "-t", "nat"}
+			ensureJumpArgs(ctx, natIPT, "PREROUTING", ChainCaptcha, r.Captcha != nil)
 		}
 	}
 	return nil
+}
+
+// ensureJump makes sure chain `from` jumps to `to` exactly when want is set.
+func ensureJump(ctx context.Context, ipt, from, to string, want bool) {
+	ensureJumpArgs(ctx, []string{ipt}, from, to, want)
+}
+
+func ensureJumpArgs(ctx context.Context, base []string, from, to string, want bool) {
+	cmd := func(args ...string) error {
+		_, err := run(ctx, "", base[0], append(append(append([]string{}, base[1:]...), "-w"), args...)...)
+		return err
+	}
+	if want {
+		if cmd("-C", from, "-j", to) != nil {
+			_ = cmd("-I", from, "1", "-j", to)
+		}
+		return
+	}
+	for i := 0; i < 10 && cmd("-D", from, "-j", to) == nil; i++ {
+	}
 }
 
 func (t IPTables) Remove() error {
@@ -289,15 +413,15 @@ func (t IPTables) Remove() error {
 	ctx, cancel := ctx60()
 	defer cancel()
 	for _, f := range t.families() {
-		for i := 0; i < 10; i++ { // remove every jump, however many were added
-			if _, err := run(ctx, "", f.ipt, "-w", "-D", "INPUT", "-j", ChainMain); err != nil {
-				break
-			}
-		}
-		for _, c := range []string{ChainMain, ChainDoS} {
+		ensureJump(ctx, f.ipt, "INPUT", ChainMain, false)
+		ensureJump(ctx, f.ipt, "OUTPUT", ChainOut, false)
+		ensureJumpArgs(ctx, []string{f.ipt, "-t", "nat"}, "PREROUTING", ChainCaptcha, false)
+		_, _ = run(ctx, "", f.ipt, "-w", "-t", "nat", "-F", ChainCaptcha)
+		_, _ = run(ctx, "", f.ipt, "-w", "-t", "nat", "-X", ChainCaptcha)
+		for _, c := range allChains() {
 			_, _ = run(ctx, "", f.ipt, "-w", "-F", c)
 		}
-		for _, c := range []string{ChainMain, ChainDoS} {
+		for _, c := range allChains() {
 			_, _ = run(ctx, "", f.ipt, "-w", "-X", c)
 		}
 	}

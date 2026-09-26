@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -36,6 +37,26 @@ type Scanner struct {
 	WhitelistUsers   []string `json:"whitelist_users"`
 	WhitelistPaths   []string `json:"whitelist_paths"`
 	BlacklistNames   []string `json:"blacklist_names"`
+	// DeleteSymlinks removes symbolic links that point outside the owner's
+	// home (a common way to read other accounts' files).
+	DeleteSymlinks bool `json:"delete_symlinks"`
+	// AutoClean removes injected code from infected files when the rest of
+	// the file is legitimate, instead of quarantining the whole file.
+	AutoClean bool `json:"auto_clean"`
+	// UserScans lets cPanel users start scans of their own home.
+	UserScans bool `json:"user_scans"`
+	// YARA also runs YARA rules from /etc/xmartguard/yara when yara is installed.
+	YARA bool `json:"yara"`
+	// DBWhitelist lists database-scanner signature ids to ignore.
+	DBWhitelist []Exclusion `json:"db_whitelist"`
+	// KeepDays is how long logs and quarantined files are kept.
+	KeepDays int `json:"keep_days"`
+}
+
+// Exclusion is an ignored id with the reason an admin gave.
+type Exclusion struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
 type Firewall struct {
@@ -51,6 +72,70 @@ type Firewall struct {
 	AllowedCountries []string `json:"allowed_countries"`
 	// LogBlocked samples dropped connections for the live monitors.
 	LogBlocked bool `json:"log_blocked"`
+	// IgnoredCountries are never blocked by any firewall rule.
+	IgnoredCountries []string `json:"ignored_countries"`
+	// DDNS hostnames are resolved every few minutes and allowed.
+	DDNS []string `json:"ddns"`
+	// ExcludedJails are Intrusion Defense (log watcher) rules turned off.
+	ExcludedJails []string `json:"excluded_jails"`
+	// WAFBan temporarily bans addresses that trigger the WAF repeatedly.
+	WAFBan          bool `json:"waf_ban"`
+	WAFBanThreshold int  `json:"waf_ban_threshold"` // WAF blocks within the brute-force window
+	// Captcha lets people behind a temporarily banned address unblock
+	// themselves by solving a CAPTCHA (web traffic only).
+	Captcha bool `json:"captcha"`
+	// PortFilter restricts traffic to the listed ports.
+	PortFilter bool   `json:"port_filter"`
+	TCPIn      string `json:"tcp_in"`
+	UDPIn      string `json:"udp_in"`
+	TCPOut     string `json:"tcp_out"`
+	UDPOut     string `json:"udp_out"`
+}
+
+// Captcha configures the page banned visitors see.
+type Captcha struct {
+	// Provider is builtin (no third party), turnstile (Cloudflare) or recaptcha (Google v2).
+	Provider     string `json:"provider"`
+	SiteKey      string `json:"site_key"`
+	SecretKey    string `json:"secret_key"`
+	AllowMinutes int    `json:"allow_minutes"` // how long a solved CAPTCHA allows the address
+	HTTPPort     int    `json:"http_port"`
+	HTTPSPort    int    `json:"https_port"`
+}
+
+// AI gives suspicious files a second opinion ("AI scanner"). The default
+// provider is XMart Guard's built-in model: free, local, no network. Ollama
+// (a free self-hosted LLM) and Anthropic's Claude (paid API) are optional.
+type AI struct {
+	Enabled   bool   `json:"enabled"`
+	Provider  string `json:"provider"` // builtin | ollama | anthropic
+	APIKey    string `json:"api_key"`  // Anthropic API key
+	OllamaURL string `json:"ollama_url"`
+	Model     string `json:"model"` // LLM model name (ollama / anthropic)
+	// MaxKB caps how much of a file is sent.
+	MaxKB int `json:"max_kb"`
+	// Act lets a "malicious" verdict apply the virus action; otherwise the
+	// verdict is only shown.
+	Act bool `json:"act"`
+}
+
+// ProcessMonitor looks for malicious processes running under users.
+type ProcessMonitor struct {
+	Enabled          bool     `json:"enabled"`
+	Kill             bool     `json:"kill"`
+	WhitelistUsers   []string `json:"whitelist_users"`
+	WhitelistStrings []string `json:"whitelist_strings"`
+}
+
+// CronMonitor checks user crontabs for malicious entries.
+type CronMonitor struct {
+	Enabled        bool     `json:"enabled"`
+	WhitelistUsers []string `json:"whitelist_users"`
+}
+
+// Rootkit runs rkhunter (when installed) every week.
+type Rootkit struct {
+	Enabled bool `json:"enabled"`
 }
 
 type Reputation struct {
@@ -75,6 +160,14 @@ type WAF struct {
 	BFWindowMin    int      `json:"bf_window_minutes"`
 	DisabledRules  []int    `json:"disabled_rules"` // any ModSecurity rule id, ours or a vendor's
 	WhitelistIPs   []string `json:"whitelist_ips"`  // never inspected by our rules
+	// LoginURLs are the login pages whose failed attempts count toward bans.
+	LoginURLs []string `json:"login_urls"`
+	// Webshell blocks requests to known web shell file names and parameters.
+	Webshell bool `json:"webshell"`
+	// BlockPHPUpload rejects any uploaded file with a PHP extension.
+	BlockPHPUpload bool `json:"block_php_upload"`
+	// WhitelistDomains are websites our rules never inspect.
+	WhitelistDomains []string `json:"whitelist_domains"`
 }
 
 // CMS controls WordPress/Joomla/OpenCart monitoring.
@@ -83,6 +176,17 @@ type CMS struct {
 	CoreCheck     bool `json:"core_check"` // verify WordPress core files against official checksums
 	DBScan        bool `json:"db_scan"`    // scan WordPress databases for injected code
 	IntervalHours int  `json:"interval_hours"`
+	// Vulns looks plugins, themes and core up in a public vulnerability
+	// database (wpvulnerability.net, no key needed).
+	Vulns bool `json:"vulns"`
+	// AutoUpdate updates vulnerable components that meet the conditions.
+	AutoUpdate       bool     `json:"auto_update"`
+	AutoUpdateCVSS   float64  `json:"auto_update_cvss"`  // only if a vulnerability scores above this (0 = any)
+	AutoUpdateDays   int      `json:"auto_update_days"`  // only if the fix was released more than N days ago (0 = any)
+	BlacklistPlugins []string `json:"blacklist_plugins"` // deactivated automatically
+	ExcludeUsers     []string `json:"exclude_users"`     // never patched automatically
+	WPCron           bool     `json:"wp_cron"`           // replace wp-cron.php page loads with a real cron job
+	WPCronHours      int      `json:"wp_cron_hours"`
 }
 
 // OSM is the Outgoing Spam Monitor (Exim).
@@ -104,6 +208,9 @@ type AutoSuspend struct {
 	Detections   int      `json:"detections"`   // malware detections...
 	WindowHours  int      `json:"window_hours"` // ...within this many hours
 	ExcludeUsers []string `json:"exclude_users"`
+	// OnDomainBlacklist suspends accounts whose domain is blacklisted.
+	OnDomainBlacklist bool     `json:"on_domain_blacklist"`
+	WhitelistDomains  []string `json:"whitelist_domains"`
 }
 
 // DomainReputation checks hosted domains against domain blocklists.
@@ -119,6 +226,8 @@ type DomainReputation struct {
 type IPDB struct {
 	Enabled bool `json:"enabled"` // drop traffic from IPDB-listed addresses
 	Report  bool `json:"report"`  // share this server's automatic bans with the IPDB
+	Log     bool `json:"log"`     // sample blocked connections for the live monitor
+	Captcha bool `json:"captcha"` // show IPDB-listed visitors a CAPTCHA instead of dropping web traffic
 }
 
 type Notifications struct {
@@ -128,6 +237,19 @@ type Notifications struct {
 	OnBinary     bool   `json:"on_binary"`
 	OnBan        bool   `json:"on_ban"`
 	OnBlacklist  bool   `json:"on_blacklist"`
+	// Additional recipients and channels.
+	ExtraEmail    string `json:"extra_email"`
+	From          string `json:"from"`
+	SlackWebhook  string `json:"slack_webhook"`
+	TelegramToken string `json:"telegram_token"`
+	TelegramChat  string `json:"telegram_chat"`
+	DailyReport   bool   `json:"daily_report"`
+	// User notifications go to the cPanel account's contact email.
+	UserInfected   bool     `json:"user_infected"`
+	UserSuspension bool     `json:"user_suspension"`
+	UserPatches    bool     `json:"user_patches"`
+	UserOutdated   string   `json:"user_outdated"` // never | weekly | monthly
+	ExcludeUsers   []string `json:"exclude_users"`
 }
 
 // Settings is the full policy document.
@@ -142,6 +264,11 @@ type Settings struct {
 	AutoSuspend   AutoSuspend      `json:"auto_suspend"`
 	DomainRep     DomainReputation `json:"domain_reputation"`
 	Notifications Notifications    `json:"notifications"`
+	Captcha       Captcha          `json:"captcha"`
+	AI            AI               `json:"ai"`
+	Processes     ProcessMonitor   `json:"processes"`
+	Cron          CronMonitor      `json:"cron"`
+	Rootkit       Rootkit          `json:"rootkit"`
 }
 
 // Defaults are safe: detections are reported, not acted on, until an admin
@@ -153,23 +280,34 @@ func Defaults() Settings {
 			VirusAction: ActionNotify, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, UseClamAV: true, MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
+			DeleteSymlinks: false, AutoClean: false, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
 			DoS: false, DoSThreshold: 150, BlockedCountries: []string{}, AllowedCountries: []string{}, LogBlocked: true,
+			IgnoredCountries: []string{}, DDNS: []string{}, ExcludedJails: []string{}, WAFBan: true, WAFBanThreshold: 15,
+			Captcha: false, TCPIn: DefaultTCPIn, UDPIn: DefaultUDPIn, TCPOut: DefaultTCPOut, UDPOut: DefaultUDPOut,
 		},
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
-		IPDB:       IPDB{Enabled: true, Report: true},
-		CMS:        CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 24},
+		IPDB:       IPDB{Enabled: true, Report: true, Log: true},
+		CMS: CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 24, Vulns: true,
+			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 12},
 		OSM: OSM{Enabled: true, PerMinute: 50, PerHour: 300, Action: "notify", CheckSubjects: true,
 			SpamPatterns: []string{}, WhitelistSenders: []string{}, WhitelistIPs: []string{}, WhitelistPaths: []string{}},
-		AutoSuspend: AutoSuspend{Enabled: false, Detections: 10, WindowHours: 24, ExcludeUsers: []string{}},
+		AutoSuspend: AutoSuspend{Enabled: false, Detections: 10, WindowHours: 24, ExcludeUsers: []string{}, WhitelistDomains: []string{}},
 		DomainRep:   DomainReputation{Enabled: true, IntervalHours: 12},
 		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
-			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{}},
+			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{},
+			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, WhitelistDomains: []string{}},
 		Notifications: Notifications{
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
+			UserOutdated: "never", ExcludeUsers: []string{},
 		},
+		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 60, HTTPPort: 7780, HTTPSPort: 7743},
+		AI:        AI{Enabled: true, Provider: "builtin", OllamaURL: "http://127.0.0.1:11434", MaxKB: 48},
+		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
+		Cron:      CronMonitor{Enabled: true, WhitelistUsers: []string{}},
+		Rootkit:   Rootkit{Enabled: true},
 	}
 }
 
@@ -273,6 +411,65 @@ func normalize(s *Settings) {
 	s.OSM.WhitelistIPs = clean(s.OSM.WhitelistIPs, false)
 	s.OSM.WhitelistPaths = clean(s.OSM.WhitelistPaths, false)
 	s.AutoSuspend.ExcludeUsers = clean(s.AutoSuspend.ExcludeUsers, false)
+	s.AutoSuspend.WhitelistDomains = clean(lower(s.AutoSuspend.WhitelistDomains), false)
+	s.Firewall.IgnoredCountries = clean(s.Firewall.IgnoredCountries, true)
+	s.Firewall.DDNS = clean(lower(s.Firewall.DDNS), false)
+	s.Firewall.ExcludedJails = clean(s.Firewall.ExcludedJails, false)
+	if s.Firewall.WAFBanThreshold <= 0 {
+		s.Firewall.WAFBanThreshold = 15
+	}
+	for _, p := range []*string{&s.Firewall.TCPIn, &s.Firewall.UDPIn, &s.Firewall.TCPOut, &s.Firewall.UDPOut} {
+		*p = strings.Join(splitPorts(*p), ",")
+	}
+	s.WAF.LoginURLs = clean(s.WAF.LoginURLs, false)
+	s.WAF.WhitelistDomains = clean(lower(s.WAF.WhitelistDomains), false)
+	s.CMS.BlacklistPlugins = clean(lower(s.CMS.BlacklistPlugins), false)
+	s.CMS.ExcludeUsers = clean(s.CMS.ExcludeUsers, false)
+	if s.CMS.WPCronHours <= 0 {
+		s.CMS.WPCronHours = 12
+	}
+	if s.Scanner.KeepDays <= 0 {
+		s.Scanner.KeepDays = 60
+	}
+	if s.Scanner.DBWhitelist == nil {
+		s.Scanner.DBWhitelist = []Exclusion{}
+	}
+	if s.Captcha.Provider == "" {
+		s.Captcha.Provider = "builtin"
+	}
+	if s.Captcha.AllowMinutes <= 0 {
+		s.Captcha.AllowMinutes = 60
+	}
+	if s.Captcha.HTTPPort <= 0 {
+		s.Captcha.HTTPPort = 7780
+	}
+	if s.Captcha.HTTPSPort <= 0 {
+		s.Captcha.HTTPSPort = 7743
+	}
+	s.Captcha.SiteKey, s.Captcha.SecretKey = strings.TrimSpace(s.Captcha.SiteKey), strings.TrimSpace(s.Captcha.SecretKey)
+	s.AI.APIKey = strings.TrimSpace(s.AI.APIKey)
+	if s.AI.Provider == "" {
+		s.AI.Provider = "builtin"
+	}
+	if s.AI.Model == "" {
+		switch s.AI.Provider {
+		case "anthropic":
+			s.AI.Model = "claude-opus-5"
+		case "ollama":
+			s.AI.Model = "qwen2.5-coder:7b"
+		}
+	}
+	s.AI.OllamaURL = strings.TrimRight(strings.TrimSpace(s.AI.OllamaURL), "/")
+	if s.AI.MaxKB <= 0 {
+		s.AI.MaxKB = 48
+	}
+	s.Processes.WhitelistUsers = clean(s.Processes.WhitelistUsers, false)
+	s.Processes.WhitelistStrings = clean(s.Processes.WhitelistStrings, false)
+	s.Cron.WhitelistUsers = clean(s.Cron.WhitelistUsers, false)
+	s.Notifications.ExcludeUsers = clean(s.Notifications.ExcludeUsers, false)
+	if s.Notifications.UserOutdated == "" {
+		s.Notifications.UserOutdated = "never"
+	}
 	if s.OSM.PerMinute <= 0 {
 		s.OSM.PerMinute = 50
 	}
@@ -373,11 +570,159 @@ func validate(s Settings) error {
 			return fmt.Errorf("invalid IP address %q", ip)
 		}
 	}
+	for _, c := range s.Firewall.IgnoredCountries {
+		if len(c) != 2 {
+			return fmt.Errorf("invalid country code %q", c)
+		}
+	}
+	for _, h := range s.Firewall.DDNS {
+		if !validHostname(h) {
+			return fmt.Errorf("invalid DDNS hostname %q", h)
+		}
+	}
+	for _, d := range append(append([]string{}, s.WAF.WhitelistDomains...), s.AutoSuspend.WhitelistDomains...) {
+		if !validHostname(d) {
+			return fmt.Errorf("invalid domain %q", d)
+		}
+	}
+	for _, u := range s.WAF.LoginURLs {
+		if !strings.HasPrefix(u, "/") || strings.ContainsAny(u, " \"'\\\n") {
+			return fmt.Errorf("invalid URL path %q (must start with /)", u)
+		}
+	}
+	for _, list := range []string{s.Firewall.TCPIn, s.Firewall.UDPIn, s.Firewall.TCPOut, s.Firewall.UDPOut} {
+		if err := validPorts(list); err != nil {
+			return err
+		}
+	}
+	if s.Firewall.PortFilter {
+		if len(splitPorts(s.Firewall.TCPIn)) == 0 {
+			return errors.New("port filter: TCP IN must list at least the SSH port")
+		}
+		if !portListed(s.Firewall.UDPOut, 53) && !portListed(s.Firewall.TCPOut, 53) {
+			return errors.New("port filter: allow outgoing port 53 (DNS), or the server cannot resolve names")
+		}
+	}
+	switch s.Captcha.Provider {
+	case "builtin":
+	case "turnstile", "recaptcha":
+		if s.Captcha.SiteKey == "" || s.Captcha.SecretKey == "" {
+			return fmt.Errorf("the %s CAPTCHA needs a site key and a secret key", s.Captcha.Provider)
+		}
+	default:
+		return fmt.Errorf("invalid CAPTCHA provider %q", s.Captcha.Provider)
+	}
+	if s.Captcha.HTTPPort == s.Captcha.HTTPSPort || s.Captcha.HTTPPort > 65535 || s.Captcha.HTTPSPort > 65535 {
+		return errors.New("invalid CAPTCHA ports")
+	}
+	switch s.AI.Provider {
+	case "builtin":
+	case "ollama":
+		if !strings.HasPrefix(s.AI.OllamaURL, "http://") && !strings.HasPrefix(s.AI.OllamaURL, "https://") {
+			return errors.New("the Ollama URL must start with http:// or https://")
+		}
+	case "anthropic":
+		if s.AI.Enabled && s.AI.APIKey == "" {
+			return errors.New("the Claude provider needs an Anthropic API key")
+		}
+	default:
+		return fmt.Errorf("invalid AI provider %q", s.AI.Provider)
+	}
+	if s.AI.MaxKB > 200 {
+		return errors.New("AI scanner: at most 200 KB per file")
+	}
+	switch s.Notifications.UserOutdated {
+	case "never", "weekly", "monthly":
+	default:
+		return fmt.Errorf("invalid outdated CMS notification interval %q", s.Notifications.UserOutdated)
+	}
+	if w := s.Notifications.SlackWebhook; w != "" && !strings.HasPrefix(w, "https://hooks.slack.com/") {
+		return errors.New("the Slack webhook must start with https://hooks.slack.com/")
+	}
+	if s.CMS.AutoUpdateCVSS < 0 || s.CMS.AutoUpdateCVSS > 10 || s.CMS.AutoUpdateDays < 0 {
+		return errors.New("invalid auto-update conditions")
+	}
 	if s.Firewall.DoSThreshold < 20 {
 		return errors.New("DoS threshold must be at least 20 connections per minute")
 	}
 	return nil
 }
+
+func lower(list []string) []string {
+	out := make([]string, len(list))
+	for i, v := range list {
+		out[i] = strings.ToLower(v)
+	}
+	return out
+}
+
+func validHostname(h string) bool {
+	if len(h) < 3 || len(h) > 253 || !strings.Contains(h, ".") {
+		return false
+	}
+	for _, r := range h {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.' || r == '*') {
+			return false
+		}
+	}
+	return true
+}
+
+// Default port filter lists (typical cPanel server).
+const (
+	DefaultTCPIn  = "20-22,25,53,80,110,143,443,465,587,853,993,995,2077-2078,2079-2080,2082-2083,2086-2087,2095-2096"
+	DefaultUDPIn  = "20-21,53,80,443,853"
+	DefaultTCPOut = "20-22,25,37,43,53,80,110,113,443,465,587,853,873,993,995,2086-2087,2089,2703"
+	DefaultUDPOut = "20-21,53,113,123,853,873,6277,24441"
+)
+
+// SplitPorts parses "22, 80,1000-2000" into clean items.
+func SplitPorts(s string) []string { return splitPorts(s) }
+
+func splitPorts(s string) []string {
+	out := []string{}
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\n' || r == ';' }) {
+		f = strings.ReplaceAll(strings.TrimSpace(f), ":", "-")
+		if f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func validPorts(s string) error {
+	for _, p := range splitPorts(s) {
+		lo, hi, isRange := strings.Cut(p, "-")
+		a, err1 := strconv.Atoi(lo)
+		b := a
+		var err2 error
+		if isRange {
+			b, err2 = strconv.Atoi(hi)
+		}
+		if err1 != nil || err2 != nil || a < 1 || b > 65535 || b < a {
+			return fmt.Errorf("invalid port or range %q", p)
+		}
+	}
+	return nil
+}
+
+func portListed(s string, port int) bool {
+	for _, p := range splitPorts(s) {
+		lo, hi, isRange := strings.Cut(p, "-")
+		a, _ := strconv.Atoi(lo)
+		b := a
+		if isRange {
+			b, _ = strconv.Atoi(hi)
+		}
+		if port >= a && port <= b {
+			return true
+		}
+	}
+	return false
+}
+
+// PortListed reports whether port is in a port list.
+func PortListed(s string, port int) bool { return portListed(s, port) }
 
 func validIPorCIDR(s string) bool {
 	if net.ParseIP(s) != nil {
