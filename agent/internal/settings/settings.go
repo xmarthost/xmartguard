@@ -108,7 +108,7 @@ type Captcha struct {
 // (a free self-hosted LLM) and Anthropic's Claude (paid API) are optional.
 type AI struct {
 	Enabled   bool   `json:"enabled"`
-	Provider  string `json:"provider"` // builtin | ollama | anthropic
+	Provider  string `json:"provider"` // builtin | portal | ollama | anthropic
 	APIKey    string `json:"api_key"`  // Anthropic API key
 	OllamaURL string `json:"ollama_url"`
 	Model     string `json:"model"` // LLM model name (ollama / anthropic)
@@ -616,7 +616,7 @@ func validate(s Settings) error {
 		return errors.New("invalid CAPTCHA ports")
 	}
 	switch s.AI.Provider {
-	case "builtin":
+	case "builtin", "portal":
 	case "ollama":
 		if !strings.HasPrefix(s.AI.OllamaURL, "http://") && !strings.HasPrefix(s.AI.OllamaURL, "https://") {
 			return errors.New("the Ollama URL must start with http:// or https://")

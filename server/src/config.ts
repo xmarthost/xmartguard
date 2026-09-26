@@ -41,6 +41,11 @@ export interface Config {
   adminEmail?: string;
   adminPassword?: string;
   logLevel: string;
+  /** Self-hosted Ollama used by the AI scanner gateway (empty disables). */
+  ollamaUrl: string;
+  ollamaModel: string;
+  aiConcurrency: number;
+  aiTimeoutSeconds: number;
 }
 
 function bool(v: string | undefined, def: boolean): boolean {
@@ -87,5 +92,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminEmail: env.ADMIN_EMAIL || undefined,
     adminPassword: env.ADMIN_PASSWORD || undefined,
     logLevel: env.LOG_LEVEL || 'info',
+    ollamaUrl: (env.OLLAMA_URL || '').replace(/\/+$/, ''),
+    ollamaModel: env.OLLAMA_MODEL || '',
+    aiConcurrency: int(env.AI_CONCURRENCY, 1),
+    aiTimeoutSeconds: int(env.AI_TIMEOUT_SECONDS, 300),
   };
 }

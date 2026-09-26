@@ -32,6 +32,16 @@ const OPS: Record<string, { label: string; action: string; params: (p: Record<st
   waf_on: { label: 'Enable WAF', action: 'settings.set', params: () => ({ waf: { enabled: true } }) },
   waf_off: { label: 'Disable WAF', action: 'settings.set', params: () => ({ waf: { enabled: false } }) },
   ipdb_on: { label: 'Enable IPDB protection', action: 'settings.set', params: () => ({ ipdb: { enabled: true } }) },
+  ai_portal: {
+    label: 'Use the portal AI model for the AI scanner',
+    action: 'settings.set',
+    params: () => ({ ai: { enabled: true, provider: 'portal' } }),
+  },
+  ai_builtin: {
+    label: 'Use the built-in AI model for the AI scanner',
+    action: 'settings.set',
+    params: () => ({ ai: { enabled: true, provider: 'builtin' } }),
+  },
   realtime_on: { label: 'Enable realtime scanning', action: 'settings.set', params: () => ({ scanner: { realtime: true } }) },
   quarantine_on: {
     label: 'Quarantine viruses automatically',

@@ -62,12 +62,12 @@ The plugins have no logic of their own: they talk to the agent's local socket, w
 
 Command line (root): `xmartguard-agent call overview`, `xmartguard-agent call fw.add '{"kind":"deny","addr":"203.0.113.9"}'`, `xmartguard-agent check /home/user/public_html` (offline scan).
 
-## What it protects (0.5.0)
+## What it protects (0.5.1)
 
 | Module | What it does |
 |---|---|
 | Malware scanner | Realtime (inotify), quick/full/path, daily and weekly scans; own heuristic analyzer + known-bad hash database + ClamAV + optional YARA rules (`/etc/xmartguard/yara/*.yar`); quarantine/restore/disable/delete; insecure symlink detection; auto clean of infected WordPress core files from the official release |
-| AI scanner | Second opinion on suspicious files. Default: **built-in model, free and local** (logistic regression over code features, trained on real quarantine data; retrain with `xmartguard-agent ai-train`). Optional: Ollama (free, self-hosted LLM) or Claude (own Anthropic API key) |
+| AI scanner | Second opinion on suspicious files. Default: **built-in model, free and local** (logistic regression over code features, trained on real quarantine data; retrain with `xmartguard-agent ai-train`). Free LLM on the portal (installer menu picks an Ollama model for the RAM), own Ollama, or Claude (own Anthropic API key) |
 | WAF | Own ModSecurity rules for Apache/LiteSpeed: uploads scanned by the malware engine, web shell protection, PHP-upload blocking, sensitive files, WordPress hardening, bad/SEO/AI/custom bots, protected login URLs, whitelisted domains; per-rule disable, config test with automatic rollback |
 | Brute force | SSH, cPanel/WHM/Webmail, Dovecot, Postfix, Exim, FTP, Apache denials and CMS logins; per-rule exclusion; addresses the WAF keeps blocking are banned ("N WAF blocked") |
 | Firewall | iptables+ipset (default) or nftables: allow/deny/temp ban/temp allow/ignore lists, ignored/allowed/blocked countries, DDNS allowlist, port filter (TCP/UDP in/out), DoS, self-healing; **CAPTCHA page for banned visitors** (built-in image challenge, or Turnstile/reCAPTCHA); live log of blocked connections |
@@ -87,15 +87,41 @@ Every server reports the attackers it bans automatically (brute force, DoS). The
 
 ## Deploy the portal
 
-On a fresh Ubuntu 22.04/24.04 VPS with Docker installed and the domain's A record pointing at it:
+On AlmaLinux/Rocky/RHEL/CloudLinux 9 (plain VPS or a cPanel server), with the domain's A record pointing at it:
 
 ```bash
-git clone git@github.com:xmarthost/xmartguard.git && cd xmartguard/deploy
-cp .env.example .env && nano .env     # DOMAIN, POSTGRES_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh
+bash /root/setup.sh --domain xmartguard.com --email you@example.com
 ```
 
-Caddy obtains the TLS certificate automatically. Log in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` and change the password under **Account**.
+The script installs Docker, builds the portal, sets up HTTPS and prints the first admin password. Re-run the same two lines to update.
+
+### Free AI model (optional)
+
+During setup a menu lists free AI models (Ollama) with the RAM each needs and recommends one for the server's RAM (the portal leaves most RAM to itself and to websites). The model runs in Docker next to the portal and is never exposed; agents send suspicious files to the portal, signed with their key, and pick **XMart Guard AI server** as AI provider (Settings » Virus Scanner, or Mass Operations » "Use the portal AI model").
+
+| Model | Download | RAM | Recommended for |
+|---|---|---|---|
+| qwen2.5-coder:1.5b | 1.0 GB | 2 GB | small VPS |
+| qwen2.5-coder:3b | 1.9 GB | 4 GB | 8 GB RAM |
+| qwen2.5-coder:7b | 4.7 GB | 6 GB | 16 GB RAM |
+| deepseek-coder-v2:16b | 8.9 GB | 11 GB | option |
+| qwen2.5-coder:14b | 9.0 GB | 12 GB | 32 GB RAM |
+| codestral:22b | 12.6 GB | 16 GB | option (slower) |
+| qwen3-coder:30b | 19 GB | 22 GB | 48–64 GB RAM (best on CPU) |
+| qwen2.5-coder:32b | 20 GB | 24 GB | option (slow on CPU) |
+
+Options: `--ai MODEL` (no menu), `--ai none`, or run the model on a separate bigger server:
+
+```bash
+# on the AI server (e.g. 64 GB RAM)
+curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-ai.sh -o setup-ai.sh
+bash setup-ai.sh --portal-ip PORTAL_SERVER_IP
+# then on the portal server
+bash /root/setup.sh --domain xmartguard.com --email you@example.com --ai-url http://AI_SERVER_IP:11434 --ai-model qwen3-coder:30b
+```
+
+Without any of this, every agent still uses its built-in free model.
 
 ## Development
 

@@ -40,7 +40,7 @@ jobs:
         working-directory: web
         run: npm ci && npm run build
       - name: Shell lint
-        run: shellcheck -S warning installer/*.sh scripts/*.sh
+        run: shellcheck -S warning installer/*.sh scripts/*.sh deploy/*.sh
       - name: Installer end-to-end
         run: |
           cd server && npm run build

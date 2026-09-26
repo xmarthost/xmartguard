@@ -2,6 +2,8 @@
 # One-shot XMart Guard PORTAL setup for AlmaLinux / Rocky / RHEL / CloudLinux 9.
 #
 #   bash setup-almalinux.sh --domain xmartguard.com --email you@example.com [--branch BRANCH] [--token GITHUB_TOKEN]
+#        [--ai MODEL|none]                 free AI model on this server (asked interactively when omitted)
+#        [--ai-url URL --ai-model MODEL]   use an AI server set up with deploy/setup-ai.sh
 #
 # Works on a plain VPS and on a server that already runs cPanel/WHM:
 #   - plain VPS:  Caddy container serves ports 80/443 with automatic HTTPS.
@@ -13,6 +15,7 @@
 set -Eeuo pipefail
 
 DOMAIN=""; EMAIL=""; BRANCH="main"; TOKEN="${GITHUB_TOKEN:-}"
+AI=""; AI_URL=""; AI_MODEL=""
 REPO="github.com/xmarthost/xmartguard.git"
 DIR=/opt/xmartguard-portal
 # Portal setups before 0.3.0 used /opt/xmartguard, which now belongs to the agent.
@@ -25,6 +28,9 @@ while [ $# -gt 0 ]; do
     --email)  EMAIL="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --token)  TOKEN="$2"; shift 2 ;;
+    --ai)     AI="$2"; shift 2 ;;
+    --ai-url) AI_URL="$2"; shift 2 ;;
+    --ai-model) AI_MODEL="$2"; shift 2 ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
 done
@@ -132,15 +138,51 @@ else
 fi
 PORTAL_PORT=$(sed -n 's/^PORTAL_PORT=//p' "$ENV")
 
+# ------------------------------------------------------------------ AI model
+step "Free AI model for the AI scanner"
+setenv() { sed -i "/^$1=/d" "$ENV"; [ -n "$2" ] && echo "$1=$2" >>"$ENV"; return 0; }
+XG_AI_LIB=1 . "$DIR/deploy/setup-ai.sh"
+CUR_MODEL=$(sed -n 's/^OLLAMA_MODEL=//p' "$ENV")
+CUR_LOCAL=$(sed -n 's/^OLLAMA_LOCAL=//p' "$ENV")
+if [ -n "$AI_URL" ]; then
+  [ -n "$AI_MODEL" ] || die "--ai-url needs --ai-model (the model installed on that server)"
+  setenv OLLAMA_URL "$AI_URL"; setenv OLLAMA_MODEL "$AI_MODEL"; setenv OLLAMA_LOCAL ""
+  ok "using the AI server $AI_URL ($AI_MODEL)"
+else
+  if [ -z "$AI" ] && [ -n "$CUR_MODEL" ]; then
+    AI=keep
+  elif [ -z "$AI" ] && [ -r /dev/tty ] && [ -t 1 ]; then
+    # The portal shares this server: leave most RAM to it (and to websites on cPanel).
+    share=50; [ "$MODE" = cpanel ] && share=35
+    AI=$(xg_ai_menu "$share")
+  elif [ -z "$AI" ]; then
+    AI=none
+  fi
+  case "$AI" in
+    keep) ok "keeping ${CUR_MODEL} ($( [ "$CUR_LOCAL" = 1 ] && echo 'on this server' || sed -n 's/^OLLAMA_URL=//p' "$ENV"))" ;;
+    none) setenv OLLAMA_URL ""; setenv OLLAMA_MODEL ""; setenv OLLAMA_LOCAL ""; ok "no AI model (agents use their built-in free model)" ;;
+    *)
+      xg_ai_known "$AI" || warn "$AI is not in the tested list; trying anyway"
+      setenv OLLAMA_URL "http://ollama:11434"; setenv OLLAMA_MODEL "$AI"; setenv OLLAMA_LOCAL 1
+      ok "will run $AI on this server" ;;
+  esac
+fi
+AI_LOCAL=$(sed -n 's/^OLLAMA_LOCAL=//p' "$ENV")
+AI_MODEL=$(sed -n 's/^OLLAMA_MODEL=//p' "$ENV")
+PROFILES=""
+[ "$AI_LOCAL" = 1 ] && PROFILES="--profile ai"
+
 step "Building and starting the portal (first build takes several minutes)"
 cd "$DIR/deploy"
 if [ "$MODE" = caddy ]; then
-  docker compose --profile caddy up -d --build --remove-orphans
+  docker compose --profile caddy $PROFILES up -d --build --remove-orphans
 else
   # A Caddy container from an earlier attempt would fight Apache for port 80.
   docker compose --profile caddy rm -sf caddy >/dev/null 2>&1 || true
-  docker compose up -d --build --remove-orphans
+  docker compose $PROFILES up -d --build --remove-orphans
 fi
+# A model container from an earlier setup is removed when AI is turned off or moved.
+[ "$AI_LOCAL" = 1 ] || docker compose --profile ai rm -sf ollama >/dev/null 2>&1 || true
 docker image prune -f >/dev/null
 
 step "Waiting for the portal"
@@ -151,6 +193,17 @@ for _ in $(seq 1 60); do
 done
 [ "$healthy" = 1 ] || { docker compose logs --tail 60 portal; die "portal did not become healthy"; }
 ok "portal answers on 127.0.0.1:$PORTAL_PORT"
+
+if [ "$AI_LOCAL" = 1 ]; then
+  step "Downloading the AI model $AI_MODEL (first time can take a while)"
+  FREE_GB=$(df -BG --output=avail /var/lib/docker 2>/dev/null | tail -1 | tr -dc 0-9)
+  if [ -n "$FREE_GB" ] && [ "$FREE_GB" -lt 25 ]; then warn "only ${FREE_GB} GB free disk for Docker; large models need up to 20 GB"; fi
+  if docker compose exec -T ollama ollama pull "$AI_MODEL"; then
+    ok "AI model $AI_MODEL ready (portal » server » Settings » Virus Scanner » AI scanner » XMart Guard AI server)"
+  else
+    warn "could not download $AI_MODEL; re-run this script to retry. Agents keep using their built-in model."
+  fi
+fi
 
 # ------------------------------------------------------------------ cPanel
 if [ "$MODE" = cpanel ]; then
@@ -246,6 +299,7 @@ echo " XMart Guard portal:  https://$DOMAIN"
 echo " Login email:         $(sed -n 's/^ADMIN_EMAIL=//p' "$ENV")"
 echo " First password:      $ADMIN_PASSWORD"
 echo "   (change it under Account after logging in)"
+[ -n "$AI_MODEL" ] && echo " AI scanner model:    $AI_MODEL"
 echo " Update later:        curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh"
 echo "                      bash /root/setup.sh --domain $DOMAIN --email $EMAIL"
 echo " Logs:                cd $DIR/deploy && docker compose logs -f portal"

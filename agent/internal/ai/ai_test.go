@@ -110,3 +110,25 @@ func TestSample(t *testing.T) {
 		t.Fatalf("sample len %d trunc %v", len(s), trunc)
 	}
 }
+
+func TestPortalProvider(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/ai" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		io.WriteString(w, `{"verdict":"suspicious","confidence":70,"reason":"obfuscated loader","model":"qwen2.5-coder:14b"}`)
+	}))
+	defer srv.Close()
+	a, f := setup(t, `{"ai":{"provider":"portal"}}`)
+	a.Portal = &PortalAI{URL: srv.URL + "/", ServerID: "11111111-1111-1111-1111-111111111111", Sign: func(m []byte) string { return "sig:" + string(m[:9]) }}
+	v, err := a.Analyze(context.Background(), Job{Path: f, SHA256: "jkl", Signature: "Test"})
+	if err != nil || v.Verdict != Suspicious || v.Model != "portal qwen2.5-coder:14b" {
+		t.Fatalf("portal: %+v %v", v, err)
+	}
+	if got["signature"] != "sig:xg-ai-v1:" || got["system"] == "" || !strings.Contains(got["prompt"], "<file>") {
+		t.Fatalf("request: %v", got)
+	}
+}

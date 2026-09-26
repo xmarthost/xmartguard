@@ -29,7 +29,7 @@ interface ScannerS {
 }
 interface AIS {
   enabled: boolean;
-  provider: 'builtin' | 'ollama' | 'anthropic';
+  provider: 'builtin' | 'portal' | 'ollama' | 'anthropic';
   api_key: string;
   ollama_url: string;
   model: string;
@@ -377,12 +377,15 @@ function DBWhitelistEditor({ items, disabled, onChange }: { items: { id: string;
 
 const AI_PROVIDERS = [
   { v: 'builtin', l: 'Built-in AI model (free)', d: 'XMart Guard’s own model runs on the server. Free, private, nothing is sent anywhere. Retrained from real quarantine data with every release.' },
+  { v: 'portal', l: 'XMart Guard AI server (free)', d: 'The free AI model installed with the portal (setup script menu). Files go only to your own portal; nothing to configure on the servers.' },
   { v: 'ollama', l: 'Ollama (free, self-hosted LLM)', d: 'A language model you run yourself with Ollama (e.g. qwen2.5-coder). Free; files are sent only to your Ollama server.' },
   { v: 'anthropic', l: 'Claude (Anthropic API, paid)', d: 'Uses your own Anthropic API key. File contents are sent to Anthropic; billed per use.' },
 ] as const;
 
 function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: boolean; onSave: (p: Partial<AIS>) => void }) {
   const dis = !admin || busy;
+  const portalAI = useApi<{ enabled: boolean; model: string; reachable: boolean; installed: boolean }>('/api/ai/status');
+  const pa = portalAI.data;
   const [f, setF] = useState(s);
   useEffect(() => setF(s), [s]);
   return (
@@ -401,6 +404,19 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
           </label>
         ))}
       </div>
+      {f.provider === 'portal' && (
+        <div className={`mb-3 rounded-lg p-3 text-sm ${pa?.enabled && pa.reachable && pa.installed ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
+          {!pa
+            ? 'Checking the portal AI server…'
+            : !pa.enabled
+              ? 'No AI model is installed on the portal yet. Re-run the portal setup script and pick a model from the menu.'
+              : !pa.reachable
+                ? `The portal cannot reach its AI server (model ${pa.model}).`
+                : !pa.installed
+                  ? `Model ${pa.model} is still downloading on the AI server.`
+                  : `Ready: ${pa.model} on your portal.`}
+        </div>
+      )}
       {f.provider === 'ollama' && (
         <div className="grid gap-3 pb-3 sm:grid-cols-2">
           <input className="input" placeholder="http://127.0.0.1:11434" value={f.ollama_url} disabled={dis} onChange={(e) => setF({ ...f, ollama_url: e.target.value })} />

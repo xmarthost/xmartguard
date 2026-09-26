@@ -13,7 +13,9 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +73,8 @@ type Analyzer struct {
 	OnVerdict func(Job, Verdict)
 	// BaseURL overrides the API endpoint (tests).
 	BaseURL string
+	// Portal describes the portal's AI gateway (provider "portal").
+	Portal *PortalAI
 	// PerHour caps API calls (default 120).
 	PerHour int
 
@@ -110,7 +115,7 @@ func (a *Analyzer) Run(ctx context.Context) {
 			if v, ok := Cached(a.DB, j.SHA256); ok && v.Verdict != Error {
 				continue
 			}
-			if a.Settings.Get().AI.Provider != "builtin" && !a.allow() {
+			if p := a.Settings.Get().AI.Provider; p != "builtin" && p != "portal" && !a.allow() {
 				a.Log.Warn("AI scanner hourly limit reached; skipping", "path", j.Path)
 				continue
 			}
@@ -214,6 +219,8 @@ func (a *Analyzer) Analyze(ctx context.Context, j Job) (Verdict, error) {
 		v, err = a.analyzeOllama(ctx, j, cfg)
 	case "anthropic":
 		v, err = a.analyzeClaude(ctx, j, cfg)
+	case "portal":
+		v, err = a.analyzePortal(ctx, j, cfg)
 	default:
 		v, err = analyzeBuiltin(j)
 	}
@@ -407,4 +414,53 @@ func baseName(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// PortalAI is the portal's AI gateway: the portal forwards to a free model it
+// hosts (Ollama), so agents need no AI setup and nothing is exposed publicly.
+type PortalAI struct {
+	URL      string // portal base URL
+	ServerID string
+	Sign     func(msg []byte) string // base64 Ed25519 signature
+}
+
+func (a *Analyzer) analyzePortal(ctx context.Context, j Job, cfg settings.AI) (Verdict, error) {
+	p := a.Portal
+	if p == nil || p.URL == "" || p.Sign == nil {
+		return Verdict{}, errors.New("this agent is not enrolled with a portal")
+	}
+	user, err := prompt(j, cfg.MaxKB)
+	if err != nil {
+		return Verdict{}, err
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	sum := sha256.Sum256([]byte(systemPrompt + "\n" + user))
+	sig := p.Sign([]byte("xg-ai-v1:" + p.ServerID + ":" + ts + ":" + hex.EncodeToString(sum[:])))
+	body, _ := json.Marshal(map[string]string{"server_id": p.ServerID, "ts": ts, "signature": sig, "system": systemPrompt, "prompt": user})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.URL, "/")+"/api/agent/ai", bytes.NewReader(body))
+	if err != nil {
+		return Verdict{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := httpClient.Do(req)
+	if err != nil {
+		return Verdict{}, fmt.Errorf("portal unreachable: %w", err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode != 200 {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(raw, &e)
+		return Verdict{}, fmt.Errorf("portal AI: %s (HTTP %d)", e.Error, res.StatusCode)
+	}
+	var out struct {
+		llmAnswer
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(raw, &out) != nil || !out.valid() {
+		return Verdict{}, errors.New("unexpected answer from the portal AI")
+	}
+	return Verdict{Verdict: out.Verdict, Confidence: out.Confidence, Reason: out.Reason, Model: "portal " + out.Model}, nil
 }

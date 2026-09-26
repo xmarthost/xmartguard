@@ -25,6 +25,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
+	"github.com/xmarthost/xmartguard/agent/internal/identity"
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/monitor"
 	"github.com/xmarthost/xmartguard/agent/internal/notify"
@@ -90,6 +91,15 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Mailer.Channels = a.channels
 	a.Mailer.Admin = func() string { return a.Settings.Get().Notifications.Email }
 	a.AI = &ai.Analyzer{DB: db, Settings: st, Log: log, OnVerdict: a.onAIVerdict}
+	if cfg != nil && cfg.ServerURL != "" {
+		a.AI.Portal = &ai.PortalAI{URL: cfg.ServerURL, ServerID: cfg.ServerID, Sign: func(msg []byte) string {
+			id, err := identity.Load(config.KeyPath())
+			if err != nil {
+				return ""
+			}
+			return id.SignB64(msg)
+		}}
+	}
 	a.Monitor = &monitor.Monitor{DB: db, Settings: st, Log: log, OnEvent: a.onMonitorEvent,
 		Users: func() map[string]string {
 			out := map[string]string{}

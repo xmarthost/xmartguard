@@ -31,11 +31,27 @@ services:
       TRUST_PROXY: "true"
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Free AI scanner model (Ollama). Empty = off; see deploy/setup-ai.sh.
+      OLLAMA_URL: ${OLLAMA_URL:-}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-}
+      AI_CONCURRENCY: ${AI_CONCURRENCY:-1}
     volumes:
       - portal_data:/app/data
     ports:
       # Only reachable from this host; the public web server proxies to it.
       - "127.0.0.1:${PORTAL_PORT:-18080}:8080"
+
+  # Free, self-hosted AI model for the AI scanner (enabled with --profile ai).
+  # Not published on any host port: only the portal talks to it.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ai"]
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_NUM_PARALLEL: 1
+    volumes:
+      - ollama:/root/.ollama
 
   caddy:
     image: caddy:2-alpine
@@ -53,6 +69,7 @@ services:
       - caddy_config:/config
 
 volumes:
+  ollama:
   db:
   portal_data:
   caddy_data:
