@@ -36,6 +36,7 @@ interface FwSettings {
   ban_minutes: number;
   dos: boolean;
   dos_threshold: number;
+  log_blocked: boolean;
   blocked_countries: string[];
   allowed_countries: string[];
 }
@@ -350,6 +351,12 @@ export function FirewallPage() {
         </SettingRow>
         <SettingRow title="DoS Threshold" desc="Maximum new connections per minute per IP before blocking">
           <input className="input w-28" type="number" min={20} value={fw.dos_threshold} disabled={!isAdmin} onChange={(e) => setFw({ ...fw, dos_threshold: Number(e.target.value) })} onBlur={() => save({ dos_threshold: fw.dos_threshold })} />
+        </SettingRow>
+      </Section>
+
+      <Section title="Monitoring" desc="Live logs of blocked connections">
+        <SettingRow title="Log blocked connections" desc="Record a sample of dropped connections (up to 10 per second per rule) for the IPDB live monitor. Written at kernel debug level, so system logs stay clean." recommended>
+          <Toggle on={fw.log_blocked ?? true} disabled={!isAdmin || busy} onChange={(v) => save({ log_blocked: v })} />
         </SettingRow>
       </Section>
 

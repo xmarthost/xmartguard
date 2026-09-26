@@ -28,6 +28,11 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'cms.status': { role: 'viewer', mutates: false },
   'cms.sites': { role: 'viewer', mutates: false },
   'db.findings': { role: 'viewer', mutates: false },
+  'osm.events': { role: 'viewer', mutates: false },
+  'osm.transaction': { role: 'viewer', mutates: false },
+  'domainrep.get': { role: 'viewer', mutates: false },
+  'suspend.list': { role: 'viewer', mutates: false },
+  'dashboard.get': { role: 'viewer', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },
   'scan.stop': { role: 'operator', mutates: true },
@@ -39,11 +44,15 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'reputation.check': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'cms.scan': { role: 'operator', mutates: true },
   'db.archive': { role: 'operator', mutates: true },
+  'osm.delete': { role: 'operator', mutates: true },
+  'domainrep.check': { role: 'operator', mutates: true, timeoutMs: 600_000 },
 
   'settings.set': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'fw.apply': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'waf.apply': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'cms.update': { role: 'admin', mutates: true, timeoutMs: 660_000 },
+  'osm.release': { role: 'admin', mutates: true, timeoutMs: 120_000 },
+  'suspend.lift': { role: 'admin', mutates: true, timeoutMs: 360_000 },
 };
 
 const Params = z.object({ id: z.string().uuid(), action: z.string().max(40) });

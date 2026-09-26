@@ -361,7 +361,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	// ---- settings
 	h["settings.get"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{
-			"settings": a.Settings.Get(),
+			"settings": masked(a.Settings.Get()),
 			"meta": map[string]any{
 				"clamav":       scanner.ClamAvailable(),
 				"firewall":     a.Firewall.Status(),
@@ -374,6 +374,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	h["settings.set"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB.Enabled
 		beforeWAF := a.Settings.Get().WAF
+		p = keepSecrets(p, a.Settings.Get())
 		next, err := a.Settings.Patch(p)
 		if err != nil {
 			return nil, err
@@ -388,7 +389,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 				return map[string]any{"settings": next, "warning": err.Error()}, nil
 			}
 		}
-		return map[string]any{"settings": next}, nil
+		return map[string]any{"settings": masked(next)}, nil
 	}
 
 	// ---- firewall
@@ -705,6 +706,44 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return map[string]any{"version": v}, nil
 	}
 	return h
+}
+
+const secretMask = "********"
+
+// masked hides API keys from portal users.
+func masked(s settings.Settings) settings.Settings {
+	if k := s.DomainRep.SafeBrowsingKey; k != "" {
+		tail := k
+		if len(k) > 4 {
+			tail = k[len(k)-4:]
+		}
+		s.DomainRep.SafeBrowsingKey = secretMask + tail
+	}
+	return s
+}
+
+// keepSecrets drops a masked key sent back by the portal so the stored key is kept.
+func keepSecrets(p json.RawMessage, cur settings.Settings) json.RawMessage {
+	var doc map[string]json.RawMessage
+	if json.Unmarshal(p, &doc) != nil {
+		return p
+	}
+	raw, ok := doc["domain_reputation"]
+	if !ok {
+		return p
+	}
+	var dr map[string]json.RawMessage
+	if json.Unmarshal(raw, &dr) != nil {
+		return p
+	}
+	var key string
+	if k, ok := dr["safe_browsing_key"]; ok && json.Unmarshal(k, &key) == nil && strings.HasPrefix(key, secretMask) {
+		delete(dr, "safe_browsing_key")
+		doc["domain_reputation"], _ = json.Marshal(dr)
+		out, _ := json.Marshal(doc)
+		return out
+	}
+	return p
 }
 
 func wafChanged(a, b settings.WAF) bool {

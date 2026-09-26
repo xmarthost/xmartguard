@@ -16,6 +16,7 @@ import { userRoutes } from './routes/users.js';
 import { downloadRoutes } from './routes/downloads.js';
 import { agentCommandRoutes } from './routes/agent-cmd.js';
 import { ipdbRoutes } from './routes/ipdb.js';
+import { massRoutes } from './routes/mass.js';
 import { GeoDB, initGeo } from './ipdb/geo.js';
 import { IPDBService } from './ipdb/service.js';
 
@@ -55,6 +56,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   downloadRoutes(app, cfg);
   agentCommandRoutes(app, pool, cfg, hub);
   ipdbRoutes(app, pool, ipdb);
+  massRoutes(app, pool, cfg, hub);
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });

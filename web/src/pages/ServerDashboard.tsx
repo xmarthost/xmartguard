@@ -7,6 +7,7 @@ import { useApi } from '../hooks';
 import { ago, bytes, duration, panelName, pct } from '../format';
 import { Bar, ErrorBox, PageLoader, StatusDot } from '../components/ui';
 import SecurityPanel from '../components/SecurityPanel';
+import AttackOverview from '../components/AttackOverview';
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -77,6 +78,8 @@ export default function ServerDashboard() {
         </div>
       </div>
 
+      <AttackOverview serverId={s.id} online={s.online} />
+
       <SecurityPanel serverId={s.id} online={s.online} agentVersion={s.agent_version} latestVersion={data!.latest_agent_version} />
 
       {m ? (
@@ -119,9 +122,6 @@ export default function ServerDashboard() {
           <Row k="CPU" v={`${inv.cpu_model} (${inv.cpu_cores} cores)`} />
           <Row k="Memory" v={bytes(inv.mem_total_bytes)} />
           <Row k="Tags" v={s.tags.join(', ')} />
-          <p className="mt-4 text-xs text-slate-400">
-            WAF, CMS and outgoing-spam panels will appear here as those modules are released.
-          </p>
         </div>
       </div>
     </div>

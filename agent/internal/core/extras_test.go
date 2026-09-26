@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
@@ -96,5 +98,27 @@ func TestAutoSuspendThreshold(t *testing.T) {
 	}
 	if err := a.liftSuspension(s[0].ID); err == nil {
 		t.Fatal("lifted a failed suspension")
+	}
+}
+
+func TestSecretMasking(t *testing.T) {
+	a := newTestAgent(t, `{"firewall":{"enabled":false},"domain_reputation":{"safe_browsing_key":"AIzaSecretKey1234"}}`)
+	h := a.Handlers()
+	out, _ := h["settings.get"](context.Background(), nil)
+	got := out.(map[string]any)["settings"].(settings.Settings).DomainRep.SafeBrowsingKey
+	if got != "********1234" {
+		t.Fatalf("masked key %q", got)
+	}
+	// Saving the masked value back keeps the real key.
+	if _, err := h["settings.set"](context.Background(), []byte(`{"domain_reputation":{"safe_browsing_key":"********1234","interval_hours":6}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if k := a.Settings.Get().DomainRep.SafeBrowsingKey; k != "AIzaSecretKey1234" || a.Settings.Get().DomainRep.IntervalHours != 6 {
+		t.Fatalf("stored %q", k)
+	}
+	// A new key replaces it.
+	h["settings.set"](context.Background(), []byte(`{"domain_reputation":{"safe_browsing_key":"NewKey5678"}}`))
+	if a.Settings.Get().DomainRep.SafeBrowsingKey != "NewKey5678" {
+		t.Fatal("new key not saved")
 	}
 }

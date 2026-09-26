@@ -15,6 +15,8 @@ import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
 import SettingsPage from './pages/Settings';
 import { BotAttacks, WafLogs } from './pages/WAF';
 import { CMSThreats, DBScanner } from './pages/CMS';
+import { DomainReputation, OutgoingSpam } from './pages/Mail';
+import MassOperations from './pages/MassOperations';
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
@@ -42,6 +44,8 @@ export default function App() {
         <Route path="/servers/:id/firewall" element={<Protected><FirewallPage /></Protected>} />
         <Route path="/servers/:id/firewall-logs" element={<Protected><FirewallLogs /></Protected>} />
         <Route path="/servers/:id/ip-reputation" element={<Protected><IPReputation /></Protected>} />
+        <Route path="/servers/:id/osm" element={<Protected><OutgoingSpam /></Protected>} />
+        <Route path="/servers/:id/domain-reputation" element={<Protected><DomainReputation /></Protected>} />
         <Route path="/servers/:id/cms" element={<Protected><CMSThreats /></Protected>} />
         <Route path="/servers/:id/db-scanner" element={<Protected><DBScanner /></Protected>} />
         <Route path="/servers/:id/waf-logs" element={<Protected><WafLogs /></Protected>} />
@@ -50,7 +54,7 @@ export default function App() {
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
-        <Route path="/mass-operations" element={<Protected><ComingSoon title="Mass Operations" milestone="milestone M10" /></Protected>} />
+        <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />
         <Route path="/security" element={<Protected role="admin"><SecurityLogPage /></Protected>} />

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, Globe2, Info, LayoutTemplate, Lock, Settings as SettingsIcon, Shield } from 'lucide-react';
+import { Bell, Bug, CheckCircle2, Globe2, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -56,6 +56,28 @@ interface CMSS {
   db_scan: boolean;
   interval_hours: number;
 }
+interface OSMS {
+  enabled: boolean;
+  per_minute: number;
+  per_hour: number;
+  action: 'notify' | 'hold' | 'suspend';
+  check_subjects: boolean;
+  spam_patterns: string[];
+  whitelist_senders: string[];
+  whitelist_ips: string[];
+  whitelist_paths: string[];
+}
+interface SuspendS {
+  enabled: boolean;
+  detections: number;
+  window_hours: number;
+  exclude_users: string[];
+}
+interface DomainRepS {
+  enabled: boolean;
+  interval_hours: number;
+  safe_browsing_key: string;
+}
 interface IPDBS {
   enabled: boolean;
   report: boolean;
@@ -65,6 +87,9 @@ interface AllSettings {
   ipdb: IPDBS;
   waf: WAFS;
   cms: CMSS;
+  osm: OSMS;
+  auto_suspend: SuspendS;
+  domain_reputation: DomainRepS;
   reputation: ReputationS;
   notifications: NotificationsS;
 }
@@ -75,15 +100,15 @@ interface Meta {
   default_rbls: string[];
 }
 
-type Section = 'scanner' | 'waf' | 'cms' | 'rbl' | 'ipdb' | 'notifications' | 'about';
+type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'ipdb' | 'notifications' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
   { v: 'ipdb', l: 'IPDB Protection', icon: <Globe2 className="h-4 w-4" /> },
   { v: 'waf', l: 'WAF & Bruteforce', icon: <Shield className="h-4 w-4" /> },
   { v: 'cms', l: 'WordPress and CMS', icon: <LayoutTemplate className="h-4 w-4" /> },
-  { v: 'suspension', l: 'Automatic Suspension', icon: <Lock className="h-4 w-4" />, soon: true },
-  { v: 'osm', l: 'Outgoing Spam Monitor', icon: <Lock className="h-4 w-4" />, soon: true },
+  { v: 'suspension', l: 'Automatic Suspension', icon: <UserX className="h-4 w-4" /> },
+  { v: 'osm', l: 'Outgoing Spam Monitor', icon: <Mail className="h-4 w-4" /> },
   { v: 'notifications', l: 'Notifications', icon: <Bell className="h-4 w-4" /> },
   { v: 'about', l: 'About', icon: <Info className="h-4 w-4" /> },
 ];
@@ -140,8 +165,11 @@ export default function SettingsPage() {
         {!admin && <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">You can view settings; only admins can change them.</div>}
         {section === 'scanner' && <ScannerSection s={st.scanner} meta={meta} admin={admin} busy={busy} onSave={setScanner} />}
         {section === 'rbl' && <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />}
+        {section === 'rbl' && st.domain_reputation && <DomainRepSection s={st.domain_reputation} admin={admin} busy={busy} onSave={(p) => save({ domain_reputation: p })} />}
         {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} />}
         {section === 'cms' && st.cms && <CMSSection s={st.cms} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
+        {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
+        {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
         {section === 'ipdb' && <IPDBSection s={st.ipdb ?? { enabled: true, report: true }} admin={admin} busy={busy} onSave={(p) => save({ ipdb: p })} />}
         {section === 'notifications' && <NotificationsSection s={st.notifications} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
         {section === 'about' && <About serverId={id!} />}
@@ -398,6 +426,145 @@ function CMSSection({ s, admin, busy, onSave }: { s: CMSS; admin: boolean; busy:
             </option>
           ))}
         </select>
+      </SettingRow>
+    </div>
+  );
+}
+
+function NumberSave({ label, value, min, disabled, onSave }: { label: string; value: number; min: number; disabled: boolean; onSave: (v: number) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  return (
+    <div className="flex items-center gap-2">
+      <input className="input w-28" type="number" min={min} value={v} disabled={disabled} onChange={(e) => setV(Number(e.target.value))} aria-label={label} />
+      <button className="btn-outline px-3" disabled={disabled || v === value || v < min} onClick={() => onSave(v)}>
+        Save
+      </button>
+    </div>
+  );
+}
+
+function OSMSection({ s, admin, busy, onSave }: { s: OSMS; admin: boolean; busy: boolean; onSave: (p: Partial<OSMS>) => void }) {
+  const dis = !admin || busy;
+  const off = dis || !s.enabled;
+  return (
+    <div>
+      <div className="mb-2 flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-navy-900">Outgoing Spam Monitor</h2>
+          <p className="text-sm text-slate-500">Watches the Exim mail log and reacts when an account or script sends too much mail.</p>
+        </div>
+        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
+      </div>
+      <SettingRow title="Messages per minute" desc="Per sender (email login or script)">
+        <NumberSave label="per minute" value={s.per_minute} min={5} disabled={off} onSave={(v) => onSave({ per_minute: v })} />
+      </SettingRow>
+      <SettingRow title="Messages per hour" desc="Per sender">
+        <NumberSave label="per hour" value={s.per_hour} min={20} disabled={off} onSave={(v) => onSave({ per_hour: v })} />
+      </SettingRow>
+      <SettingRow title="Action when a limit is crossed" desc="Hold/suspend apply to the whole cPanel account's outgoing mail and can be released from the Outgoing Spam Monitor page">
+        <select className="input w-56" value={s.action} disabled={off} onChange={(e) => onSave({ action: e.target.value as OSMS['action'] })}>
+          <option value="notify">Notify only</option>
+          <option value="hold">Hold outgoing mail (queue)</option>
+          <option value="suspend">Suspend outgoing mail</option>
+        </select>
+      </SettingRow>
+      <SettingRow title="Check subjects" desc="Flag ALL CAPS subjects and the patterns below" recommended>
+        <Toggle on={s.check_subjects} disabled={off} onChange={(v) => onSave({ check_subjects: v })} />
+      </SettingRow>
+      <ListEditor title="Spam subject patterns" desc="Case-insensitive text found in subjects" items={s.spam_patterns} disabled={off} onChange={(v) => onSave({ spam_patterns: v })} />
+      <ListEditor title="Whitelisted senders" desc="Email addresses or logins never limited (newsletters, ticket systems)" items={s.whitelist_senders} disabled={off} placeholder="user@example.com" onChange={(v) => onSave({ whitelist_senders: v })} />
+      <ListEditor title="Whitelisted IPs" desc="SMTP clients never limited" items={s.whitelist_ips} disabled={off} validate={isIPorCIDR} placeholder="IP or CIDR" onChange={(v) => onSave({ whitelist_ips: v })} />
+      <ListEditor title="Whitelisted script paths" desc="Scripts under these directories are never limited" items={s.whitelist_paths} disabled={off} placeholder="/home/user/public_html/mailer" validate={(v) => (v.startsWith('/') ? null : 'Enter an absolute path')} onChange={(v) => onSave({ whitelist_paths: v })} />
+    </div>
+  );
+}
+
+interface SuspensionRow {
+  id: number;
+  at: number;
+  user: string;
+  reason: string;
+  status: string;
+  lifted_at: number;
+}
+
+function SuspendSection({ serverId, s, admin, busy, onSave }: { serverId: string; s: SuspendS; admin: boolean; busy: boolean; onSave: (p: Partial<SuspendS>) => void }) {
+  const dis = !admin || busy;
+  const list = useAgent<{ suspensions: SuspensionRow[] }>(serverId, 'suspend.list');
+  const { run, busy: lifting } = useAction();
+  const meta = useAgent<{ meta: { users: { name: string }[] } }>(serverId, 'settings.get');
+  return (
+    <div>
+      <div className="mb-2 flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-navy-900">Automatic Suspension</h2>
+          <p className="text-sm text-slate-500">Suspend a cPanel account that keeps getting infected, to stop it attacking other sites and visitors.</p>
+        </div>
+        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
+      </div>
+      <SettingRow title="Malware detections" desc="Number of virus detections for one account that triggers a suspension">
+        <NumberSave label="detections" value={s.detections} min={2} disabled={dis || !s.enabled} onSave={(v) => onSave({ detections: v })} />
+      </SettingRow>
+      <SettingRow title="Within (hours)" desc="Time window for counting detections">
+        <NumberSave label="hours" value={s.window_hours} min={1} disabled={dis || !s.enabled} onSave={(v) => onSave({ window_hours: v })} />
+      </SettingRow>
+      <ListEditor
+        title="Never suspend"
+        desc="Accounts excluded from automatic suspension"
+        items={s.exclude_users}
+        options={(meta.data?.meta.users ?? []).map((u) => u.name)}
+        disabled={dis}
+        onChange={(v) => onSave({ exclude_users: v })}
+      />
+      <div className="py-4">
+        <div className="mb-2 font-medium text-navy-900">Suspension history</div>
+        {!list.data?.suspensions.length ? (
+          <div className="text-sm text-slate-400">No automatic suspensions</div>
+        ) : (
+          <table className="w-full text-sm">
+            <tbody className="divide-y divide-slate-100">
+              {list.data.suspensions.map((x) => (
+                <tr key={x.id}>
+                  <td className="py-2 font-medium">{x.user}</td>
+                  <td className="py-2 text-xs">{x.reason}</td>
+                  <td className="py-2 text-xs text-slate-500">{new Date(x.at * 1000).toLocaleString()}</td>
+                  <td className="py-2 text-xs capitalize">{x.status}</td>
+                  <td className="py-2 text-right">
+                    {admin && x.status === 'suspended' && (
+                      <button className="btn-outline px-2 py-1 text-xs" disabled={lifting} onClick={() => run(() => agentCall(serverId, 'suspend.lift', { id: x.id }), `${x.user} unsuspended`).then(() => list.reload())}>
+                        Unsuspend
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: boolean; busy: boolean; onSave: (p: Partial<DomainRepS>) => void }) {
+  const dis = !admin || busy;
+  const [key, setKey] = useState(s.safe_browsing_key);
+  useEffect(() => setKey(s.safe_browsing_key), [s.safe_browsing_key]);
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-6">
+      <h2 className="text-lg font-semibold text-navy-900">Domain Reputation</h2>
+      <p className="mb-2 text-sm text-slate-500">Check every hosted domain against Spamhaus DBL, SURBL and URIBL.</p>
+      <SettingRow title="Domain reputation monitoring" desc={`Checked every ${s.interval_hours} hours; alerts when a domain becomes listed`} recommended>
+        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
+      </SettingRow>
+      <SettingRow title="Google Safe Browsing API key" desc="Optional. Adds malware and phishing (SOCIAL_ENGINEERING) checks from Google.">
+        <div className="flex gap-2">
+          <input className="input w-72" type="password" value={key} disabled={dis} placeholder="AIza…" onChange={(e) => setKey(e.target.value)} />
+          <button className="btn-outline" disabled={dis || key === s.safe_browsing_key} onClick={() => onSave({ safe_browsing_key: key.trim() })}>
+            Save
+          </button>
+        </div>
       </SettingRow>
     </div>
   );
