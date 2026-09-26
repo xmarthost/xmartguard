@@ -46,6 +46,7 @@ interface Status {
   samples_malicious: number;
   samples_clean: number;
   train_min_per_class: number;
+  overruled: { match: string; files: number }[];
   models: { base_version: string; version: string; samples: number; accuracy: number; trained_at: string; weights: number }[];
 }
 
@@ -227,6 +228,24 @@ export default function AIScanner() {
           </li>
         </ul>
       </Card>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <WPCoreCard admin={admin} />
+        <SignaturesCard admin={admin} />
+      </div>
+
+      {st.overruled.length > 0 && (
+        <Card title="Signatures the AI overruled" desc="Detections the AI found to be false positives, by engine signature. The files are restored and never flagged again; frequent ones show rules to tune.">
+          <ul className="grid gap-2 text-sm md:grid-cols-2">
+            {st.overruled.map((o) => (
+              <li key={o.match} className="flex justify-between rounded bg-slate-50 px-3 py-2">
+                <span className="font-mono text-xs">{o.match}</span>
+                <span className="text-slate-600">{num(o.files)} files</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <KnowledgeBase admin={admin} onChange={() => status.reload()} />
 
@@ -569,6 +588,104 @@ function KnowledgeBase({ admin, onChange }: { admin: boolean; onChange: () => vo
           </table>
           <Pager total={kb.data.total} limit={limit} offset={offset} onChange={setOffset} />
         </div>
+      )}
+    </Card>
+  );
+}
+
+interface WPStatus {
+  versions: number;
+  stable: number;
+  prerelease: number;
+  latest: string;
+  newest_prerelease: string;
+  files: number;
+  synced_at: string | null;
+  error: string;
+}
+
+/** Official WordPress core files known to every server. */
+function WPCoreCard({ admin }: { admin: boolean }) {
+  const wp = useApi<WPStatus>('/api/wp-core/status', 60_000);
+  const { run, busy } = useAction();
+  const d = wp.data;
+  return (
+    <Card
+      title="WordPress core files"
+      desc="Every file of every WordPress release since 5.8, including betas and release candidates. Official core files are never flagged, and infected ones are replaced with the official file of the site's version."
+      right={
+        admin ? (
+          <button className="btn-outline" disabled={busy} onClick={() => run(() => api('POST', '/api/wp-core/sync').then(() => wp.reload()), 'WordPress versions updated')}>
+            <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} /> Update now
+          </button>
+        ) : undefined
+      }
+    >
+      {!d ? (
+        <PageLoader />
+      ) : (
+        <div className="space-y-1 text-sm text-slate-600">
+          <div>
+            <b className="text-navy-900">{num(d.versions)}</b> versions ({num(d.stable)} releases, {num(d.prerelease)} betas/RCs) ·{' '}
+            <b className="text-navy-900">{num(d.files)}</b> distinct files
+          </div>
+          <div>
+            Latest release <b>{d.latest || '—'}</b>
+            {d.newest_prerelease && (
+              <>
+                {' '}
+                · newest pre-release <b>{d.newest_prerelease}</b>
+              </>
+            )}
+          </div>
+          <div className="text-xs text-slate-400">Checked {d.synced_at ? ago(d.synced_at) : 'not yet (every 12 hours)'}; agents also ship with all releases up to 7.1.2.</div>
+          {d.error && <div className="text-xs text-red-600">{d.error}</div>}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+interface SigStatus {
+  feeds: { url: string; kind: string; counts: { md5?: number; hex?: number; yara?: number }; error: string; fetched_at: string | null }[];
+}
+
+/** Public malware signature feeds sent to every server. */
+function SignaturesCard({ admin }: { admin: boolean }) {
+  const sig = useApi<SigStatus>('/api/signatures/status', 60_000);
+  const { run, busy } = useAction();
+  return (
+    <Card
+      title="Public malware signatures"
+      desc="Downloaded daily and sent to every server: Linux Malware Detect (MD5 and hex patterns) and web shell YARA rules (signature-base)."
+      right={
+        admin ? (
+          <button className="btn-outline" disabled={busy} onClick={() => run(() => api('POST', '/api/signatures/sync').then(() => sig.reload()), 'Signatures updated')}>
+            <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} /> Update now
+          </button>
+        ) : undefined
+      }
+    >
+      {!sig.data ? (
+        <PageLoader />
+      ) : (
+        <ul className="space-y-2 text-sm">
+          {sig.data.feeds.map((f) => (
+            <li key={f.url} className="rounded bg-slate-50 px-3 py-2">
+              <div className="flex justify-between gap-3">
+                <span className="truncate font-medium text-navy-900" title={f.url}>
+                  {f.kind === 'lmd' ? 'Linux Malware Detect' : 'YARA'} · {f.url.split('/').pop()}
+                </span>
+                <span className="whitespace-nowrap text-slate-500">
+                  {[f.counts.md5 ? `${num(f.counts.md5)} MD5` : '', f.counts.hex ? `${num(f.counts.hex)} hex` : '', f.counts.yara ? `${f.counts.yara} YARA file` : '']
+                    .filter(Boolean)
+                    .join(' · ') || 'not downloaded yet'}
+                </span>
+              </div>
+              {f.error ? <div className="text-xs text-red-600">{f.error}</div> : f.fetched_at && <div className="text-xs text-slate-400">updated {ago(f.fetched_at)}</div>}
+            </li>
+          ))}
+        </ul>
       )}
     </Card>
   );

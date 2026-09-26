@@ -232,4 +232,29 @@ CREATE TABLE ai_models (
 );
 `,
   },
+  {
+    version: '004_wpcore_signatures',
+    sql: `
+-- Official WordPress core checksums per version (releases, betas, RCs).
+CREATE TABLE wp_core_versions (
+  version     text PRIMARY KEY,
+  channel     text NOT NULL DEFAULT 'stable',
+  files       integer NOT NULL DEFAULT 0,
+  checksums   jsonb NOT NULL,
+  source      text NOT NULL DEFAULT 'api',
+  fetched_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Downloaded malware signature feeds (latest good copy of each).
+CREATE TABLE sig_feeds (
+  url         text PRIMARY KEY,
+  kind        text NOT NULL,
+  etag        text NOT NULL DEFAULT '',
+  bundle      jsonb NOT NULL DEFAULT '{}'::jsonb,
+  counts      jsonb NOT NULL DEFAULT '{}'::jsonb,
+  error       text NOT NULL DEFAULT '',
+  fetched_at  timestamptz
+);
+`,
+  },
 ];

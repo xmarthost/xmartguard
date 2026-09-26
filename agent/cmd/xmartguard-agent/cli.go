@@ -440,7 +440,7 @@ func cliScanner(c *cli) error {
 		return nil
 	}
 	return c.printSection("scanner", "enabled", "realtime", "daily_scan", "weekly_scan", "virus_action", "suspicious_action", "binary_action",
-		"use_clamav", "yara", "auto_clean", "trim", "trim_max_percent", "max_file_size_mb", "keep_days")
+		"use_clamav", "yara", "feeds", "wp_core_repair", "trim", "trim_max_percent", "max_file_size_mb", "keep_days")
 }
 
 func cliAIScan(c *cli) error {
@@ -454,7 +454,7 @@ func cliAIScan(c *cli) error {
 	if v := c.val("--scope"); v != "" {
 		f["scope"] = v
 	}
-	for flag, field := range map[string]string{"--learn": "learn", "--act": "act"} {
+	for flag, field := range map[string]string{"--learn": "learn", "--act": "act", "--restore-clean": "restore_clean"} {
 		on, ok, err := c.onOff(flag)
 		if err != nil {
 			return err
@@ -849,13 +849,13 @@ func parseWhen(s string) (int64, error) {
 
 func cliLogAction(c *cli) error {
 	action := ""
-	for _, a := range []string{"restore", "quarantine", "delete", "disable", "trim", "ignore"} {
+	for _, a := range []string{"restore", "quarantine", "delete", "disable", "trim", "ignore", "clear"} {
 		if c.has("--" + a) {
 			action = a
 		}
 	}
 	if action == "" {
-		return errors.New("choose --restore, --quarantine, --delete, --disable, --trim or --ignore, plus filters")
+		return errors.New("choose --restore, --quarantine, --delete, --disable, --trim, --clear or --ignore, plus filters")
 	}
 	var ids []int64
 	if v := c.vals("--log-id"); len(v) > 0 {
@@ -1753,19 +1753,20 @@ Usage:  xgcli COMMAND [--options]      (run as root)
   scanner [--enable|--disable] [--realtime enable|disable]
   dailyscan | weeklyscan [--enable|--disable]
   ai-scan [--enable|--disable] [--provider builtin|portal] [--scope suspicious|all]
-          [--learn enable|disable] [--act enable|disable] [--max-per-hour N] [--sync] [--check LOG_ID]
+          [--learn enable|disable] [--act enable|disable] [--restore-clean enable|disable] [--max-per-hour N] [--sync] [--check LOG_ID]
   watch --list                    directories the scanner watches
   whitelist --user|--file  --list | --add X[,Y] | --remove X[,Y]
   blacklist --file          --list | --add X | --remove X
   file-action [--virus A] [--suspicious A] [--binary A] [--symbolic-link enable|disable]   A: email|disable|quarantine
-  cleanup [--enable|--disable]    restore infected WordPress core files
+  cleanup [--enable|--disable]    replace infected WordPress core files with the official ones
+  feeds [--enable|--disable]      public malware signatures (Linux Malware Detect, YARA web shell rules)
   trim [--enable|--disable] [--max 20]   remove only injected code the AI located
 
   scan --all | --path DIR | --daily | --weekly [--no-wait]
   scan --list | --result ID [--page N --limit N --export FILE.csv] | --stop ID | --delete ID
   logs [--status S] [--category C] [--file TEXT] [--page N --limit N] [--export FILE.csv]
   view LOG_ID                     show a detected file (">" marks injected lines)
-  log-action --restore|--quarantine|--delete|--disable|--trim|--ignore
+  log-action --restore|--quarantine|--delete|--disable|--trim|--clear|--ignore
              [--log-id ID[,ID]] [--user U] [--file TEXT] [--signature S] [--scan-id ID] [--from '-24 hours'] [--to now]
 
   fw [--status|--enable|--disable|--restart] [--provider iptables|nftables]

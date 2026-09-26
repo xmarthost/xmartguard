@@ -2,7 +2,8 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import { audit, requireRole } from '../auth.js';
-import { sha256, verifyEd25519 } from '../security.js';
+import { sha256 } from '../security.js';
+import { verifyAgent } from '../agent-sign.js';
 import { TRAIN_MIN_PER_CLASS, type AIGateway } from '../ai/gateway.js';
 import { PRESETS, complete, listModels, preset } from '../ai/providers.js';
 
@@ -78,18 +79,8 @@ const LegacyBody = z.object({
 });
 
 export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void {
-  /** Verifies an agent's signed envelope; returns its account or replies 401. */
   async function agentOf(serverId: string, ts: string, message: string, signature: string, reply: FastifyReply) {
-    if (Math.abs(Date.now() / 1000 - Number(ts)) > 300) {
-      reply.code(401).send({ error: 'stale request (check the server clock)' });
-      return null;
-    }
-    const { rows } = await pool.query("SELECT account_id, public_key FROM servers WHERE id = $1 AND status = 'active'", [serverId]);
-    if (!rows[0] || !verifyEd25519(rows[0].public_key, message, signature)) {
-      reply.code(401).send({ error: 'bad signature' });
-      return null;
-    }
-    return rows[0].account_id as string;
+    return (await verifyAgent(pool, serverId, ts, message, signature, reply))?.accountId ?? null;
   }
 
   // ---------------------------------------------------------------- settings
@@ -211,6 +202,10 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
       ),
       pool.query('SELECT base_version, version, samples, accuracy, trained_at, jsonb_array_length(entries) AS weights FROM ai_models ORDER BY trained_at DESC LIMIT 3'),
     ]);
+    // Engine signatures the AI overruled most (false positives to fix in the rules).
+    const overruled = await pool.query(
+      `SELECT match, count(*)::int AS files FROM ai_kb WHERE verdict = 'clean' AND match <> '' GROUP BY match ORDER BY files DESC LIMIT 10`,
+    );
     const samples = await pool.query(
       'SELECT count(*)::int AS n, count(*) FILTER (WHERE label = 1)::int AS malicious, count(*) FILTER (WHERE label = 0)::int AS clean FROM ai_samples',
     );
@@ -221,6 +216,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
       samples_malicious: samples.rows[0].malicious,
       samples_clean: samples.rows[0].clean,
       train_min_per_class: TRAIN_MIN_PER_CLASS,
+      overruled: overruled.rows,
       models: models.rows,
     };
   });

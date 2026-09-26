@@ -6,6 +6,7 @@ package scanner
 import (
 	"bufio"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
+	"github.com/xmarthost/xmartguard/agent/internal/wpcore"
 )
 
 // Finding is one detection.
@@ -77,6 +79,15 @@ type Scanner struct {
 	// OnClean is called for new or changed code files the realtime scanner
 	// found clean (the AI scanner's "all files" mode).
 	OnClean func(path string, info fs.FileInfo)
+	// KnownGood reports content that is an official file (WordPress core);
+	// it is never flagged, whatever a rule or hash says.
+	KnownGood func(md5 [16]byte) bool
+	// KnownGoodPath reports an unmodified file of a published plugin
+	// (checked against the official checksums of its version).
+	KnownGoodPath func(path string, md5 [16]byte) bool
+	// Cleared reports content (by SHA-256) the AI scanner or an
+	// administrator found clean; it is not flagged again.
+	Cleared func(sha256 string) bool
 
 	mu      sync.Mutex
 	cancels map[int64]context.CancelFunc
@@ -86,7 +97,8 @@ type Scanner struct {
 
 // New creates a scanner and marks scans interrupted by a restart as failed.
 func New(db *sql.DB, st *settings.Store, log *slog.Logger) *Scanner {
-	s := &Scanner{DB: db, Settings: st, Log: log, cancels: map[int64]context.CancelFunc{}, sem: make(chan struct{}, 1), users: map[uint32]string{}}
+	s := &Scanner{DB: db, Settings: st, Log: log, cancels: map[int64]context.CancelFunc{}, sem: make(chan struct{}, 1), users: map[uint32]string{},
+		KnownGood: wpcore.Default().Known}
 	_, _ = db.Exec(`UPDATE scans SET status = 'failed', error = 'interrupted by agent restart', finished_at = ? WHERE status IN ('queued','running')`, store.Now())
 	return s
 }
@@ -234,6 +246,12 @@ type Detection struct {
 	Signature string
 }
 
+// ErrTrusted is returned (with a nil detection) for content that must not be
+// flagged by any engine: official WordPress core files and files the AI or
+// an administrator found clean. Callers treat it as clean and skip YARA and
+// ClamAV for the file.
+var ErrTrusted = errors.New("trusted content")
+
 // CheckFile applies whitelist/blacklist rules and signatures to one file.
 func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner) (*Detection, error) {
 	if !info.Mode().IsRegular() || info.Size() == 0 {
@@ -258,25 +276,42 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			return &Detection{CatVirus, "XG-BLACKLIST.FileName"}, nil
 		}
 	}
-	// Known-bad hash lookup: only hash a file whose exact size matches an entry
-	// in our blocklist, so this stays cheap across a full scan.
-	if hashDB.SizeKnown(info.Size()) {
-		if sum := sha256File(path); sum != "" {
-			if label := hashDB.Lookup(info.Size(), sum); label != "" {
-				return &Detection{CatVirus, label}, nil
+	ext := extOf(name)
+	var content []byte
+	if ScriptExts[ext] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
+		var err error
+		if content, err = os.ReadFile(path); err != nil {
+			return nil, err
+		}
+		sum := md5.Sum(content)
+		if s.KnownGood != nil && s.KnownGood(sum) {
+			return nil, ErrTrusted
+		}
+		if s.KnownGoodPath != nil && s.KnownGoodPath(path, sum) {
+			return nil, ErrTrusted
+		}
+		if s.Cleared != nil {
+			sum := sha256.Sum256(content)
+			if s.Cleared(hex.EncodeToString(sum[:])) {
+				return nil, ErrTrusted
 			}
 		}
 	}
-	ext := extOf(name)
-	if ScriptExts[ext] {
-		max := int64(cfg.MaxFileSizeMB) << 20
-		if info.Size() > max {
-			return nil, nil
+	// Known-bad hash lookup: only hash a file whose exact size matches an entry
+	// in our blocklist, so this stays cheap across a full scan.
+	if hdb := activeHashDB(); hdb.SizeKnown(info.Size()) {
+		label := hdb.LookupSums(info.Size(), func() (string, string) {
+			if content != nil {
+				h, m := sha256.Sum256(content), md5.Sum(content)
+				return hex.EncodeToString(h[:]), hex.EncodeToString(m[:])
+			}
+			return sha256File(path), md5File(path)
+		})
+		if label != "" {
+			return &Detection{CatVirus, label}, nil
 		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
+	}
+	if content != nil {
 		if ext == "" && IsELF(content) {
 			return binaryCheck(path)
 		}
@@ -286,7 +321,15 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		if r := Match(ext, content); r != nil {
 			return &Detection{r.Category, r.Name}, nil
 		}
+		// Byte patterns from public feeds (Linux Malware Detect): reported
+		// as suspicious so the AI scanner confirms them first.
+		if name := feedPatterns.Match(content); name != "" {
+			return &Detection{CatSuspicious, "LMD." + name}, nil
+		}
 		return nil, nil
+	}
+	if ScriptExts[ext] {
+		return nil, nil // larger than the size limit
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -309,6 +352,19 @@ func binaryCheck(path string) (*Detection, error) {
 		}
 	}
 	return nil, nil
+}
+
+func md5File(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func sha256File(path string) string {
@@ -516,6 +572,9 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=? WHERE id=?`, files, infected, id)
 			}
 			det, err := s.CheckFile(path, info, cfg)
+			if errors.Is(err, ErrTrusted) {
+				return nil
+			}
 			if useYARA && (err != nil || det == nil) && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
 				scripts = append(scripts, path)
 			}
@@ -540,8 +599,16 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	if ctx.Err() == nil {
 		flushClam()
 		for path, rule := range yaraScan(ctx, scripts) {
+			// Public feed rules are broad: suspicious, confirmed by the AI.
+			cat := CatVirus
+			if ns, name, ok := strings.Cut(rule, ":"); ok {
+				rule = name
+				if ns == "feed" {
+					cat = CatSuspicious
+				}
+			}
 			if info, err := os.Lstat(path); err == nil {
-				if _, err := s.Record(id, "manual", path, info, Detection{CatVirus, "YARA." + rule}); err == nil {
+				if _, err := s.Record(id, "manual", path, info, Detection{cat, "YARA." + rule}); err == nil {
 					infected++
 				}
 			}
@@ -784,5 +851,5 @@ func (c *clamAV) scan(paths []string) map[string]string {
 // NewOffline returns a scanner usable for CheckFile without a database
 // (CLI checks and benchmarks).
 func NewOffline() *Scanner {
-	return &Scanner{users: map[uint32]string{}, cancels: map[int64]context.CancelFunc{}}
+	return &Scanner{users: map[uint32]string{}, cancels: map[int64]context.CancelFunc{}, KnownGood: wpcore.Default().Known}
 }

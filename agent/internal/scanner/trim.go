@@ -219,7 +219,15 @@ func (s *Scanner) Trim(id int64, cuts []Cut, maxPercent int) error {
 		return fmt.Errorf("the scanner still detects %s after trimming", d.Signature)
 	}
 
-	// Keep the original, then replace the live file atomically.
+	return s.replaceLive(id, r, orig, out, "trimmed")
+}
+
+// replaceLive keeps the current content (orig) in quarantine and puts
+// replacement live at the finding's path with its original owner and mode.
+func (s *Scanner) replaceLive(id int64, r row, orig, replacement []byte, status string) error {
+	if err := os.MkdirAll(QuarantineDir(), 0o700); err != nil {
+		return err
+	}
 	backup := filepath.Join(QuarantineDir(), strconv.FormatInt(id, 10)+".orig")
 	if r.status == "quarantined" {
 		if err := os.Rename(r.qpath, backup); err != nil {
@@ -236,8 +244,8 @@ func (s *Scanner) Trim(id int64, cuts []Cut, maxPercent int) error {
 	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
 		return err
 	}
-	next := filepath.Join(filepath.Dir(r.path), "."+filepath.Base(r.path)+".xg-trim")
-	if err := os.WriteFile(next, out, mode); err != nil {
+	next := filepath.Join(filepath.Dir(r.path), "."+filepath.Base(r.path)+".xg-new")
+	if err := os.WriteFile(next, replacement, mode); err != nil {
 		return err
 	}
 	if r.uid >= 0 {
@@ -248,7 +256,52 @@ func (s *Scanner) Trim(id int64, cuts []Cut, maxPercent int) error {
 		os.Remove(next)
 		return err
 	}
-	return s.setStatus(id, "trimmed", backup)
+	return s.setStatus(id, status, backup)
+}
+
+// ReplaceWithOfficial puts the official version of an infected file (e.g. a
+// WordPress core file from the release) in place; the infected copy stays
+// in quarantine and Restore can bring it back.
+func (s *Scanner) ReplaceWithOfficial(id int64, official []byte) error {
+	r, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	src := r.path
+	switch r.status {
+	case "detected", "disabled":
+	case "quarantined":
+		src = r.qpath
+		if _, err := os.Lstat(r.path); err == nil {
+			return fmt.Errorf("a file already exists at %s", r.path)
+		}
+	default:
+		return fmt.Errorf("cannot replace a %s file", r.status)
+	}
+	orig, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return s.replaceLive(id, r, orig, official, "cleaned")
+}
+
+// Clear marks a detection as a false positive: a quarantined or disabled
+// file is put back with its owner and permissions.
+func (s *Scanner) Clear(id int64) error {
+	r, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	switch r.status {
+	case "quarantined", "disabled":
+		if err := s.Restore(id); err != nil {
+			return err
+		}
+	case "detected", "restored":
+	default:
+		return fmt.Errorf("cannot clear a %s file", r.status)
+	}
+	return s.setStatus(id, "cleared", "")
 }
 
 // Content returns a finding's current content (the quarantined copy, or the
@@ -259,7 +312,7 @@ func (s *Scanner) Content(id int64, limit int64) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	p := r.path
-	if (r.status == "quarantined" || r.status == "trimmed") && r.qpath != "" {
+	if (r.status == "quarantined" || r.status == "trimmed" || r.status == "cleaned") && r.qpath != "" {
 		p = r.qpath
 	}
 	if r.status == "deleted" {

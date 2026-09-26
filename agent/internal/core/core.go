@@ -38,6 +38,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/updater"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
 	"github.com/xmarthost/xmartguard/agent/internal/waf"
+	"github.com/xmarthost/xmartguard/agent/internal/wpcore"
 )
 
 // Agent holds every module.
@@ -57,6 +58,11 @@ type Agent struct {
 	Monitor  *monitor.Monitor
 	Mailer   *notify.Mailer
 	Session  *client.Session
+
+	// WPSource and WPPlugins override where official WordPress files and
+	// plugin checksums come from (tests).
+	WPSource  wpcore.Source
+	WPPlugins wpcore.PluginSource
 
 	// ExitForUpdate is called after a successful self-update.
 	ExitForUpdate func()
@@ -81,6 +87,14 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Scanner = scanner.New(db, st, log)
 	a.Scanner.OnFinding = a.onFinding
 	a.Scanner.OnClean = func(path string, _ os.FileInfo) { a.AI.EnqueueNew(path) }
+	a.Scanner.Cleared = func(sha string) bool { return ai.IsCleared(db, sha) }
+	plugins := &wpcore.Plugins{CacheDir: filepath.Join(store.StateDir(), "cms", "plugin-checksums")}
+	var pluginsOnce sync.Once
+	a.Scanner.KnownGoodPath = func(path string, sum [16]byte) bool {
+		// The portal connection is set up after the scanner.
+		pluginsOnce.Do(func() { plugins.Source = a.pluginSource() })
+		return plugins.Known(path, sum)
+	}
 	a.Realtime = &scanner.Realtime{S: a.Scanner}
 	a.Firewall = &firewall.Manager{
 		DB: db, Settings: st, Log: log, NFT: firewall.FindNFT(), IPT: firewall.FindIPTables(),
@@ -149,6 +163,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.Captcha.Run(ctx)
 	go a.AI.Run(ctx)
 	go a.AI.RunSync(ctx)
+	go a.wpCoreLoop(ctx)
 	go a.Monitor.Run(ctx)
 	go a.retentionLoop(ctx)
 	go a.reportLoop(ctx)
@@ -207,7 +222,9 @@ func (a *Agent) protectedIPs() []string {
 
 func (a *Agent) onFinding(f scanner.Finding) {
 	a.maybeSuspend(f)
-	a.maybeAutoClean(f)
+	if a.maybeRepairCore(f) {
+		return // the official file is back in place
+	}
 	// Suspicious files get the AI's opinion. With the portal AI, detected
 	// malware is sent too: the AI locates injected code (for Trim) and its
 	// verdicts teach every linked server.
@@ -409,6 +426,10 @@ func (a *Agent) Handlers() map[string]client.Handler {
 				err = a.Scanner.Delete(id)
 			case "trim":
 				err = a.trimFinding(id)
+			case "clear":
+				// A false positive: restore the file and never flag this
+				// content again (on every server, through the portal).
+				err = a.clearFinding(id)
 			case "ignore":
 				var path string
 				path, err = a.Scanner.Ignore(id)
@@ -682,6 +703,29 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		evs, total, err := a.WAF.Events(f)
 		return map[string]any{"events": evs, "total": total}, err
 	}
+	// waf.rule switches one XMart Guard WAF rule on or off.
+	h["waf.rule"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID      int  `json:"id"`
+			Enabled bool `json:"enabled"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		patch, err := waf.ToggleRule(a.Settings.Get().WAF, in.ID, in.Enabled)
+		if err != nil {
+			return nil, err
+		}
+		raw, _ := json.Marshal(map[string]any{"waf": patch})
+		if _, err := a.Settings.Patch(raw); err != nil {
+			return nil, err
+		}
+		res := map[string]any{"rules": a.WAF.RuleCatalog()}
+		if err := a.WAF.Apply(); err != nil {
+			res["warning"] = err.Error()
+		}
+		return res, nil
+	}
 	h["waf.apply"] = func(context.Context, json.RawMessage) (any, error) {
 		return a.WAF.Status(), a.WAF.Apply()
 	}
@@ -954,6 +998,10 @@ func fwChanged(a, b settings.Firewall) bool {
 func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 	st := a.Settings.Get()
 	a.Log.Info("AI verdict", "path", j.Path, "verdict", v.Verdict, "confidence", v.Confidence, "model", v.Model, "source", v.Source)
+	if v.Verdict == ai.Clean && j.FindingID != 0 {
+		a.clearFalsePositive(j, v)
+		return
+	}
 	if v.Verdict != ai.Malicious || v.Confidence < 80 {
 		return
 	}
@@ -1008,6 +1056,46 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 		a.Mailer.Enqueue(n.Email, "AI scanner confirmed malware",
 			fmt.Sprintf("[AI %d%%] %s\n  file: %s\n  reason: %s\n  action: %s\n", v.Confidence, f.Signature, f.Path, v.Reason, st.Scanner.VirusAction))
 	}
+}
+
+// clearFalsePositive restores a file the AI is sure is clean (a false
+// positive) from quarantine. The verdict already went to the portal, so the
+// same content is not flagged again on any server and the fleet model learns
+// from it.
+func (a *Agent) clearFalsePositive(j ai.Job, v ai.Verdict) {
+	st := a.Settings.Get()
+	if !st.AI.RestoreClean || v.Confidence < ai.ClearMinConfidence || (v.Source != "ai" && v.Source != "fleet") {
+		return
+	}
+	f, err := a.Scanner.Get(j.FindingID)
+	if err != nil || (f.Status != "quarantined" && f.Status != "disabled" && f.Status != "detected") {
+		return
+	}
+	if err := a.Scanner.Clear(f.ID); err != nil {
+		a.Log.Warn("could not restore a file the AI found clean", "path", f.Path, "err", err)
+		return
+	}
+	a.Log.Info("false positive cleared by the AI scanner", "path", f.Path, "signature", f.Signature, "confidence", v.Confidence)
+	if n := st.Notifications; n.Email != "" && n.OnVirus && f.Status != "detected" {
+		a.Mailer.Enqueue(n.Email, "false positive restored",
+			fmt.Sprintf("[AI %d%% clean] %s\n  file: %s\n  reason: %s\n  action: restored from %s; the scanner will not flag this content again.\n", v.Confidence, f.Signature, f.Path, v.Reason, f.Status))
+	}
+}
+
+// clearFinding marks a detection as a false positive by hand.
+func (a *Agent) clearFinding(id int64) error {
+	f, err := a.Scanner.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := a.Scanner.Clear(id); err != nil {
+		return err
+	}
+	if f.SHA256 != "" {
+		ai.Save(a.DB, ai.Verdict{SHA256: f.SHA256, Verdict: ai.Clean, Confidence: 100, Reason: "Marked as a false positive by an administrator.",
+			Model: "admin", Source: "ai", At: store.Now(), Size: f.Size})
+	}
+	return nil
 }
 
 // trimFinding removes the injected code the AI located in a finding's file

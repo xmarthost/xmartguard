@@ -3,8 +3,11 @@ package waf
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,8 +89,55 @@ func categoryEnabled(c settings.WAF, cat string) bool {
 		return c.AIBots
 	case "custom_bots":
 		return len(c.CustomBots) > 0
+	case "webshell":
+		return c.Webshell
+	case "block_php_upload":
+		return c.BlockPHPUpload
 	}
 	return false
+}
+
+// ToggleRule returns the settings change that switches one of our rules on
+// or off. Switching a rule on whose group is off turns the group on and keeps
+// the group's other rules off, so only the chosen rule starts working.
+func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
+	var rule *RuleInfo
+	for i := range Catalog {
+		if Catalog[i].ID == id {
+			rule = &Catalog[i]
+		}
+	}
+	if rule == nil {
+		return nil, fmt.Errorf("unknown XMart Guard rule %d", id)
+	}
+	disabled := map[int]bool{}
+	for _, d := range c.DisabledRules {
+		disabled[d] = true
+	}
+	patch := map[string]any{}
+	if on {
+		delete(disabled, id)
+		if !categoryEnabled(c, rule.Category) {
+			if rule.Category == "custom_bots" {
+				return nil, errors.New("add custom User-Agents first")
+			}
+			patch[rule.Category] = true
+			for _, r := range Catalog {
+				if r.Category == rule.Category && r.ID != id {
+					disabled[r.ID] = true
+				}
+			}
+		}
+	} else {
+		disabled[id] = true
+	}
+	ids := []int{}
+	for d := range disabled {
+		ids = append(ids, d)
+	}
+	sort.Ints(ids)
+	patch["disabled_rules"] = ids
+	return patch, nil
 }
 
 // Apply detects the web server, renders and installs the rules.

@@ -22,6 +22,8 @@ interface ScannerS {
   blacklist_names: string[];
   delete_symlinks: boolean;
   auto_clean: boolean;
+  wp_core_repair: boolean;
+  feeds: boolean;
   trim: boolean;
   trim_max_percent: number;
   user_scans: boolean;
@@ -37,6 +39,7 @@ interface AIS {
   max_kb: number;
   act: boolean;
   learn: boolean;
+  restore_clean: boolean;
 }
 interface ProcS {
   enabled: boolean;
@@ -227,7 +230,7 @@ export default function SettingsPage() {
         )}
         {section === 'rbl' && <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />}
         {section === 'rbl' && st.domain_reputation && <DomainRepSection s={st.domain_reputation} admin={admin} busy={busy} onSave={(p) => save({ domain_reputation: p })} />}
-        {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} />}
+        {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} onReload={res.reload} />}
         {section === 'cms' && st.cms && <CMSSection s={st.cms} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
         {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
         {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
@@ -295,8 +298,19 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         <SettingRow title="Delete insecure symbolic links" desc="Remove links that point into another account's files, or to files the user could not read otherwise" recommended>
           <Toggle on={s.delete_symlinks} disabled={dis} onChange={(v) => onSave({ delete_symlinks: v })} />
         </SettingRow>
-        <SettingRow title="Auto clean infected files" desc="When an infected file is a WordPress core file, restore the original from the official WordPress release (content, plugins and themes are not touched)" recommended>
-          <Toggle on={s.auto_clean} disabled={dis} onChange={(v) => onSave({ auto_clean: v })} />
+        <SettingRow
+          title="Repair infected WordPress core files"
+          desc="Replace an infected WordPress core file with the official file of the site's WordPress version (downloaded through the portal, checked against the official checksum). Official core files of every release since 5.8, betas included, are never flagged."
+          recommended
+        >
+          <Toggle on={s.wp_core_repair || s.auto_clean} disabled={dis} onChange={(v) => onSave({ wp_core_repair: v, auto_clean: false })} />
+        </SettingRow>
+        <SettingRow
+          title="Public malware signatures"
+          desc="Also use the signatures the portal collects every day: Linux Malware Detect (MD5 and hex patterns) and web shell YARA rules (signature-base). Pattern and YARA hits are reported as suspicious and confirmed by the AI scanner."
+          recommended
+        >
+          <Toggle on={s.feeds} disabled={dis} onChange={(v) => onSave({ feeds: v })} />
         </SettingRow>
         <SettingRow
           title="Trim injected code"
@@ -483,6 +497,13 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
           </SettingRow>
         </>
       )}
+      <SettingRow
+        title="Restore false positives"
+        desc="When the AI is at least 90% sure a detected file is clean, put it back from quarantine (or re-enable it). The scanner then never flags that content again, on any server."
+        recommended
+      >
+        <Toggle on={f.restore_clean} disabled={dis} onChange={(v) => setF({ ...f, restore_clean: v })} />
+      </SettingRow>
       <SettingRow title="Learn from all servers" desc="Files any linked server’s AI found malicious are detected here immediately, and this server’s built-in model gets the fleet’s training updates." recommended>
         <Toggle on={f.learn} disabled={dis} onChange={(v) => setF({ ...f, learn: v })} />
       </SettingRow>
@@ -607,7 +628,8 @@ interface WafRule {
   enabled: boolean;
 }
 
-function WAFSection({ serverId, s, admin, busy, onSave }: { serverId: string; s: WAFS; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void }) {
+function WAFSection({ serverId, s, admin, busy, onSave, onReload }: { serverId: string; s: WAFS; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void; onReload: () => void }) {
+  const { run } = useAction();
   const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string }; rules: WafRule[] }>(serverId, 'waf.status');
   const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
   useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
@@ -669,15 +691,28 @@ function WAFSection({ serverId, s, admin, busy, onSave }: { serverId: string; s:
       />
       {info.data && (
         <div className="py-4">
-          <div className="mb-2 font-medium text-navy-900">XMart Guard rules</div>
+          <div className="mb-1 font-medium text-navy-900">XMart Guard rules</div>
+          <p className="mb-2 text-sm text-slate-500">Switch single rules on or off. Switching on a rule of a group that is off turns on only that rule.</p>
           <table className="w-full text-sm">
             <tbody className="divide-y divide-slate-100">
               {info.data.rules.map((r) => (
                 <tr key={r.id}>
-                  <td className="py-2 font-mono text-xs text-slate-500">{r.id}</td>
-                  <td className="py-2">{r.title}</td>
-                  <td className="py-2 text-xs text-slate-500">{r.action}</td>
-                  <td className="py-2 text-right text-xs">{r.enabled ? <span className="text-green-600">active</span> : <span className="text-slate-400">off</span>}</td>
+                  <td className="w-20 py-2 pr-3 font-mono text-xs text-slate-500">{r.id}</td>
+                  <td className="py-2 pr-3">{r.title}</td>
+                  <td className="py-2 pr-3 text-xs text-slate-500">{r.action}</td>
+                  <td className="py-2 pr-3 text-right text-xs">{r.enabled ? <span className="text-green-600">active</span> : <span className="text-slate-400">off</span>}</td>
+                  <td className="w-20 py-2 text-right">
+                    <Toggle
+                      on={r.enabled}
+                      disabled={dis || !s.enabled}
+                      onChange={async (v) => {
+                        const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.rule', { id: r.id, enabled: v }), `Rule ${r.id} ${v ? 'on' : 'off'}`);
+                        if (res?.warning) alert(res.warning);
+                        info.reload();
+                        onReload();
+                      }}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>

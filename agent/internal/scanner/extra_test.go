@@ -53,8 +53,27 @@ func TestYARAScan(t *testing.T) {
 	miss := filepath.Join(dir, "b.php")
 	os.WriteFile(hit, []byte("<?php // XG-TEST-MARKER-7f3a"), 0o644)
 	os.WriteFile(miss, []byte("<?php echo 1;"), 0o644)
-	got := yaraScan(t.Context(), []string{hit, miss})
-	if got[hit] != "XG_Test_Marker" || len(got) != 1 {
+	// A public feed rule is namespaced "feed".
+	os.MkdirAll(FeedYARADir(), 0o755)
+	os.WriteFile(filepath.Join(FeedYARADir(), "webshells.yar"), []byte(`rule Feed_Marker { strings: $a = "FEED-MARKER-11aa" condition: $a }`), 0o644)
+	feed := filepath.Join(dir, "c.php")
+	os.WriteFile(feed, []byte("<?php // FEED-MARKER-11aa"), 0o644)
+	got := yaraScan(t.Context(), []string{hit, miss, feed})
+	if got[hit] != "admin:XG_Test_Marker" || got[feed] != "feed:Feed_Marker" || len(got) != 2 {
 		t.Fatalf("yara: %v", got)
+	}
+	bad := filepath.Join(dir, "bad.yar")
+	os.WriteFile(bad, []byte("rule { broken"), 0o644)
+	if ValidYARA(bad) == nil {
+		t.Fatal("broken rule file accepted")
+	}
+}
+
+func TestFeedPatterns(t *testing.T) {
+	m := newMatcher([][]byte{[]byte("abcdef"), []byte("bcd"), []byte("zzz_marker")}, []string{"one", "two", "three"})
+	for in, want := range map[string]string{"xxabcdefyy": "two", "zzz_marke": "", "..zzz_marker": "three", "": ""} {
+		if got := m.Match([]byte(in)); got != want {
+			t.Errorf("%q: %q want %q", in, got, want)
+		}
 	}
 }

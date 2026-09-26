@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -77,14 +78,34 @@ func YARABin() string {
 // YARADir holds administrator-supplied YARA rules (*.yar, *.yara).
 func YARADir() string { return filepath.Join(config.Dir(), "yara") }
 
-// YARARules lists the rule files.
+// YARARules lists the rule files: the administrator's own (namespace
+// "admin") and those from public feeds (namespace "feed").
 func YARARules() []string {
 	var out []string
-	for _, pat := range []string{"*.yar", "*.yara"} {
-		m, _ := filepath.Glob(filepath.Join(YARADir(), pat))
-		out = append(out, m...)
+	for _, d := range []struct{ ns, dir string }{{"admin", YARADir()}, {"feed", FeedYARADir()}} {
+		for _, pat := range []string{"*.yar", "*.yara"} {
+			m, _ := filepath.Glob(filepath.Join(d.dir, pat))
+			for _, f := range m {
+				out = append(out, d.ns+":"+f)
+			}
+		}
 	}
 	return out
+}
+
+// ValidYARA reports whether a rule file compiles with the installed yara.
+func ValidYARA(path string) error {
+	bin := YARABin()
+	if bin == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "-w", path, os.DevNull).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", bytes.TrimSpace(out))
+	}
+	return nil
 }
 
 // yaraScan runs the rules over a list of files and returns path -> rule.
@@ -107,7 +128,7 @@ func yaraScan(ctx context.Context, files []string) map[string]string {
 	list.Close()
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
-	args := append([]string{"-w", "--scan-list"}, rules...)
+	args := append([]string{"-w", "-e", "--scan-list"}, rules...)
 	args = append(args, list.Name())
 	raw, _ := exec.CommandContext(cctx, bin, args...).Output()
 	for _, line := range bytes.Split(raw, []byte("\n")) {

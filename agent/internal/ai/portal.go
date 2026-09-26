@@ -34,6 +34,11 @@ type PortalAI struct {
 
 // Signed envelope: the portal verifies
 // Ed25519("xg-ai-v2:<server_id>:<ts>:<sha256(payload)>").
+// Post sends a signed request to the portal and decodes the answer.
+func (p *PortalAI) Post(ctx context.Context, path string, payload any, out any) error {
+	return p.post(ctx, path, payload, out)
+}
+
 func (p *PortalAI) post(ctx context.Context, path string, payload any, out any) error {
 	if p == nil || p.URL == "" || p.Sign == nil {
 		return errors.New("this agent is not enrolled with a portal")

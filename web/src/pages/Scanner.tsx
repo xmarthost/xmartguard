@@ -203,6 +203,7 @@ const ACTIONS: { v: string; l: string; confirm?: string }[] = [
   { v: 'quarantine', l: 'Quarantine' },
   { v: 'restore', l: 'Restore' },
   { v: 'disable', l: 'Disable (chmod 000)' },
+  { v: 'clear', l: 'False positive' },
   { v: 'ignore', l: 'Ignore & whitelist' },
   { v: 'delete', l: 'Delete permanently', confirm: 'Permanently delete the selected files? This cannot be undone.' },
 ];
@@ -272,7 +273,7 @@ export function ScannerLogs() {
           </select>
           <select className="input w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
-            {['detected', 'quarantined', 'disabled', 'trimmed', 'cleaned', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s}</option>)}
+            {['detected', 'quarantined', 'disabled', 'trimmed', 'cleaned', 'cleared', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <form onSubmit={(e) => (e.preventDefault(), setQuery(q))}>
             <input className="input w-56" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />

@@ -40,9 +40,15 @@ var (
 	reOrdChr       = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
 	reStrReplace   = regexp.MustCompile(`(?i)\bstr_replace\s*\(`)
 	reDefineArr    = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
-	reEvalGz       = regexp.MustCompile(`(?i)\b(?:eval|assert|include|require|create_function|call_user_func|preg_replace)\b`)
-	rePhpOpen      = regexp.MustCompile(`<\?(?:php|=)`)
-	reWpNonce      = regexp.MustCompile(`(?i)wp_(?:nonce|verify_nonce|enqueue|register)`)
+	reEvalGz       = regexp.MustCompile(`(?i)\b(?:eval|assert|create_function)\s*\(`)
+	// A function name taken straight from request data: $_POST['f'](...) or
+	// call_user_func($_GET['f'], ...).
+	reInputCall     = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|SERVER)\s*\[[^\]]+\]\s*\(`)
+	reCallUserInput = regexp.MustCompile(`(?i)\bcall_user_func(?:_array)?\s*\(\s*(?:@\s*)?\$_(?:POST|GET|REQUEST|COOKIE|SERVER)\b`)
+	// $f = $_POST['f'] (optionally through trim/stripslashes/decoders).
+	reTaintAssign = regexp.MustCompile(`(?i)\$([a-zA-Z_]\w*)\s*=\s*(?:@\s*)?(?:(?:trim|stripslashes|base64_decode|str_rot13|strrev|urldecode|rawurldecode|hex2bin|gzinflate|gzuncompress|strtolower)\s*\(\s*)*\$_(?:POST|GET|REQUEST|COOKIE|SERVER)\b`)
+	rePhpOpen     = regexp.MustCompile(`<\?(?:php|=)`)
+	reWpNonce     = regexp.MustCompile(`(?i)wp_(?:nonce|verify_nonce|enqueue|register)`)
 	// A backtick command substitution on a real code line (assignment, echo,
 	// return or print) that embeds attacker input — not a docblock example.
 	reBacktickExec = regexp.MustCompile("(?i)(?:=|echo|return|print|exec|system)\\s*`[^`]{0,200}\\$_(?:POST|GET|REQUEST|COOKIE)")
@@ -66,7 +72,7 @@ func analyzePHP(content []byte) *verdict {
 	if !rePhpOpen.Match(content) {
 		return nil
 	}
-	s := content
+	s := stripPHPComments(content)
 	n := len(s)
 
 	evalOrAssert := reEvalSink.Match(s)
@@ -110,8 +116,10 @@ func analyzePHP(content []byte) *verdict {
 	if reBacktickExec.Match(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.BacktickInput"}
 	}
-	// 6. Variable-function or call_user_func fed attacker input.
-	if (varFunc || reCallUserFunc.Match(s)) && hasInput && near(s, orRe(reVarFunc, reCallUserFunc), reInput, 160) {
+	// 6. A function whose NAME comes from the request: $_POST['f'](...),
+	// call_user_func($_GET['f']), or $f = $_POST['f']; ... $f(...).
+	// (Calling a callback with request data as arguments is ordinary code.)
+	if hasInput && (reInputCall.Match(s) || reCallUserInput.Match(s) || taintedCall(s)) {
 		return &verdict{CatVirus, "PHP.Backdoor.DynamicCall"}
 	}
 	// 7. goto-flattened obfuscation with an execution sink.
@@ -162,7 +170,7 @@ func analyzePHP(content []byte) *verdict {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharArrayDecoder"}
 	}
 	// 17. Large inline character/string array feeding an executor.
-	if reDefineArr.Match(s) && reEvalGz.Match(s) {
+	if reDefineArr.Match(s) && reEvalGz.Match(s) && !library {
 		return &verdict{CatVirus, "PHP.Obfuscated.PackedArray"}
 	}
 	// 18. Minified single-line PHP with an executor (packed one-liner).
@@ -173,7 +181,7 @@ func analyzePHP(content []byte) *verdict {
 	if longBlob && (decoders >= 1 || evalOrAssert) {
 		return &verdict{CatSuspicious, "PHP.Suspicious.EncodedPayload"}
 	}
-	if concat >= 40 && (evalOrAssert || varFunc) {
+	if concat >= 40 && evalOrAssert && !library {
 		return &verdict{CatSuspicious, "PHP.Suspicious.ConcatObfuscation"}
 	}
 	if entropyOfLongestToken(s) > 5.4 && evalOrAssert && n < 200000 {
@@ -201,6 +209,19 @@ func analyzeJS(content []byte) *verdict {
 		return &verdict{CatSuspicious, "JS.Injection.DocumentWriteUnescape"}
 	}
 	return nil
+}
+
+// taintedCall reports a variable assigned from request data and then
+// called as a function (or passed as the callback of call_user_func).
+func taintedCall(s []byte) bool {
+	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
+		name := regexp.QuoteMeta(string(m[1]))
+		re := regexp.MustCompile(`(?:\$` + name + `\s*\(|(?i:call_user_func(?:_array)?)\s*\(\s*\$` + name + `\b)`)
+		if re.Match(s) {
+			return true
+		}
+	}
+	return false
 }
 
 func countMatches(re *regexp.Regexp, s []byte) int { return len(re.FindAllIndex(s, -1)) }

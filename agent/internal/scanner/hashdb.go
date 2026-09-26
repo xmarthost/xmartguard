@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -29,7 +30,12 @@ type HashDB struct {
 	count  int
 }
 
-var hashDB = loadHashDB()
+// current is swapped atomically when signatures are updated during scans.
+var current atomic.Pointer[HashDB]
+
+func init() { current.Store(loadHashDB()) }
+
+func activeHashDB() *HashDB { return current.Load() }
 
 // HashDBPath is where the portal can push signature updates.
 func HashDBPath() string { return store.StateDir() + "/sigs/hashes.txt" }
@@ -50,8 +56,14 @@ func loadHashDB() *HashDB {
 	if raw, err := os.ReadFile(LearnedHashPath()); err == nil {
 		db.merge(string(raw))
 	}
+	if raw, err := os.ReadFile(FeedHashPath()); err == nil {
+		db.merge(string(raw))
+	}
 	return db
 }
+
+// FeedHashPath holds MD5 signatures from public feeds (Linux Malware Detect).
+func FeedHashPath() string { return store.StateDir() + "/sigs/feed-md5.txt" }
 
 func (db *HashDB) merge(text string) {
 	db.mu.Lock()
@@ -76,6 +88,9 @@ func (db *HashDB) merge(text string) {
 			label = f[2]
 		}
 		sha := strings.ToLower(f[1])
+		if len(sha) != 64 && len(sha) != 32 {
+			continue
+		}
 		for _, e := range db.bySize[size] {
 			if e.sha == sha {
 				sha = ""
@@ -97,12 +112,23 @@ func (db *HashDB) SizeKnown(size int64) bool {
 	return len(db.bySize[size]) > 0
 }
 
-// Lookup returns the label for a size+sha256 match, or "".
+// Lookup returns the label for a size + SHA-256 (or MD5) match, or "".
+// sums is called only when an entry has this size.
 func (db *HashDB) Lookup(size int64, sha string) string {
+	return db.LookupSums(size, func() (string, string) { return sha, "" })
+}
+
+// LookupSums matches SHA-256 entries and MD5 entries (public feeds).
+func (db *HashDB) LookupSums(size int64, sums func() (sha256, md5 string)) string {
 	db.mu.RLock()
-	defer db.mu.RUnlock()
-	for _, e := range db.bySize[size] {
-		if e.sha == sha {
+	entries := db.bySize[size]
+	db.mu.RUnlock()
+	if len(entries) == 0 {
+		return ""
+	}
+	sha, md := sums()
+	for _, e := range entries {
+		if (len(e.sha) == 64 && e.sha == sha) || (len(e.sha) == 32 && md != "" && e.sha == md) {
 			return e.label
 		}
 	}
@@ -119,9 +145,9 @@ func (db *HashDB) Count() int {
 // ReloadHashDB re-reads the runtime signature file (after a portal update).
 func ReloadHashDB() int {
 	db := loadHashDB()
-	hashDB = db
+	current.Store(db)
 	return db.Count()
 }
 
 // SignatureCount is exposed for the About/stats views.
-func SignatureCount() int { return hashDB.Count() + len(Rules) }
+func SignatureCount() int { return activeHashDB().Count() + len(Rules) }

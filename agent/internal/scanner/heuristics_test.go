@@ -61,14 +61,60 @@ func TestHeuristicsNoFalsePositives(t *testing.T) {
 }
 
 func TestHashDB(t *testing.T) {
-	if hashDB.Count() < 100 {
-		t.Fatalf("baseline hash DB too small: %d", hashDB.Count())
+	if activeHashDB().Count() < 100 {
+		t.Fatalf("baseline hash DB too small: %d", activeHashDB().Count())
 	}
 	// A size with no entry is cheaply skipped.
-	if hashDB.SizeKnown(7) {
+	if activeHashDB().SizeKnown(7) {
 		t.Skip("unlikely size present; skipping")
 	}
 	if SignatureCount() <= len(Rules) {
 		t.Fatal("signature count should include hashes")
+	}
+}
+
+func TestDynamicCallNeedsRequestControlledName(t *testing.T) {
+	bad := []string{
+		"<?php @$_POST['a'](@$_POST['b']);",
+		"<?php $f = $_GET['f']; $f($_GET['a']);",
+		"<?php $f = trim(stripslashes($_REQUEST['f'])); call_user_func($f, 'x');",
+		"<?php call_user_func($_COOKIE['c'], $_COOKIE['d']);",
+	}
+	for _, s := range bad {
+		if v := analyzePHP([]byte(s)); v == nil || v.signature != "PHP.Backdoor.DynamicCall" {
+			t.Errorf("missed: %s -> %+v", s, v)
+		}
+	}
+	good := []string{
+		// WordPress: comments that mention superglobals next to parentheses.
+		"<?php\n// Add magic quotes and set up $_REQUEST ( $_GET + $_POST ).\nwp_magic_quotes();\n",
+		"<?php\n/* must match $doing_wp_cron (the \"key\"). */\nif ( $a !== $_GET['doing_wp_cron'] ) { die(); }\n",
+		// Callbacks called with request data as arguments.
+		"<?php\nif ( isset( $_POST['action'] ) ) { return call_user_func_array( $upload_error_handler, array( &$file, $_POST['x'] ) ); }\n",
+		"<?php\n$callback = $this->callbacks[ $id ];\n$callback( $_POST['value'] );\n",
+		"<?php\n$url = 'https://example.com/?a=$_GET'; // not code: $_POST['f']( )\n",
+	}
+	for _, s := range good {
+		if v := analyzePHP([]byte(s)); v != nil {
+			t.Errorf("false positive %s on: %q", v.signature, s)
+		}
+	}
+}
+
+func TestStripPHPComments(t *testing.T) {
+	in := "<html>// kept</html><?php $a = 'x // y'; // gone\n# gone too\n#[Attr]\n/* gone\nstill */ $b = \"/* kept */\"; ?>// kept after close"
+	out := string(stripPHPComments([]byte(in)))
+	if len(out) != len(in) {
+		t.Fatal("length changed")
+	}
+	for _, want := range []string{"<html>// kept</html>", "'x // y'", "#[Attr]", `"/* kept */"`, "?>// kept after close", "\nstill"[:1]} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lost %q: %q", want, out)
+		}
+	}
+	for _, gone := range []string{"// gone", "# gone too", "/* gone", "still */"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("kept comment %q: %q", gone, out)
+		}
 	}
 }

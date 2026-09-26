@@ -2,22 +2,27 @@ package core
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/ai"
 	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/monitor"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
+	"github.com/xmarthost/xmartguard/agent/internal/wpcore"
 )
 
 // UserDomainsPath lists cPanel domains and their owners.
@@ -424,49 +429,241 @@ func (a *Agent) pruneOld() {
 	}
 }
 
-// maybeAutoClean restores an infected WordPress core file from the official
-// release ("Auto clean infected files"): wp-cli re-downloads the site's core
-// files (content untouched) and the finding is marked cleaned when the file
-// is clean afterwards.
-func (a *Agent) maybeAutoClean(f scanner.Finding) {
-	if !a.Settings.Get().Scanner.AutoClean || f.Category != scanner.CatVirus || (f.Status != "detected" && f.Status != "quarantined") {
-		return
+// maybeRepairCore replaces an infected WordPress core file with the official
+// file of the site's WordPress version (verified against the official MD5)
+// and reports whether it did. The infected copy stays in quarantine.
+func (a *Agent) maybeRepairCore(f scanner.Finding) bool {
+	sc := a.Settings.Get().Scanner
+	if !(sc.WPCoreRepair || sc.AutoClean) || (f.Category != scanner.CatVirus && f.Category != scanner.CatSuspicious) ||
+		(f.Status != "detected" && f.Status != "quarantined" && f.Status != "disabled") {
+		return false
 	}
-	var site string
-	rows, err := a.DB.Query(`SELECT path FROM cms_sites WHERE type = 'wordpress'`)
+	if root, _ := wpcore.FindRoot(f.Path); root == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	body, version, rel, err := wpcore.Official(ctx, a.wpSource(), f.Path)
 	if err != nil {
-		return
-	}
-	for rows.Next() {
-		var p string
-		if rows.Scan(&p) == nil && strings.HasPrefix(f.Path, p+"/") && len(p) > len(site) {
-			site = p
+		if !errors.Is(err, wpcore.ErrNotCore) {
+			a.Log.Warn("WordPress core repair not possible", "file", f.Path, "err", err)
 		}
+		return false
 	}
-	rows.Close()
-	if site == "" {
+	if err := a.Scanner.ReplaceWithOfficial(f.ID, body); err != nil {
+		a.Log.Warn("WordPress core repair failed", "file", f.Path, "err", err)
+		return false
+	}
+	a.Log.Info("infected WordPress core file replaced with the official file", "file", f.Path, "version", version, "rel", rel)
+	if n := a.Settings.Get().Notifications; n.Email != "" && n.OnVirus {
+		a.Mailer.Enqueue(n.Email, "WordPress core file repaired",
+			fmt.Sprintf("[%s] %s\n  file: %s\n  action: replaced with the official WordPress %s file; the infected copy is kept in quarantine.\n", f.Category, f.Signature, f.Path, version))
+	}
+	return true
+}
+
+// wpSource fetches official WordPress checksums and files through the
+// portal (cached for the whole fleet), then from wordpress.org directly.
+func (a *Agent) wpSource() wpcore.Source {
+	if a.WPSource != nil {
+		return a.WPSource
+	}
+	direct := wpcore.NewDirect()
+	if a.AI.Portal == nil {
+		return direct
+	}
+	return wpcore.Chain{portalWP{a.AI.Portal}, direct}
+}
+
+// pluginSource fetches official plugin checksums (portal, then WordPress.org).
+func (a *Agent) pluginSource() wpcore.PluginSource {
+	if a.WPPlugins != nil {
+		return a.WPPlugins
+	}
+	direct := wpcore.DirectPlugins{D: wpcore.NewDirect()}
+	if a.AI.Portal == nil {
+		return direct
+	}
+	return wpcore.PluginChain{portalWP{a.AI.Portal}, direct}
+}
+
+func (s portalWP) PluginChecksums(ctx context.Context, slug, version string) ([]byte, error) {
+	var r struct {
+		Missing   bool            `json:"missing"`
+		Checksums json.RawMessage `json:"checksums"`
+	}
+	if err := s.p.Post(ctx, "/api/agent/wp-plugin/checksums", map[string]string{"slug": slug, "version": version}, &r); err != nil {
+		return nil, err
+	}
+	if r.Missing {
+		return nil, wpcore.ErrNoChecksums
+	}
+	return r.Checksums, nil
+}
+
+type portalWP struct{ p *ai.PortalAI }
+
+func (s portalWP) Checksums(ctx context.Context, version string) (map[string]string, error) {
+	var r struct {
+		Checksums map[string]string `json:"checksums"`
+	}
+	err := s.p.Post(ctx, "/api/agent/wp-core/checksums", map[string]string{"version": version}, &r)
+	return r.Checksums, err
+}
+
+func (s portalWP) File(ctx context.Context, version, rel string) ([]byte, error) {
+	var r struct {
+		Content string `json:"content"`
+	}
+	if err := s.p.Post(ctx, "/api/agent/wp-core/file", map[string]string{"version": version, "path": rel}, &r); err != nil {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(r.Content)
+}
+
+// wpCoreLoop keeps the list of official WordPress files current (new
+// releases, betas and release candidates, collected by the portal).
+func (a *Agent) wpCoreLoop(ctx context.Context) {
+	select {
+	case <-ctx.Done():
 		return
+	case <-time.After(90 * time.Second):
 	}
-	rel := strings.TrimPrefix(f.Path, site+"/")
-	core := strings.HasPrefix(rel, "wp-admin/") || strings.HasPrefix(rel, "wp-includes/") ||
-		(!strings.Contains(rel, "/") && strings.HasPrefix(rel, "wp-") && rel != "wp-config.php") || rel == "index.php" || rel == "xmlrpc.php"
-	if !core {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		defer cancel()
-		if _, err := a.CMS.Update(ctx, site, "core-repair", ""); err != nil {
-			a.Log.Warn("auto clean failed", "file", f.Path, "err", err)
+	for {
+		if a.AI.Portal != nil {
+			if err := a.syncWPCore(ctx); err != nil {
+				a.Log.Debug("WordPress core list sync failed", "err", err)
+			}
+			if err := a.syncSignatures(ctx); err != nil {
+				a.Log.Debug("signature feed sync failed", "err", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
 			return
+		case <-time.After(6 * time.Hour):
 		}
-		info, err := os.Lstat(f.Path)
-		if err != nil {
-			return
+	}
+}
+
+func (a *Agent) syncWPCore(ctx context.Context) error {
+	set := wpcore.Default()
+	var r struct {
+		ETag      string `json:"etag"`
+		Unchanged bool   `json:"unchanged"`
+		Data      string `json:"data"`
+		Versions  int    `json:"versions"`
+	}
+	if err := a.AI.Portal.Post(ctx, "/api/agent/wp-core/set", map[string]string{"etag": set.ETag()}, &r); err != nil {
+		return err
+	}
+	if r.Unchanged || r.Data == "" {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(r.Data)
+	if err != nil {
+		return err
+	}
+	if err := set.Update(raw, r.ETag); err != nil {
+		return err
+	}
+	a.Log.Info("WordPress core file list updated", "versions", r.Versions, "files", set.Count())
+	return nil
+}
+
+// syncSignatures installs the public malware signatures the portal
+// collected: MD5 hashes (hash DB), hex patterns and YARA rule files (each
+// file is compiled first; one that does not compile is skipped).
+func (a *Agent) syncSignatures(ctx context.Context) error {
+	if !a.Settings.Get().Scanner.Feeds {
+		return a.removeSignatures()
+	}
+	etag := store.GetKV(a.DB, "sig_etag")
+	var r struct {
+		ETag      string              `json:"etag"`
+		Unchanged bool                `json:"unchanged"`
+		MD5       [][]json.RawMessage `json:"md5"`
+		Hex       [][2]string         `json:"hex"`
+		YARA      []struct {
+			Name string `json:"name"`
+			Text string `json:"text"`
+		} `json:"yara"`
+	}
+	if err := a.AI.Portal.Post(ctx, "/api/agent/signatures", map[string]string{"etag": etag}, &r); err != nil {
+		return err
+	}
+	if r.Unchanged || r.ETag == "" {
+		return nil
+	}
+	var md5s, hexes strings.Builder
+	md5s.WriteString("# public feeds (Linux Malware Detect)\n")
+	for _, e := range r.MD5 {
+		var sum, name string
+		var size int64
+		if len(e) != 3 || json.Unmarshal(e[0], &sum) != nil || json.Unmarshal(e[1], &size) != nil || json.Unmarshal(e[2], &name) != nil {
+			continue
 		}
-		if d, _ := a.Scanner.CheckFile(f.Path, info, a.Settings.Get().Scanner); d == nil {
-			_, _ = a.DB.Exec(`UPDATE findings SET status = 'cleaned', updated_at = ? WHERE id = ?`, store.Now(), f.ID)
-			a.Log.Info("infected core file restored from the official release", "file", f.Path)
+		if len(sum) != 32 || size <= 0 || strings.ContainsAny(name, " \n") {
+			continue
 		}
-	}()
+		fmt.Fprintf(&md5s, "%d %s LMD.%s\n", size, sum, name)
+	}
+	for _, e := range r.Hex {
+		if strings.ContainsAny(e[0]+e[1], " \n") {
+			continue
+		}
+		fmt.Fprintf(&hexes, "%s %s\n", e[0], e[1])
+	}
+	if err := os.MkdirAll(filepath.Dir(scanner.FeedHashPath()), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(scanner.FeedHashPath(), []byte(md5s.String()), 0o600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(scanner.FeedHexPath(), []byte(hexes.String()), 0o600); err != nil {
+		return err
+	}
+	dir := scanner.FeedYARADir()
+	_ = os.RemoveAll(dir + ".new")
+	if err := os.MkdirAll(dir+".new", 0o700); err != nil {
+		return err
+	}
+	kept := 0
+	for _, y := range r.YARA {
+		name := strings.Map(func(c rune) rune {
+			if c == '-' || c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+				return c
+			}
+			return '-'
+		}, y.Name)
+		p := filepath.Join(dir+".new", name+".yar")
+		if os.WriteFile(p, []byte(y.Text), 0o600) != nil {
+			continue
+		}
+		if err := scanner.ValidYARA(p); err != nil {
+			a.Log.Warn("YARA feed skipped: it does not compile", "name", y.Name, "err", err)
+			os.Remove(p)
+			continue
+		}
+		kept++
+	}
+	_ = os.RemoveAll(dir)
+	if err := os.Rename(dir+".new", dir); err != nil {
+		return err
+	}
+	scanner.ReloadFeeds()
+	_ = store.SetKV(a.DB, "sig_etag", r.ETag)
+	a.Log.Info("malware signature feeds updated", "md5", len(r.MD5), "hex", len(r.Hex), "yara_files", kept)
+	return nil
+}
+
+func (a *Agent) removeSignatures() error {
+	if store.GetKV(a.DB, "sig_etag") == "" {
+		return nil
+	}
+	os.Remove(scanner.FeedHashPath())
+	os.Remove(scanner.FeedHexPath())
+	os.RemoveAll(scanner.FeedYARADir())
+	scanner.ReloadFeeds()
+	return store.SetKV(a.DB, "sig_etag", "")
 }

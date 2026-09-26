@@ -158,8 +158,10 @@ func (a *Analyzer) process(ctx context.Context, batch []Job) {
 			}
 		}
 		if v, ok := Cached(a.DB, j.SHA256); ok && v.Verdict != Error && (v.Source != "fallback" || cfg.Provider != "portal") {
-			if j.FindingID == 0 && v.Verdict == Malicious && a.OnVerdict != nil {
-				a.OnVerdict(j, v) // a file already known to be bad reappeared
+			// Known content: act on the stored verdict (a new detection of a
+			// file the fleet already judged, or known malware reappearing).
+			if a.OnVerdict != nil && (j.FindingID != 0 || v.Verdict == Malicious) {
+				a.OnVerdict(j, v)
 			}
 			continue
 		}
@@ -237,6 +239,7 @@ func Save(db *sql.DB, v Verdict) {
 		model = excluded.model, at = excluded.at, injected = excluded.injected, cut = excluded.cut, source = excluded.source,
 		size = CASE WHEN excluded.size > 0 THEN excluded.size ELSE ai_verdicts.size END`,
 		v.SHA256, v.Verdict, v.Confidence, v.Reason, v.Model, v.At, injected, cut, v.Source, v.Size)
+	noteCleared(db, v)
 }
 
 // Analyze judges one file now (the "Check with AI" button).
@@ -356,4 +359,65 @@ func baseName(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// ClearMinConfidence is how sure the AI must be that a file is clean before
+// it is restored from quarantine and never flagged again.
+const ClearMinConfidence = 90
+
+// cleared caches the SHA-256 of files the AI (on any server) or an
+// administrator found clean, for the scanner's per-file check.
+var cleared struct {
+	mu  sync.RWMutex
+	db  *sql.DB
+	set map[string]bool
+}
+
+func isClearedVerdict(v Verdict) bool {
+	return v.Verdict == Clean && v.Confidence >= ClearMinConfidence && (v.Source == "ai" || v.Source == "fleet")
+}
+
+func loadCleared(db *sql.DB) {
+	set := map[string]bool{}
+	rows, err := db.Query(`SELECT sha256 FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND source IN ('ai','fleet')`, ClearMinConfidence)
+	if err == nil {
+		for rows.Next() {
+			var s string
+			if rows.Scan(&s) == nil {
+				set[s] = true
+			}
+		}
+		rows.Close()
+	}
+	cleared.db, cleared.set = db, set
+}
+
+// IsCleared reports whether content with this SHA-256 was found clean.
+func IsCleared(db *sql.DB, sha string) bool {
+	cleared.mu.RLock()
+	if cleared.db == db && cleared.set != nil {
+		ok := cleared.set[sha]
+		cleared.mu.RUnlock()
+		return ok
+	}
+	cleared.mu.RUnlock()
+	cleared.mu.Lock()
+	defer cleared.mu.Unlock()
+	if cleared.db != db || cleared.set == nil {
+		loadCleared(db)
+	}
+	return cleared.set[sha]
+}
+
+func noteCleared(db *sql.DB, v Verdict) {
+	cleared.mu.Lock()
+	defer cleared.mu.Unlock()
+	if cleared.db != db || cleared.set == nil {
+		return // loaded on first use
+	}
+	if isClearedVerdict(v) {
+		cleared.set[v.SHA256] = true
+	} else {
+		delete(cleared.set, v.SHA256)
+	}
 }

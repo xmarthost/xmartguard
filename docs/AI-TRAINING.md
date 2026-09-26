@@ -67,3 +67,29 @@ learn continuously from the AI APIs configured in the portal:
 When a new agent release ships a retrained base model, samples are kept per
 base version and the update is trained again for the new base as servers send
 files.
+
+## Making detection better (research notes, 0.7)
+
+What reduces false positives most is not a smarter model but knowing which
+files are genuine: official checksums for WordPress core (every release and
+beta) and WordPress.org plugins, the same approach Wordfence uses. XMart
+Guard now trusts those files outright and repairs modified core files from
+the official release.
+
+For the model itself, published work on PHP web shells points to:
+
+- **Opcode / AST features** instead of raw tokens (PHP VLD opcode n-grams,
+  simplified syntax trees) resist obfuscation better; a future agent could
+  extract them with `php -d vld…` where PHP is installed.
+- **Long files**: attention over sliding windows beats truncation; our
+  excerpt (start, end, windows around risky calls) follows the same idea for
+  the AI APIs.
+- **Incremental learning** from newly confirmed samples, with balanced
+  benign examples, keeps a model current; the fleet model does this with AI
+  verdicts and needs clean examples as much as malicious ones (hence the
+  5 + 5 minimum).
+- **Data**: benign code from real frameworks (WordPress, plugins) matters as
+  much as malware. Quarantine data from your servers (malicious) plus the
+  AI's "clean" verdicts on detections (hard negatives) are the most useful
+  training material; send quarantine archives to retrain the shipped model
+  with `xmartguard-agent ai-train`.

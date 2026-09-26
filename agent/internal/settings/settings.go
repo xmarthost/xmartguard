@@ -43,6 +43,13 @@ type Scanner struct {
 	// AutoClean removes injected code from infected files when the rest of
 	// the file is legitimate, instead of quarantining the whole file.
 	AutoClean bool `json:"auto_clean"`
+	// Feeds adds public malware signatures the portal collects (Linux
+	// Malware Detect MD5/hex, web shell YARA rules).
+	Feeds bool `json:"feeds"`
+	// WPCoreRepair replaces an infected WordPress core file with the
+	// official file of the site's WordPress version (verified against the
+	// official checksum); the infected copy stays in quarantine.
+	WPCoreRepair bool `json:"wp_core_repair"`
 	// Trim removes only the injected code the AI scanner located (for
 	// example a backdoor added to the top of a legitimate plugin file) and
 	// keeps the site running, instead of quarantining the whole file. The
@@ -130,6 +137,10 @@ type AI struct {
 	// Act lets a "malicious" verdict apply the virus action; otherwise the
 	// verdict is only shown.
 	Act bool `json:"act"`
+	// RestoreClean restores a quarantined or disabled file when the AI is at
+	// least 90% sure it is clean (a false positive), and the scanner stops
+	// flagging that content on every server.
+	RestoreClean bool `json:"restore_clean"`
 	// Learn uses the fleet's shared knowledge: files any linked server's AI
 	// found malicious are detected here at once, and the built-in model is
 	// updated with what the AI taught it.
@@ -297,7 +308,7 @@ func Defaults() Settings {
 			VirusAction: ActionNotify, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, UseClamAV: true, MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
-			DeleteSymlinks: false, AutoClean: false, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
+			DeleteSymlinks: false, AutoClean: false, Feeds: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
@@ -321,7 +332,7 @@ func Defaults() Settings {
 			UserOutdated: "never", ExcludeUsers: []string{},
 		},
 		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 60, HTTPPort: 7780, HTTPSPort: 7743},
-		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true},
+		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true, RestoreClean: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
 		Cron:      CronMonitor{Enabled: true, WhitelistUsers: []string{}},
 		Rootkit:   Rootkit{Enabled: true},

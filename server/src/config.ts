@@ -49,7 +49,32 @@ export interface Config {
   aiBatchWaitMs: number;
   /** Background retraining of the fleet model (disabled in tests). */
   aiTraining: boolean;
+  /** Official WordPress core files: background sync (disabled in tests) and sources. */
+  wpCoreSync: boolean;
+  wpCoreMinVersion: string;
+  wpApi: string;
+  wpSite: string;
+  wpSvn: string;
+  wpMirror: string;
+  /** downloads.wordpress.org: official plugin checksums. */
+  wpDownloads: string;
+  /** Malware signature feeds merged and sent to agents (empty disables). */
+  sigFeeds: string[];
+  sigSync: boolean;
 }
+
+/**
+ * Public malware signature feeds (see docs/SIGNATURES.md): Linux Malware
+ * Detect's signature pack (MD5 + hex patterns, GPLv2) and the web shell YARA
+ * rules of Florian Roth's signature-base (Detection Rule License 1.1).
+ * Downloaded by the portal at run
+ * time, validated, and sent to agents.
+ */
+const DEFAULT_SIG_FEEDS = [
+  'lmd:https://cdn.rfxn.com/downloads/maldet-sigpack.tgz',
+  'yara:https://raw.githubusercontent.com/Neo23x0/signature-base/master/yara/gen_webshells.yar',
+  'yara:https://raw.githubusercontent.com/Neo23x0/signature-base/master/yara/thor-webshells.yar',
+].join(',');
 
 function bool(v: string | undefined, def: boolean): boolean {
   if (v === undefined || v === '') return def;
@@ -99,5 +124,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     aiBatchFiles: int(env.AI_BATCH_FILES, 6),
     aiBatchWaitMs: int(env.AI_BATCH_WAIT_MS, 2500),
     aiTraining: bool(env.AI_TRAINING, true),
+    wpCoreSync: bool(env.WP_CORE_SYNC, true),
+    wpCoreMinVersion: env.WP_CORE_MIN_VERSION || '5.8',
+    wpApi: (env.WP_API || 'https://api.wordpress.org').replace(/\/+$/, ''),
+    wpSite: (env.WP_SITE || 'https://wordpress.org').replace(/\/+$/, ''),
+    wpSvn: (env.WP_SVN || 'https://core.svn.wordpress.org/tags').replace(/\/+$/, ''),
+    wpDownloads: (env.WP_DOWNLOADS || 'https://downloads.wordpress.org').replace(/\/+$/, ''),
+    wpMirror: (env.WP_MIRROR || 'https://raw.githubusercontent.com/WordPress/WordPress').replace(/\/+$/, ''),
+    sigFeeds: (env.SIG_FEEDS ?? DEFAULT_SIG_FEEDS)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    sigSync: bool(env.SIG_SYNC, true),
   };
 }
