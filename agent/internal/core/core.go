@@ -58,6 +58,7 @@ type Agent struct {
 	Monitor  *monitor.Monitor
 	Mailer   *notify.Mailer
 	Session  *client.Session
+	started  time.Time // when Start ran (zero in tests)
 
 	// WPSource and WPPlugins override where official WordPress files and
 	// plugin checksums come from (tests).
@@ -148,6 +149,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 
 // Start launches the background workers.
 func (a *Agent) Start(ctx context.Context) {
+	a.started = time.Now()
 	go a.Realtime.Run(ctx)
 	go a.Firewall.Run(ctx)
 	go a.Firewall.RunBruteForce(ctx)
@@ -222,7 +224,18 @@ func (a *Agent) protectedIPs() []string {
 
 func (a *Agent) onFinding(f scanner.Finding) {
 	a.maybeSuspend(f)
-	if a.maybeRepairCore(f) {
+	// The scanner's own action (quarantine/disable) is already applied.
+	// Repairing a WordPress core file downloads the official file, so it
+	// runs in the background and never holds up realtime scanning.
+	if root, _ := wpcore.FindRoot(f.Path); root != "" {
+		go a.afterFinding(f, true)
+		return
+	}
+	a.afterFinding(f, false)
+}
+
+func (a *Agent) afterFinding(f scanner.Finding, wordpress bool) {
+	if wordpress && a.maybeRepairCore(f) {
 		return // the official file is back in place
 	}
 	// Suspicious files get the AI's opinion. With the portal AI, detected

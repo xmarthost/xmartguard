@@ -308,6 +308,9 @@ var columnMigrations = []string{
 	`ALTER TABLE ai_verdicts ADD COLUMN cut TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE ai_verdicts ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE ai_verdicts ADD COLUMN size INTEGER NOT NULL DEFAULT 0`,
+	// Scan progress: files to check (counted while the scan runs) and path now.
+	`ALTER TABLE scans ADD COLUMN total INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE scans ADD COLUMN current TEXT NOT NULL DEFAULT ''`,
 }
 
 // Now is the clock used for timestamps (overridable in tests).

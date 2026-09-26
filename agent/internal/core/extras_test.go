@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xmarthost/xmartguard/agent/internal/config"
@@ -22,6 +23,22 @@ func newTestAgent(t *testing.T, settingsJSON string) *Agent {
 	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
 	os.MkdirAll(filepath.Join(dir, "conf"), 0o700)
 	os.WriteFile(filepath.Join(dir, "conf", "settings.json"), []byte(settingsJSON), 0o600)
+	if !strings.Contains(settingsJSON, "virus_action") {
+		// Tests choose actions explicitly; start from "report only".
+		var doc map[string]any
+		json.Unmarshal([]byte(settingsJSON), &doc)
+		if doc == nil {
+			doc = map[string]any{}
+		}
+		sc, _ := doc["scanner"].(map[string]any)
+		if sc == nil {
+			sc = map[string]any{}
+		}
+		sc["virus_action"] = "notify"
+		doc["scanner"] = sc
+		b, _ := json.Marshal(doc)
+		os.WriteFile(filepath.Join(dir, "conf", "settings.json"), b, 0o600)
+	}
 	a, err := New(&config.Config{ServerURL: "https://portal.example", ServerID: "x"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

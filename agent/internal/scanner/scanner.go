@@ -19,10 +19,12 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -62,6 +64,8 @@ type Scan struct {
 	Target     string `json:"target"`
 	Status     string `json:"status"`
 	Files      int64  `json:"files"`
+	Total      int64  `json:"total"` // files to check (0 while still counting)
+	Current    string `json:"current,omitempty"`
 	Infected   int64  `json:"infected"`
 	Initiator  string `json:"initiator"`
 	StartedAt  int64  `json:"started_at"`
@@ -514,7 +518,8 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 
 	cfg := s.Settings.Get().Scanner
 	clam := newClam(cfg.UseClamAV)
-	var files, infected int64
+	var files int64
+	var infected atomic.Int64
 	var batch []string
 	flushClam := func() {
 		for path, sig := range clam.scan(batch) {
@@ -523,15 +528,110 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				continue
 			}
 			if _, err := s.Record(id, "manual", path, info, Detection{CatVirus, "ClamAV." + sig}); err == nil {
-				infected++
+				infected.Add(1)
 			}
 		}
 		batch = batch[:0]
 	}
 	qdir := QuarantineDir()
 	homeMap := homes()
+	skipDir := func(root, path string, d fs.DirEntry) bool {
+		return path != root && (skipAnywhere[d.Name()] || (filepath.Dir(path) == root && skipInHome[d.Name()]) || path == qdir || underAny(path, forbidden))
+	}
+	// Count the files to check alongside the scan, for the progress bar.
+	go func() {
+		var total int64
+		for _, root := range roots {
+			_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if err != nil {
+					return nil
+				}
+				if d.IsDir() {
+					if skipDir(root, path, d) {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				if d.Type().IsRegular() {
+					if !since.IsZero() {
+						if info, err := d.Info(); err != nil || info.ModTime().Before(since) {
+							return nil
+						}
+					}
+					total++
+				}
+				return nil
+			})
+		}
+		if ctx.Err() == nil {
+			_, _ = s.DB.Exec(`UPDATE scans SET total = ? WHERE id = ?`, total, id)
+		}
+	}()
+	lastProgress := time.Now()
 	var scripts []string // for YARA
 	useYARA := cfg.YARA && YARABin() != "" && len(YARARules()) > 0
+	maxSize := int64(cfg.MaxFileSizeMB) << 20
+
+	// Files are checked by a worker pool (half the CPUs, so websites stay
+	// fast); one collector records results, so the ClamAV and YARA batches
+	// need no locking.
+	type job struct {
+		path string
+		info fs.FileInfo
+	}
+	type result struct {
+		job
+		det *Detection
+		err error
+	}
+	workers := runtime.NumCPU() / 2
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 8 {
+		workers = 8
+	}
+	jobs := make(chan job, 256)
+	results := make(chan result, 256)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				det, err := s.CheckFile(j.path, j.info, cfg)
+				results <- result{j, det, err}
+			}
+		}()
+	}
+	collected := make(chan struct{})
+	go func() {
+		defer close(collected)
+		for r := range results {
+			if errors.Is(r.err, ErrTrusted) {
+				continue
+			}
+			if useYARA && (r.err != nil || r.det == nil) && r.info.Size() <= maxSize {
+				scripts = append(scripts, r.path)
+			}
+			if r.err != nil || r.det == nil {
+				if clam.ok && ScriptExts[extOf(filepath.Base(r.path))] && r.info.Size() <= maxSize {
+					batch = append(batch, r.path)
+					if len(batch) >= 200 {
+						flushClam()
+					}
+				}
+				continue
+			}
+			if _, err := s.Record(id, "manual", r.path, r.info, *r.det); err == nil {
+				infected.Add(1)
+			}
+		}
+	}()
+
 	var walkErr error
 	for _, root := range roots {
 		walkErr = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -542,7 +642,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				return nil // unreadable entry: skip
 			}
 			if d.IsDir() {
-				if path != root && (skipAnywhere[d.Name()] || (filepath.Dir(path) == root && skipInHome[d.Name()]) || path == qdir || underAny(path, forbidden)) {
+				if skipDir(root, path, d) {
 					return filepath.SkipDir
 				}
 				return nil
@@ -551,7 +651,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				if target, bad := InsecureSymlink(path, homeMap); bad {
 					if info, err := os.Lstat(path); err == nil {
 						if _, err := s.Record(id, "manual", path, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + target}); err == nil {
-							infected++
+							infected.Add(1)
 						}
 					}
 				}
@@ -568,27 +668,14 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				return nil
 			}
 			files++
-			if files%250 == 0 {
-				_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=? WHERE id=?`, files, infected, id)
+			if time.Since(lastProgress) >= time.Second {
+				lastProgress = time.Now()
+				_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=?, current=? WHERE id=?`, files, infected.Load(), path, id)
 			}
-			det, err := s.CheckFile(path, info, cfg)
-			if errors.Is(err, ErrTrusted) {
-				return nil
-			}
-			if useYARA && (err != nil || det == nil) && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
-				scripts = append(scripts, path)
-			}
-			if err != nil || det == nil {
-				if clam.ok && ScriptExts[extOf(d.Name())] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
-					batch = append(batch, path)
-					if len(batch) >= 200 {
-						flushClam()
-					}
-				}
-				return nil
-			}
-			if _, err := s.Record(id, "manual", path, info, *det); err == nil {
-				infected++
+			select {
+			case jobs <- job{path, info}:
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 			return nil
 		})
@@ -596,6 +683,10 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 			break
 		}
 	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+	<-collected
 	if ctx.Err() == nil {
 		flushClam()
 		for path, rule := range yaraScan(ctx, scripts) {
@@ -609,7 +700,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 			}
 			if info, err := os.Lstat(path); err == nil {
 				if _, err := s.Record(id, "manual", path, info, Detection{cat, "YARA." + rule}); err == nil {
-					infected++
+					infected.Add(1)
 				}
 			}
 		}
@@ -620,8 +711,8 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	} else if walkErr != nil {
 		status, errText = "failed", walkErr.Error()
 	}
-	_, _ = s.DB.Exec(`UPDATE scans SET status=?, files=?, infected=?, finished_at=?, error=? WHERE id=?`, status, files, infected, store.Now(), errText, id)
-	s.Log.Info("scan finished", "id", id, "status", status, "files", files, "infected", infected)
+	_, _ = s.DB.Exec(`UPDATE scans SET status=?, files=?, infected=?, finished_at=?, error=?, current='', total=CASE WHEN ? = 'completed' THEN ? ELSE total END WHERE id=?`, status, files, infected.Load(), store.Now(), errText, status, files, id)
+	s.Log.Info("scan finished", "id", id, "status", status, "files", files, "infected", infected.Load())
 }
 
 // ScanFile checks a single file (realtime protection).
@@ -649,7 +740,7 @@ func (s *Scanner) ListScans(limit int) ([]Scan, error) { return s.ListScansUnder
 
 // ListScansUnder lists scans whose target is dir or below it ("" = all).
 func (s *Scanner) ListScansUnder(dir string, limit int) ([]Scan, error) {
-	q, args := `SELECT id, kind, target, status, files, infected, initiator, started_at, finished_at, error FROM scans`, []any{}
+	q, args := `SELECT id, kind, target, status, files, total, current, infected, initiator, started_at, finished_at, error FROM scans`, []any{}
 	if dir != "" {
 		q, args = q+` WHERE target = ? OR substr(target, 1, ?) = ?`, append(args, dir, len(dir)+1, dir+"/")
 	}
@@ -661,7 +752,7 @@ func (s *Scanner) ListScansUnder(dir string, limit int) ([]Scan, error) {
 	out := []Scan{}
 	for rows.Next() {
 		var sc Scan
-		if err := rows.Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error); err != nil {
+		if err := rows.Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error); err != nil {
 			return nil, err
 		}
 		out = append(out, sc)

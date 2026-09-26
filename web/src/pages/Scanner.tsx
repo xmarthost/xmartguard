@@ -4,7 +4,7 @@ import { Download, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, S
 import { can, useAuth } from '../auth';
 import { bytes } from '../format';
 import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
-import { Badge, Modal, Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
+import { Badge, Modal, Pager, agentCall, fmtTime, useAction, useAgent, useToast } from '../components/controls';
 import { useApi } from '../hooks';
 import type { Server } from '../api';
 
@@ -14,6 +14,8 @@ interface Scan {
   target: string;
   status: string;
   files: number;
+  total?: number;
+  current?: string;
   infected: number;
   initiator: string;
   started_at: number;
@@ -72,6 +74,40 @@ interface HostingUser {
   web_root: string;
 }
 
+/** Live progress of a running scan: files checked of the files counted. */
+function ScanProgress({ s }: { s: Scan }) {
+  const total = s.total ?? 0;
+  const pct = total > 0 ? Math.min(99, Math.floor((s.files / total) * 100)) : 0;
+  const secs = Math.max(1, Date.now() / 1000 - s.started_at);
+  const rate = Math.round(s.files / secs);
+  return (
+    <div className="min-w-[220px]">
+      <div className="flex justify-between text-xs">
+        <span className="font-medium text-navy-900">
+          {s.files.toLocaleString()} {total > 0 ? `/ ${total.toLocaleString()}` : ''} files
+        </span>
+        <span className="text-slate-500">{total > 0 ? `${pct}%` : 'counting…'}</span>
+      </div>
+      <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
+        {total > 0 ? (
+          <div className="h-2 rounded-full bg-gradient-to-r from-blue-500 to-navy-600 transition-all duration-700" style={{ width: `${Math.max(2, pct)}%` }} />
+        ) : (
+          <div className="h-2 w-1/3 animate-pulse rounded-full bg-blue-300" />
+        )}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-400">
+        {rate.toLocaleString()} files/s
+        {total > 0 && rate > 0 && ` · about ${Math.max(1, Math.ceil((total - s.files) / rate / 60))} min left`}
+      </div>
+      {s.current && (
+        <div className="truncate text-[11px] text-slate-400" title={s.current}>
+          {s.current}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function useServerName(id?: string) {
   const { data } = useApi<{ server: Server }>(id ? `/api/servers/${id}` : null);
   return data?.server.hostname ?? '';
@@ -81,7 +117,7 @@ export function ManualScans() {
   const { id } = useParams();
   const host = useServerName(id);
   const { user } = useAuth();
-  const scans = useAgent<{ scans: Scan[] }>(id, 'scan.list', {}, 4000);
+  const scans = useAgent<{ scans: Scan[] }>(id, 'scan.list', {}, 2000);
   const paths = useAgent<{ users: HostingUser[] }>(id, 'scanner.paths');
   const { run, busy } = useAction();
   const [quick, setQuick] = useState('');
@@ -166,7 +202,9 @@ export function ManualScans() {
                 <tr key={s.id} className="border-b border-slate-100 last:border-0">
                   <td className="py-3 capitalize">{s.kind}</td>
                   <td className="max-w-xs py-3 break-all">{s.target}</td>
-                  <td className="py-3">{s.files.toLocaleString()}</td>
+                  <td className="py-3">
+                    {s.status === 'running' ? <ScanProgress s={s} /> : s.files.toLocaleString()}
+                  </td>
                   <td className={`py-3 ${s.infected ? 'font-semibold text-red-600' : ''}`}>{s.infected}</td>
                   <td className="py-3">{s.initiator}</td>
                   <td className="py-3">
@@ -229,6 +267,8 @@ export function ScannerLogs() {
   const [detail, setDetail] = useState<Finding | null>(null);
   const [aiRes, setAiRes] = useState<AIResult | null>(null);
   const [viewing, setViewing] = useState<Finding | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const toast = useToast();
   const limit = 25;
   const params = { scan_id: scanId, category, status, q: query, limit, offset };
   const list = useAgent<{ findings: Finding[]; total: number }>(id, 'findings.list', params, 15_000);
@@ -263,7 +303,18 @@ export function ScannerLogs() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button className="btn border border-slate-300 bg-white" onClick={list.reload}><RefreshCw className="h-4 w-4" /> Refresh</button>
+          <button
+            className="btn border border-slate-300 bg-white"
+            disabled={refreshing}
+            onClick={async () => {
+              setRefreshing(true);
+              await list.reload();
+              setRefreshing(false);
+              toast('ok', 'Logs refreshed');
+            }}
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Refresh
+          </button>
           <select className="input w-40" value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="">All categories</option>
             <option value="virus">Virus</option>

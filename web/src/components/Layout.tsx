@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
-  Activity, BrainCircuit, Cpu, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
+  BookOpen,
+  Activity, BrainCircuit, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
@@ -37,6 +38,79 @@ function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem
         </NavLink>
       ))}
     </div>
+  );
+}
+
+interface RailEntry {
+  label: string;
+  icon: ReactNode;
+  to?: string;
+  end?: boolean;
+  children?: NavItem[];
+}
+
+/**
+ * The desktop sidebar: an icon rail that widens when the mouse is over it;
+ * groups open their pages in a flyout to the right.
+ */
+function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }) {
+  const loc = useLocation();
+  const [open, setOpen] = useState<string | null>(null);
+  const isActive = (e: RailEntry) =>
+    e.children ? e.children.some((c) => loc.pathname === c.to || loc.pathname.startsWith(c.to + '/')) : e.end ? loc.pathname === e.to : loc.pathname.startsWith(e.to!);
+  const item = (e: RailEntry) => {
+    const active = isActive(e);
+    const cls = `relative mx-2 my-1 flex h-12 items-center gap-4 rounded-l-full rounded-r-2xl px-5 text-sm transition ${
+      active ? 'bg-white font-medium text-navy-900' : 'text-white/80 hover:bg-white/10 hover:text-white'
+    }`;
+    const body = (
+      <>
+        <span className="h-5 w-5 shrink-0 [&>svg]:h-5 [&>svg]:w-5">{e.icon}</span>
+        <span className="whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100">{e.label}</span>
+      </>
+    );
+    if (!e.children) {
+      return (
+        <NavLink key={e.label} to={e.to!} end={e.end} className={cls} onMouseEnter={() => setOpen(null)}>
+          {body}
+        </NavLink>
+      );
+    }
+    return (
+      <div key={e.label} className="relative" onMouseEnter={() => setOpen(e.label)}>
+        <div className={`${cls} cursor-default`}>
+          {body}
+          {open === e.label && <span className="absolute top-1/2 -right-2 hidden -translate-y-1/2 border-y-8 border-r-8 border-y-transparent border-r-navy-800 group-hover/rail:block" />}
+        </div>
+        {open === e.label && (
+          <div className="absolute top-0 left-full z-40 ml-0 hidden w-64 rounded-2xl bg-navy-800 p-3 shadow-2xl group-hover/rail:block">
+            {e.children.map((c) => (
+              <NavLink
+                key={c.to}
+                to={c.to}
+                end={c.end}
+                onClick={() => setOpen(null)}
+                className={({ isActive: a }) =>
+                  `flex items-center gap-3 rounded-full px-4 py-2.5 text-sm transition ${a ? 'bg-white/15 font-medium text-white' : 'text-white/85 hover:bg-white/10 hover:text-white'}`
+                }
+              >
+                <span className="h-4 w-4 [&>svg]:h-4 [&>svg]:w-4">{c.icon}</span>
+                {c.label}
+              </NavLink>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+  return (
+    <aside
+      className="group/rail fixed top-16 bottom-0 left-0 z-30 hidden w-20 flex-col bg-gradient-to-b from-navy-900 to-navy-700 py-4 transition-[width] duration-200 hover:w-60 hover:shadow-2xl md:flex"
+      onMouseLeave={() => setOpen(null)}
+    >
+      <nav className="flex-1">{entries.map(item)}</nav>
+      <div className="border-t border-white/10 pt-3">{bottom.map(item)}</div>
+    </aside>
   );
 }
 
@@ -139,13 +213,56 @@ export default function Layout({ children }: { children: ReactNode }) {
   const { data } = useApi<{ server: Server }>(serverId ? `/api/servers/${serverId}` : null);
   const close = () => setMobileOpen(false);
 
-  const global: NavItem[] = [
-    { to: '/', label: 'Overview', icon: <LayoutDashboard />, end: true },
-    { to: '/servers', label: 'Server List', icon: <ServerIcon />, end: true },
-    { to: '/ai', label: 'AI Scanner', icon: <BrainCircuit /> },
-    { to: '/mass-operations', label: 'Mass Operations', icon: <Layers /> },
-  ];
   const base = `/servers/${serverId}`;
+  const entries: RailEntry[] = serverId
+    ? [
+        { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
+        { label: 'Dashboard', icon: <LayoutDashboard />, to: base, end: true },
+        {
+          label: 'Virus Scanner',
+          icon: <Bug />,
+          children: [
+            { to: `${base}/scanner`, label: 'Manual Scans', icon: <ScanSearchIcon /> },
+            { to: `${base}/scanner-logs`, label: 'Scanner Logs', icon: <FileWarning /> },
+            { to: `${base}/cms`, label: 'CMS Threats', icon: <LayoutTemplate /> },
+            { to: `${base}/db-scanner`, label: 'DB Scanner', icon: <DatabaseZap /> },
+          ],
+        },
+        {
+          label: 'Protection',
+          icon: <ShieldAlert />,
+          children: [
+            { to: `${base}/firewall`, label: 'Firewall', icon: <Flame /> },
+            { to: `${base}/firewall-logs`, label: 'Firewall Logs', icon: <ListX /> },
+            { to: `${base}/waf-logs`, label: 'WAF Logs', icon: <ShieldCheck /> },
+            { to: `${base}/ipdb`, label: 'IPDB', icon: <Globe2 /> },
+            { to: `${base}/bot-attacks`, label: 'Bot Attacks', icon: <Bot /> },
+            { to: `${base}/osm`, label: 'Outgoing Spam Monitor', icon: <MailWarning /> },
+          ],
+        },
+        {
+          label: 'Server Health',
+          icon: <HeartPulse />,
+          children: [
+            { to: `${base}/monitoring`, label: 'System Monitoring', icon: <Activity /> },
+            { to: `${base}/domain-reputation`, label: 'Domain Reputation', icon: <Globe /> },
+            { to: `${base}/ip-reputation`, label: 'IP Reputation', icon: <Radar /> },
+            { to: `${base}/security-monitor`, label: 'Process & Cron Monitor', icon: <Cpu /> },
+          ],
+        },
+        { label: 'Settings', icon: <Settings />, to: `${base}/settings` },
+      ]
+    : [
+        { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
+        { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
+        { label: 'AI Scanner', icon: <BrainCircuit />, to: '/ai' },
+        { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
+      ];
+  const bottom: RailEntry[] = [
+    { label: 'Security Log', icon: <ShieldCheck />, to: '/security' },
+    { label: 'Knowledge Base', icon: <BookOpen />, to: '/kb' },
+    { label: 'Support', icon: <LifeBuoy />, to: '/support' },
+  ];
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -165,65 +282,23 @@ export default function Layout({ children }: { children: ReactNode }) {
         </div>
       </header>
       <div className="flex flex-1">
+        {/* Desktop: a slim icon rail that opens on hover (like cPGuard). */}
+        <Rail entries={entries} bottom={bottom} />
+        {/* Mobile: full drawer. */}
         <aside
-          className={`fixed top-16 bottom-0 z-10 w-60 shrink-0 overflow-y-auto bg-gradient-to-b from-navy-900 to-navy-700 pt-4 transition-transform md:sticky md:h-[calc(100vh-4rem)] md:translate-x-0 ${
+          className={`fixed top-16 bottom-0 z-30 w-64 overflow-y-auto bg-gradient-to-b from-navy-900 to-navy-700 pt-4 transition-transform md:hidden ${
             mobileOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >
-          {serverId ? (
-            <>
-              <NavLink to="/servers" onClick={close} className="mx-4 mb-4 flex items-center gap-2 text-sm text-white/70 hover:text-white">
-                <ArrowLeft className="h-4 w-4" /> All servers
-              </NavLink>
-              <NavGroup onNavigate={close} items={[{ to: base, label: 'Dashboard', icon: <Gauge />, end: true }]} />
-              <NavGroup
-                title="Virus Scanner"
-                onNavigate={close}
-                items={[
-                  { to: `${base}/scanner`, label: 'Manual Scans', icon: <Bug /> },
-                  { to: `${base}/scanner-logs`, label: 'Scanner Logs', icon: <FileWarning /> },
-                  { to: `${base}/cms`, label: 'CMS Threats', icon: <LayoutTemplate /> },
-                  { to: `${base}/db-scanner`, label: 'DB Scanner', icon: <DatabaseZap /> },
-                ]}
-              />
-              <NavGroup
-                title="Protection"
-                onNavigate={close}
-                items={[
-                  { to: `${base}/firewall`, label: 'Firewall', icon: <Flame /> },
-                  { to: `${base}/firewall-logs`, label: 'Firewall Logs', icon: <ListX /> },
-                  { to: `${base}/waf-logs`, label: 'WAF Logs', icon: <ShieldAlert /> },
-                  { to: `${base}/bot-attacks`, label: 'Bot Attacks', icon: <Bot /> },
-                  { to: `${base}/ipdb`, label: 'IPDB', icon: <Globe2 /> },
-                ]}
-              />
-              <NavGroup
-                title="Server Health"
-                onNavigate={close}
-                items={[
-                  { to: `${base}/monitoring`, label: 'System Monitoring', icon: <Activity /> },
-                  { to: `${base}/security-monitor`, label: 'Process & Cron Monitor', icon: <Cpu /> },
-                  { to: `${base}/ip-reputation`, label: 'IP Reputation', icon: <Radar /> },
-                  { to: `${base}/domain-reputation`, label: 'Domain Reputation', icon: <Globe /> },
-                  { to: `${base}/osm`, label: 'Outgoing Spam', icon: <MailWarning /> },
-                ]}
-              />
-              <NavGroup onNavigate={close} items={[{ to: `${base}/settings`, label: 'Settings', icon: <Settings /> }]} />
-            </>
-          ) : (
-            <NavGroup onNavigate={close} items={global} />
+          {[...entries, ...bottom].map((e) =>
+            e.children ? (
+              <NavGroup key={e.label} title={e.label} onNavigate={close} items={e.children} />
+            ) : (
+              <NavGroup key={e.label} onNavigate={close} items={[{ to: e.to!, label: e.label, icon: e.icon, end: e.end }]} />
+            ),
           )}
-          <div className="mt-auto border-t border-white/10 pt-4">
-            <NavGroup
-              onNavigate={close}
-              items={[
-                { to: '/security', label: 'Security Log', icon: <ShieldCheck /> },
-                { to: '/support', label: 'Support', icon: <LifeBuoy /> },
-              ]}
-            />
-          </div>
         </aside>
-        <main className="min-w-0 flex-1 p-4 md:p-6">{children}</main>
+        <main className="min-w-0 flex-1 p-4 md:ml-20 md:p-6">{children}</main>
       </div>
     </div>
   );

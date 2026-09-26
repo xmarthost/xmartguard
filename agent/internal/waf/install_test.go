@@ -104,3 +104,38 @@ func TestInstallIntoRealApache(t *testing.T) {
 		t.Fatal("RemoveInclude left files behind")
 	}
 }
+
+func TestLiteSpeedLogLine(t *testing.T) {
+	line := `2026-09-26 12:00:01.123456 [NOTICE] [4321] [T0] [203.0.113.7:51234-3#APVH_www.example.com:443] [Module:mod_security] ModSecurity: Access denied with code 403 (phase 1). [id "7700201"] [msg "XMartGuard - Access to sensitive file blocked"] [uri "/.env"]`
+	e, ok := ParseLine(line)
+	if !ok || e.IP != "203.0.113.7" || e.Host != "example.com" || e.RuleID != 7700201 || e.URI != "/.env" {
+		t.Fatalf("%+v %v", e, ok)
+	}
+}
+
+func TestRuleChangesAreTestedAndReloaded(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "reloads")
+	tgt := Target{Name: "test", ModSec: true, IncludeFile: filepath.Join(dir, "inc.conf"), Engine: "On",
+		configTest: []string{"/bin/true"}, reload: []string{"/bin/sh", "-c", "echo x >> " + marker}}
+	m := &Manager{RulesDir: filepath.Join(dir, "rules")}
+	reloads := func() int { b, _ := os.ReadFile(marker); return strings.Count(string(b), "x") }
+	if err := m.install(tgt, "SecRule A", nil); err != nil || reloads() != 1 {
+		t.Fatalf("first install: %v %d", err, reloads())
+	}
+	if m.install(tgt, "SecRule A", nil); reloads() != 1 {
+		t.Fatal("reloaded without a change")
+	}
+	// Only the rules changed (a rule switched off): test and reload.
+	if err := m.install(tgt, "SecRule B", nil); err != nil || reloads() != 2 {
+		t.Fatalf("rule change not applied: %v %d", err, reloads())
+	}
+	// A rejected change is rolled back entirely.
+	tgt.configTest = []string{"/bin/false"}
+	if err := m.install(tgt, "SecRule broken", nil); err == nil {
+		t.Fatal("rejected rules accepted")
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "rules", "rules.conf")); string(b) != "SecRule B" {
+		t.Fatalf("rules not rolled back: %q", b)
+	}
+}

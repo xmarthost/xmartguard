@@ -31,6 +31,35 @@ export interface Dash {
   infections_daily: Partial<Record<'virus' | 'suspicious' | 'binary' | 'symlink', DayPoint[]>>;
   summary: { outdated_cms: number; cms_issues: number; ips_blacklisted: number; domains_blacklisted: number; db_infections: number };
   alerts: Alert[];
+  services?: Service[];
+}
+interface Service {
+  name: string;
+  ok: boolean;
+  off: boolean;
+  problem: string;
+  link: string;
+}
+
+/** One chip per protection: green running, red stopped, grey switched off. */
+function ServiceStrip({ services }: { services: Service[] }) {
+  return (
+    <div className="card flex flex-wrap items-center gap-2 px-5 py-3">
+      <span className="mr-2 text-sm font-semibold text-navy-900">Protection status</span>
+      {services.map((sv) => {
+        const tone = sv.off ? 'bg-slate-100 text-slate-500' : sv.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700';
+        const dot = sv.off ? 'bg-slate-400' : sv.ok ? 'bg-green-500' : 'bg-red-500 animate-pulse';
+        const label = sv.off ? 'Off' : sv.ok ? 'Running' : 'Not running';
+        return (
+          <Link key={sv.name} to={sv.off ? 'settings' : sv.link} title={sv.problem || label} className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm hover:opacity-80 ${tone}`}>
+            <span className={`h-2 w-2 rounded-full ${dot}`} />
+            {sv.name}
+            <span className="text-xs opacity-75">· {label}</span>
+          </Link>
+        );
+      })}
+    </div>
+  );
 }
 
 export function compact(n: number): string {
@@ -183,6 +212,7 @@ export default function AttackOverview({ serverId, online, days }: { serverId: s
 
   return (
     <div className="space-y-5">
+      {data.services && data.services.length > 0 && <ServiceStrip services={data.services} />}
       <div className="grid gap-4 md:grid-cols-3">
         <Metric icon={<Settings2 />} p={data.threats} label="Threats Stopped" />
         <Metric icon={<Lock />} p={data.web_attacks} label="Web Attacks Blocked" />

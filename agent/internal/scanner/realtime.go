@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -15,20 +16,41 @@ import (
 )
 
 // MaxWatches caps inotify watches so huge servers stay responsive.
-var MaxWatches = 300000
+var MaxWatches = 500000
+
+// RealtimeWorkers scan changed files in parallel, so reading events never
+// waits for a scan (a stalled reader loses events when the queue fills up).
+var RealtimeWorkers = 4
 
 const watchMask = unix.IN_CLOSE_WRITE | unix.IN_MOVED_TO | unix.IN_CREATE | unix.IN_DELETE_SELF | unix.IN_ONLYDIR
 
-// Realtime watches web roots with inotify and scans files as they are written.
+// Realtime watches every hosting account (the whole home directory, not
+// only public_html: addon domains, uploads and extracted archives live
+// anywhere in it) plus /tmp, /var/tmp and /dev/shm, and scans files as soon
+// as they are written.
 type Realtime struct {
 	S *Scanner
+	// Roots overrides the watched directories (tests).
+	Roots func() []string
 
-	mu      sync.Mutex
-	fd      int
-	dirs    map[int]string
-	byPath  map[string]int
-	pending map[string]time.Time
-	watches int
+	mu       sync.Mutex
+	fd       int
+	dirs     map[int]string
+	byPath   map[string]int
+	pending  map[string]time.Time
+	watches  int
+	homes    map[string]bool
+	work     chan string
+	scanned  atomic.Int64
+	overflow atomic.Int64
+	active   atomic.Bool
+	lastErr  atomic.Value // string
+}
+
+// Health reports whether inotify watching is running and, if not, why.
+func (r *Realtime) Health() (active bool, err string) {
+	e, _ := r.lastErr.Load().(string)
+	return r.active.Load(), e
 }
 
 // Watches returns the number of active directory watches.
@@ -38,23 +60,37 @@ func (r *Realtime) Watches() int {
 	return r.watches
 }
 
-// ensureLimit raises fs.inotify.max_user_watches (runtime only) when too low.
-func ensureLimit(want int) {
-	const p = "/proc/sys/fs/inotify/max_user_watches"
-	raw, err := os.ReadFile(p)
-	if err != nil {
-		return
+// Scanned is the number of files the realtime scanner checked since start.
+func (r *Realtime) Scanned() int64 { return r.scanned.Load() }
+
+// ensureLimits raises the inotify limits (runtime only) when too low.
+func ensureLimits() {
+	for p, want := range map[string]int{
+		"/proc/sys/fs/inotify/max_user_watches":  MaxWatches + 100000,
+		"/proc/sys/fs/inotify/max_queued_events": 1 << 20,
+	} {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		cur, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if cur < want {
+			_ = os.WriteFile(p, []byte(strconv.Itoa(want)), 0o644)
+		}
 	}
-	cur, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if cur < want {
-		_ = os.WriteFile(p, []byte(strconv.Itoa(want)), 0o644)
+}
+
+func (r *Realtime) roots() []string {
+	if r.Roots != nil {
+		return r.Roots()
 	}
+	return FullRoots()
 }
 
 // Run watches until ctx ends. Roots are refreshed every 10 minutes so new
 // accounts are picked up; enable/disable follows the scanner settings.
 func (r *Realtime) Run(ctx context.Context) {
-	ensureLimit(MaxWatches + 100000)
+	ensureLimits()
 	for ctx.Err() == nil {
 		if !r.S.Settings.Get().Scanner.Enabled || !r.S.Settings.Get().Scanner.Realtime {
 			select {
@@ -69,7 +105,8 @@ func (r *Realtime) Run(ctx context.Context) {
 }
 
 func (r *Realtime) session(ctx context.Context) {
-	if err := r.init(WebRoots()); err != nil {
+	if err := r.init(r.roots()); err != nil {
+		r.lastErr.Store(err.Error())
 		r.S.Log.Warn("realtime scanning unavailable", "err", err)
 		select {
 		case <-ctx.Done():
@@ -78,7 +115,10 @@ func (r *Realtime) session(ctx context.Context) {
 		return
 	}
 	r.S.Log.Info("realtime scanning active", "watches", r.Watches())
+	r.lastErr.Store("")
+	r.active.Store(true)
 	r.loop(ctx)
+	r.active.Store(false)
 }
 
 // init opens an inotify instance and watches the given roots recursively.
@@ -87,11 +127,16 @@ func (r *Realtime) init(roots []string) error {
 	if err != nil {
 		return err
 	}
+	homes := map[string]bool{}
+	for _, u := range Users() {
+		homes[u.Home] = true
+	}
 	r.mu.Lock()
-	r.fd, r.dirs, r.byPath, r.pending, r.watches = fd, map[int]string{}, map[string]int{}, map[string]time.Time{}, 0
+	r.fd, r.dirs, r.byPath, r.pending, r.watches, r.homes = fd, map[int]string{}, map[string]int{}, map[string]time.Time{}, 0, homes
+	r.work = make(chan string, 20000)
 	r.mu.Unlock()
 	for _, root := range roots {
-		r.addTree(root)
+		r.addTree(root, false)
 	}
 	return nil
 }
@@ -99,43 +144,69 @@ func (r *Realtime) init(roots []string) error {
 // loop processes events until ctx ends or realtime is switched off.
 func (r *Realtime) loop(ctx context.Context) {
 	fd := r.fd
+	wctx, stopWorkers := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	for i := 0; i < max(1, RealtimeWorkers); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-wctx.Done():
+					return
+				case p := <-r.work:
+					r.S.ScanFile(p)
+					r.scanned.Add(1)
+				}
+			}
+		}()
+	}
 	defer func() {
+		stopWorkers()
+		wg.Wait()
 		unix.Close(fd)
 		r.mu.Lock()
 		r.watches = 0
 		r.mu.Unlock()
 	}()
 	refresh := time.NewTicker(10 * time.Minute)
-	flush := time.NewTicker(time.Second)
 	defer refresh.Stop()
-	defer flush.Stop()
-	buf := make([]byte, 64*1024)
+	buf := make([]byte, 256*1024)
+	lastFlush := time.Now()
+	pfd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
+		}
+		select {
 		case <-refresh.C:
 			cfg := r.S.Settings.Get().Scanner
 			if !cfg.Enabled || !cfg.Realtime {
 				return
 			}
-			for _, root := range WebRoots() {
+			for _, root := range r.roots() {
 				r.mu.Lock()
 				_, known := r.byPath[root]
 				r.mu.Unlock()
 				if !known {
-					r.addTree(root)
+					r.addTree(root, false)
 				}
 			}
-		case <-flush.C:
-			r.flushPending()
 		default:
-			n, err := unix.Read(fd, buf)
-			if err != nil || n <= 0 {
-				time.Sleep(200 * time.Millisecond)
-				continue
+		}
+		// Wait up to 200 ms for events, then read everything queued.
+		if n, _ := unix.Poll(pfd, 200); n > 0 {
+			for {
+				n, err := unix.Read(fd, buf)
+				if err != nil || n <= 0 {
+					break
+				}
+				r.handle(buf[:n])
 			}
-			r.handle(buf[:n])
+		}
+		if time.Since(lastFlush) >= 250*time.Millisecond {
+			r.flushPending()
+			lastFlush = time.Now()
 		}
 	}
 }
@@ -158,13 +229,34 @@ func (r *Realtime) addWatch(dir string) bool {
 	return true
 }
 
-func (r *Realtime) addTree(root string) {
-	qdir := QuarantineDir()
+// skip reports directories never watched: bind mounts and caches anywhere,
+// and mailboxes, logs and panel data directly inside a home directory.
+func (r *Realtime) skip(path string, name string) bool {
+	if skipAnywhere[name] || path == QuarantineDir() || underAny(path, forbidden) {
+		return true
+	}
+	r.mu.Lock()
+	home := r.homes[filepath.Dir(path)]
+	r.mu.Unlock()
+	return home && (skipInHome[name] || name == "access-logs" || name == ".trash" || name == "ssl" || name == ".htpasswds")
+}
+
+// addTree watches root and every directory below it. With queueFiles, the
+// files already inside are scanned too: a directory that just appeared
+// (an extracted archive, a moved folder) is usually filled before its
+// watch exists, and those files would otherwise never be seen.
+func (r *Realtime) addTree(root string, queueFiles bool) {
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || !d.IsDir() {
+		if err != nil {
 			return nil
 		}
-		if skipAnywhere[d.Name()] || path == qdir {
+		if !d.IsDir() {
+			if queueFiles && d.Type().IsRegular() {
+				r.queue(path)
+			}
+			return nil
+		}
+		if path != root && r.skip(path, d.Name()) {
 			return filepath.SkipDir
 		}
 		if !r.addWatch(path) {
@@ -174,11 +266,29 @@ func (r *Realtime) addTree(root string) {
 	})
 }
 
+func (r *Realtime) queue(path string) {
+	r.mu.Lock()
+	r.pending[path] = time.Now()
+	r.mu.Unlock()
+}
+
+// inOverflow is set by the kernel when events were lost.
+const inOverflow = unix.IN_Q_OVERFLOW
+
 func (r *Realtime) handle(buf []byte) {
 	for off := 0; off+unix.SizeofInotifyEvent <= len(buf); {
 		ev := (*unix.InotifyEvent)(unsafe.Pointer(&buf[off]))
-		nameBytes := buf[off+unix.SizeofInotifyEvent : off+unix.SizeofInotifyEvent+int(ev.Len)]
-		off += unix.SizeofInotifyEvent + int(ev.Len)
+		end := off + unix.SizeofInotifyEvent + int(ev.Len)
+		if end > len(buf) {
+			break
+		}
+		nameBytes := buf[off+unix.SizeofInotifyEvent : end]
+		off = end
+		if ev.Mask&inOverflow != 0 {
+			r.overflow.Add(1)
+			go r.catchUp(time.Now().Add(-10 * time.Minute))
+			continue
+		}
 		name := strings.TrimRight(string(nameBytes), "\x00")
 		r.mu.Lock()
 		dir, ok := r.dirs[int(ev.Wd)]
@@ -188,9 +298,11 @@ func (r *Realtime) handle(buf []byte) {
 		}
 		if ev.Mask&unix.IN_IGNORED != 0 || ev.Mask&unix.IN_DELETE_SELF != 0 {
 			r.mu.Lock()
-			delete(r.dirs, int(ev.Wd))
-			delete(r.byPath, dir)
-			r.watches--
+			if _, still := r.dirs[int(ev.Wd)]; still {
+				delete(r.dirs, int(ev.Wd))
+				delete(r.byPath, dir)
+				r.watches--
+			}
 			r.mu.Unlock()
 			continue
 		}
@@ -199,32 +311,53 @@ func (r *Realtime) handle(buf []byte) {
 		}
 		full := filepath.Join(dir, name)
 		if ev.Mask&unix.IN_ISDIR != 0 {
-			if ev.Mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 {
-				r.addTree(full)
+			if ev.Mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 && !r.skip(full, name) {
+				r.addTree(full, true)
 			}
 			continue
 		}
 		if ev.Mask&(unix.IN_CLOSE_WRITE|unix.IN_MOVED_TO) != 0 {
-			r.mu.Lock()
-			r.pending[full] = time.Now()
-			r.mu.Unlock()
+			r.queue(full)
 		}
 	}
 }
 
-// flushPending scans files that have been quiet for at least one second.
+// catchUp scans files changed since t after the kernel dropped events.
+func (r *Realtime) catchUp(since time.Time) {
+	r.S.Log.Warn("realtime event queue overflowed; rescanning recently changed files")
+	for _, root := range r.roots() {
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if path != root && r.skip(path, d.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info, err := d.Info(); err == nil && info.Mode().IsRegular() && info.ModTime().After(since) {
+				r.queue(path)
+			}
+			return nil
+		})
+	}
+}
+
+// flushPending hands files that were quiet for a moment to the workers.
 func (r *Realtime) flushPending() {
 	r.mu.Lock()
-	var ready []string
+	defer r.mu.Unlock()
 	for p, t := range r.pending {
-		if time.Since(t) >= time.Second {
-			ready = append(ready, p)
-			delete(r.pending, p)
+		if time.Since(t) < 300*time.Millisecond {
+			continue
 		}
-	}
-	r.mu.Unlock()
-	for _, p := range ready {
-		r.S.ScanFile(p)
+		select {
+		case r.work <- p:
+			delete(r.pending, p)
+		default:
+			return // workers busy: try again on the next flush
+		}
 	}
 }
 

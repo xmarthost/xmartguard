@@ -115,6 +115,7 @@ var phpOpen = regexp.MustCompile(`<\?php\s`)
 
 // Match returns the first matching rule for content with the given extension.
 func Match(ext string, content []byte) *Rule {
+	var low []byte
 	for i := range Rules {
 		r := &Rules[i]
 		if len(r.Exts) > 0 && !hasExt(r.Exts, ext) {
@@ -126,7 +127,10 @@ func Match(ext string, content []byte) *Rule {
 			}
 			continue
 		}
-		if r.re.Match(content) {
+		if low == nil {
+			low = lowerASCII(content)
+		}
+		if may(r.re, low) && r.re.Match(content) {
 			return r
 		}
 	}

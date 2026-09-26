@@ -305,7 +305,7 @@ func Defaults() Settings {
 	return Settings{
 		Scanner: Scanner{
 			Enabled: true, Realtime: true,
-			VirusAction: ActionNotify, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
+			VirusAction: ActionQuarantine, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, UseClamAV: true, MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
 			DeleteSymlinks: false, AutoClean: false, Feeds: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,

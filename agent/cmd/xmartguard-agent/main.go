@@ -285,20 +285,25 @@ func cmdUnenroll() error {
 
 // cmdCheck scans paths offline with the default policy (no quarantine).
 // cmdScanUpload scans one uploaded file; exit 0 = clean, 1 = block.
+// cmdScanUpload is ModSecurity's @inspectFile approver. Apache's
+// ModSecurity reads the first character of the output ("1" = pass,
+// "0" = reject); LiteSpeed uses the exit code (1 = pass, 0 = reject). Both
+// get the same answer.
 func cmdScanUpload(args []string) int {
+	pass := func() int { fmt.Println("1 XMartGuard: clean"); return 1 }
 	if len(args) != 1 {
-		return 0
+		return pass()
 	}
 	info, err := os.Stat(args[0])
 	if err != nil || info.Size() > 32<<20 {
-		return 0
+		return pass()
 	}
 	det, _ := scanner.NewOffline().CheckFile(args[0], info, settings.Scanner{MaxFileSizeMB: 32})
 	if det != nil && det.Category == scanner.CatVirus {
-		fmt.Printf("XMartGuard blocked malware upload: %s\n", det.Signature)
-		return 1
+		fmt.Printf("0 XMartGuard blocked malware upload: %s\n", det.Signature)
+		return 0
 	}
-	return 0
+	return pass()
 }
 
 func cmdCheck(args []string) error {

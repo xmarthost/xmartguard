@@ -67,6 +67,9 @@ func (m *Manager) Status() Status {
 	case "Off":
 		warn = "ModSecurity's rule engine is turned off on this server (SecRuleEngine Off): the WAF rules are inactive."
 	}
+	if t.Plain && !t.Hooked && cfg.Enabled {
+		warn = "One step left in LiteSpeed: " + t.Hint
+	}
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
 		Panel: t.Name, Error: e, Warning: warn, Rules: n}
 }
@@ -197,6 +200,8 @@ var (
 	reField  = regexp.MustCompile(`\[(msg|id|hostname|uri|severity) "((?:[^"\\]|\\.)*)"\]`)
 	reDenied = regexp.MustCompile(`(?:Access denied with code (\d+)|denied by server)`)
 	reMethod = regexp.MustCompile(`\[method "([A-Z]+)"\]`)
+	// LiteSpeed: "[NOTICE] [pid] [T0] [1.2.3.4:51234-3#APVH_example.com:443] [Module:mod_security] ..."
+	reLSClient = regexp.MustCompile(`\[(` + ipPat + `):\d+-[^\]#]*#APVH_([^\]:]+)`)
 )
 
 const ipPat = `(?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{3,45}`
@@ -221,11 +226,14 @@ func ParseLine(line string) (Event, bool) {
 	if !strings.Contains(line, "ModSecurity") {
 		return Event{}, false
 	}
-	c := reClient.FindStringSubmatch(line)
-	if c == nil {
+	var e Event
+	if c := reClient.FindStringSubmatch(line); c != nil {
+		e = Event{IP: c[1], At: store.Now()}
+	} else if c := reLSClient.FindStringSubmatch(line); c != nil {
+		e = Event{IP: c[1], Host: strings.TrimPrefix(c[2], "www."), At: store.Now()}
+	} else {
 		return Event{}, false
 	}
-	e := Event{IP: c[1], At: store.Now()}
 	for _, f := range reField.FindAllStringSubmatch(line, -1) {
 		val := strings.ReplaceAll(f[2], `\"`, `"`)
 		switch f[1] {

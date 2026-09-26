@@ -104,12 +104,16 @@ describe('agent end-to-end', () => {
     expect(f.body.total).toBe(1);
     const finding = f.body.findings[0];
     expect(finding.signature).toMatch(/^PHP\.Backdoor\./);
-    const q = await cmd('finding.action', { ids: [finding.id], action: 'quarantine' });
-    expect(q.body.done).toBe(1);
+    // Viruses are quarantined at once by default.
+    expect(finding.status).toBe('quarantined');
     expect(fs.existsSync(path.join(webDir, 'up', 'x.php'))).toBe(false);
     const r = await cmd('finding.action', { ids: [finding.id], action: 'restore' });
     expect(r.body.done).toBe(1);
     expect(fs.readFileSync(path.join(webDir, 'up', 'x.php'), 'utf8')).toBe(shell);
+    const q = await cmd('finding.action', { ids: [finding.id], action: 'quarantine' });
+    expect(q.body.done).toBe(1);
+    expect(fs.existsSync(path.join(webDir, 'up', 'x.php'))).toBe(false);
+    await cmd('finding.action', { ids: [finding.id], action: 'restore' });
     expect((await cmd('scan.start', { kind: 'path', path: '/etc' })).status).toBe(409);
     const stats = await cmd('stats.get');
     expect(stats.body.summary.scanner.threats_total).toBe(1);
@@ -117,7 +121,7 @@ describe('agent end-to-end', () => {
 
   it('reads and updates settings with validation', async () => {
     const g = await cmd('settings.get');
-    expect(g.body.settings.scanner.virus_action).toBe('notify');
+    expect(g.body.settings.scanner.virus_action).toBe('quarantine');
     expect(g.body.settings.firewall.provider).toBe('iptables');
     const bad = await cmd('settings.set', { scanner: { virus_action: 'explode' } });
     expect(bad.status).toBe(409);

@@ -58,6 +58,9 @@ var (
 	reNamespace = regexp.MustCompile(`(?m)^\s*namespace\s+[A-Za-z_\\]`)
 	reClassDef  = regexp.MustCompile(`(?m)^\s*(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+\w`)
 	reFuncDef   = regexp.MustCompile(`(?i)\bfunction\s+\w+\s*\(`)
+
+	reSinkOrExec = orRe(reSink, reExecBare)
+	reExecutors  = orRe(reEvalSink, reVarFunc, reGlobalsCall)
 )
 
 // heuristic result codes map to signature names.
@@ -74,56 +77,69 @@ func analyzePHP(content []byte) *verdict {
 	}
 	s := stripPHPComments(content)
 	n := len(s)
+	low := lowerASCII(s)
+	m := func(re *regexp.Regexp) bool { return may(re, low) && re.Match(s) }
+	cnt := func(re *regexp.Regexp) int {
+		if !may(re, low) {
+			return 0
+		}
+		return countMatches(re, s)
+	}
+	nr := func(a, b *regexp.Regexp, window int) bool { return may(a, low) && may(b, low) && near(s, a, b, window) }
 
-	evalOrAssert := reEvalSink.Match(s)
-	decoders := countMatches(reDecoder, s)
-	hasInput := reInput.Match(s)
-	longBlob := reLongB64.Match(s)
-	hex := len(reHex.FindAllIndex(s, -1))
-	oct := len(reOct.FindAllIndex(s, -1))
-	chr := countMatches(reChr, s)
-	concat := len(reConcatChar.FindAllIndex(s, -1))
-	goto_ := countMatches(reGoto, s)
-	varFunc := reVarFunc.Match(s)
+	evalOrAssert := m(reEvalSink)
+	decoders := cnt(reDecoder)
+	hasInput := m(reInput)
+	longBlob := m(reLongB64)
+	hex := cnt(reHex)
+	oct := cnt(reOct)
+	chr := cnt(reChr)
+	// Only consulted together with eval/assert (reAssertVar implies it too).
+	concat := 0
+	if evalOrAssert {
+		concat = cnt(reConcatChar)
+	}
+	goto_ := cnt(reGoto)
+	varFunc := m(reVarFunc)
 	// A file with a namespace, or several functions plus a class/interface, and
 	// little obfuscation, is almost certainly a legitimate library. The strong
 	// input-flow rules below still apply to it; only the ambiguous
 	// obfuscation-density rules consult this guard.
-	library := reNamespace.Match(s) ||
-		(countMatches(reFuncDef, s) >= 4 && reClassDef.Match(s) && !longBlob && goto_ < 4)
+	library := m(reNamespace) ||
+		(cnt(reFuncDef) >= 4 && m(reClassDef) && !longBlob && goto_ < 4)
 
 	// 1. preg_replace with the /e modifier (executes its replacement).
-	if rePregE.Match(s) {
+	if m(rePregE) {
 		return &verdict{CatVirus, "PHP.Backdoor.PregReplaceEval"}
 	}
 	// 2. create_function with attacker input.
-	if reCreateFunc.Match(s) && hasInput {
+	if m(reCreateFunc) && hasInput {
 		return &verdict{CatVirus, "PHP.Backdoor.CreateFunction"}
 	}
 	// 3. eval/assert of a decoded payload: a long encoded blob, or a decoder
 	// chain right next to the executor.
-	if evalOrAssert && decoders >= 1 && (longBlob || (decoders >= 2 && near(s, reEvalSink, reDecoder, 200))) && !library {
+	if evalOrAssert && decoders >= 1 && (longBlob || (decoders >= 2 && nr(reEvalSink, reDecoder, 200))) && !library {
 		return &verdict{CatVirus, "PHP.Obfuscated.EvalDecodedPayload"}
 	}
 	// 4. eval/assert directly on attacker input.
-	if evalOrAssert && hasInput && near(s, reEvalSink, reInput, 120) {
+	if evalOrAssert && hasInput && nr(reEvalSink, reInput, 120) {
 		return &verdict{CatVirus, "PHP.Backdoor.EvalInput"}
 	}
 	// 5. Command execution driven by attacker input (incl. backticks).
-	if (reSink.Match(s) || reExecBare.Match(s)) && hasInput && near(s, orRe(reSink, reExecBare), reInput, 200) {
+	if (m(reSink) || m(reExecBare)) && hasInput && nr(reSinkOrExec, reInput, 200) {
 		return &verdict{CatVirus, "PHP.Backdoor.CommandInjection"}
 	}
-	if reBacktickExec.Match(s) {
+	if m(reBacktickExec) {
 		return &verdict{CatVirus, "PHP.Backdoor.BacktickInput"}
 	}
 	// 6. A function whose NAME comes from the request: $_POST['f'](...),
 	// call_user_func($_GET['f']), or $f = $_POST['f']; ... $f(...).
 	// (Calling a callback with request data as arguments is ordinary code.)
-	if hasInput && (reInputCall.Match(s) || reCallUserInput.Match(s) || taintedCall(s)) {
+	if hasInput && (m(reInputCall) || m(reCallUserInput) || (may(reTaintAssign, low) && taintedCall(s))) {
 		return &verdict{CatVirus, "PHP.Backdoor.DynamicCall"}
 	}
 	// 7. goto-flattened obfuscation with an execution sink.
-	if goto_ >= 8 && (evalOrAssert || decoders >= 1 || reSink.Match(s)) {
+	if goto_ >= 8 && (evalOrAssert || decoders >= 1 || m(reSink)) {
 		return &verdict{CatVirus, "PHP.Obfuscated.GotoFlow"}
 	}
 	// 8. Heavy hex/octal/chr obfuscation building code.
@@ -132,45 +148,45 @@ func analyzePHP(content []byte) *verdict {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharEncoded"}
 	}
 	// 9. eval/assert after __halt_compiler (payload appended to the file).
-	if reHalt.Match(s) && evalOrAssert {
+	if m(reHalt) && evalOrAssert {
 		return &verdict{CatVirus, "PHP.Obfuscated.HaltCompilerPayload"}
 	}
 	// 10. Compressed payload include (gzinflate blob without eval, still executed).
-	if reGzUncompress.Match(s) && longBlob && (evalOrAssert || reDynInclude.Match(s) || varFunc) {
+	if m(reGzUncompress) && longBlob && (evalOrAssert || m(reDynInclude) || varFunc) {
 		return &verdict{CatVirus, "PHP.Obfuscated.CompressedPayload"}
 	}
 	// 11. Uploader that saves the raw client-supplied filename (lets the
 	// attacker choose the .php destination).
-	if reUploadRaw.Match(s) && !reWpNonce.Match(s) {
+	if m(reUploadRaw) && !m(reWpNonce) {
 		return &verdict{CatVirus, "PHP.Uploader.MoveUploadedFile"}
 	}
 	// 12. Drop-and-write shell: writes a file from attacker input.
-	if reWriteSink.Match(s) && hasInput && (reChr.Match(s) || decoders >= 1) && near(s, reWriteSink, reInput, 200) {
+	if m(reWriteSink) && hasInput && (m(reChr) || decoders >= 1) && nr(reWriteSink, reInput, 200) {
 		return &verdict{CatVirus, "PHP.Backdoor.FileDropper"}
 	}
 	// 13. Spam mailer: mail() fed attacker input, in a small standalone script
 	// (not a mail library, which defines classes).
-	if reMailInput.Match(s) && hasInput && near(s, reMailInput, reInput, 200) && !library && n < 60000 {
+	if m(reMailInput) && hasInput && nr(reMailInput, reInput, 200) && !library && n < 60000 {
 		return &verdict{CatSuspicious, "PHP.Spam.Mailer"}
 	}
 
 	// 14. $GLOBALS['x'][y](...) dynamic dispatch (very common in packed shells).
-	if reGlobalsCall.Match(s) && (decoders >= 1 || evalOrAssert || hasInput) {
+	if m(reGlobalsCall) && (decoders >= 1 || evalOrAssert || hasInput) {
 		return &verdict{CatVirus, "PHP.Backdoor.GlobalsDispatch"}
 	}
 	// 15. assert() on a variable expression built by the file.
-	if reAssertVar.Match(s) && !library && (decoders >= 1 || chr >= 10 || concat >= 20 || goto_ >= 4) {
+	if m(reAssertVar) && !library && (decoders >= 1 || chr >= 10 || concat >= 20 || goto_ >= 4) {
 		return &verdict{CatVirus, "PHP.Backdoor.AssertVariable"}
 	}
 	// 16. Character-array decoder: builds code from ord/chr/pack next to an
 	// executor. Excludes crypto/encoding libraries, which use ord/pack heavily.
-	ordChr := countMatches(reOrdChr, s)
-	if ordChr >= 25 && !library && (evalOrAssert || varFunc || reGlobalsCall.Match(s)) &&
-		near(s, reOrdChr, orRe(reEvalSink, reVarFunc, reGlobalsCall), 400) {
+	ordChr := cnt(reOrdChr)
+	if ordChr >= 25 && !library && (evalOrAssert || varFunc || m(reGlobalsCall)) &&
+		nr(reOrdChr, reExecutors, 400) {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharArrayDecoder"}
 	}
 	// 17. Large inline character/string array feeding an executor.
-	if reDefineArr.Match(s) && reEvalGz.Match(s) && !library {
+	if m(reDefineArr) && m(reEvalGz) && !library {
 		return &verdict{CatVirus, "PHP.Obfuscated.PackedArray"}
 	}
 	// 18. Minified single-line PHP with an executor (packed one-liner).
@@ -184,7 +200,7 @@ func analyzePHP(content []byte) *verdict {
 	if concat >= 40 && evalOrAssert && !library {
 		return &verdict{CatSuspicious, "PHP.Suspicious.ConcatObfuscation"}
 	}
-	if entropyOfLongestToken(s) > 5.4 && evalOrAssert && n < 200000 {
+	if evalOrAssert && n < 200000 && entropyOfLongestToken(s) > 5.4 {
 		return &verdict{CatSuspicious, "PHP.Suspicious.HighEntropyEval"}
 	}
 	return nil
@@ -199,13 +215,15 @@ var (
 
 // analyzeJS scores JavaScript.
 func analyzeJS(content []byte) *verdict {
-	if reJSMiner.Match(content) {
+	low := lowerASCII(content)
+	m := func(re *regexp.Regexp) bool { return may(re, low) && re.Match(content) }
+	if m(reJSMiner) {
 		return &verdict{CatVirus, "JS.Miner.Browser"}
 	}
-	if reJSHexArray.Match(content) && (reJSHexBlob.Match(content) || len(reLongB64.FindIndex(content)) > 0) {
+	if m(reJSHexArray) && (m(reJSHexBlob) || m(reLongB64)) {
 		return &verdict{CatSuspicious, "JS.Obfuscated.EvalPacked"}
 	}
-	if reJSDocWrite.Match(content) {
+	if m(reJSDocWrite) {
 		return &verdict{CatSuspicious, "JS.Injection.DocumentWriteUnescape"}
 	}
 	return nil

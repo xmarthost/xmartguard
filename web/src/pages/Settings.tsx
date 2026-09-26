@@ -1076,7 +1076,10 @@ function About({ serverId }: { serverId: string }) {
         )}
         {!outdated && <div className="mt-4 text-green-700">The agent is up to date. New versions are installed automatically.</div>}
       </div>
-      <p className="mt-6 text-xs text-slate-400">XMart Guard is developed by XMartHost.</p>
+      <p className="mt-6 text-xs text-slate-400">
+        XMart Guard is developed by XMartHost. Third-party data and software:{' '}
+        <Link to="/kb#attributions" className="text-blue-700 hover:underline">licenses and attributions</Link>.
+      </p>
     </div>
   );
 }

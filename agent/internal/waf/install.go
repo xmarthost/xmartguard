@@ -23,6 +23,13 @@ type Target struct {
 	// DetectionOnly, Off, or "" when nothing sets it (ModSecurity then
 	// defaults to Off, so XMart Guard turns it on for its own include).
 	Engine string `json:"engine"`
+	// LiteSpeed is set when LiteSpeed Web Server serves the sites.
+	LiteSpeed bool `json:"litespeed"`
+	// Plain: IncludeFile holds the rules themselves (LiteSpeed's native WAF
+	// rule set includes it), and Hint says how to hook it in if Hooked is false.
+	Plain  bool   `json:"plain"`
+	Hooked bool   `json:"hooked"`
+	Hint   string `json:"hint"`
 
 	configTest []string // command that validates the config
 	reload     []string // command that reloads the web server
@@ -104,11 +111,30 @@ func Detect() Target {
 			reload:      []string{firstBin("/scripts/restartsrv_httpd")},
 		}
 		t.Engine = engineSetting("/etc/apache2/conf.d/modsec2.conf", "/etc/apache2/conf.d/modsec/*.conf")
+		// LiteSpeed Enterprise on cPanel reads the same Apache includes but
+		// logs ModSecurity to its own error log and must be restarted to
+		// load changed rules.
+		if exists("/usr/local/lsws/bin/lswsctrl") {
+			t.WebServer = "LiteSpeed (cPanel)"
+			t.LiteSpeed = true
+			t.ErrorLogs = append([]string{"/usr/local/lsws/logs/error.log"}, t.ErrorLogs...)
+		}
 		if t.configTest[0] == "" {
 			t.configTest = []string{firstBin("/usr/local/apache/bin/httpd", "httpd"), "-t"}
 			t.reload = []string{firstBin("/usr/local/apache/bin/apachectl", "apachectl"), "graceful"}
 		}
 		return t
+	case exists("/usr/local/lsws/bin/lswsctrl"):
+		// Stand-alone LiteSpeed (Enhance, CyberPanel, plain LSWS): LiteSpeed
+		// loads ModSecurity rules from a WAF rule set defined in WebAdmin.
+		conf, _ := os.ReadFile("/usr/local/lsws/conf/httpd_config.xml")
+		return Target{Name: "litespeed", ModSec: true, LiteSpeed: true, Plain: true,
+			IncludeFile: "/usr/local/lsws/conf/xmartguard-waf.conf",
+			Hooked:      strings.Contains(string(conf), "xmartguard-waf.conf"),
+			Hint: "In LiteSpeed WebAdmin (https://SERVER_IP:7080) » Configuration » Server » Security: Enable WAF: Yes, Scan Request Body: Yes. " +
+				"Then add a WAF Rule Set: Name: XMartGuard, Action: deny,log,status:403, Enabled: Yes, Rules Definition: Include $SERVER_ROOT/conf/xmartguard-waf.conf — and restart LiteSpeed.",
+			WebServer: "LiteSpeed", ErrorLogs: []string{"/usr/local/lsws/logs/error.log"}, Engine: "On",
+			reload: []string{"/usr/local/lsws/bin/lswsctrl", "restart"}}
 	case exists("/etc/httpd/conf.d") && hasModule(firstBin("/usr/sbin/httpd", "httpd")):
 		return Target{Name: "rhel", ModSec: true, IncludeFile: "/etc/httpd/conf.d/xmartguard-waf.conf",
 			WebServer: "Apache", ErrorLogs: []string{"/var/log/httpd/error_log"},
@@ -135,7 +161,7 @@ func Detect() Target {
 // It returns "" when it cannot be created; the caller then omits the upload rule.
 func InspectScript(dir, agentBin string) string {
 	path := filepath.Join(dir, "upload-scan")
-	script := "#!/bin/sh\n# XMart Guard ModSecurity upload approver. Exit non-zero rejects the file.\nexec " + agentBin + " scan-upload \"$1\"\n"
+	script := "#!/bin/sh\n# XMart Guard ModSecurity upload approver: prints 1/0 (Apache) and exits 1/0 (LiteSpeed); 0 rejects the file.\nexec " + agentBin + " scan-upload \"$1\"\n"
 	if writeIfChanged(path, script, 0o755) != nil {
 		return ""
 	}
@@ -173,28 +199,53 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for name, body := range botFiles {
-		if err := writeIfChanged(filepath.Join(dir, name), body, 0o644); err != nil {
-			return err
-		}
-	}
-	rulesFile := filepath.Join(dir, "rules.conf")
-	if err := writeIfChanged(rulesFile, rules, 0o644); err != nil {
-		return err
-	}
 	engine := ""
 	if t.Engine == "" {
 		// Nothing turns ModSecurity on (Debian/Ubuntu without modsecurity.conf):
 		// enable it with body access, which the upload and XML-RPC rules need.
 		engine = "SecRuleEngine On\nSecRequestBodyAccess On\n"
 	}
+	rulesFile := filepath.Join(dir, "rules.conf")
 	include := fmt.Sprintf("%s\n# Managed by xmartguard-agent. Configure in the XMart Guard portal.\n<IfModule security2_module>\n%sIncludeOptional %s\n</IfModule>\n%s\n", markBegin, engine, rulesFile, markEnd)
-	prev, _ := os.ReadFile(t.IncludeFile)
-	if string(prev) == include {
-		return nil // already current; don't reload
+	if t.Plain {
+		// LiteSpeed WAF rule set: the file is plain ModSecurity rules.
+		include = rules
 	}
-	if err := writeIfChanged(t.IncludeFile, include, 0o644); err != nil {
-		return err
+
+	// Every file the web server loads, with its previous content for a
+	// rollback. Nothing changed: no test, no reload.
+	files := map[string]string{rulesFile: rules, t.IncludeFile: include}
+	for name, body := range botFiles {
+		files[filepath.Join(dir, name)] = body
+	}
+	prev := map[string][]byte{}
+	changed := false
+	for path, body := range files {
+		old, err := os.ReadFile(path)
+		if err == nil {
+			prev[path] = old
+		}
+		if err != nil || string(old) != body {
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	rollback := func() {
+		for path := range files {
+			if old, ok := prev[path]; ok {
+				_ = os.WriteFile(path, old, 0o644)
+			} else {
+				_ = os.Remove(path)
+			}
+		}
+	}
+	for path, body := range files {
+		if err := writeIfChanged(path, body, 0o644); err != nil {
+			rollback()
+			return err
+		}
 	}
 	// Debian keeps includes under conf-available; enable it once.
 	if t.Name == "debian" {
@@ -204,15 +255,17 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 	}
 	if out, err := m.runTimeout(t.configTest, 60*time.Second); err != nil {
 		// Roll back so a bad rule never takes the web server down.
-		if len(prev) > 0 {
-			_ = os.WriteFile(t.IncludeFile, prev, 0o644)
-		} else {
-			_ = os.Remove(t.IncludeFile)
-		}
+		rollback()
 		return fmt.Errorf("web server rejected the WAF rules (rolled back): %s", strings.TrimSpace(out))
 	}
 	if out, err := m.runTimeout(t.reload, 120*time.Second); err != nil {
 		return fmt.Errorf("WAF rules written but reload failed: %s", strings.TrimSpace(out))
+	}
+	// LiteSpeed only loads changed ModSecurity rules on a (graceful) restart.
+	if t.LiteSpeed && !t.Plain {
+		if out, err := m.runTimeout([]string{"/usr/local/lsws/bin/lswsctrl", "restart"}, 120*time.Second); err != nil {
+			return fmt.Errorf("WAF rules written but LiteSpeed restart failed: %s", strings.TrimSpace(out))
+		}
 	}
 	return nil
 }

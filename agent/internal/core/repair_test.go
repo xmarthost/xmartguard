@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/ai"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
@@ -51,7 +52,11 @@ func TestInfectedCoreFileIsReplacedWithOfficial(t *testing.T) {
 
 	a.Scanner.ScanFile(p)
 	var status, qpath string
-	a.DB.QueryRow(`SELECT status, qpath FROM findings WHERE path = ?`, p).Scan(&status, &qpath)
+	// The repair runs in the background; the quarantine happens at once.
+	for i := 0; i < 50 && status != "cleaned"; i++ {
+		time.Sleep(20 * time.Millisecond)
+		a.DB.QueryRow(`SELECT status, qpath FROM findings WHERE path = ?`, p).Scan(&status, &qpath)
+	}
 	if status != "cleaned" {
 		t.Fatalf("status %q", status)
 	}

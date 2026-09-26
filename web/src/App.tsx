@@ -19,6 +19,7 @@ import { BotAttacks, WafLogs } from './pages/WAF';
 import { CMSThreats, DBScanner } from './pages/CMS';
 import { DomainReputation, OutgoingSpam } from './pages/Mail';
 import MassOperations from './pages/MassOperations';
+import KnowledgeBase from './pages/KnowledgeBase';
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />
         <Route path="/security" element={<Protected role="admin"><SecurityLogPage /></Protected>} />
+        <Route path="/kb" element={<Protected><KnowledgeBase /></Protected>} />
         <Route path="/support" element={<Protected><SupportPage /></Protected>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

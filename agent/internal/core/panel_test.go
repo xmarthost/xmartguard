@@ -63,7 +63,7 @@ func TestPanelSocketIsolatesAccounts(t *testing.T) {
 	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
 	t.Setenv("XG_SOCKET", filepath.Join(dir, "run", "agent.sock"))
 	os.MkdirAll(filepath.Join(dir, "conf"), 0o700)
-	os.WriteFile(filepath.Join(dir, "conf", "settings.json"), []byte(`{"firewall":{"enabled":false},"scanner":{"realtime":false}}`), 0o600)
+	os.WriteFile(filepath.Join(dir, "conf", "settings.json"), []byte(`{"firewall":{"enabled":false},"scanner":{"realtime":false,"virus_action":"notify"}}`), 0o600)
 
 	alice, bob := mkUser(t, "xgpanela"), mkUser(t, "xgpanelb")
 	shell := strings.Join([]string{"<?php sys", "tem($_GET['c']); ?>"}, "")

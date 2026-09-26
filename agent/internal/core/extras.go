@@ -334,11 +334,10 @@ func (a *Agent) Dashboard(days int) map[string]any {
 	if critical > 0 {
 		add("warning", fmt.Sprintf("%d website(s) at critical risk", critical), "cms")
 	}
-	if st := a.Firewall.Status(); st.Enabled && !st.Healthy {
-		add("warning", "Firewall rules are not loaded: "+st.Error, "firewall")
-	}
-	if ws := a.WAF.Status(); ws.Enabled && !ws.Available {
-		add("info", "ModSecurity is not installed; the WAF is inactive", "waf-logs")
+	for _, h := range a.ServiceHealth() {
+		if !h.OK {
+			add(h.Level, h.Name+" is not running: "+h.Problem, h.Link)
+		}
 	}
 	var osmRecent int
 	_ = a.DB.QueryRow(`SELECT count(*) FROM osm_events WHERE at >= ?`, store.Now()-86400).Scan(&osmRecent)
@@ -360,8 +359,79 @@ func (a *Agent) Dashboard(days int) map[string]any {
 			"domains_blacklisted": domSum.Flagged,
 			"db_infections":       cmsCounts.DBInfected,
 		},
-		"alerts": alerts,
+		"alerts":   alerts,
+		"services": a.ServiceHealth(),
 	}
+}
+
+// Service is the state of one protection component, shown on the dashboard.
+type Service struct {
+	Name    string `json:"name"`
+	OK      bool   `json:"ok"`
+	Off     bool   `json:"off"` // switched off in Settings
+	Level   string `json:"level"`
+	Problem string `json:"problem"`
+	Link    string `json:"link"`
+}
+
+// ServiceHealth checks that each enabled protection is actually working, so
+// a stopped realtime scanner or an empty IPDB shows up as an alert.
+func (a *Agent) ServiceHealth() []Service {
+	cfg := a.Settings.Get()
+	running := func(d time.Duration) bool { return !a.started.IsZero() && time.Since(a.started) > d }
+	out := []Service{}
+	add := func(name, link string, enabled bool, level, problem string) {
+		out = append(out, Service{Name: name, OK: !enabled || problem == "", Off: !enabled, Level: level, Problem: problem, Link: link})
+	}
+
+	rtOn := cfg.Scanner.Enabled && cfg.Scanner.Realtime
+	rtProblem := ""
+	if rtOn && a.Realtime != nil {
+		if active, err := a.Realtime.Health(); !active && running(time.Minute) {
+			rtProblem = "inotify watching is not active"
+			if err != "" {
+				rtProblem += " (" + err + ")"
+			}
+		} else if active && a.Realtime.Watches() == 0 {
+			rtProblem = "no website folders are being watched"
+		}
+	}
+	add("Realtime scanner", "scanner-logs", rtOn, "danger", rtProblem)
+
+	fw := a.Firewall.Status()
+	fwProblem := ""
+	if fw.Enabled && !fw.Healthy {
+		fwProblem = "firewall rules are not loaded"
+		if fw.Error != "" {
+			fwProblem += ": " + fw.Error
+		}
+	}
+	add("Firewall", "firewall", fw.Enabled, "danger", fwProblem)
+
+	ipdb := a.Firewall.IPDB
+	ipdbOn := cfg.IPDB.Enabled && fw.Enabled
+	ipdbProblem := ""
+	if ipdbOn {
+		if _, entries := ipdb.Snapshot(); len(entries) == 0 && running(15*time.Minute) {
+			ipdbProblem = "no blocklist received from the portal yet"
+		} else if !fw.Healthy && running(time.Minute) {
+			ipdbProblem = "the firewall is not loaded, so the IPDB is not enforced"
+		}
+	}
+	add("IPDB", "ipdb", ipdbOn, "warning", ipdbProblem)
+
+	ws := a.WAF.Status()
+	wafProblem := ""
+	if ws.Enabled {
+		switch {
+		case !ws.Available:
+			wafProblem = "ModSecurity is not installed"
+		case ws.Error != "":
+			wafProblem = ws.Error
+		}
+	}
+	add("Web application firewall", "waf-logs", ws.Enabled, "warning", wafProblem)
+	return out
 }
 
 func plural(n int) string {

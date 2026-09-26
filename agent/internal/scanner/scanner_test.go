@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -52,6 +53,10 @@ func newScanner(t *testing.T) *Scanner {
 	t.Cleanup(func() { db.Close() })
 	st, err := settings.Load()
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Tests choose actions explicitly; start from "report only".
+	if _, err := st.Patch([]byte(`{"scanner":{"virus_action":"notify"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	return New(db, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -290,4 +295,48 @@ func TestRealtimeDetectsNewFile(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("realtime did not detect the new file")
+}
+
+// Extracting an archive creates directories and fills them at once, before
+// any watch on them exists; moving a finished folder in produces a single
+// event for the folder. Every file must still be scanned.
+func TestRealtimeCatchesExtractedAndMovedTrees(t *testing.T) {
+	s := newScanner(t)
+	root := t.TempDir()
+	rt := &Realtime{S: s, Roots: func() []string { return []string{root} }}
+	if err := rt.init([]string{root}); err != nil {
+		t.Skip("inotify unavailable:", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go rt.loop(ctx)
+	time.Sleep(100 * time.Millisecond)
+
+	want := 0
+	// "unzip": nested directories written immediately.
+	for i := 0; i < 20; i++ {
+		d := filepath.Join(root, "cpguard", "a", fmt.Sprint(i), "deep")
+		os.MkdirAll(d, 0o755)
+		os.WriteFile(filepath.Join(d, "shell.php"), []byte(malicious["eval.php"]+fmt.Sprint(i)), 0o644)
+		want++
+	}
+	// A folder prepared elsewhere and moved in.
+	outside := t.TempDir()
+	os.MkdirAll(filepath.Join(outside, "pkg", "inc"), 0o755)
+	os.WriteFile(filepath.Join(outside, "pkg", "inc", "x.php"), []byte(malicious["exec.php"]), 0o644)
+	os.Rename(filepath.Join(outside, "pkg"), filepath.Join(root, "pkg"))
+	want++
+
+	deadline := time.Now().Add(15 * time.Second)
+	got := 0
+	for time.Now().Before(deadline) {
+		_, got, _ = s.ListFindings(FindingFilter{Limit: 100})
+		if got >= want {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if got != want {
+		t.Fatalf("realtime found %d of %d files", got, want)
+	}
 }
