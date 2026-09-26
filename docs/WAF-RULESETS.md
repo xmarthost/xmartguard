@@ -41,6 +41,20 @@ duplicate rule ids. Blocks by CRS are named after the attack that scored
 configuration is tested; if it fails, the extra rule sets are left out
 (and reported), and XMart Guard's rules stay active.
 
+## Self-test
+
+After every change the agent requests `/xmartguard-waf-selftest` from the
+local web server (127.0.0.1, http then https); rule 7700000 must answer 403.
+With OWASP CRS active it also sends a harmless XSS-looking query that CRS
+must block. Rollout shows "self-test passed" or the exact problem (for
+example "a test request that must be blocked got HTTP 200"), and the
+dashboard marks the WAF as not working. Self-test requests are not counted
+as attacks.
+
+On cPanel the rules are hooked in through `/etc/apache2/conf.d/zz-xmartguard-waf.conf`
+(httpd.conf loads every `conf.d/*.conf`; Apache and LiteSpeed both read it).
+Agents before 0.7.7 used `conf.d/includes/`, which cPanel does not load.
+
 ## Where the hits are counted
 
 The agent reads ModSecurity hits from

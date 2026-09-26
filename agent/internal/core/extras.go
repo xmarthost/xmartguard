@@ -428,6 +428,8 @@ func (a *Agent) ServiceHealth() []Service {
 			wafProblem = "ModSecurity is not installed"
 		case ws.Error != "":
 			wafProblem = ws.Error
+		case ws.SelfTest != nil && !ws.SelfTest.OK:
+			wafProblem = ws.SelfTest.Detail
 		}
 	}
 	add("Web application firewall", "waf-logs", ws.Enabled, "warning", wafProblem)

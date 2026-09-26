@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -39,6 +40,11 @@ type Manager struct {
 	sources  []string // logs being read
 	ruleSets RuleSets
 	states   []RuleSetState
+	selfTest *SelfTest
+	// SelfTestWait: how long the self-test waits for a reload (tests set 0).
+	SelfTestWait time.Duration
+	// NoSelfTest disables the self-test (unit tests without a web server).
+	NoSelfTest bool
 }
 
 // Status is shown in the portal.
@@ -53,6 +59,7 @@ type Status struct {
 	// Logs the agent reads ModSecurity hits from.
 	Logs     []string       `json:"logs"`
 	RuleSets []RuleSetState `json:"rule_sets"`
+	SelfTest *SelfTest      `json:"self_test,omitempty"`
 }
 
 func (m *Manager) Status() Status {
@@ -60,6 +67,7 @@ func (m *Manager) Status() Status {
 	t, e := m.target, m.err
 	logs := append([]string(nil), m.sources...)
 	sets := append([]RuleSetState(nil), m.states...)
+	selfTest := m.selfTest
 	m.mu.Unlock()
 	cfg := m.Settings.Get().WAF
 	n := 0
@@ -79,7 +87,7 @@ func (m *Manager) Status() Status {
 		warn = "One step left in LiteSpeed: " + t.Hint
 	}
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
-		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets}
+		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {
@@ -180,6 +188,7 @@ func (m *Manager) Apply() error {
 		} else {
 			rules = "# XMart Guard's own rules are turned off; rule sets from the portal follow.\n"
 		}
+		rules = selfTestRule + "\n" + rules
 		bots := BotFiles(cfg)
 		for k, v := range extraFiles {
 			bots[strings.TrimPrefix(k, m.RulesDir+"/")] = v
@@ -191,6 +200,7 @@ func (m *Manager) Apply() error {
 					states[i].State, states[i].Detail = "error", err.Error()
 				}
 			}
+			extra = ""
 			if cfg.Enabled {
 				err = m.install(t, rules, BotFiles(cfg))
 			} else {
@@ -198,9 +208,37 @@ func (m *Manager) Apply() error {
 			}
 		}
 	}
+	// Prove the rules are enforced, not just written.
+	var st *SelfTest
+	if err == nil && !m.NoSelfTest && t.ModSec && t.IncludeFile != "" && (cfg.Enabled || extra != "") && !(t.Plain && !t.Hooked) {
+		crsActive := false
+		for _, s := range states {
+			if s.ID == "owasp_crs" && s.State == "active" {
+				crsActive = true
+			}
+		}
+		wait := m.SelfTestWait
+		if wait == 0 {
+			wait = 30 * time.Second
+		}
+		r := runSelfTest(crsActive, wait)
+		st = &r
+		for i := range states {
+			if states[i].ID == "owasp_crs" && states[i].State == "active" && r.CRS != "" && r.CRS != "blocked" {
+				states[i].State, states[i].Detail = "error", r.CRS
+			}
+			if !r.OK && states[i].State == "active" {
+				states[i].State, states[i].Detail = "error", r.Detail
+			}
+		}
+		if !r.OK {
+			m.Log.Warn("WAF self-test failed", "detail", r.Detail)
+		}
+	}
 	m.mu.Lock()
 	m.target = t
 	m.states = states
+	m.selfTest = st
 	m.err = ""
 	if err != nil {
 		m.err = err.Error()
@@ -360,6 +398,9 @@ func (m *Manager) tailLogs(ctx context.Context) {
 	lines := make(chan string, 512)
 	audits := make(chan auditHit, 256)
 	start := func(path string) {
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			path = real // /usr/local/apache/logs is a link to /etc/apache2/logs on cPanel
+		}
 		if path == "" || seen[path] {
 			return
 		}
@@ -400,7 +441,7 @@ func (m *Manager) tailLogs(ctx context.Context) {
 		if !strings.HasPrefix(ev.Action, "Access denied") && (ev.RuleID < 7700000 || ev.RuleID > 7709999) {
 			return
 		}
-		if !dedupe.add(ev.UID) {
+		if isSelfTest(ev) || !dedupe.add(ev.UID) {
 			return
 		}
 		m.record(ev)

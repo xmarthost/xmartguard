@@ -2,6 +2,8 @@ package waf
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,5 +219,36 @@ func TestCRSBlockIsNamedAfterTheAttack(t *testing.T) {
 	d = r.apply(d)
 	if d.Msg != "SQL Injection Attack Detected via libinjection (Total Score: 5)" {
 		t.Fatalf("msg %q", d.Msg)
+	}
+}
+
+func TestSelfTestReportsUnenforcedRules(t *testing.T) {
+	blocking := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if blocking && (strings.HasPrefix(r.URL.Path, selfTestPath) || strings.Contains(r.URL.RawQuery, "script")) {
+			w.WriteHeader(403)
+			return
+		}
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	old := SelfTestURLs
+	SelfTestURLs = []string{srv.URL}
+	defer func() { SelfTestURLs = old }()
+
+	r := runSelfTest(true, 0)
+	if r.OK || r.Status != 200 || !strings.Contains(r.Detail, "does not apply them") {
+		t.Fatalf("unenforced: %+v", r)
+	}
+	blocking = true
+	r = runSelfTest(true, 0)
+	if !r.OK || r.CRS != "blocked" {
+		t.Fatalf("enforced: %+v", r)
+	}
+	if !isSelfTest(Event{URI: selfTestPath + "?t=1"}) || !isSelfTest(Event{RuleID: IDSelfTest}) || isSelfTest(Event{URI: "/wp-login.php"}) {
+		t.Fatal("self-test events not recognised")
+	}
+	if !strings.Contains(selfTestRule, "id:7700000") {
+		t.Fatal("rule id")
 	}
 }

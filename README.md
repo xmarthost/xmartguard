@@ -84,7 +84,7 @@ xgcli config --export settings.json            # and --import FILE|URL on anothe
 
 Also: `scanner`, `dailyscan`, `weeklyscan`, `watch`, `blacklist`, `file-action`, `cleanup`, `lfd`, `bot-check`, `account-suspend`, `rootkit`, `process-monitor`, `cron-monitor`, `osm`, `ip-reputation`, `dbscan`, `notification`, `cms`, `upload-scanner`, `cloud`. Low level: `xmartguard-agent call ACTION '{json}'`, `xmartguard-agent check PATH` (offline scan).
 
-## What it protects (0.7.6)
+## What it protects (0.7.7)
 
 | Module | What it does |
 |---|---|

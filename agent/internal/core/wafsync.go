@@ -112,6 +112,10 @@ func (a *Agent) wafResult(ctx context.Context, rs waf.RuleSets) WAFSyncResult {
 			xg.State, xg.Detail = "unsupported", st.WebServer
 		} else if st.Error != "" {
 			xg.State, xg.Detail = "error", st.Error
+		} else if st.SelfTest != nil && !st.SelfTest.OK {
+			xg.State, xg.Detail = "error", st.SelfTest.Detail
+		} else if st.SelfTest != nil {
+			xg.Detail = "self-test passed: a test attack was blocked"
 		}
 	}
 	res.RuleSets = append([]waf.RuleSetState{xg}, a.WAF.RuleSetStates()...)

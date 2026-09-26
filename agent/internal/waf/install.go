@@ -102,9 +102,11 @@ func Detect() Target {
 	case exists("/usr/local/cpanel/version"):
 		httpd := firstBin("/usr/local/apache/bin/httpd", "/usr/sbin/httpd", "httpd", "apachectl")
 		t := Target{
-			Name:        "cpanel",
-			ModSec:      hasModule(httpd) || exists("/etc/apache2/conf.d/modsec/modsec2.conf") || exists("/etc/apache2/conf.d/modsec2.user.conf"),
-			IncludeFile: "/etc/apache2/conf.d/includes/xmartguard-waf.conf",
+			Name:   "cpanel",
+			ModSec: hasModule(httpd) || exists("/etc/apache2/conf.d/modsec/modsec2.conf") || exists("/etc/apache2/conf.d/modsec2.user.conf"),
+			// httpd.conf loads every conf.d/*.conf (LiteSpeed reads it too),
+			// but from conf.d/includes/ only cPanel's own named files.
+			IncludeFile: CPanelInclude,
 			WebServer:   "Apache (cPanel EA4)",
 			ErrorLogs:   []string{"/etc/apache2/logs/error_log", "/usr/local/apache/logs/error_log"},
 			configTest:  []string{firstBin("/scripts/restartsrv_httpd"), "--check"},
@@ -157,6 +159,13 @@ func Detect() Target {
 	return Target{Name: "", WebServer: "unknown"}
 }
 
+// CPanelInclude is where the rules are hooked in on cPanel; the name sorts
+// after modsec2.conf, which loads the module.
+const CPanelInclude = "/etc/apache2/conf.d/zz-xmartguard-waf.conf"
+
+// oldCPanelInclude was used before 0.7.7 (never loaded by httpd.conf).
+const oldCPanelInclude = "/etc/apache2/conf.d/includes/xmartguard-waf.conf"
+
 // InspectScript writes the small PHP approver ModSecurity calls for uploads.
 // It returns "" when it cannot be created; the caller then omits the upload rule.
 func InspectScript(dir, agentBin string) string {
@@ -198,6 +207,9 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 	dir := m.RulesDir
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	if t.Name == "cpanel" {
+		_ = os.Remove(oldCPanelInclude)
 	}
 	engine := ""
 	if t.Engine == "" {
@@ -280,6 +292,9 @@ func (m *Manager) uninstall(t Target) error {
 // uninstaller calls it (through "xmartguard-agent cleanup") before deleting
 // /etc/xmartguard, so Apache never references a missing file.
 func RemoveInclude(t Target) {
+	if t.Name == "cpanel" {
+		_ = os.Remove(oldCPanelInclude)
+	}
 	if t.IncludeFile == "" || !exists(t.IncludeFile) {
 		return
 	}
