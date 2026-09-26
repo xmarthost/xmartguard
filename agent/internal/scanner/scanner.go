@@ -462,10 +462,25 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		f.Owner = s.owner(st.Uid)
 		uid, gid = int(st.Uid), int(st.Gid)
 	}
-	// Do not re-report an unchanged file that is already tracked.
+	// A file that is already tracked (same path and content) is reported
+	// again in this scan with its current signature, and the configured
+	// action is applied if it was only reported before (for example when the
+	// server was on "notify" and is now on "quarantine"). Ignored files stay
+	// ignored. A quarantined file that is back on disk is a re-infection and
+	// is recorded as a new finding below.
 	var existing int64
-	if err := s.DB.QueryRow(`SELECT id FROM findings WHERE path = ? AND sha256 = ? AND status IN ('detected','quarantined','disabled','ignored') LIMIT 1`, path, f.SHA256).Scan(&existing); err == nil {
-		return Finding{}, errExists
+	var status string
+	if err := s.DB.QueryRow(`SELECT id, status FROM findings WHERE path = ? AND sha256 = ? AND status IN ('detected','disabled','ignored') ORDER BY id DESC LIMIT 1`, path, f.SHA256).Scan(&existing, &status); err == nil {
+		if status == "ignored" {
+			return Finding{}, errExists
+		}
+		_, _ = s.DB.Exec(`UPDATE findings SET scan_id = CASE WHEN ? > 0 THEN ? ELSE scan_id END, category = ?, signature = ?, updated_at = ? WHERE id = ?`,
+			scanID, scanID, d.Category, d.Signature, now, existing)
+		f.ID, f.Status = existing, status
+		if status == "detected" {
+			s.applyAction(&f, d, path)
+		}
+		return f, nil
 	}
 	res, err := s.DB.Exec(`INSERT INTO findings (scan_id, source, path, owner, category, signature, sha256, size, status, created_at, updated_at, orig_mode, orig_uid, orig_gid)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, scanID, source, path, f.Owner, f.Category, f.Signature, f.SHA256, f.Size, f.Status, now, now, int(info.Mode().Perm()), uid, gid)
@@ -473,6 +488,19 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		return f, err
 	}
 	f.ID, _ = res.LastInsertId()
+	s.applyAction(&f, d, path)
+	s.Log.Info("detection", "path", path, "signature", d.Signature, "category", d.Category, "status", f.Status)
+	if s.OnFinding != nil {
+		s.OnFinding(f)
+	}
+	return f, nil
+}
+
+var errExists = errors.New("already recorded")
+
+// applyAction runs the configured action (quarantine, disable, …) for a
+// finding's category and updates f.Status.
+func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 	cfg := s.Settings.Get().Scanner
 	action := cfg.VirusAction
 	switch d.Category {
@@ -503,14 +531,7 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 			f.Status = "disabled"
 		}
 	}
-	s.Log.Info("detection", "path", path, "signature", d.Signature, "category", d.Category, "status", f.Status)
-	if s.OnFinding != nil {
-		s.OnFinding(f)
-	}
-	return f, nil
 }
-
-var errExists = errors.New("already recorded")
 
 // Start queues a scan and returns its ID. kind: full | quick | path | daily | weekly.
 func (s *Scanner) Start(kind, target, initiator string) (int64, error) {

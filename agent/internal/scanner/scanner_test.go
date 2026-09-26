@@ -144,10 +144,51 @@ func TestPathScanFindsAllSamples(t *testing.T) {
 	if total != len(malicious) {
 		t.Fatalf("total %d", total)
 	}
-	// Re-scanning the same unchanged files does not duplicate findings.
+	// Re-scanning the same unchanged files reports them in the new scan
+	// without creating duplicate findings.
 	id2, _ := s.Start("path", root, "test")
-	if sc2 := waitScan(t, s, id2); sc2.Infected != 0 {
-		t.Fatalf("rescan reported %d duplicates", sc2.Infected)
+	if sc2 := waitScan(t, s, id2); sc2.Infected != int64(len(malicious)) {
+		t.Fatalf("rescan infected=%d want %d", sc2.Infected, len(malicious))
+	}
+	if _, all, _ := s.ListFindings(FindingFilter{Limit: 100}); all != len(malicious) {
+		t.Fatalf("rescan created duplicates: %d findings", all)
+	}
+	if _, inScan2, _ := s.ListFindings(FindingFilter{ScanID: id2, Limit: 100}); inScan2 != len(malicious) {
+		t.Fatalf("rescan lists %d findings", inScan2)
+	}
+	// Switching to quarantine and scanning again quarantines the files that
+	// were only reported before.
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	id3, _ := s.Start("path", root, "test")
+	waitScan(t, s, id3)
+	fs3, _, _ := s.ListFindings(FindingFilter{ScanID: id3, Limit: 100})
+	for _, f := range fs3 {
+		if f.Category == CatVirus && f.Status != "quarantined" {
+			t.Errorf("%s still %s after switching to quarantine", f.Path, f.Status)
+		}
+		if _, err := os.Stat(f.Path); f.Category == CatVirus && err == nil {
+			t.Errorf("%s still on disk", f.Path)
+		}
+	}
+	// A quarantined file that comes back is a new finding (re-infection).
+	var back string
+	for _, f := range fs3 {
+		if f.Category == CatVirus {
+			back = f.Path
+			break
+		}
+	}
+	os.MkdirAll(filepath.Dir(back), 0o755)
+	os.WriteFile(back, []byte(malicious[filepath.Base(back)]), 0o644)
+	info, _ := os.Lstat(back)
+	det, _ := s.CheckFile(back, info, s.Settings.Get().Scanner)
+	if det == nil {
+		t.Fatalf("%s not detected again", back)
+	}
+	if f, err := s.Record(0, "realtime", back, info, *det); err != nil || f.Status != "quarantined" {
+		t.Fatalf("re-infection not handled: %+v %v", f, err)
 	}
 }
 
