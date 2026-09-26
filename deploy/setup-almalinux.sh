@@ -65,11 +65,20 @@ fi
 
 step "Installing packages and Docker"
 dnf -y -q install git curl dnf-plugins-core openssl >/dev/null 2>&1 || dnf -y install git curl dnf-plugins-core openssl
-if ! command -v docker >/dev/null; then
+# A "docker" command alone is not enough: podman-docker provides one without
+# the Docker service. Install Docker CE unless its service really exists.
+if ! systemctl list-unit-files docker.service 2>/dev/null | grep -q '^docker.service'; then
+  if rpm -q podman-docker >/dev/null 2>&1 || rpm -q runc >/dev/null 2>&1; then
+    warn "removing podman-docker/runc (they conflict with Docker CE)"
+    dnf -y -q remove podman-docker runc >/dev/null 2>&1 || true
+  fi
   dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo >/dev/null
-  dnf -y -q install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
+  if ! dnf -y install --allowerasing docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+    die "Docker CE could not be installed (see the dnf output above)"
+  fi
 fi
 systemctl enable --now docker >/dev/null
+docker compose version >/dev/null 2>&1 || dnf -y install docker-compose-plugin
 ok "$(docker --version)"
 
 # Building the image needs ~2 GB RAM; add swap on small servers.
