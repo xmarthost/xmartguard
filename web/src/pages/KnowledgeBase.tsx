@@ -40,7 +40,8 @@ xgcli watch --list                  # directories the realtime scanner watches
 sysctl fs.inotify.max_user_watches  # the agent raises this to 500000
 journalctl -u xmartguard-agent -n 50`}</Code>
         <p>To find which files of a folder are not detected (for reporting detection gaps):</p>
-        <Code>{`xmartguard-agent check /home/user/public_html/folder --misses`}</Code>
+        <Code>{`xmartguard-agent check /home/user/public_html/folder --misses
+xmartguard-agent check /home/user/public_html/folder --misses --no-hash   # rules only`}</Code>
       </>
     ),
   },

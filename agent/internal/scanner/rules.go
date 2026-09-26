@@ -41,7 +41,8 @@ var ScriptExts = map[string]bool{
 	".php": true, ".phtml": true, ".php3": true, ".php4": true, ".php5": true, ".php7": true, ".php8": true,
 	".phar": true, ".inc": true, ".pht": true, ".phps": true, ".js": true, ".html": true, ".htm": true,
 	".pl": true, ".cgi": true, ".py": true, ".sh": true, ".asp": true, ".aspx": true, ".jsp": true,
-	".ico": true, ".jpg": true, ".png": true, ".gif": true, ".txt": true, ".htaccess": true, ".suspected": true, "": true,
+	".ico": true, ".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".bmp": true, ".tif": true, ".tiff": true, ".webp": true,
+	".txt": true, ".htaccess": true, ".ini": true, ".suspected": true, "": true,
 }
 
 // CodeExts are code files the AI scanner's "all files" mode checks.

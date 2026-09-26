@@ -4,6 +4,17 @@ import "strings"
 
 // analyze runs the heuristic analyzers appropriate for the file extension.
 func analyze(ext string, content []byte) *Detection {
+	if ext == ".ini" || ext == ".htaccess" {
+		if d := configLoader(content); d != nil {
+			return d
+		}
+	}
+	if d := markupInImage(ext, content); d != nil {
+		if v := analyzePHP(content); v != nil {
+			return &Detection{CatSuspicious, "PHP.Suspicious.CodeInNonScript"}
+		}
+		return d
+	}
 	switch {
 	case ext == ".js":
 		if v := analyzeJS(content); v != nil {

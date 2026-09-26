@@ -26,6 +26,49 @@ XMart Guard combines several engines. Order of checks for a script file:
 Measured on all 13,186 distinct script files of WordPress 5.8 – 7.1.2: **0
 detections**, including before the known-good list applies.
 
+## Behaviour families (0.7.2)
+
+Rules describe what a file *does*, so renamed and re-encoded variants are
+caught without a hash:
+
+| Signature | Behaviour |
+|---|---|
+| `PHP.Loader.SilentInclude` / `IncludeNonPHP` / `HiddenInclude` | tiny loaders: `@is_file("…")` + `@include`, or include of an image/archive/log file or a hidden `.name.php` |
+| `PHP.Loader.DecodedInclude` | `require` of a path computed by a character-building decoder |
+| `PHP.Obfuscated.FunctionTable` | functions fetched by number: `f(40)($x)` |
+| `PHP.Obfuscated.CharDecoder` | `chr(ord($s[$i]) ^ $k)` / `.= chr(…)` decoders feeding eval or a dynamic call |
+| `PHP.Obfuscated.RandomIdentifiers`, `HashNamedVariables` | machine-generated variable names around an executor |
+| `PHP.Obfuscated.EvalTemplate` | `eval("?>" . $decoded)` |
+| `PHP.Obfuscated.SplitFunctionName` | `'gz'.'in'.'fla'.'te'` |
+| `PHP.Dropper.WritableDirs`, `PHP.Dropper.SelfDeleting` | writes a decoded payload into every writable directory; tiny self-deleting writers |
+| `PHP.Backdoor.WPAdminLogin`, `WPAdminCreator` | small scripts that load WordPress to log in as, or create, an administrator |
+| `PHP.WebShell.FunctionBypass`, `ExecAlternatives` | `ini_set('disable_functions')`, tables of exec alternatives |
+| `PHP.Injector.RemoteContent` | front-end hook echoing remote content fetched with `sslverify => false` |
+| `PHP.SEO.UserAgentCloaking`, `PHP.SEO.Cloaking` | crawlers get a different page |
+| `PHP.Config.AutoPrependLoader` | `.user.ini` / `php.ini` / `.htaccess` `auto_prepend_file` to a hidden or non-PHP file (Wordfence, NinjaFirewall, MalCare, Sucuri, Patchstack are allowed) |
+| `Disguised.MarkupInImage` | HTML pages saved as `.jpg`/`.png` |
+
+Heuristic hits in `/tests/` directories and `.phar` archives are reported as
+suspicious (confirmed by the AI) instead of quarantined.
+
+### Measuring detection
+
+```bash
+xmartguard-agent check /path --misses              # files NOT detected
+xmartguard-agent check /path --misses --no-hash    # the rules alone, without the hash list
+```
+
+On a real quarantine of 2,162 files (2,100 genuinely malicious): the rules
+alone detect 91.1% of the malware (76% in 0.7.1), 97.6% of all files with the
+hash list. On 259,348 files of 22 clean projects (WordPress 7.1.2, Gutenberg,
+WooCommerce, Jetpack, Elementor, Yoast, Drupal, Joomla, Magento, PrestaShop,
+Laravel, Moodle, Nextcloud, phpMyAdmin, …): one quarantine-level hit
+(VaultPress, which executes signed remote code by design and is trusted
+through the WordPress.org plugin checksums), the rest suspicious-only in test
+suites. The known-bad hash list was cleaned at the same time: 44 entries were
+not malware (plugin translation files, and files corrupted by a partial disk
+write whose remainder is the official WordPress file).
+
 ## Public feeds (configured on the portal: `SIG_FEEDS`)
 
 | Feed | What | License |

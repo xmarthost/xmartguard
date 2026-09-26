@@ -3,6 +3,7 @@ package scanner
 import (
 	"math"
 	"regexp"
+	"strings"
 )
 
 // This file implements XMart Guard's own heuristic PHP/JS analyzer. It scores
@@ -12,35 +13,38 @@ import (
 // our own, written from the behaviour of common backdoor/webshell techniques.
 
 var (
-	reEvalSink     = regexp.MustCompile(`(?i)\b(?:eval|assert)\s*\(`)
-	reCreateFunc   = regexp.MustCompile(`(?i)\bcreate_function\s*\(`)
-	rePregE        = regexp.MustCompile(`(?i)\bpreg_replace(?:_callback)?\s*\(\s*['"][^'"]*['"]?[a-z]*e[a-z]*['"]`)
-	reDecoder      = regexp.MustCompile(`(?i)\b(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|strrev|hex2bin|convert_uu(?:decode)?|urldecode|rawurldecode|bzdecompress|base_convert|pack)\s*\(`)
-	reInput        = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|SERVER|FILES)\b`)
-	reSink         = regexp.MustCompile(`(?i)\b(?:system|shell_exec|passthru|proc_open|popen|pcntl_exec)\s*\(`)
-	reExecBare     = regexp.MustCompile(`(?i)(?:[^_a-z]|^)exec\s*\(`)
-	reVarFunc      = regexp.MustCompile(`\$(?:[a-zA-Z_]\w*|_(?:POST|GET|REQUEST|COOKIE|SERVER)\s*\[[^\]]+\])\s*\(`)
-	reCallUserFunc = regexp.MustCompile(`(?i)\bcall_user_func(?:_array)?\s*\(`)
-	reUploader     = regexp.MustCompile(`(?i)move_uploaded_file\s*\(`)
-	reFilesName    = regexp.MustCompile(`\$_FILES\b`)
-	reWriteSink    = regexp.MustCompile(`(?i)\b(?:file_put_contents|fwrite|fputs)\s*\(`)
-	reGoto         = regexp.MustCompile(`(?i)\bgoto\s+[a-zA-Z_]\w*\s*;`)
-	reHex          = regexp.MustCompile(`\\x[0-9A-Fa-f]{2}`)
-	reOct          = regexp.MustCompile(`\\[0-3][0-7]{2}`)
-	reChr          = regexp.MustCompile(`(?i)\bchr\s*\(`)
-	reConcatChar   = regexp.MustCompile(`['"]\s*\.\s*['"]`)
-	reLongB64      = regexp.MustCompile(`['"][A-Za-z0-9+/]{260,}={0,2}['"]`)
-	reB64Blob      = regexp.MustCompile(`[A-Za-z0-9+/]{120,}={0,2}`)
-	reHalt         = regexp.MustCompile(`(?i)__halt_compiler\s*\(\s*\)\s*;`)
-	reGzUncompress = regexp.MustCompile(`(?i)\bgz(?:inflate|uncompress|decode)\s*\(`)
-	reDynInclude   = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\s*\(?\s*\$`)
-	reMailInput    = regexp.MustCompile(`(?i)\bmail\s*\(`)
-	reGlobalsCall  = regexp.MustCompile(`\$GLOBALS\s*\[[^\]]+\]\s*(?:\[[^\]]+\]\s*)*\(`)
-	reAssertVar    = regexp.MustCompile(`(?i)\bassert\s*\(\s*(?:@\s*)?\$`)
-	reOrdChr       = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
-	reStrReplace   = regexp.MustCompile(`(?i)\bstr_replace\s*\(`)
-	reDefineArr    = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
-	reEvalGz       = regexp.MustCompile(`(?i)\b(?:eval|assert|create_function)\s*\(`)
+	reEvalSink   = regexp.MustCompile(`(?i)\b(?:eval|assert)\s*\(`)
+	reCreateFunc = regexp.MustCompile(`(?i)\bcreate_function\s*\(`)
+	rePregE      = pregEvalModifier()
+	reDecoder    = regexp.MustCompile(`(?i)\b(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|strrev|hex2bin|convert_uu(?:decode)?|urldecode|rawurldecode|bzdecompress|base_convert|pack)\s*\(`)
+	reInput      = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|SERVER|FILES)\b`)
+	// Functions, not methods: "->exec(" and "Hook::exec(" are ordinary code.
+	reSink          = regexp.MustCompile(`(?i)(?:^|[^\w$>:\\])(?:system|shell_exec|passthru|proc_open|popen|pcntl_exec)\s*\(`)
+	reExecBare      = regexp.MustCompile(`(?i)(?:^|[^\w$>:\\])exec\s*\(`)
+	reVarFunc       = regexp.MustCompile(`\$(?:[a-zA-Z_]\w*|_(?:POST|GET|REQUEST|COOKIE|SERVER)\s*\[[^\]]+\])\s*\(`)
+	reCallUserFunc  = regexp.MustCompile(`(?i)\bcall_user_func(?:_array)?\s*\(`)
+	reUploader      = regexp.MustCompile(`(?i)move_uploaded_file\s*\(`)
+	reFilesName     = regexp.MustCompile(`\$_FILES\b`)
+	reWriteSink     = regexp.MustCompile(`(?i)\b(?:file_put_contents|fwrite|fputs)\s*\(`)
+	reWriteSinkFile = regexp.MustCompile(`(?i)\b(?:file_put_contents|fwrite|fputs)\s*\(\s*[^'"\s]|\b(?:file_put_contents|fwrite|fputs)\s*\(\s*['"](?:[^p'"]|p[^h]|ph[^p]|php[^:])`)
+	reUserInput     = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|FILES)\b`)
+	reGoto          = regexp.MustCompile(`(?i)\bgoto\s+[a-zA-Z_]\w*\s*;`)
+	reHex           = regexp.MustCompile(`\\x[0-9A-Fa-f]{2}`)
+	reOct           = regexp.MustCompile(`\\[0-3][0-7]{2}`)
+	reChr           = regexp.MustCompile(`(?i)\bchr\s*\(`)
+	reConcatChar    = regexp.MustCompile(`['"]\s*\.\s*['"]`)
+	reLongB64       = regexp.MustCompile(`['"][A-Za-z0-9+/]{260,}={0,2}['"]`)
+	reB64Blob       = regexp.MustCompile(`[A-Za-z0-9+/]{120,}={0,2}`)
+	reHalt          = regexp.MustCompile(`(?i)__halt_compiler\s*\(\s*\)\s*;`)
+	reGzUncompress  = regexp.MustCompile(`(?i)\bgz(?:inflate|uncompress|decode)\s*\(`)
+	reDynInclude    = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\s*\(?\s*\$`)
+	reMailInput     = regexp.MustCompile(`(?i)\bmail\s*\(`)
+	reGlobalsCall   = regexp.MustCompile(`\$GLOBALS\s*\[[^\]]+\]\s*(?:\[[^\]]+\]\s*)*\(`)
+	reAssertVar     = regexp.MustCompile(`(?i)\bassert\s*\(\s*(?:@\s*)?\$`)
+	reOrdChr        = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
+	reStrReplace    = regexp.MustCompile(`(?i)\bstr_replace\s*\(`)
+	reDefineArr     = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
+	reEvalGz        = regexp.MustCompile(`(?i)\b(?:eval|assert|create_function)\s*\(`)
 	// A function name taken straight from request data: $_POST['f'](...) or
 	// call_user_func($_GET['f'], ...).
 	reInputCall     = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|SERVER)\s*\[[^\]]+\]\s*\(`)
@@ -121,8 +125,9 @@ func analyzePHP(content []byte) *verdict {
 	if evalOrAssert && decoders >= 1 && (longBlob || (decoders >= 2 && nr(reEvalSink, reDecoder, 200))) && !library {
 		return &verdict{CatVirus, "PHP.Obfuscated.EvalDecodedPayload"}
 	}
-	// 4. eval/assert directly on attacker input.
-	if evalOrAssert && hasInput && nr(reEvalSink, reInput, 120) {
+	// 4. eval/assert whose argument is attacker input (directly, or a variable
+	// assigned from it). eval($code) merely near $_POST is not enough.
+	if evalOrAssert && hasInput && evalOnInput(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.EvalInput"}
 	}
 	// 5. Command execution driven by attacker input (incl. backticks).
@@ -157,11 +162,17 @@ func analyzePHP(content []byte) *verdict {
 	}
 	// 11. Uploader that saves the raw client-supplied filename (lets the
 	// attacker choose the .php destination).
+	// Standalone uploader scripts are small; in a large application file
+	// (an admin import controller) it is only worth a look.
 	if m(reUploadRaw) && !m(reWpNonce) {
-		return &verdict{CatVirus, "PHP.Uploader.MoveUploadedFile"}
+		if n < 20000 {
+			return &verdict{CatVirus, "PHP.Uploader.MoveUploadedFile"}
+		}
+		return &verdict{CatSuspicious, "PHP.Suspicious.RawUploadName"}
 	}
 	// 12. Drop-and-write shell: writes a file from attacker input.
-	if m(reWriteSink) && hasInput && (m(reChr) || decoders >= 1) && nr(reWriteSink, reInput, 200) {
+	// ($_SERVER and writes to php:// streams are request logging, not dropping.)
+	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders >= 1) && nr(reWriteSinkFile, reUserInput, 200) {
 		return &verdict{CatVirus, "PHP.Backdoor.FileDropper"}
 	}
 	// 13. Spam mailer: mail() fed attacker input, in a small standalone script
@@ -192,6 +203,9 @@ func analyzePHP(content []byte) *verdict {
 	// 18. Minified single-line PHP with an executor (packed one-liner).
 	if evalOrAssert && longestLine(s) > 2000 && n < 300000 && (decoders >= 1 || concat >= 15 || varFunc) {
 		return &verdict{CatVirus, "PHP.Obfuscated.PackedOneLiner"}
+	}
+	if v := families(s, low, n, library, evalOrAssert, varFunc, hasInput, decoders); v != nil {
+		return v
 	}
 	// ---- weaker signals -> suspicious (report only) ----
 	if longBlob && (decoders >= 1 || evalOrAssert) {
@@ -323,4 +337,41 @@ func max64(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// pregEvalModifier matches preg_replace with the /e modifier (the replacement
+// is executed as PHP) for the usual delimiters, reading the pattern string
+// properly so quotes and letters inside the pattern do not count.
+func pregEvalModifier() *regexp.Regexp {
+	var alts []string
+	for _, d := range []string{"/", "#", "~", "!", "@", "|", "%", "+"} {
+		q := regexp.QuoteMeta(d)
+		for _, quote := range []string{"'", `"`} {
+			alts = append(alts, quote+q+`(?:[^`+quote+`\\`+q+`]|\\.)*`+q+`[a-zA-Z]*e[a-zA-Z]*`+quote)
+		}
+	}
+	return regexp.MustCompile(`(?i:\bpreg_replace)\s*\(\s*(?:` + strings.Join(alts, "|") + `)`)
+}
+
+var reEvalArg = regexp.MustCompile(`(?i)\b(?:eval|assert)\s*\(([^;]{0,300})`)
+
+// evalOnInput reports eval/assert whose argument contains request data or a
+// variable assigned from it.
+func evalOnInput(s []byte) bool {
+	var tainted []string
+	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
+		tainted = append(tainted, string(m[1]))
+	}
+	for _, m := range reEvalArg.FindAllSubmatch(s, 50) {
+		arg := m[1]
+		if reInput.Match(arg) {
+			return true
+		}
+		for _, name := range tainted {
+			if regexp.MustCompile(`\$` + regexp.QuoteMeta(name) + `\b`).Match(arg) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -75,6 +76,9 @@ type Scan struct {
 
 // Scanner owns scan jobs and the quarantine.
 type Scanner struct {
+	// NoHash skips the known-bad hash list (xmartguard-agent check --no-hash,
+	// to measure what the rules catch on their own).
+	NoHash   bool
 	DB       *sql.DB
 	Settings *settings.Store
 	Log      *slog.Logger
@@ -113,6 +117,13 @@ func QuarantineDir() string { return filepath.Join(store.StateDir(), "quarantine
 // forbidden are never scanned or acted on.
 var forbidden = []string{"/proc", "/sys", "/dev", "/run", "/boot", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"}
 
+// scannable are writable temp areas inside forbidden trees that malware
+// uses (/dev/shm); they are scanned like any other directory.
+var scannable = []string{"/dev/shm", "/run/shm"}
+
+// systemPath reports a path that must never be scanned or acted on.
+func systemPath(p string) bool { return underAny(p, forbidden) && !underAny(p, scannable) }
+
 // skipAnywhere are skipped at any depth: bind mounts and caches.
 var skipAnywhere = map[string]bool{"virtfs": true, ".cagefs": true, ".trash": true}
 
@@ -137,7 +148,7 @@ func ValidateTarget(p string) (string, error) {
 	if p == "/" {
 		return "", errors.New("scanning / is not allowed; use a Full scan")
 	}
-	if underAny(p, forbidden) || underAny(p, []string{store.StateDir(), store.HomeDir}) {
+	if systemPath(p) || underAny(p, []string{store.StateDir(), store.HomeDir}) {
 		return "", fmt.Errorf("%s is a system path and cannot be scanned", p)
 	}
 	st, err := os.Stat(p)
@@ -157,18 +168,26 @@ type HostingUser struct {
 	WebRoot string `json:"web_root"`
 }
 
+// Account sources (variables for tests).
+var (
+	passwdFile     = "/etc/passwd"
+	cpanelUsersDir = "/var/cpanel/users"
+	cpanelUserdata = "/var/cpanel/userdata"
+)
+
 // Users lists hosting accounts: cPanel users when present, otherwise regular
-// users (uid >= 1000) with a home directory.
+// users (uid >= 1000) with a home directory. Homes may be on any partition
+// (/home, /home2, /home3, /var/www/vhosts, …).
 func Users() []HostingUser {
 	cp := map[string]bool{}
-	if entries, err := os.ReadDir("/var/cpanel/users"); err == nil {
+	if entries, err := os.ReadDir(cpanelUsersDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != "system" {
 				cp[e.Name()] = true
 			}
 		}
 	}
-	f, err := os.Open("/etc/passwd")
+	f, err := os.Open(passwdFile)
 	if err != nil {
 		return nil
 	}
@@ -186,7 +205,7 @@ func Users() []HostingUser {
 			if !cp[name] {
 				continue
 			}
-		} else if uid < 1000 || uid >= 60000 || !strings.HasPrefix(home, "/home") {
+		} else if uid < 1000 || uid >= 60000 || home == "/" || systemPath(home) || home == "/nonexistent" {
 			continue
 		}
 		if st, err := os.Stat(home); err != nil || !st.IsDir() {
@@ -216,18 +235,63 @@ func FullRoots() []string {
 	return roots
 }
 
-// WebRoots are the document roots used by quick scans and realtime protection.
+// WebRoots are the document roots used by quick scans: every account's
+// public_html plus cPanel addon/subdomain document roots outside it.
 func WebRoots() []string {
 	var roots []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		p = filepath.Clean(p)
+		if !seen[p] {
+			seen[p] = true
+			roots = append(roots, p)
+		}
+	}
 	for _, u := range Users() {
 		if u.WebRoot != "" {
-			roots = append(roots, u.WebRoot)
+			add(u.WebRoot)
+		}
+		for _, d := range cpanelDocroots(u.Name) {
+			if d != u.WebRoot && !underAny(d, []string{u.WebRoot}) {
+				if st, err := os.Stat(d); err == nil && st.IsDir() {
+					add(d)
+				}
+			}
 		}
 	}
 	if st, err := os.Stat("/var/www/html"); err == nil && st.IsDir() {
-		roots = append(roots, "/var/www/html")
+		add("/var/www/html")
 	}
 	return roots
+}
+
+var reDocroot = regexp.MustCompile(`^documentroot:\s*(\S+)`)
+
+// cpanelDocroots lists the document roots of an account's domains
+// (/var/cpanel/userdata/<user>/<domain>: "documentroot: /home2/u/addon.com").
+func cpanelDocroots(user string) []string {
+	dir := filepath.Join(cpanelUserdata, user)
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, f := range files {
+		n := f.Name()
+		if f.IsDir() || n == "main" || strings.HasSuffix(n, ".cache") || strings.HasSuffix(n, ".json") || strings.HasSuffix(n, ".yaml") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil || len(b) > 1<<20 {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if m := reDocroot.FindStringSubmatch(strings.TrimSpace(line)); m != nil && filepath.IsAbs(m[1]) && !systemPath(m[1]) {
+				out = append(out, filepath.Clean(m[1]))
+			}
+		}
+	}
+	return out
 }
 
 func (s *Scanner) owner(uid uint32) string {
@@ -303,7 +367,7 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	}
 	// Known-bad hash lookup: only hash a file whose exact size matches an entry
 	// in our blocklist, so this stays cheap across a full scan.
-	if hdb := activeHashDB(); hdb.SizeKnown(info.Size()) {
+	if hdb := activeHashDB(); !s.NoHash && hdb.SizeKnown(info.Size()) {
 		label := hdb.LookupSums(info.Size(), func() (string, string) {
 			if content != nil {
 				h, m := sha256.Sum256(content), md5.Sum(content)
@@ -320,7 +384,7 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			return binaryCheck(path)
 		}
 		if d := analyze(ext, content); d != nil {
-			return d, nil
+			return capHeuristic(path, ext, d), nil
 		}
 		if r := Match(ext, content); r != nil {
 			return &Detection{r.Category, r.Name}, nil
@@ -536,7 +600,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	qdir := QuarantineDir()
 	homeMap := homes()
 	skipDir := func(root, path string, d fs.DirEntry) bool {
-		return path != root && (skipAnywhere[d.Name()] || (filepath.Dir(path) == root && skipInHome[d.Name()]) || path == qdir || underAny(path, forbidden))
+		return path != root && (skipAnywhere[d.Name()] || (filepath.Dir(path) == root && skipInHome[d.Name()]) || path == qdir || systemPath(path))
 	}
 	// Count the files to check alongside the scan, for the progress bar.
 	go func() {
@@ -943,4 +1007,17 @@ func (c *clamAV) scan(paths []string) map[string]string {
 // (CLI checks and benchmarks).
 func NewOffline() *Scanner {
 	return &Scanner{users: map[uint32]string{}, cancels: map[int64]context.CancelFunc{}, KnownGood: wpcore.Default().Known}
+}
+
+// capHeuristic reports heuristic detections in test suites and PHP archives
+// as suspicious: test code exercises eval, exec and uploads on purpose, and a
+// .phar bundles whole libraries. The AI scanner then confirms them.
+func capHeuristic(path, ext string, d *Detection) *Detection {
+	if d.Category != CatVirus {
+		return d
+	}
+	if ext == ".phar" || strings.Contains(path, "/tests/") || strings.Contains(path, "/test/") {
+		return &Detection{CatSuspicious, d.Signature}
+	}
+	return d
 }

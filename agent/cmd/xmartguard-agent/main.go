@@ -20,6 +20,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -128,7 +131,7 @@ Usage:
   xmartguard-agent unenroll     remove this server from the portal
   xmartguard-agent info         print detected host inventory
   xmartguard-agent cleanup      remove all XMart Guard firewall rules
-  xmartguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses)
+  xmartguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses, --no-hash)
   xmartguard-agent panel install|uninstall|status   manage the WHM/cPanel plugins
   xmartguard-agent call ACTION ['{"json":"params"}']  call the running agent (root)
   xgcli COMMAND ...             command line like cpgcli (also: xmartguard-agent cli ...; xgcli --help)
@@ -310,42 +313,71 @@ func cmdCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "print JSON lines")
 	misses := fs.Bool("misses", false, "print files that were NOT detected instead")
-	if err := fs.Parse(args); err != nil {
+	noHash := fs.Bool("no-hash", false, "ignore the known-bad hash list (test the rules alone)")
+	// Accept flags before or after the paths.
+	var flags, paths []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+		} else {
+			paths = append(paths, a)
+		}
+	}
+	if err := fs.Parse(flags); err != nil {
 		return err
 	}
-	if fs.NArg() == 0 {
-		return errors.New("usage: xmartguard-agent check [--json] [--misses] PATH...")
+	if len(paths) == 0 {
+		return errors.New("usage: xmartguard-agent check [--json] [--misses] [--no-hash] PATH...")
 	}
 	cfg := settings.Defaults().Scanner
 	cfg.MaxFileSizeMB = 20
 	sc := scanner.NewOffline()
+	sc.NoHash = *noHash
+	type job struct {
+		path string
+		info iofs.FileInfo
+	}
+	jobs := make(chan job, 512)
+	var mu sync.Mutex
 	var files, found int
-	for _, root := range fs.Args() {
+	var wg sync.WaitGroup
+	for i := 0; i < max(1, runtime.NumCPU()); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				det, _ := sc.CheckFile(j.path, j.info, cfg)
+				mu.Lock()
+				files++
+				if det != nil {
+					found++
+				}
+				switch {
+				case *misses && det == nil:
+					fmt.Println(j.path)
+				case !*misses && det != nil && *asJSON:
+					b, _ := json.Marshal(map[string]string{"path": j.path, "category": det.Category, "signature": det.Signature})
+					fmt.Println(string(b))
+				case !*misses && det != nil:
+					fmt.Printf("%-11s %-40s %s\n", det.Category, det.Signature, j.path)
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, root := range paths {
 		_ = filepath.WalkDir(root, func(path string, d iofs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !d.Type().IsRegular() {
 				return nil
 			}
-			info, err := d.Info()
-			if err != nil {
-				return nil
-			}
-			files++
-			det, _ := sc.CheckFile(path, info, cfg)
-			if det != nil {
-				found++
-			}
-			switch {
-			case *misses && det == nil:
-				fmt.Println(path)
-			case !*misses && det != nil && *asJSON:
-				b, _ := json.Marshal(map[string]string{"path": path, "category": det.Category, "signature": det.Signature})
-				fmt.Println(string(b))
-			case !*misses && det != nil:
-				fmt.Printf("%-11s %-40s %s\n", det.Category, det.Signature, path)
+			if info, err := d.Info(); err == nil {
+				jobs <- job{path, info}
 			}
 			return nil
 		})
 	}
+	close(jobs)
+	wg.Wait()
 	fmt.Fprintf(os.Stderr, "scanned %d files, %d detected (%.1f%%)\n", files, found, 100*float64(found)/float64(max(files, 1)))
 	return nil
 }

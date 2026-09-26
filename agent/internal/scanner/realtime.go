@@ -232,7 +232,7 @@ func (r *Realtime) addWatch(dir string) bool {
 // skip reports directories never watched: bind mounts and caches anywhere,
 // and mailboxes, logs and panel data directly inside a home directory.
 func (r *Realtime) skip(path string, name string) bool {
-	if skipAnywhere[name] || path == QuarantineDir() || underAny(path, forbidden) {
+	if skipAnywhere[name] || path == QuarantineDir() || systemPath(path) {
 		return true
 	}
 	r.mu.Lock()
