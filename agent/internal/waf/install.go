@@ -18,8 +18,8 @@ type Target struct {
 	WebServer   string   `json:"web_server"`
 	ErrorLogs   []string `json:"error_logs"`
 
-	configTest []string   // command that validates the config
-	reload     []string   // command that reloads the web server
+	configTest []string // command that validates the config
+	reload     []string // command that reloads the web server
 }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }

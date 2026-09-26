@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/client"
+	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/notify"
@@ -29,8 +30,8 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 	"github.com/xmarthost/xmartguard/agent/internal/updater"
-	"github.com/xmarthost/xmartguard/agent/internal/waf"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
+	"github.com/xmarthost/xmartguard/agent/internal/waf"
 )
 
 // Agent holds every module.
@@ -43,6 +44,7 @@ type Agent struct {
 	Realtime *scanner.Realtime
 	Firewall *firewall.Manager
 	WAF      *waf.Manager
+	CMS      *cms.Manager
 	Mailer   *notify.Mailer
 	Session  *client.Session
 
@@ -78,6 +80,17 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Firewall.OnBan = a.onBan
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
 		AgentBin: selfPath(), Firewall: a.Firewall}
+	a.CMS = &cms.Manager{DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
+		Accounts: func() []cms.Account {
+			var out []cms.Account
+			for _, u := range scanner.Users() {
+				out = append(out, cms.Account{Name: u.Name, Home: u.Home})
+			}
+			return out
+		},
+		Docroots:  func() map[string]string { return cms.CPanelDocroots("/var/cpanel/userdata") },
+		OnFinding: a.onDBFinding,
+	}
 	return a, nil
 }
 
@@ -92,6 +105,15 @@ func (a *Agent) Start(ctx context.Context) {
 		func(kind string) { _ = store.SetKV(a.DB, "last_"+kind, strconv.FormatInt(time.Now().Unix(), 10)) })
 	go a.reputationLoop(ctx)
 	go a.WAF.Run(ctx)
+	go a.CMS.Run(ctx)
+}
+
+func (a *Agent) onDBFinding(s cms.Site, f cms.DBFinding) {
+	n := a.Settings.Get().Notifications
+	if n.Email != "" && n.OnVirus {
+		a.Mailer.Enqueue(n.Email, "database infection found",
+			fmt.Sprintf("[%s] %s\n  site: %s (%s)\n  table: %s  row: %s\n", f.Signature, s.Domain, s.Path, s.User, f.Table, f.Row))
+	}
 }
 
 // selfPath is the agent binary, for scripts the WAF and panel invoke.
@@ -489,6 +511,63 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	}
 	h["waf.apply"] = func(context.Context, json.RawMessage) (any, error) {
 		return a.WAF.Status(), a.WAF.Apply()
+	}
+
+	// ---- CMS + database scanner
+	h["cms.status"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"status": a.CMS.Status(), "counts": a.CMS.Counts()}, nil
+	}
+	h["cms.sites"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		f, err := decode[cms.SiteFilter](p)
+		if err != nil {
+			return nil, err
+		}
+		sites, total, err := a.CMS.Sites(f)
+		return map[string]any{"sites": sites, "total": total}, err
+	}
+	h["cms.scan"] = func(context.Context, json.RawMessage) (any, error) {
+		if !a.Settings.Get().CMS.Enabled {
+			return nil, errors.New("CMS monitoring is disabled in settings")
+		}
+		return map[string]any{"ok": true}, a.CMS.Start()
+	}
+	h["cms.update"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Path string `json:"path"`
+			What string `json:"what"`
+			Slug string `json:"slug"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		out, err := a.CMS.Update(ctx, in.Path, in.What, in.Slug)
+		if err == nil {
+			_ = a.CMS.Start() // refresh the inventory
+		}
+		return map[string]any{"output": out}, err
+	}
+	h["db.findings"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Status string `json:"status"`
+			Q      string `json:"q"`
+			Limit  int    `json:"limit"`
+			Offset int    `json:"offset"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		rows, total, err := a.CMS.DBFindings(in.Status, in.Q, in.Limit, in.Offset)
+		return map[string]any{"findings": rows, "total": total}, err
+	}
+	h["db.archive"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IDs []int64 `json:"ids"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		n, err := a.CMS.ArchiveDBFindings(in.IDs)
+		return map[string]any{"done": n}, err
 	}
 
 	// ---- reputation

@@ -77,6 +77,14 @@ type WAF struct {
 	WhitelistIPs   []string `json:"whitelist_ips"`  // never inspected by our rules
 }
 
+// CMS controls WordPress/Joomla/OpenCart monitoring.
+type CMS struct {
+	Enabled       bool `json:"enabled"`
+	CoreCheck     bool `json:"core_check"` // verify WordPress core files against official checksums
+	DBScan        bool `json:"db_scan"`    // scan WordPress databases for injected code
+	IntervalHours int  `json:"interval_hours"`
+}
+
 // IPDB is the portal-wide shared blocklist: servers report attackers they
 // ban, the portal aggregates the reports and distributes a list that every
 // server drops at the firewall.
@@ -101,6 +109,7 @@ type Settings struct {
 	Reputation    Reputation    `json:"reputation"`
 	IPDB          IPDB          `json:"ipdb"`
 	WAF           WAF           `json:"waf"`
+	CMS           CMS           `json:"cms"`
 	Notifications Notifications `json:"notifications"`
 }
 
@@ -120,6 +129,7 @@ func Defaults() Settings {
 		},
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
 		IPDB:       IPDB{Enabled: true, Report: true},
+		CMS:        CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 24},
 		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
 			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{}},
 		Notifications: Notifications{
@@ -222,6 +232,9 @@ func normalize(s *Settings) {
 	s.WAF.WhitelistIPs = clean(s.WAF.WhitelistIPs, false)
 	if s.WAF.DisabledRules == nil {
 		s.WAF.DisabledRules = []int{}
+	}
+	if s.CMS.IntervalHours <= 0 {
+		s.CMS.IntervalHours = 24
 	}
 	if s.WAF.BFThreshold <= 0 {
 		s.WAF.BFThreshold = 10

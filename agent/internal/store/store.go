@@ -144,6 +144,44 @@ CREATE TABLE IF NOT EXISTS waf_events (
 );
 CREATE INDEX IF NOT EXISTS waf_events_at ON waf_events(at);
 CREATE INDEX IF NOT EXISTS waf_events_cat ON waf_events(category, id);
+CREATE TABLE IF NOT EXISTS cms_latest (
+  kind        TEXT NOT NULL,
+  slug        TEXT NOT NULL,
+  version     TEXT NOT NULL DEFAULT '',
+  checked_at  INTEGER NOT NULL,
+  PRIMARY KEY (kind, slug)
+);
+CREATE TABLE IF NOT EXISTS cms_sites (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  type              TEXT NOT NULL,
+  path              TEXT NOT NULL UNIQUE,
+  user              TEXT NOT NULL DEFAULT '',
+  domain            TEXT NOT NULL DEFAULT '',
+  version           TEXT NOT NULL DEFAULT '',
+  latest            TEXT NOT NULL DEFAULT '',
+  plugins           TEXT NOT NULL DEFAULT '[]',
+  themes            TEXT NOT NULL DEFAULT '[]',
+  mu_plugins        TEXT NOT NULL DEFAULT '[]',
+  outdated_plugins  INTEGER NOT NULL DEFAULT 0,
+  outdated_themes   INTEGER NOT NULL DEFAULT 0,
+  core              TEXT NOT NULL DEFAULT '{}',
+  core_issues       INTEGER NOT NULL DEFAULT 0,
+  db_issues         INTEGER NOT NULL DEFAULT 0,
+  risk              TEXT NOT NULL DEFAULT 'ok',
+  scanned_at        INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS db_findings (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          INTEGER NOT NULL,
+  site_path   TEXT NOT NULL,
+  user        TEXT NOT NULL DEFAULT '',
+  db_name     TEXT NOT NULL,
+  tbl         TEXT NOT NULL,
+  row_ref     TEXT NOT NULL,
+  signature   TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'detected',
+  UNIQUE(site_path, tbl, row_ref, signature)
+);
 CREATE TABLE IF NOT EXISTS kv (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

@@ -23,6 +23,11 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'ipdb.status': { role: 'viewer', mutates: false },
   'ipdb.live': { role: 'viewer', mutates: false },
   'fw.connections': { role: 'viewer', mutates: false },
+  'waf.status': { role: 'viewer', mutates: false },
+  'waf.events': { role: 'viewer', mutates: false },
+  'cms.status': { role: 'viewer', mutates: false },
+  'cms.sites': { role: 'viewer', mutates: false },
+  'db.findings': { role: 'viewer', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },
   'scan.stop': { role: 'operator', mutates: true },
@@ -32,9 +37,13 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'fw.remove': { role: 'operator', mutates: true },
   'fw.unblock': { role: 'operator', mutates: true },
   'reputation.check': { role: 'operator', mutates: true, timeoutMs: 120_000 },
+  'cms.scan': { role: 'operator', mutates: true },
+  'db.archive': { role: 'operator', mutates: true },
 
   'settings.set': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'fw.apply': { role: 'admin', mutates: true, timeoutMs: 120_000 },
+  'waf.apply': { role: 'admin', mutates: true, timeoutMs: 180_000 },
+  'cms.update': { role: 'admin', mutates: true, timeoutMs: 660_000 },
 };
 
 const Params = z.object({ id: z.string().uuid(), action: z.string().max(40) });

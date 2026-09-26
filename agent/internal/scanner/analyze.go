@@ -22,3 +22,18 @@ func analyze(ext string, content []byte) *Detection {
 	}
 	return nil
 }
+
+// AnalyzeScript runs the heuristic analyzer on content that is not a file
+// (for example a database value). kind is "js" or "php".
+func AnalyzeScript(kind string, content []byte) *Detection {
+	var v *verdict
+	if kind == "js" {
+		v = analyzeJS(content)
+	} else {
+		v = analyzePHP(content)
+	}
+	if v == nil {
+		return nil
+	}
+	return &Detection{v.category, v.signature}
+}

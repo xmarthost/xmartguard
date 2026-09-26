@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, Globe2, Info, Lock, Settings as SettingsIcon } from 'lucide-react';
+import { Bell, Bug, CheckCircle2, Globe2, Info, LayoutTemplate, Lock, Settings as SettingsIcon, Shield } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
-import { ListEditor, SettingRow, Tabs, Toggle, agentCall, useAction, useAgent } from '../components/controls';
+import { ListEditor, SettingRow, Tabs, Toggle, agentCall, isIPorCIDR, useAction, useAgent } from '../components/controls';
 
 interface ScannerS {
   enabled: boolean;
@@ -35,6 +35,27 @@ interface NotificationsS {
   on_ban: boolean;
   on_blacklist: boolean;
 }
+interface WAFS {
+  enabled: boolean;
+  upload_scan: boolean;
+  sensitive_files: boolean;
+  wordpress: boolean;
+  bad_bots: boolean;
+  seo_bots: boolean;
+  ai_bots: boolean;
+  custom_bots: string[];
+  bruteforce: boolean;
+  bf_threshold: number;
+  bf_window_minutes: number;
+  disabled_rules: number[];
+  whitelist_ips: string[];
+}
+interface CMSS {
+  enabled: boolean;
+  core_check: boolean;
+  db_scan: boolean;
+  interval_hours: number;
+}
 interface IPDBS {
   enabled: boolean;
   report: boolean;
@@ -42,6 +63,8 @@ interface IPDBS {
 interface AllSettings {
   scanner: ScannerS;
   ipdb: IPDBS;
+  waf: WAFS;
+  cms: CMSS;
   reputation: ReputationS;
   notifications: NotificationsS;
 }
@@ -52,13 +75,13 @@ interface Meta {
   default_rbls: string[];
 }
 
-type Section = 'scanner' | 'rbl' | 'ipdb' | 'notifications' | 'about';
+type Section = 'scanner' | 'waf' | 'cms' | 'rbl' | 'ipdb' | 'notifications' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
   { v: 'ipdb', l: 'IPDB Protection', icon: <Globe2 className="h-4 w-4" /> },
-  { v: 'waf', l: 'WAF & Bruteforce', icon: <Lock className="h-4 w-4" />, soon: true },
-  { v: 'cms', l: 'WordPress and CMS', icon: <Lock className="h-4 w-4" />, soon: true },
+  { v: 'waf', l: 'WAF & Bruteforce', icon: <Shield className="h-4 w-4" /> },
+  { v: 'cms', l: 'WordPress and CMS', icon: <LayoutTemplate className="h-4 w-4" /> },
   { v: 'suspension', l: 'Automatic Suspension', icon: <Lock className="h-4 w-4" />, soon: true },
   { v: 'osm', l: 'Outgoing Spam Monitor', icon: <Lock className="h-4 w-4" />, soon: true },
   { v: 'notifications', l: 'Notifications', icon: <Bell className="h-4 w-4" /> },
@@ -117,6 +140,8 @@ export default function SettingsPage() {
         {!admin && <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">You can view settings; only admins can change them.</div>}
         {section === 'scanner' && <ScannerSection s={st.scanner} meta={meta} admin={admin} busy={busy} onSave={setScanner} />}
         {section === 'rbl' && <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />}
+        {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} />}
+        {section === 'cms' && st.cms && <CMSSection s={st.cms} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
         {section === 'ipdb' && <IPDBSection s={st.ipdb ?? { enabled: true, report: true }} admin={admin} busy={busy} onSave={(p) => save({ ipdb: p })} />}
         {section === 'notifications' && <NotificationsSection s={st.notifications} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
         {section === 'about' && <About serverId={id!} />}
@@ -260,6 +285,120 @@ function RBLSection({ s, meta, admin, busy, onSave }: { s: ReputationS; meta: Me
           <button className="btn-primary" disabled={dis} onClick={() => onSave({ rbls })}>Save RBLs</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+interface WafRule {
+  id: number;
+  category: string;
+  title: string;
+  action: string;
+  enabled: boolean;
+}
+
+function WAFSection({ serverId, s, admin, busy, onSave }: { serverId: string; s: WAFS; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void }) {
+  const info = useAgent<{ status: { available: boolean; web_server: string; error: string }; rules: WafRule[] }>(serverId, 'waf.status');
+  const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
+  useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
+  const dis = !admin || busy;
+  const st = info.data?.status;
+  const row = (key: keyof WAFS, title: string, desc: string, rec?: boolean) => (
+    <SettingRow title={title} desc={desc} recommended={rec}>
+      <Toggle on={Boolean(s[key])} disabled={dis || !s.enabled} onChange={(v) => onSave({ [key]: v } as Partial<WAFS>)} />
+    </SettingRow>
+  );
+  return (
+    <div>
+      <div className="mb-2 flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-navy-900">WAF &amp; Bruteforce</h2>
+          <p className="text-sm text-slate-500">
+            XMart Guard ModSecurity rules for {st?.web_server ?? 'the web server'}.{' '}
+            {st && !st.available && <span className="text-amber-600">ModSecurity is not installed (cPanel: EasyApache 4 » ea-apache24-mod_security2).</span>}
+          </p>
+          {st?.error && <p className="mt-1 text-sm text-red-600">{st.error}</p>}
+        </div>
+        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
+      </div>
+      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the XMart Guard engine before it is saved. PHP files uploaded through forms are refused.', true)}
+      {row('sensitive_files', 'Protect sensitive files', 'Block web access to .env, .git, config backups, logs and SQL dumps', true)}
+      {row('wordpress', 'WordPress hardening', 'Block running PHP inside wp-content/uploads and XML-RPC multicall', true)}
+      {row('bad_bots', 'Block bad bots', 'Vulnerability scanners and abusive tools', true)}
+      {row('seo_bots', 'Block SEO crawlers', 'Ahrefs, Semrush, MJ12, DotBot and similar aggressive crawlers')}
+      {row('ai_bots', 'Block AI crawlers', 'GPTBot, CCBot, Bytespider, ClaudeBot and similar training crawlers')}
+      {row('bruteforce', 'CMS login brute-force protection', 'Ban IPs that repeatedly fail WordPress, Joomla or OpenCart logins', true)}
+      <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 py-4">
+        <label className="text-sm">
+          <div className="label">Failed logins before ban</div>
+          <input className="input w-32" type="number" min={3} value={bf.t} disabled={dis} onChange={(e) => setBf({ ...bf, t: Number(e.target.value) })} />
+        </label>
+        <label className="text-sm">
+          <div className="label">Within (minutes)</div>
+          <input className="input w-32" type="number" min={1} value={bf.w} disabled={dis} onChange={(e) => setBf({ ...bf, w: Number(e.target.value) })} />
+        </label>
+        <button className="btn-primary" disabled={dis} onClick={() => onSave({ bf_threshold: bf.t, bf_window_minutes: bf.w })}>
+          Save
+        </button>
+      </div>
+      <ListEditor title="Custom bots" desc="Block requests whose User-Agent contains any of these" items={s.custom_bots} disabled={dis} placeholder="e.g. badcrawler" onChange={(v) => onSave({ custom_bots: v })} />
+      <ListEditor title="WAF whitelist" desc="These IPs are never inspected by XMart Guard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
+      <ListEditor
+        title="Disabled rules"
+        desc="ModSecurity rule ids switched off on this server (ours or any vendor's). Use the button in WAF Logs to disable a rule causing false positives."
+        items={s.disabled_rules.map(String)}
+        disabled={dis}
+        placeholder="rule id"
+        validate={(v) => (/^\d{1,8}$/.test(v) ? null : 'Enter a numeric rule id')}
+        onChange={(v) => onSave({ disabled_rules: v.map(Number) })}
+      />
+      {info.data && (
+        <div className="py-4">
+          <div className="mb-2 font-medium text-navy-900">XMart Guard rules</div>
+          <table className="w-full text-sm">
+            <tbody className="divide-y divide-slate-100">
+              {info.data.rules.map((r) => (
+                <tr key={r.id}>
+                  <td className="py-2 font-mono text-xs text-slate-500">{r.id}</td>
+                  <td className="py-2">{r.title}</td>
+                  <td className="py-2 text-xs text-slate-500">{r.action}</td>
+                  <td className="py-2 text-right text-xs">{r.enabled ? <span className="text-green-600">active</span> : <span className="text-slate-400">off</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CMSSection({ s, admin, busy, onSave }: { s: CMSS; admin: boolean; busy: boolean; onSave: (p: Partial<CMSS>) => void }) {
+  const dis = !admin || busy;
+  return (
+    <div>
+      <div className="mb-2 flex items-start justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-navy-900">WordPress and CMS</h2>
+          <p className="text-sm text-slate-500">Find WordPress, Joomla and OpenCart sites, track outdated plugins and themes, verify core files and scan databases.</p>
+        </div>
+        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
+      </div>
+      <SettingRow title="Verify WordPress core files" desc="Compare every core file with the official checksums from wordpress.org" recommended>
+        <Toggle on={s.core_check} disabled={dis || !s.enabled} onChange={(v) => onSave({ core_check: v })} />
+      </SettingRow>
+      <SettingRow title="Scan WordPress databases" desc="Look for injected scripts, hidden iframes and PHP code in posts and options (read-only)" recommended>
+        <Toggle on={s.db_scan} disabled={dis || !s.enabled} onChange={(v) => onSave({ db_scan: v })} />
+      </SettingRow>
+      <SettingRow title="Scan interval" desc="How often all websites are re-checked">
+        <select className="input w-40" value={s.interval_hours} disabled={dis || !s.enabled} onChange={(e) => onSave({ interval_hours: Number(e.target.value) })}>
+          {[6, 12, 24, 48, 168].map((h) => (
+            <option key={h} value={h}>
+              {h < 24 ? `${h} hours` : h === 168 ? 'weekly' : `${h / 24} day${h > 24 ? 's' : ''}`}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useMatch, useNavigate } from 'react-router-dom';
 import {
-  Activity, ArrowLeft, Globe2, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
+  Activity, ArrowLeft, Bot, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
@@ -182,6 +182,8 @@ export default function Layout({ children }: { children: ReactNode }) {
                 items={[
                   { to: `${base}/scanner`, label: 'Manual Scans', icon: <Bug /> },
                   { to: `${base}/scanner-logs`, label: 'Scanner Logs', icon: <FileWarning /> },
+                  { to: `${base}/cms`, label: 'CMS Threats', icon: <LayoutTemplate /> },
+                  { to: `${base}/db-scanner`, label: 'DB Scanner', icon: <DatabaseZap /> },
                 ]}
               />
               <NavGroup
@@ -190,6 +192,8 @@ export default function Layout({ children }: { children: ReactNode }) {
                 items={[
                   { to: `${base}/firewall`, label: 'Firewall', icon: <Flame /> },
                   { to: `${base}/firewall-logs`, label: 'Firewall Logs', icon: <ListX /> },
+                  { to: `${base}/waf-logs`, label: 'WAF Logs', icon: <ShieldAlert /> },
+                  { to: `${base}/bot-attacks`, label: 'Bot Attacks', icon: <Bot /> },
                   { to: `${base}/ipdb`, label: 'IPDB', icon: <Globe2 /> },
                 ]}
               />

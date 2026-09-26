@@ -13,6 +13,8 @@ import { AccountPage, SecurityLogPage, SupportPage, UsersPage } from './pages/Ad
 import { ManualScans, ScannerLogs } from './pages/Scanner';
 import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
 import SettingsPage from './pages/Settings';
+import { BotAttacks, WafLogs } from './pages/WAF';
+import { CMSThreats, DBScanner } from './pages/CMS';
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
@@ -40,6 +42,10 @@ export default function App() {
         <Route path="/servers/:id/firewall" element={<Protected><FirewallPage /></Protected>} />
         <Route path="/servers/:id/firewall-logs" element={<Protected><FirewallLogs /></Protected>} />
         <Route path="/servers/:id/ip-reputation" element={<Protected><IPReputation /></Protected>} />
+        <Route path="/servers/:id/cms" element={<Protected><CMSThreats /></Protected>} />
+        <Route path="/servers/:id/db-scanner" element={<Protected><DBScanner /></Protected>} />
+        <Route path="/servers/:id/waf-logs" element={<Protected><WafLogs /></Protected>} />
+        <Route path="/servers/:id/bot-attacks" element={<Protected><BotAttacks /></Protected>} />
         <Route path="/servers/:id/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><ServerIPDB /></Suspense></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
