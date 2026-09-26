@@ -127,7 +127,7 @@ xmartguard-agent check /home/user/public_html/folder --misses --no-hash   # rule
         <Steps
           items={[
             <>Portal: <b>AI Connector » Create connector</b>, copy the URL (<code>https://portal/mcp/xgm_…</code>).</>,
-            <>Claude: <b>Settings » Connectors » Add custom connector</b>, paste the URL, no OAuth.</>,
+            <>Claude: <b>Settings » Connectors » Add custom connector</b>, paste the URL, <b>Continue</b>, Authentication: <b>No sign-in</b>. (“Sign in now” fails: the portal has no OAuth service; the token in the URL is the login.)</>,
             <>Revoke the connector in the portal to cut access immediately.</>,
           ]}
         />

@@ -134,7 +134,7 @@ export default function AIConnector() {
             In Claude open <b>Settings » Connectors » Add custom connector</b>.
           </li>
           <li>
-            Name it <b>XMart Guard</b>, paste the URL into <b>Remote MCP server URL</b>, leave OAuth empty and click <b>Add</b>.
+            Name it <b>XMart Guard</b>, paste the URL and click <b>Continue</b>. Under <b>Authentication</b> choose <b>No sign-in</b> (the token is already in the URL), then <b>Add</b> and <b>Connect</b>.
           </li>
           <li>In a chat, enable the XMart Guard connector from the tools menu and ask, for example: “Review the quarantined files on all servers and list likely false positives.”</li>
         </ol>

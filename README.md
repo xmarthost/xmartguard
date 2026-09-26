@@ -121,7 +121,7 @@ The script installs Docker, builds the portal, sets up HTTPS and prints the firs
 
 ### AI connector (MCP)
 
-Open **AI Connector** (admins), create a connector and copy its URL (`https://your-portal/mcp/xgm_…`, shown once). In Claude: **Settings » Connectors » Add custom connector**, paste the URL, no OAuth. Other clients: `claude mcp add --transport http xmartguard https://your-portal/mcp/<token>` or `POST /mcp` with `Authorization: Bearer <token>`. Read-only connectors see everything; read & write connectors can also run actions, recorded in the Security Log as `mcp.*`. Revoke a connector to cut access at once.
+Open **AI Connector** (admins), create a connector and copy its URL (`https://your-portal/mcp/xgm_…`, shown once). In Claude: **Settings » Connectors » Add custom connector**, paste the URL, **Continue**, and choose Authentication **No sign-in** ("Sign in now" fails; the token in the URL is the login). Other clients: `claude mcp add --transport http xmartguard https://your-portal/mcp/<token>` or `POST /mcp` with `Authorization: Bearer <token>`. Read-only connectors see everything; read & write connectors can also run actions, recorded in the Security Log as `mcp.*`. Revoke a connector to cut access at once.
 
 ### AI scanner (free AI APIs)
 
