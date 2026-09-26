@@ -58,6 +58,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'fw.apply': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'waf.apply': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'waf.rule': { role: 'admin', mutates: true, timeoutMs: 180_000 },
+  'waf.sync': { role: 'admin', mutates: true, timeoutMs: 300_000 },
   'cms.update': { role: 'admin', mutates: true, timeoutMs: 660_000 },
   'osm.release': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'suspend.lift': { role: 'admin', mutates: true, timeoutMs: 360_000 },

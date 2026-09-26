@@ -277,4 +277,36 @@ CREATE TABLE mcp_tokens (
 CREATE INDEX mcp_tokens_account_idx ON mcp_tokens (account_id, created_at DESC);
 `,
   },
+  {
+    version: '006_waf_rulesets',
+    sql: `
+-- WAF Rule Sets: one ModSecurity configuration per account, rolled out to
+-- every server (XMart Guard rules, OWASP CRS, cPanel vendors, custom rules).
+CREATE TABLE waf_rulesets (
+  account_id  uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  config      jsonb NOT NULL DEFAULT '{}'::jsonb,
+  version     bigint NOT NULL DEFAULT 1,
+  updated_by  uuid REFERENCES users(id) ON DELETE SET NULL,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- OWASP CRS releases downloaded from the official GitHub repository.
+CREATE TABLE waf_crs (
+  version     text PRIMARY KEY,
+  files       jsonb NOT NULL,
+  size        integer NOT NULL DEFAULT 0,
+  source      text NOT NULL DEFAULT '',
+  published   timestamptz,
+  fetched_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- What each server reported after applying the rule sets.
+CREATE TABLE waf_server_status (
+  server_id   uuid PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  version     bigint NOT NULL DEFAULT 0,
+  status      jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

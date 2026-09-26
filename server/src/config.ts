@@ -61,6 +61,10 @@ export interface Config {
   /** Malware signature feeds merged and sent to agents (empty disables). */
   sigFeeds: string[];
   sigSync: boolean;
+  /** OWASP CRS releases for WAF Rule Sets (GitHub API base and repository). */
+  crsSync: boolean;
+  crsApi: string;
+  crsRepo: string;
 }
 
 /**
@@ -136,5 +140,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .map((s) => s.trim())
       .filter(Boolean),
     sigSync: bool(env.SIG_SYNC, true),
+    crsSync: bool(env.CRS_SYNC, true),
+    crsApi: (env.CRS_API || 'https://api.github.com').replace(/\/+$/, ''),
+    crsRepo: env.CRS_REPO || 'coreruleset/coreruleset',
   };
 }

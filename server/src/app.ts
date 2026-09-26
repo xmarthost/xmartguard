@@ -25,6 +25,8 @@ import { WPCoreService } from './wpcore/service.js';
 import { SignatureService } from './signatures/service.js';
 import { wpcoreRoutes } from './routes/wpcore.js';
 import { mcpRoutes } from './routes/mcp.js';
+import { wafRulesetRoutes } from './routes/waf-rulesets.js';
+import { CRSService } from './waf/rulesets.js';
 
 export interface App {
   app: FastifyInstance;
@@ -33,6 +35,7 @@ export interface App {
   ai: AIGateway;
   wp: WPCoreService;
   sigs: SignatureService;
+  crs: CRSService;
 }
 
 export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean } = {}): Promise<App> {
@@ -47,6 +50,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   const ai = new AIGateway(pool, cfg, app.log);
   const wp = new WPCoreService(pool, cfg, app.log);
   const sigs = new SignatureService(pool, cfg, app.log);
+  const crs = new CRSService(pool, cfg, app.log);
   void initGeo(geo, cfg.dataDir, cfg.geoUrl, app.log).then(() => ipdb.markDirty());
 
   await app.register(cookie);
@@ -72,6 +76,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   aiRoutes(app, pool, ai);
   wpcoreRoutes(app, pool, wp, sigs);
   mcpRoutes(app, pool, cfg, hub);
+  wafRulesetRoutes(app, pool, hub, crs);
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });
@@ -91,12 +96,14 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   ai.start();
   wp.start();
   sigs.start();
+  crs.start();
   app.addHook('onClose', async () => {
     ipdb.stop();
     ai.stop();
     wp.stop();
     sigs.stop();
+    crs.stop();
     hub.closeAll();
   });
-  return { app, hub, ipdb, ai, wp, sigs };
+  return { app, hub, ipdb, ai, wp, sigs, crs };
 }

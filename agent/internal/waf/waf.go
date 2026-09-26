@@ -33,9 +33,12 @@ type Manager struct {
 	AgentBin string
 	Firewall Banner
 
-	mu     sync.Mutex
-	target Target
-	err    string
+	mu       sync.Mutex
+	target   Target
+	err      string
+	sources  []string // logs being read
+	ruleSets RuleSets
+	states   []RuleSetState
 }
 
 // Status is shown in the portal.
@@ -47,11 +50,16 @@ type Status struct {
 	Error     string `json:"error"`
 	Warning   string `json:"warning"`
 	Rules     int    `json:"rules"`
+	// Logs the agent reads ModSecurity hits from.
+	Logs     []string       `json:"logs"`
+	RuleSets []RuleSetState `json:"rule_sets"`
 }
 
 func (m *Manager) Status() Status {
 	m.mu.Lock()
 	t, e := m.target, m.err
+	logs := append([]string(nil), m.sources...)
+	sets := append([]RuleSetState(nil), m.states...)
 	m.mu.Unlock()
 	cfg := m.Settings.Get().WAF
 	n := 0
@@ -71,7 +79,7 @@ func (m *Manager) Status() Status {
 		warn = "One step left in LiteSpeed: " + t.Hint
 	}
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
-		Panel: t.Name, Error: e, Warning: warn, Rules: n}
+		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {
@@ -143,22 +151,56 @@ func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
 	return patch, nil
 }
 
-// Apply detects the web server, renders and installs the rules.
+// Apply detects the web server, renders and installs the rules: XMart
+// Guard's own (when enabled) plus the OWASP CRS and custom rules from the
+// portal's WAF Rule Sets. If the web server rejects the extra rule sets,
+// they are left out so XMart Guard's rules keep protecting the sites.
 func (m *Manager) Apply() error {
 	t := Detect()
 	cfg := m.Settings.Get().WAF
+	extra, extraFiles, states := m.extras(t)
 	var err error
-	if !cfg.Enabled {
-		err = m.uninstall(t)
-	} else if t.ModSec && t.IncludeFile != "" {
-		opts := Options{Dir: m.RulesDir, UploadScan: true}
-		if cfg.UploadScan {
-			opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
+	switch {
+	case !t.ModSec || t.IncludeFile == "":
+		for i := range states {
+			if states[i].State == "active" {
+				states[i].State, states[i].Detail = "unsupported", "ModSecurity is not available on this web server"
+			}
 		}
-		err = m.install(t, Render(cfg, opts), BotFiles(cfg))
+	case !cfg.Enabled && extra == "":
+		err = m.uninstall(t)
+	default:
+		rules := ""
+		if cfg.Enabled {
+			opts := Options{Dir: m.RulesDir, UploadScan: true}
+			if cfg.UploadScan {
+				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
+			}
+			rules = Render(cfg, opts)
+		} else {
+			rules = "# XMart Guard's own rules are turned off; rule sets from the portal follow.\n"
+		}
+		bots := BotFiles(cfg)
+		for k, v := range extraFiles {
+			bots[strings.TrimPrefix(k, m.RulesDir+"/")] = v
+		}
+		err = m.install(t, rules+extra, bots)
+		if err != nil && extra != "" {
+			for i := range states {
+				if states[i].State == "active" {
+					states[i].State, states[i].Detail = "error", err.Error()
+				}
+			}
+			if cfg.Enabled {
+				err = m.install(t, rules, BotFiles(cfg))
+			} else {
+				err = m.uninstall(t)
+			}
+		}
 	}
 	m.mu.Lock()
 	m.target = t
+	m.states = states
 	m.err = ""
 	if err != nil {
 		m.err = err.Error()
@@ -168,6 +210,13 @@ func (m *Manager) Apply() error {
 		m.Log.Error("waf apply failed", "err", err)
 	}
 	return err
+}
+
+// RuleSetStates reports each portal rule set's state after the last Apply.
+func (m *Manager) RuleSetStates() []RuleSetState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]RuleSetState(nil), m.states...)
 }
 
 // Rule catalog with each rule's enabled state, for the settings page.
@@ -219,12 +268,18 @@ type Event struct {
 	Category string `json:"category"`
 	Action   string `json:"action"`
 	User     string `json:"user"`
+	// UID is ModSecurity's unique_id (dedupes error and audit log copies).
+	UID string `json:"-"`
 }
 
 // ParseLine turns one error-log line into an Event, or false.
 func ParseLine(line string) (Event, bool) {
-	if !strings.Contains(line, "ModSecurity") {
+	// Apache writes "ModSecurity:"; LiteSpeed's own engine "[Module:mod_security]".
+	if !strings.Contains(line, "ModSecurity") && !strings.Contains(line, "mod_security") {
 		return Event{}, false
+	}
+	if !strings.Contains(line, `[id "`) {
+		return Event{}, false // start-up notices, not a rule hit
 	}
 	var e Event
 	if c := reClient.FindStringSubmatch(line); c != nil {
@@ -249,6 +304,9 @@ func ParseLine(line string) (Event, bool) {
 	}
 	if mm := reMethod.FindStringSubmatch(line); mm != nil {
 		e.Method = mm[1]
+	}
+	if u := reUniqueID.FindStringSubmatch(line); u != nil {
+		e.UID = u[1]
 	}
 	if d := reDenied.FindStringSubmatch(line); d != nil && d[1] != "" {
 		e.Action = "Access denied with code " + d[1]
@@ -300,41 +358,85 @@ func (m *Manager) Run(ctx context.Context) {
 func (m *Manager) tailLogs(ctx context.Context) {
 	seen := map[string]bool{}
 	lines := make(chan string, 512)
+	audits := make(chan auditHit, 256)
 	start := func(path string) {
 		if path == "" || seen[path] {
 			return
 		}
 		seen[path] = true
+		m.noteSource(path)
 		go logtail.Follow(ctx, path, lines)
 	}
-	for _, p := range Detect().ErrorLogs {
-		start(p)
+	startAudit := func(path string) {
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		m.noteSource(path)
+		go followAudit(ctx, path, audits)
 	}
+	discover := func() {
+		for _, p := range Detect().ErrorLogs {
+			if exists(p) {
+				start(p)
+			}
+		}
+		for _, p := range auditLogs() {
+			startAudit(p)
+		}
+	}
+	discover()
 	// Periodically discover new log files (cPanel writes per-domain logs).
 	rescan := time.NewTicker(2 * time.Minute)
 	defer rescan.Stop()
 	counter, blocks := newCounter(), newCounter()
+	dedupe := newSeenIDs(4096)
+	reasons := newReasons(2048)
+	handle := func(ev Event) {
+		ev = reasons.apply(ev)
+		// Third-party rule sets (OWASP CRS scoring) log a warning for every
+		// matched rule; only the request they block is an attack to record.
+		// (The warnings share the request's unique id, so this comes first.)
+		if !strings.HasPrefix(ev.Action, "Access denied") && (ev.RuleID < 7700000 || ev.RuleID > 7709999) {
+			return
+		}
+		if !dedupe.add(ev.UID) {
+			return
+		}
+		m.record(ev)
+		if ev.Category == "login" {
+			m.maybeBan(ev, counter)
+		} else if strings.HasPrefix(ev.Action, "Access denied") {
+			m.maybeBanBlocked(ev, blocks)
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-rescan.C:
-			for _, p := range Detect().ErrorLogs {
-				start(p)
-			}
+			discover()
 		case line := <-lines:
-			ev, ok := ParseLine(line)
-			if !ok {
-				continue
+			if ev, ok := ParseLine(line); ok {
+				handle(ev)
 			}
-			m.record(ev)
-			if ev.Category == "login" {
-				m.maybeBan(ev, counter)
-			} else if strings.HasPrefix(ev.Action, "Access denied") {
-				m.maybeBanBlocked(ev, blocks)
-			}
+		case h := <-audits:
+			h.e.UID = h.uid
+			handle(h.e)
 		}
 	}
+}
+
+// noteSource remembers which logs are read (shown in the WAF status).
+func (m *Manager) noteSource(path string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.sources {
+		if p == path {
+			return
+		}
+	}
+	m.sources = append(m.sources, path)
 }
 
 func (m *Manager) record(e Event) {

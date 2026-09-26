@@ -276,12 +276,12 @@ func (a *Agent) Dashboard(days int) map[string]any {
 		days = 30
 	}
 	threats := a.countWindow(`SELECT count(*) FROM findings WHERE created_at >= ? AND created_at < ?`, days)
-	web := a.countWindow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND at >= ? AND at < ?`, days)
+	web := a.countWindow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? AND at < ?`, days)
 	conns := a.countWindow(`SELECT coalesce(sum(packets),0) FROM drop_stats WHERE minute >= ? AND minute < ?`, days)
 
 	dayExpr := func(col string) string { return `strftime('%Y-%m-%d', ` + col + `, 'unixepoch')` }
 	attacks := a.daily(`SELECT `+dayExpr("minute")+` AS d, sum(packets) FROM drop_stats WHERE minute >= ? GROUP BY d`, days)
-	webDaily := a.daily(`SELECT `+dayExpr("at")+` AS d, count(*) FROM waf_events WHERE category IN ('waf','bot') AND at >= ? GROUP BY d`, days)
+	webDaily := a.daily(`SELECT `+dayExpr("at")+` AS d, count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? GROUP BY d`, days)
 	infections := map[string][]dayPoint{}
 	for _, cat := range []string{scanner.CatVirus, scanner.CatSuspicious, scanner.CatBinary, scanner.CatSymlink} {
 		infections[cat] = a.daily(`SELECT `+dayExpr("created_at")+` AS d, count(*) FROM findings WHERE category = '`+cat+`' AND created_at >= ? GROUP BY d`, days)

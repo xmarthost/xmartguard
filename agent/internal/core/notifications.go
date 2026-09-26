@@ -92,7 +92,7 @@ func (a *Agent) sendDailyReport(to string) {
 	fmt.Fprintf(&b, "  Malware detections:      %d\n", count(`SELECT count(*) FROM findings WHERE created_at >= ?`))
 	fmt.Fprintf(&b, "  Addresses banned:        %d\n", count(`SELECT count(*) FROM fw_events WHERE created_at >= ?`))
 	fmt.Fprintf(&b, "  Connections dropped:     %d\n", count(`SELECT coalesce(sum(packets),0) FROM drop_stats WHERE minute >= ?`))
-	fmt.Fprintf(&b, "  Web attacks blocked:     %d\n", count(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND at >= ?`))
+	fmt.Fprintf(&b, "  Web attacks blocked:     %d\n", count(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ?`))
 	fmt.Fprintf(&b, "  Outgoing spam alerts:    %d\n", count(`SELECT count(*) FROM osm_events WHERE at >= ?`))
 	fmt.Fprintf(&b, "  Process / cron alerts:   %d\n", count(`SELECT count(*) FROM monitor_events WHERE at >= ?`))
 	if open := a.Scanner.Stats().OpenFindings; open > 0 {

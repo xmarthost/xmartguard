@@ -158,7 +158,9 @@ func (a *Agent) Start(ctx context.Context) {
 		func(kind string) int64 { n, _ := strconv.ParseInt(store.GetKV(a.DB, "last_"+kind), 10, 64); return n },
 		func(kind string) { _ = store.SetKV(a.DB, "last_"+kind, strconv.FormatInt(time.Now().Unix(), 10)) })
 	go a.reputationLoop(ctx)
+	a.loadRuleSets()
 	go a.WAF.Run(ctx)
+	go a.wafSyncLoop(ctx)
 	go a.CMS.Run(ctx)
 	go a.OSM.Run(ctx)
 	go a.domainRepLoop(ctx)
@@ -287,7 +289,7 @@ func (a *Agent) SecuritySummary() any {
 func (a *Agent) serverCard() map[string]any {
 	var virus, web int64
 	_ = a.DB.QueryRow(`SELECT count(*) FROM findings`).Scan(&virus)
-	_ = a.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot')`).Scan(&web)
+	_ = a.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%'`).Scan(&web)
 	now := store.Now()
 	from := now - now%3600 - 23*3600
 	hourly := make([]int64, 24)
@@ -744,6 +746,15 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	// ---- WAF
 	h["waf.status"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "stats": a.WAF.Stats()}, nil
+	}
+	// waf.sync pulls the portal's WAF Rule Sets now and applies them.
+	h["waf.sync"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		res, err := a.syncWAF(ctx, true)
+		if err != nil {
+			return nil, err
+		}
+		go a.reportWAF(context.Background(), res)
+		return res, nil
 	}
 	h["waf.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		f, err := decode[waf.EventFilter](p)

@@ -55,7 +55,8 @@ func TestDashboardAggregates(t *testing.T) {
 			"/home/a/f"+string(rune('a'+i)), "alice", cat, now-100, now-100)
 	}
 	a.DB.Exec(`INSERT INTO findings (source, path, owner, category, signature, status, created_at, updated_at) VALUES ('manual','/old','alice','virus','X','deleted',?,?)`, now-40*86400, now-40*86400)
-	a.DB.Exec(`INSERT INTO waf_events (at, ip, category) VALUES (?, '1.2.3.4', 'waf'), (?, '1.2.3.5', 'bot'), (?, '1.2.3.6', 'login')`, now-50, now-50, now-50)
+	a.DB.Exec(`INSERT INTO waf_events (at, ip, category, action) VALUES (?, '1.2.3.4', 'waf', 'Access denied with code 403'), (?, '1.2.3.5', 'bot', 'Access denied with code 403'),
+		(?, '1.2.3.6', 'login', 'Logged'), (?, '1.2.3.7', 'waf', 'Logged')`, now-50, now-50, now-50, now-50)
 	a.DB.Exec(`INSERT INTO drop_stats (minute, kind, packets) VALUES (?, 'ipdb', 500), (?, 'deny', 20)`, now-now%60-60, now-now%60-60)
 	a.DB.Exec(`INSERT INTO domain_reputation (domain, user, status, reasons, checked_at) VALUES ('bad.example','bob','listed','PHISHING (SURBL)',?)`, now)
 	d := a.Dashboard(30)
@@ -64,7 +65,7 @@ func TestDashboardAggregates(t *testing.T) {
 		t.Fatalf("threats %+v", th)
 	}
 	if w := d["web_attacks"].(periodCount); w.Current != 2 {
-		t.Fatalf("web %+v (login attempts must not count)", w)
+		t.Fatalf("web %+v (login attempts and logged-only hits must not count)", w)
 	}
 	if c := d["blocked_connections"].(periodCount); c.Current != 520 {
 		t.Fatalf("conns %+v", c)

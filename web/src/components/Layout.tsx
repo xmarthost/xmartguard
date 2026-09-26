@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
   BookOpen,
-  Activity, BrainCircuit, Cable, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
+  Activity, BrainCircuit, Cable, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
@@ -273,6 +273,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
         { label: 'AI Scanner', icon: <BrainCircuit />, to: '/ai' },
+        { label: 'WAF Rule Sets', icon: <ShieldHalf />, to: '/waf-rulesets' },
         { label: 'AI Connector', icon: <Cable />, to: '/ai-connector' },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
       ];
