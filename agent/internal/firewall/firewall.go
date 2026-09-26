@@ -61,6 +61,7 @@ type Manager struct {
 
 	mu        sync.Mutex
 	lastError string
+	stats     dropStats
 }
 
 // Backend returns the provider selected in settings.
@@ -138,7 +139,8 @@ func (m *Manager) Build() (Ruleset, error) {
 	if err != nil {
 		return Ruleset{}, err
 	}
-	rs := Ruleset{TempAllow: map[string]time.Duration{}, TempBan: map[string]time.Duration{}, DoS: cfg.DoS, DoSPerMinute: cfg.DoSThreshold, DoSBanSeconds: cfg.BanMinutes * 60}
+	rs := Ruleset{TempAllow: map[string]time.Duration{}, TempBan: map[string]time.Duration{}, DoS: cfg.DoS, DoSPerMinute: cfg.DoSThreshold, DoSBanSeconds: cfg.BanMinutes * 60,
+		LogDrops: cfg.LogBlocked}
 	now := time.Now().Unix()
 	for _, r := range all {
 		switch r.Kind {
@@ -487,6 +489,7 @@ func (m *Manager) Run(ctx context.Context) {
 		if !cfg.Enabled {
 			continue
 		}
+		m.stats.record(m.DB, m.Backend().Counters(), store.Now())
 		// Another firewall (e.g. `csf -r`) may have flushed our rules: reload them.
 		if !m.Backend().Healthy() {
 			m.Log.Warn("firewall rules missing; reloading", "provider", m.Backend().Name())

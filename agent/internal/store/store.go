@@ -110,6 +110,40 @@ CREATE TABLE IF NOT EXISTS ipdb_country (
   hits     INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (day, country)
 );
+CREATE TABLE IF NOT EXISTS conn_log (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  at        INTEGER NOT NULL,
+  kind      TEXT NOT NULL,           -- ipdb | deny | tempban | country
+  src       TEXT NOT NULL,
+  src_port  INTEGER NOT NULL DEFAULT 0,
+  dst       TEXT NOT NULL DEFAULT '',
+  dst_port  INTEGER NOT NULL DEFAULT 0,
+  proto     TEXT NOT NULL DEFAULT '',
+  country   TEXT NOT NULL DEFAULT '',
+  entry     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS conn_log_kind ON conn_log(kind, id);
+CREATE TABLE IF NOT EXISTS drop_stats (
+  minute   INTEGER NOT NULL,
+  kind     TEXT NOT NULL,
+  packets  INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (minute, kind)
+);
+CREATE TABLE IF NOT EXISTS waf_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  at         INTEGER NOT NULL,
+  ip         TEXT NOT NULL,
+  method     TEXT NOT NULL DEFAULT '',
+  host       TEXT NOT NULL DEFAULT '',
+  uri        TEXT NOT NULL DEFAULT '',
+  rule_id    INTEGER NOT NULL DEFAULT 0,
+  msg        TEXT NOT NULL DEFAULT '',
+  category   TEXT NOT NULL DEFAULT '',   -- waf | bot | login
+  action     TEXT NOT NULL DEFAULT '',
+  user       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS waf_events_at ON waf_events(at);
+CREATE INDEX IF NOT EXISTS waf_events_cat ON waf_events(category, id);
 CREATE TABLE IF NOT EXISTS kv (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

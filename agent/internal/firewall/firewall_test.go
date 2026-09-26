@@ -44,18 +44,31 @@ func TestLogRules(t *testing.T) {
 		{"Mail (Dovecot)", "Sep 26 10:00:00 host dovecot[1]: imap-login: Disconnected (auth failed, 3 attempts in 12 secs): user=<a@b.c>, method=PLAIN, rip=198.51.100.23, lip=10.0.0.1", "198.51.100.23"},
 		{"Mail (Exim SMTP auth)", "2026-09-26 10:00:00 dovecot_login authenticator failed for ([10.0.0.1]) [203.0.113.77]:5555: 535 Incorrect authentication data", "203.0.113.77"},
 		{"FTP", "Sep 26 10:00:00 host pure-ftpd: (?@192.0.2.8) [WARNING] Authentication failed for user [bob]", "192.0.2.8"},
+		{"FTP", `Sep 26 10:00:00 host vsftpd[1]: [bob] FAIL LOGIN: Client "::ffff:192.0.2.18"`, "192.0.2.18"},
+		{"Mail (Postfix SASL)", "Sep 26 host postfix/smtpd[1]: warning: unknown[203.0.113.66]: SASL LOGIN authentication failed: UGFzc3dvcmQ6", "203.0.113.66"},
+		{"Mail (Exim abuse)", "2026-09-26 10:00:00 H=(x) [198.51.100.90]:4444 F=<a@b.c> rejected RCPT <x@y.z>: relay not permitted", "198.51.100.90"},
+		{"Mail (Exim abuse)", "2026-09-26 10:00:00 SMTP call from (x) [198.51.100.91]:4444 dropped: too many nonmail commands (last was \"RSET\")", "198.51.100.91"},
+		{"Mail (Dovecot)", "Sep 26 host dovecot: auth-worker(123): pam(bob,203.0.113.12,<abc>): pam_authenticate() failed: Authentication failure", "203.0.113.12"},
+		{"cPanel/WHM/Webmail", "FAILED LOGIN cpaneld: user password incorrect ip=192.0.2.45 user=bob", "192.0.2.45"},
+		{"Web (denied)", "[Sat Sep 26 10:00:00.1 2026] [authz_core:error] [pid 1] [client 203.0.113.80:5555] AH01630: client denied by server configuration: /home/x", "203.0.113.80"},
 	}
-	byName := map[string]LogRule{}
-	for _, r := range LogRules {
-		byName[r.Service] = r
+	parse := func(service, line string) (string, bool) {
+		for _, r := range LogRules {
+			if r.Service == service {
+				if ip, ok := r.ParseLine(line); ok {
+					return ip, true
+				}
+			}
+		}
+		return "", false
 	}
 	for _, c := range cases {
-		ip, ok := byName[c.service].ParseLine(c.line)
+		ip, ok := parse(c.service, c.line)
 		if !ok || ip != c.ip {
-			t.Errorf("%s: got %q %v, want %q", c.service, ip, ok, c.ip)
+			t.Errorf("%s: got %q %v, want %q (%s)", c.service, ip, ok, c.ip, c.line)
 		}
 	}
-	if _, ok := byName["SSH"].ParseLine("sshd[1]: Accepted password for root from 203.0.113.9 port 1 ssh2"); ok {
+	if _, ok := parse("SSH", "sshd[1]: Accepted password for root from 203.0.113.9 port 1 ssh2"); ok {
 		t.Error("successful login matched")
 	}
 }
@@ -340,6 +353,9 @@ func TestIPDBOnKernel(t *testing.T) {
 			t.Fatalf("apply: %d %v", n, err)
 		}
 		dump := kernelDump(m)
+		if !strings.Contains(dump, "XG-IPDB") {
+			t.Fatalf("drop logging rule not loaded:\n%s", dump)
+		}
 		if !strings.Contains(dump, "203.0.113.7") || !strings.Contains(dump, "xg-ipdb") {
 			t.Fatalf("ipdb not loaded:\n%s", dump)
 		}
@@ -393,4 +409,75 @@ func TestIPDBOnKernel(t *testing.T) {
 			t.Fatalf("pending not cleared: %+v", again)
 		}
 	})
+}
+
+func TestParseKernelLog(t *testing.T) {
+	ev, ok := ParseKernelLog("XG-IPDB IN=eth0 OUT= MAC=00:11 SRC=217.138.222.66 DST=74.50.90.186 LEN=60 TOS=0x00 PREC=0x00 TTL=50 ID=1 DF PROTO=TCP SPT=33050 DPT=8443 WINDOW=64240 RES=0x00 SYN URGP=0")
+	if !ok || ev.Kind != "ipdb" || ev.Src != "217.138.222.66" || ev.Dst != "74.50.90.186" || ev.SrcPort != 33050 || ev.DstPort != 8443 || ev.Proto != "TCP" {
+		t.Fatalf("%+v %v", ev, ok)
+	}
+	if _, ok := ParseKernelLog("[UFW BLOCK] IN=eth0 SRC=1.2.3.4"); ok {
+		t.Fatal("foreign log line parsed")
+	}
+	if ev, ok := ParseKernelLog("XG-TBAN IN=eth0 SRC=2001:db8::1 DST=2001:db8::2 PROTO=UDP SPT=53 DPT=5353"); !ok || ev.Kind != "tempban" {
+		t.Fatalf("%+v", ev)
+	}
+}
+
+func TestConnLogFromKernel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	st, _ := settings.Load()
+	m := &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), IPDB: &IPDB{}}
+	m.IPDB.Replace("v1", []string{"217.138.222.0/24 GB"})
+	kmsg := filepath.Join(dir, "kmsg")
+	os.WriteFile(kmsg, []byte("6,1,1,-;old record\n"), 0o600)
+	saved := KmsgPath
+	KmsgPath = kmsg
+	defer func() { KmsgPath = saved }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.RunConnLog(ctx)
+	time.Sleep(300 * time.Millisecond)
+	f, _ := os.OpenFile(kmsg, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString("4,2,2,-;XG-IPDB IN=eth0 OUT= SRC=217.138.222.66 DST=192.0.2.1 PROTO=TCP SPT=40000 DPT=22\n")
+	f.Close()
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		live := m.IPDBLive(0)
+		if len(live.Events) == 1 {
+			e := live.Events[0]
+			if e.Src != "217.138.222.66" || e.Country != "GB" || e.Entry != "217.138.222.0/24" || e.DstPort != 22 {
+				t.Fatalf("event %+v", e)
+			}
+			if len(live.Minutes) < 10 || len(live.Hourly) < 24 {
+				t.Fatalf("timelines %d %d", len(live.Minutes), len(live.Hourly))
+			}
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("event not recorded")
+}
+
+func TestDropStats(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	db, _ := store.Open()
+	defer db.Close()
+	var d dropStats
+	d.record(db, map[string]uint64{"xg-ipdb": 100, "xg-deny": 5}, 6000)
+	d.record(db, map[string]uint64{"xg-ipdb": 130, "xg-deny": 5}, 6060)
+	d.record(db, map[string]uint64{"xg-ipdb": 10}, 6120) // counters reset by a reload
+	m := &Manager{DB: db}
+	tot := m.DropTotals(0)
+	if tot["ipdb"] != 40 || tot["deny"] != 0 {
+		t.Fatalf("totals %v", tot)
+	}
 }

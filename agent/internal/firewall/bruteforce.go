@@ -1,15 +1,14 @@
 package firewall
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"sync"
-	"syscall"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/logtail"
 )
 
 // LogRule detects a failed login in one log file; the first capture group is the IP.
@@ -25,14 +24,34 @@ const ipRe = `((?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{3,39})`
 var LogRules = []LogRule{
 	{"SSH", []string{"/var/log/secure", "/var/log/auth.log"},
 		regexp.MustCompile(`sshd\[\d+\]: (?:Failed (?:password|publickey) for (?:invalid user )?\S+|Invalid user \S* ?) from ` + ipRe)},
+	{"SSH", []string{"/var/log/secure", "/var/log/auth.log"},
+		regexp.MustCompile(`sshd\[\d+\]: (?:Did not receive identification string|Unable to negotiate|Connection closed by authenticating user \S+|Disconnected from invalid user \S+) (?:from )?` + ipRe)},
 	{"cPanel/WHM/Webmail", []string{"/usr/local/cpanel/logs/login_log"},
 		regexp.MustCompile(`\[(?:cpaneld|whostmgrd|webmaild|cpdavd)\] ` + ipRe + ` - .*FAILED LOGIN`)},
+	{"cPanel/WHM/Webmail", []string{"/usr/local/cpanel/logs/login_log"},
+		regexp.MustCompile(`FAILED LOGIN (?:cpaneld|whostmgrd|webmaild): .* ip=` + ipRe)},
 	{"Mail (Dovecot)", []string{"/var/log/maillog", "/var/log/mail.log"},
-		regexp.MustCompile(`dovecot.*(?:auth failed|Authentication failure|password mismatch).*rip=` + ipRe)},
+		regexp.MustCompile(`dovecot.*(?:auth failed|Authentication failure|[Pp]assword mismatch).*rip=` + ipRe)},
+	{"Mail (Dovecot)", []string{"/var/log/maillog", "/var/log/mail.log"},
+		regexp.MustCompile(`dovecot.*auth(?:-worker)?\([^,]*,` + ipRe + `[,)].*(?:pam_authenticate\(\) failed|Password mismatch|unknown user)`)},
+	{"Mail (Postfix SASL)", []string{"/var/log/maillog", "/var/log/mail.log"},
+		regexp.MustCompile(`warning: \S*\[` + ipRe + `\]: SASL \S+ authentication failed`)},
 	{"Mail (Exim SMTP auth)", []string{"/var/log/exim_mainlog"},
 		regexp.MustCompile(`authenticator failed for .*\[` + ipRe + `\]`)},
+	{"Mail (Exim abuse)", []string{"/var/log/exim_mainlog", "/var/log/exim_rejectlog"},
+		regexp.MustCompile(`H=.*\[` + ipRe + `\].* rejected RCPT <[^>]*>: (?:Relay not permitted|relay not permitted)`)},
+	{"Mail (Exim abuse)", []string{"/var/log/exim_mainlog"},
+		regexp.MustCompile(`SMTP (?:call|connection) from .*\[` + ipRe + `\](?::\d+)? (?:dropped: too many (?:nonmail|unrecognized) commands|dropped: too many syntax or protocol errors|closed by DROP in ACL)`)},
+	{"Mail (Exim abuse)", []string{"/var/log/exim_mainlog"},
+		regexp.MustCompile(`SMTP protocol synchronization error .* H=.*\[` + ipRe + `\]`)},
 	{"FTP", []string{"/var/log/messages", "/var/log/syslog"},
 		regexp.MustCompile(`pure-ftpd: \([^@]*@` + ipRe + `\) \[WARNING\] Authentication failed`)},
+	{"FTP", []string{"/var/log/messages", "/var/log/syslog", "/var/log/proftpd/proftpd.log"},
+		regexp.MustCompile(`proftpd.*\[` + ipRe + `\].*(?:no such user|Incorrect password|Login failed)`)},
+	{"FTP", []string{"/var/log/vsftpd.log"},
+		regexp.MustCompile(`FAIL LOGIN: Client "(?:::ffff:)?` + ipRe + `"`)},
+	{"Web (denied)", []string{"/usr/local/apache/logs/error_log", "/etc/apache2/logs/error_log", "/var/log/httpd/error_log", "/var/log/apache2/error.log"},
+		regexp.MustCompile(`\[client ` + ipRe + `(?::\d+)?\] (?:AH01630|AH01797|AH01618|AH01617)`)},
 }
 
 // ParseLine returns the offending IP if the line is a failed login for rule.
@@ -93,78 +112,6 @@ func (c *Counter) Reset(ip string) {
 	c.mu.Unlock()
 }
 
-// tail follows a file from its end, surviving rotation and truncation.
-func tail(ctx context.Context, path string, lines chan<- string) {
-	var f *os.File
-	var ino uint64
-	var off int64
-	open := func(fromEnd bool) bool {
-		nf, err := os.Open(path)
-		if err != nil {
-			return false
-		}
-		st, _ := nf.Stat()
-		if f != nil {
-			f.Close()
-		}
-		f = nf
-		ino = st.Sys().(*syscall.Stat_t).Ino
-		off = 0
-		if fromEnd {
-			off = st.Size()
-		}
-		return true
-	}
-	opened := open(true)
-	defer func() {
-		if f != nil {
-			f.Close()
-		}
-	}()
-	t := time.NewTicker(2 * time.Second)
-	defer t.Stop()
-	var partial string
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-		if !opened {
-			opened = open(true)
-			continue
-		}
-		st, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if st.Sys().(*syscall.Stat_t).Ino != ino || st.Size() < off {
-			open(false) // rotated or truncated: read the new file from the start
-		}
-		if st.Size() == off {
-			continue
-		}
-		if _, err := f.Seek(off, io.SeekStart); err != nil {
-			continue
-		}
-		r := bufio.NewReaderSize(io.LimitReader(f, 8<<20), 64*1024)
-		for {
-			chunk, err := r.ReadString('\n')
-			off += int64(len(chunk))
-			if err != nil {
-				partial += chunk
-				break
-			}
-			select {
-			case lines <- partial + chunk:
-			case <-ctx.Done():
-				return
-			}
-			partial = ""
-		}
-	}
-}
-
 // RunBruteForce watches login logs and temp-bans repeat offenders.
 func (m *Manager) RunBruteForce(ctx context.Context) {
 	counter := &Counter{}
@@ -173,27 +120,37 @@ func (m *Manager) RunBruteForce(ctx context.Context) {
 		line string
 	}
 	hits := make(chan hit, 1024)
+	byFile := map[string][]LogRule{}
 	for _, rule := range LogRules {
 		for _, file := range rule.Files {
-			if _, err := os.Stat(file); err != nil {
-				continue
-			}
-			lines := make(chan string, 256)
-			go tail(ctx, file, lines)
-			go func(r LogRule) {
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case l := <-lines:
+			byFile[file] = append(byFile[file], rule)
+		}
+	}
+	for file, rules := range byFile {
+		if _, err := os.Stat(file); err != nil {
+			continue
+		}
+		lines := make(chan string, 256)
+		go logtail.Follow(ctx, file, lines)
+		go func(rules []LogRule) {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case l := <-lines:
+					for _, r := range rules {
+						if !r.Re.MatchString(l) {
+							continue
+						}
 						select {
 						case hits <- hit{r, l}:
 						default: // overloaded: drop rather than block the tailer
 						}
+						break
 					}
 				}
-			}(rule)
-		}
+			}
+		}(rules)
 	}
 	for {
 		select {

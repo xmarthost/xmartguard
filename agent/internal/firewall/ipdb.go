@@ -24,6 +24,44 @@ type IPDB struct {
 	entries []string          // canonical IPs/CIDRs
 	country map[string]string // entry -> ISO country code
 	last    map[string]uint64 // last kernel counter per entry
+	exact   map[netip.Addr]string
+	nets    []netip.Prefix // sorted, most specific first
+}
+
+func (l *IPDB) index() {
+	l.exact = map[netip.Addr]string{}
+	l.nets = nil
+	for _, e := range l.entries {
+		if p, err := netip.ParsePrefix(e); err == nil {
+			l.nets = append(l.nets, p.Masked())
+		} else if a, err := netip.ParseAddr(e); err == nil {
+			l.exact[a] = e
+		}
+	}
+	sort.Slice(l.nets, func(i, j int) bool { return l.nets[i].Bits() > l.nets[j].Bits() })
+}
+
+// Lookup returns the list entry covering ip and its country ("" if none).
+func (l *IPDB) Lookup(ip string) (entry, country string) {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return "", ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.load()
+	if l.exact == nil {
+		l.index()
+	}
+	if e, ok := l.exact[a]; ok {
+		return e, l.country[e]
+	}
+	for _, p := range l.nets {
+		if p.Contains(a) {
+			return p.String(), l.country[p.String()]
+		}
+	}
+	return "", ""
 }
 
 // IPDBPath is the on-disk copy of the list.
@@ -117,6 +155,7 @@ func (l *IPDB) Replace(version string, items []string) (int, error) {
 	}
 	l.mu.Lock()
 	l.loaded, l.version, l.entries, l.country = true, version, entries, country
+	l.exact = nil
 	l.mu.Unlock()
 	return len(entries), nil
 }
@@ -386,4 +425,37 @@ next:
 func index(list []netip.Prefix, p netip.Prefix) (int, bool) {
 	i := sort.Search(len(list), func(i int) bool { return !list[i].Addr().Less(p.Addr()) })
 	return i, i < len(list) && list[i] == p
+}
+
+// IPDBLive is the per-server IPDB monitor: sampled connections and timelines.
+type IPDBLive struct {
+	Events    []ConnEvent      `json:"events"`
+	Minutes   []TimePoint      `json:"minutes"`   // last 10 minutes
+	Hourly    []TimePoint      `json:"hourly"`    // last 24 hours
+	Countries map[string]int64 `json:"countries"` // last 7 days
+	Logging   bool             `json:"logging"`
+}
+
+func (m *Manager) IPDBLive(sinceID int64) IPDBLive {
+	now := store.Now()
+	ev, _, _ := m.ConnEvents(ConnFilter{Kind: "ipdb", Since: sinceID, Limit: 60})
+	out := IPDBLive{
+		Events:    ev,
+		Minutes:   m.DropTimeline("ipdb", now-10*60, 60),
+		Hourly:    m.DropTimeline("ipdb", now-24*3600, 3600),
+		Countries: map[string]int64{},
+		Logging:   m.Settings.Get().Firewall.LogBlocked,
+	}
+	from := time.Unix(now-7*86400, 0).UTC().Format("2006-01-02")
+	if rows, err := m.DB.Query(`SELECT country, sum(hits) FROM ipdb_country WHERE day >= ? GROUP BY country`, from); err == nil {
+		for rows.Next() {
+			var cc string
+			var n int64
+			if rows.Scan(&cc, &n) == nil {
+				out.Countries[cc] = n
+			}
+		}
+		rows.Close()
+	}
+	return out
 }

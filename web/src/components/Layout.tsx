@@ -190,7 +190,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 items={[
                   { to: `${base}/firewall`, label: 'Firewall', icon: <Flame /> },
                   { to: `${base}/firewall-logs`, label: 'Firewall Logs', icon: <ListX /> },
-                  { to: '/ipdb', label: 'IPDB', icon: <Globe2 /> },
+                  { to: `${base}/ipdb`, label: 'IPDB', icon: <Globe2 /> },
                 ]}
               />
               <NavGroup

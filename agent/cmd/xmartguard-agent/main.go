@@ -55,6 +55,9 @@ func main() {
 		err = printJSON(sysinfo.Collect())
 	case "check":
 		err = cmdCheck(os.Args[2:])
+	case "scan-upload":
+		// Used by the WAF upload approver: exit 1 if the file is malware.
+		os.Exit(cmdScanUpload(os.Args[2:]))
 	case "cleanup":
 		// Used by uninstall.sh: remove firewall rules from every provider.
 		_ = firewall.FindIPTables().Remove()
@@ -262,6 +265,23 @@ func cmdUnenroll() error {
 }
 
 // cmdCheck scans paths offline with the default policy (no quarantine).
+// cmdScanUpload scans one uploaded file; exit 0 = clean, 1 = block.
+func cmdScanUpload(args []string) int {
+	if len(args) != 1 {
+		return 0
+	}
+	info, err := os.Stat(args[0])
+	if err != nil || info.Size() > 32<<20 {
+		return 0
+	}
+	det, _ := scanner.NewOffline().CheckFile(args[0], info, settings.Scanner{MaxFileSizeMB: 32})
+	if det != nil && det.Category == scanner.CatVirus {
+		fmt.Printf("XMartGuard blocked malware upload: %s\n", det.Signature)
+		return 1
+	}
+	return 0
+}
+
 func cmdCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "print JSON lines")

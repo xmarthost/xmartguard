@@ -31,7 +31,19 @@ type Ruleset struct {
 	IPDB []string
 	// NoSetCounters disables per-element counters (old nftables versions).
 	NoSetCounters bool
+	// LogDrops writes rate-limited kernel log samples of dropped packets.
+	LogDrops bool
 }
+
+// Kernel log prefixes of dropped-packet samples (read back from /dev/kmsg).
+const (
+	LogPrefixIPDB    = "XG-IPDB "
+	LogPrefixDeny    = "XG-DENY "
+	LogPrefixTempBan = "XG-TBAN "
+	LogPrefixCountry = "XG-CTRY "
+	// LogRate is the maximum number of samples per second per rule.
+	LogRate = 10
+)
 
 func split(list []string) (v4, v6 []string) {
 	for _, c := range list {
@@ -123,14 +135,23 @@ func (r Ruleset) Render() string {
 	b.WriteString("\t\tiifname \"lo\" accept\n")
 	b.WriteString("\t\tip saddr @allow4 accept\n\t\tip6 saddr @allow6 accept\n")
 	b.WriteString("\t\tip saddr @tempallow4 accept\n\t\tip6 saddr @tempallow6 accept\n")
-	b.WriteString("\t\tip saddr @ipdb4 counter drop comment \"xg-ipdb\"\n\t\tip6 saddr @ipdb6 counter drop comment \"xg-ipdb\"\n")
-	b.WriteString("\t\tip saddr @deny4 counter drop comment \"xg-deny\"\n\t\tip6 saddr @deny6 counter drop comment \"xg-deny\"\n")
-	b.WriteString("\t\tip saddr @tempban4 counter drop comment \"xg-tempban\"\n\t\tip6 saddr @tempban6 counter drop comment \"xg-tempban\"\n")
+	drop := func(match, comment, prefix string) {
+		if r.LogDrops {
+			fmt.Fprintf(&b, "\t\t%s limit rate %d/second burst %d packets log prefix \"%s\" level debug\n", match, LogRate, LogRate*2, prefix)
+		}
+		fmt.Fprintf(&b, "\t\t%s counter drop comment \"%s\"\n", match, comment)
+	}
+	drop("ip saddr @ipdb4", "xg-ipdb", LogPrefixIPDB)
+	drop("ip6 saddr @ipdb6", "xg-ipdb", LogPrefixIPDB)
+	drop("ip saddr @deny4", "xg-deny", LogPrefixDeny)
+	drop("ip6 saddr @deny6", "xg-deny", LogPrefixDeny)
+	drop("ip saddr @tempban4", "xg-tempban", LogPrefixTempBan)
+	drop("ip6 saddr @tempban6", "xg-tempban", LogPrefixTempBan)
 	if len(cb4) > 0 {
 		if len(ca4) > 0 {
 			b.WriteString("\t\tip saddr @country_allow4 accept\n")
 		}
-		b.WriteString("\t\tip saddr @country_block4 counter drop comment \"xg-country\"\n")
+		drop("ip saddr @country_block4", "xg-country", LogPrefixCountry)
 	}
 	if r.DoS {
 		ban := r.DoSBanSeconds
@@ -180,10 +201,18 @@ func (n NFT) Apply(r Ruleset) error {
 	defer cancel()
 	script := r.Render()
 	if _, err := n.run(ctx, script, "-c", "-f", "-"); err != nil {
-		// nftables < 0.9.5 cannot count per set element: load without counters.
-		r.NoSetCounters = true
-		script = r.Render()
-		if _, err2 := n.run(ctx, script, "-c", "-f", "-"); err2 != nil {
+		// Old nftables cannot count per set element, and some kernels lack
+		// the log expression: fall back step by step.
+		ok := false
+		for _, fix := range []func(){func() { r.NoSetCounters = true }, func() { r.LogDrops = false }} {
+			fix()
+			script = r.Render()
+			if _, err2 := n.run(ctx, script, "-c", "-f", "-"); err2 == nil {
+				ok = true
+				break
+			}
+		}
+		if !ok {
 			return err
 		}
 	}

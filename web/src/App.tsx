@@ -14,6 +14,7 @@ import { ManualScans, ScannerLogs } from './pages/Scanner';
 import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
 import SettingsPage from './pages/Settings';
 const IPDBPage = lazy(() => import('./pages/IPDB'));
+const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
 function Protected({ children, role }: { children: ReactNode; role?: 'owner' | 'admin' }) {
   const { user, loading } = useAuth();
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/servers/:id/firewall" element={<Protected><FirewallPage /></Protected>} />
         <Route path="/servers/:id/firewall-logs" element={<Protected><FirewallLogs /></Protected>} />
         <Route path="/servers/:id/ip-reputation" element={<Protected><IPReputation /></Protected>} />
+        <Route path="/servers/:id/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><ServerIPDB /></Suspense></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />

@@ -203,16 +203,24 @@ func renderRules(r Ruleset, v6 bool) string {
 	add("-i lo -j RETURN")
 	add("-m set --match-set xg_allow" + sfx + " src -j RETURN")
 	add("-m set --match-set xg_tallow" + sfx + " src -j RETURN")
-	if len(r.IPDB) > 0 {
-		add("-m set --match-set xg_ipdb" + sfx + ` src -m comment --comment "xg-ipdb" -j DROP`)
+	// drop logs a rate-limited sample (kernel debug level, so syslog does not
+	// store it by default) for the live monitors, then drops.
+	drop := func(match, comment, prefix string) {
+		if r.LogDrops {
+			add(fmt.Sprintf(`%s -m limit --limit %d/sec --limit-burst %d -j LOG --log-prefix "%s" --log-level 7`, match, LogRate, LogRate*2, prefix))
+		}
+		add(fmt.Sprintf(`%s -m comment --comment "%s" -j DROP`, match, comment))
 	}
-	add("-m set --match-set xg_deny" + sfx + ` src -m comment --comment "xg-deny" -j DROP`)
-	add("-m set --match-set xg_tban" + sfx + ` src -m comment --comment "xg-tempban" -j DROP`)
+	if len(r.IPDB) > 0 {
+		drop("-m set --match-set xg_ipdb"+sfx+" src", "xg-ipdb", LogPrefixIPDB)
+	}
+	drop("-m set --match-set xg_deny"+sfx+" src", "xg-deny", LogPrefixDeny)
+	drop("-m set --match-set xg_tban"+sfx+" src", "xg-tempban", LogPrefixTempBan)
 	if !v6 && len(r.CountryBlock) > 0 {
 		if len(r.CountryAllow) > 0 {
 			add("-m set --match-set xg_callow4 src -j RETURN")
 		}
-		add(`-m set --match-set xg_cblock4 src -m comment --comment "xg-country" -j DROP`)
+		drop("-m set --match-set xg_cblock4 src", "xg-country", LogPrefixCountry)
 	}
 	if r.DoS {
 		ban := r.DoSBanSeconds
@@ -256,7 +264,14 @@ func (t IPTables) Apply(r Ruleset) error {
 	}
 	for _, f := range t.families() {
 		if _, err := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err != nil {
-			return err
+			if !r.LogDrops {
+				return err
+			}
+			// The LOG target is unavailable (some containers): load without it.
+			r.LogDrops = false
+			if _, err2 := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err2 != nil {
+				return err
+			}
 		}
 		if _, err := run(ctx, "", f.ipt, "-w", "-C", "INPUT", "-j", ChainMain); err != nil {
 			if _, err := run(ctx, "", f.ipt, "-w", "-I", "INPUT", "1", "-j", ChainMain); err != nil {

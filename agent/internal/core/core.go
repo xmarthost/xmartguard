@@ -29,6 +29,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 	"github.com/xmarthost/xmartguard/agent/internal/updater"
+	"github.com/xmarthost/xmartguard/agent/internal/waf"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
 )
 
@@ -41,6 +42,7 @@ type Agent struct {
 	Scanner  *scanner.Scanner
 	Realtime *scanner.Realtime
 	Firewall *firewall.Manager
+	WAF      *waf.Manager
 	Mailer   *notify.Mailer
 	Session  *client.Session
 
@@ -74,6 +76,8 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		Protected: a.protectedIPs,
 	}
 	a.Firewall.OnBan = a.onBan
+	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
+		AgentBin: selfPath(), Firewall: a.Firewall}
 	return a, nil
 }
 
@@ -82,10 +86,23 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.Realtime.Run(ctx)
 	go a.Firewall.Run(ctx)
 	go a.Firewall.RunBruteForce(ctx)
+	go a.Firewall.RunConnLog(ctx)
 	go a.Scanner.Scheduler(ctx,
 		func(kind string) int64 { n, _ := strconv.ParseInt(store.GetKV(a.DB, "last_"+kind), 10, 64); return n },
 		func(kind string) { _ = store.SetKV(a.DB, "last_"+kind, strconv.FormatInt(time.Now().Unix(), 10)) })
 	go a.reputationLoop(ctx)
+	go a.WAF.Run(ctx)
+}
+
+// selfPath is the agent binary, for scripts the WAF and panel invoke.
+func selfPath() string {
+	if p, err := os.Executable(); err == nil {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return p
+	}
+	return "/opt/xmartguard/bin/xmartguard-agent"
 }
 
 // protectedIPs are never blocked: this server's addresses, loopback and the portal.
@@ -134,7 +151,7 @@ func (a *Agent) SecuritySummary() any {
 			listed++
 		}
 	}
-	return map[string]any{"scanner": sc, "firewall": fw, "blacklisted_ips": listed}
+	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": listed}
 }
 
 // ------------------------------------------------------------------ reputation
@@ -328,6 +345,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	}
 	h["settings.set"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB.Enabled
+		beforeWAF := a.Settings.Get().WAF
 		next, err := a.Settings.Patch(p)
 		if err != nil {
 			return nil, err
@@ -335,6 +353,11 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		if fwChanged(before, next.Firewall) || beforeIPDB != next.IPDB.Enabled {
 			if err := a.Firewall.Apply(); err != nil {
 				return nil, fmt.Errorf("settings saved, but the firewall could not be applied: %w", err)
+			}
+		}
+		if wafChanged(beforeWAF, next.WAF) {
+			if err := a.WAF.Apply(); err != nil {
+				return map[string]any{"settings": next, "warning": err.Error()}, nil
 			}
 		}
 		return map[string]any{"settings": next}, nil
@@ -434,6 +457,39 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	h["ipdb.status"] = func(context.Context, json.RawMessage) (any, error) {
 		return a.Firewall.IPDBStatus(), nil
 	}
+	h["ipdb.live"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			SinceID int64 `json:"since_id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		return a.Firewall.IPDBLive(in.SinceID), nil
+	}
+	h["fw.connections"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		f, err := decode[firewall.ConnFilter](p)
+		if err != nil {
+			return nil, err
+		}
+		evs, total, err := a.Firewall.ConnEvents(f)
+		return map[string]any{"events": evs, "total": total}, err
+	}
+
+	// ---- WAF
+	h["waf.status"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "stats": a.WAF.Stats()}, nil
+	}
+	h["waf.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		f, err := decode[waf.EventFilter](p)
+		if err != nil {
+			return nil, err
+		}
+		evs, total, err := a.WAF.Events(f)
+		return map[string]any{"events": evs, "total": total}, err
+	}
+	h["waf.apply"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.WAF.Status(), a.WAF.Apply()
+	}
 
 	// ---- reputation
 	h["reputation.get"] = func(context.Context, json.RawMessage) (any, error) {
@@ -478,6 +534,12 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return map[string]any{"version": v}, nil
 	}
 	return h
+}
+
+func wafChanged(a, b settings.WAF) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return string(x) != string(y)
 }
 
 func fwChanged(a, b settings.Firewall) bool {

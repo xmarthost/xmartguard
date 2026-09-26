@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,8 @@ type Firewall struct {
 	DoSThreshold     int      `json:"dos_threshold"` // new connections per minute per IP
 	BlockedCountries []string `json:"blocked_countries"`
 	AllowedCountries []string `json:"allowed_countries"`
+	// LogBlocked samples dropped connections for the live monitors.
+	LogBlocked bool `json:"log_blocked"`
 }
 
 type Reputation struct {
@@ -55,6 +58,23 @@ type Reputation struct {
 	IPs           []string `json:"ips"` // empty = all server IPs
 	RBLs          []string `json:"rbls"`
 	IntervalHours int      `json:"interval_hours"`
+}
+
+// WAF is XMart Guard's ModSecurity rule set for Apache/LiteSpeed.
+type WAF struct {
+	Enabled        bool     `json:"enabled"`
+	UploadScan     bool     `json:"upload_scan"`     // scan uploaded files with the malware engine
+	SensitiveFiles bool     `json:"sensitive_files"` // .env, .git, backups, logs
+	WordPress      bool     `json:"wordpress"`       // WordPress hardening
+	BadBots        bool     `json:"bad_bots"`        // vulnerability scanners and abusive tools
+	SEOBots        bool     `json:"seo_bots"`        // aggressive SEO crawlers
+	AIBots         bool     `json:"ai_bots"`         // AI training crawlers
+	CustomBots     []string `json:"custom_bots"`     // extra User-Agent fragments to block
+	BruteForce     bool     `json:"bruteforce"`      // ban IPs with repeated failed CMS logins
+	BFThreshold    int      `json:"bf_threshold"`
+	BFWindowMin    int      `json:"bf_window_minutes"`
+	DisabledRules  []int    `json:"disabled_rules"` // any ModSecurity rule id, ours or a vendor's
+	WhitelistIPs   []string `json:"whitelist_ips"`  // never inspected by our rules
 }
 
 // IPDB is the portal-wide shared blocklist: servers report attackers they
@@ -80,6 +100,7 @@ type Settings struct {
 	Firewall      Firewall      `json:"firewall"`
 	Reputation    Reputation    `json:"reputation"`
 	IPDB          IPDB          `json:"ipdb"`
+	WAF           WAF           `json:"waf"`
 	Notifications Notifications `json:"notifications"`
 }
 
@@ -95,10 +116,12 @@ func Defaults() Settings {
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
-			DoS: false, DoSThreshold: 150, BlockedCountries: []string{}, AllowedCountries: []string{},
+			DoS: false, DoSThreshold: 150, BlockedCountries: []string{}, AllowedCountries: []string{}, LogBlocked: true,
 		},
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
 		IPDB:       IPDB{Enabled: true, Report: true},
+		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
+			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{}},
 		Notifications: Notifications{
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
 		},
@@ -195,6 +218,17 @@ func normalize(s *Settings) {
 	s.Firewall.AllowedCountries = clean(s.Firewall.AllowedCountries, true)
 	s.Reputation.IPs = clean(s.Reputation.IPs, false)
 	s.Reputation.RBLs = clean(s.Reputation.RBLs, false)
+	s.WAF.CustomBots = clean(s.WAF.CustomBots, false)
+	s.WAF.WhitelistIPs = clean(s.WAF.WhitelistIPs, false)
+	if s.WAF.DisabledRules == nil {
+		s.WAF.DisabledRules = []int{}
+	}
+	if s.WAF.BFThreshold <= 0 {
+		s.WAF.BFThreshold = 10
+	}
+	if s.WAF.BFWindowMin <= 0 {
+		s.WAF.BFWindowMin = 10
+	}
 	if s.Scanner.MaxFileSizeMB <= 0 {
 		s.Scanner.MaxFileSizeMB = 10
 	}
@@ -239,10 +273,33 @@ func validate(s Settings) error {
 	if s.Firewall.Provider != "iptables" && s.Firewall.Provider != "nftables" {
 		return fmt.Errorf("invalid firewall provider %q", s.Firewall.Provider)
 	}
+	for _, b := range s.WAF.CustomBots {
+		if len(b) < 3 || strings.ContainsAny(b, "\n\r\"'\\") {
+			return fmt.Errorf("invalid bot name %q", b)
+		}
+	}
+	for _, id := range s.WAF.DisabledRules {
+		if id <= 0 || id > 99999999 {
+			return fmt.Errorf("invalid rule id %d", id)
+		}
+	}
+	for _, ip := range s.WAF.WhitelistIPs {
+		if !validIPorCIDR(ip) {
+			return fmt.Errorf("invalid IP address %q", ip)
+		}
+	}
 	if s.Firewall.DoSThreshold < 20 {
 		return errors.New("DoS threshold must be at least 20 connections per minute")
 	}
 	return nil
+}
+
+func validIPorCIDR(s string) bool {
+	if net.ParseIP(s) != nil {
+		return true
+	}
+	_, _, err := net.ParseCIDR(s)
+	return err == nil
 }
 
 // DefaultRBLs are widely used, free-to-query DNS blocklists.
