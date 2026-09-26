@@ -75,9 +75,12 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });
-    // SPA fallback for client-side routes.
+    // SPA fallback for client-side routes. Machine paths (API, downloads,
+    // MCP, /.well-known OAuth discovery) get a real 404 so AI clients see
+    // that no sign-in service exists instead of an HTML page.
+    const machine = ['/api/', '/downloads/', '/mcp', '/.well-known/'];
     app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !req.url.startsWith('/api/') && !req.url.startsWith('/downloads/')) {
+      if (req.method === 'GET' && !machine.some((p) => req.url.startsWith(p))) {
         return reply.type('text/html').sendFile('index.html');
       }
       return reply.code(404).send({ error: 'not found' });

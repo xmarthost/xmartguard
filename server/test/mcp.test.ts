@@ -122,3 +122,20 @@ describe('mcp endpoint', () => {
     expect(Number(rows[0].calls)).toBeGreaterThan(5);
   });
 });
+
+describe('mcp discovery with the web app served', () => {
+  it('answers OAuth discovery with 404, not the SPA page', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xgweb-'));
+    fs.writeFileSync(path.join(dir, 'index.html'), '<html>spa</html>');
+    await h.close();
+    h = await startHarness({ webDir: dir });
+    for (const p of ['/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource/mcp/xgm_x']) {
+      const r = await fetch(h.url + p);
+      expect(r.status).toBe(404);
+    }
+    expect(await (await fetch(h.url + '/servers')).text()).toContain('spa');
+  });
+});
