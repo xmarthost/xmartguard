@@ -54,7 +54,7 @@ safe_path() {
     /run/xmartguard|/run/xmartguard/*) return 0 ;;
     /var/lib/xmartguard|/var/lib/xmartguard/*) return 0 ;;
     /var/log/xmartguard|/var/log/xmartguard/*) return 0 ;;
-    /usr/local/bin/xmartguard|/usr/local/bin/xmartguard-agent) return 0 ;;
+    /usr/local/bin/xmartguard|/usr/local/bin/xmartguard-agent|/usr/local/bin/xgcli) return 0 ;;
     /etc/systemd/system/xmartguard-agent.service) return 0 ;;
   esac
   return 1
@@ -69,10 +69,12 @@ if [ -f "$MANIFEST" ]; then
       unit) UNITS+=("$path") ;;
     esac
   done < <(grep -v '^#' "$MANIFEST")
+  # Created by the agent itself on upgrades from before 0.6.
+  [ -L /usr/local/bin/xgcli ] && FILES+=(/usr/local/bin/xgcli)
   ok "Loaded install manifest (${#FILES[@]} files, ${#DIRS[@]} directories)"
 else
   warn "No install manifest found; removing the default locations."
-  FILES=("$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard)
+  FILES=("$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli)
   DIRS=(/etc/xmartguard "$HOME_DIR" "${LEGACY_DIRS[@]}")
   UNITS=("/etc/systemd/system/$UNIT_NAME")
 fi
@@ -147,7 +149,7 @@ ok "Removed configuration and state directories"
 LEFT=()
 KEEP_HOME=()
 [ "$KEEP_LOGS" -eq 0 ] && [ ! -d "$HOME_DIR/.git" ] && KEEP_HOME=("$HOME_DIR")
-for p in "$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
+for p in "$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard /usr/local/cpanel/base/frontend/jupiter/xmartguard \
          "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME; do
   { [ -e "$p" ] || [ -L "$p" ]; } && LEFT+=("$p")

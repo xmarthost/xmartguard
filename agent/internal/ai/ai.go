@@ -1,17 +1,22 @@
-// Package ai gives suspicious files a second opinion ("AI scanner").
+// Package ai gives files a second opinion ("AI scanner").
 //
 // Providers:
 //   - builtin (default): XMart Guard's own model (package ml), free, runs
 //     locally, nothing leaves the server;
-//   - ollama: a free LLM the administrator hosts (e.g. on the portal server);
-//   - anthropic: Claude through the Anthropic API with the administrator's
-//     own (paid) key.
+//   - portal: the portal asks the free AI APIs configured there (Google
+//     Gemini, Groq, OpenRouter, ...), fails over between keys and providers
+//     when one hits its limit, and shares every verdict with all linked
+//     servers.
+//
+// With "learn" on, the agent also uses the fleet's knowledge: files any
+// server's AI found malicious are detected here by hash at once, and the
+// built-in model receives the update the portal trained from the AI's
+// verdicts (see Sync).
 //
 // Verdicts are cached by SHA-256, so each distinct file is judged once.
 package ai
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -21,19 +26,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
-
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
-	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 
 	"github.com/xmarthost/xmartguard/agent/internal/ml"
+	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -46,7 +45,7 @@ const (
 	Error      = "error"
 )
 
-// Verdict is the model's opinion of one file.
+// Verdict is the AI's opinion of one file.
 type Verdict struct {
 	SHA256     string `json:"sha256"`
 	Verdict    string `json:"verdict"`
@@ -54,29 +53,33 @@ type Verdict struct {
 	Reason     string `json:"reason"`
 	Model      string `json:"model"`
 	At         int64  `json:"at"`
+	// Injected: malicious code was added to an otherwise legitimate file;
+	// Cut says where (for Trim).
+	Injected bool          `json:"injected,omitempty"`
+	Cut      []scanner.Cut `json:"cut,omitempty"`
+	// Source: builtin | ai (asked now) | fleet (another server's verdict)
+	// | fallback (built-in model while the portal AI was unavailable).
+	Source string `json:"source"`
+	Size   int64  `json:"-"`
 }
 
-// Job asks for a verdict on one finding.
+// Job asks for a verdict on one file.
 type Job struct {
-	FindingID int64
+	FindingID int64 // 0 for a clean file checked in "all files" mode
 	Path      string
 	SHA256    string
 	Signature string // what the local engine matched
 }
 
-// Analyzer runs jobs one at a time with an hourly cap.
+// Analyzer runs jobs in the background.
 type Analyzer struct {
 	DB       *sql.DB
 	Settings *settings.Store
 	Log      *slog.Logger
 	// OnVerdict is called after a new verdict (to apply actions).
 	OnVerdict func(Job, Verdict)
-	// BaseURL overrides the API endpoint (tests).
-	BaseURL string
 	// Portal describes the portal's AI gateway (provider "portal").
 	Portal *PortalAI
-	// PerHour caps API calls (default 120).
-	PerHour int
 
 	queue chan Job
 	once  sync.Once
@@ -85,14 +88,14 @@ type Analyzer struct {
 }
 
 func (a *Analyzer) init() {
-	a.once.Do(func() { a.queue = make(chan Job, 500) })
+	a.once.Do(func() { a.queue = make(chan Job, 1000) })
 }
 
 // Enqueue schedules a job; it never blocks (a full queue drops the job,
 // which is retried on the next scan of the file).
 func (a *Analyzer) Enqueue(j Job) {
 	a.init()
-	if !a.Settings.Get().AI.Enabled || j.SHA256 == "" {
+	if !a.Settings.Get().AI.Enabled || j.Path == "" {
 		return
 	}
 	select {
@@ -101,40 +104,88 @@ func (a *Analyzer) Enqueue(j Job) {
 	}
 }
 
-// Run processes the queue until ctx ends.
+// EnqueueNew schedules a clean new/changed code file ("all files" mode).
+func (a *Analyzer) EnqueueNew(path string) {
+	cfg := a.Settings.Get().AI
+	if cfg.Provider != "portal" || cfg.Scope != "all" {
+		return
+	}
+	a.Enqueue(Job{Path: path})
+}
+
+const batchMax = 6
+
+// Run processes the queue until ctx ends. Jobs arriving within a couple of
+// seconds are sent together: one request for several files uses fewer
+// requests (the free tiers' scarcest limit) and one copy of the instructions.
 func (a *Analyzer) Run(ctx context.Context) {
 	a.init()
 	for {
+		var batch []Job
 		select {
 		case <-ctx.Done():
 			return
 		case j := <-a.queue:
-			if !a.Settings.Get().AI.Enabled {
+			batch = append(batch, j)
+		}
+		wait := time.After(2 * time.Second)
+	gather:
+		for len(batch) < batchMax {
+			select {
+			case j := <-a.queue:
+				batch = append(batch, j)
+			case <-wait:
+				break gather
+			case <-ctx.Done():
+				return
+			}
+		}
+		a.process(ctx, batch)
+	}
+}
+
+func (a *Analyzer) process(ctx context.Context, batch []Job) {
+	cfg := a.Settings.Get().AI
+	if !cfg.Enabled {
+		return
+	}
+	var todo []Job
+	for _, j := range batch {
+		if j.SHA256 == "" {
+			j.SHA256 = fileSHA(j.Path)
+			if j.SHA256 == "" {
 				continue
 			}
-			if v, ok := Cached(a.DB, j.SHA256); ok && v.Verdict != Error {
-				continue
+		}
+		if v, ok := Cached(a.DB, j.SHA256); ok && v.Verdict != Error && (v.Source != "fallback" || cfg.Provider != "portal") {
+			if j.FindingID == 0 && v.Verdict == Malicious && a.OnVerdict != nil {
+				a.OnVerdict(j, v) // a file already known to be bad reappeared
 			}
-			if p := a.Settings.Get().AI.Provider; p != "builtin" && p != "portal" && !a.allow() {
-				a.Log.Warn("AI scanner hourly limit reached; skipping", "path", j.Path)
-				continue
-			}
-			v, err := a.Analyze(ctx, j)
-			if err != nil {
-				a.Log.Warn("AI scan failed", "path", j.Path, "err", err)
-				continue
-			}
-			if a.OnVerdict != nil {
-				a.OnVerdict(j, v)
-			}
+			continue
+		}
+		if j.FindingID == 0 && !a.allow(cfg.MaxPerHour) {
+			continue
+		}
+		todo = append(todo, j)
+	}
+	if len(todo) == 0 {
+		return
+	}
+	verdicts, err := a.AnalyzeBatch(ctx, todo)
+	if err != nil {
+		a.Log.Warn("AI scan failed", "files", len(todo), "err", err)
+	}
+	for i, v := range verdicts {
+		if v.Verdict != "" && a.OnVerdict != nil {
+			a.OnVerdict(todo[i], v)
 		}
 	}
 }
 
-func (a *Analyzer) allow() bool {
+// allow enforces the hourly cap on clean files sent in "all files" mode.
+func (a *Analyzer) allow(limit int) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	limit := a.PerHour
 	if limit <= 0 {
 		limit = 120
 	}
@@ -156,81 +207,94 @@ func (a *Analyzer) allow() bool {
 // Cached returns a stored verdict for a file hash.
 func Cached(db *sql.DB, sha string) (Verdict, bool) {
 	v := Verdict{SHA256: sha}
-	err := db.QueryRow(`SELECT verdict, confidence, reason, model, at FROM ai_verdicts WHERE sha256 = ?`, sha).
-		Scan(&v.Verdict, &v.Confidence, &v.Reason, &v.Model, &v.At)
-	return v, err == nil
-}
-
-func save(db *sql.DB, v Verdict) {
-	_, _ = db.Exec(`INSERT INTO ai_verdicts (sha256, verdict, confidence, reason, model, at) VALUES (?,?,?,?,?,?)
-		ON CONFLICT(sha256) DO UPDATE SET verdict = excluded.verdict, confidence = excluded.confidence,
-		reason = excluded.reason, model = excluded.model, at = excluded.at`, v.SHA256, v.Verdict, v.Confidence, v.Reason, v.Model, v.At)
-}
-
-const systemPrompt = `You are the malware analyst of a web hosting security product. You receive one file from a
-customer's website that a signature engine flagged, and you decide whether it is malicious.
-
-Judge what the code does, not how it looks: minified or encoded code in plugins and themes is often
-legitimate; eval of decoded data, remote code download and execution, hidden file managers or shells,
-credential or card skimming, SEO spam injection, mailers used for spam, cryptominers and backdoors that
-take commands from request parameters are malicious. Library code, installers and admin tools of known
-CMS projects are usually clean.
-
-Answer with the verdict, a confidence from 0 to 100, and one or two sentences of reason that name the
-behaviour you found (for example "decodes a base64 payload from a POST parameter and passes it to eval").
-Do not quote long code. The file may be truncated; say so if it limits your judgement.`
-
-var schema = map[string]any{
-	"type": "object",
-	"properties": map[string]any{
-		"verdict":    map[string]any{"type": "string", "enum": []string{Malicious, Suspicious, Clean}},
-		"confidence": map[string]any{"type": "integer"},
-		"reason":     map[string]any{"type": "string"},
-	},
-	"required":             []string{"verdict", "confidence", "reason"},
-	"additionalProperties": false,
-}
-
-// sample returns the text sent for a file: all of it when it fits,
-// otherwise the beginning and the end (where injected code usually sits),
-// marked as truncated.
-func sample(raw []byte, maxKB int) (string, bool) {
-	limit := maxKB * 1024
-	if len(raw) <= limit {
-		return strings.ToValidUTF8(string(raw), "?"), false
-	}
-	head := raw[:limit*3/4]
-	tail := raw[len(raw)-limit/4:]
-	for len(head) > 0 && !utf8.Valid(head[len(head)-3:]) {
-		head = head[:len(head)-1]
-	}
-	return strings.ToValidUTF8(string(head), "?") +
-		fmt.Sprintf("\n\n[... %d bytes omitted ...]\n\n", len(raw)-len(head)-len(tail)) +
-		strings.ToValidUTF8(string(tail), "?"), true
-}
-
-// Analyze judges one file with the configured provider and stores the verdict.
-func (a *Analyzer) Analyze(ctx context.Context, j Job) (Verdict, error) {
-	cfg := a.Settings.Get().AI
-	var v Verdict
-	var err error
-	switch cfg.Provider {
-	case "ollama":
-		v, err = a.analyzeOllama(ctx, j, cfg)
-	case "anthropic":
-		v, err = a.analyzeClaude(ctx, j, cfg)
-	case "portal":
-		v, err = a.analyzePortal(ctx, j, cfg)
-	default:
-		v, err = analyzeBuiltin(j)
-	}
+	var cut string
+	var injected int
+	err := db.QueryRow(`SELECT verdict, confidence, reason, model, at, injected, cut, source, size FROM ai_verdicts WHERE sha256 = ?`, sha).
+		Scan(&v.Verdict, &v.Confidence, &v.Reason, &v.Model, &v.At, &injected, &cut, &v.Source, &v.Size)
 	if err != nil {
-		return Verdict{}, err
+		return v, false
 	}
-	v.SHA256, v.At = j.SHA256, store.Now()
-	v.Confidence, v.Reason = clamp(v.Confidence), truncate(v.Reason, 600)
-	save(a.DB, v)
-	return v, nil
+	v.Injected = injected == 1
+	if cut != "" {
+		_ = json.Unmarshal([]byte(cut), &v.Cut)
+	}
+	return v, true
+}
+
+// Save stores a verdict.
+func Save(db *sql.DB, v Verdict) {
+	cut := ""
+	if len(v.Cut) > 0 {
+		b, _ := json.Marshal(v.Cut)
+		cut = string(b)
+	}
+	injected := 0
+	if v.Injected {
+		injected = 1
+	}
+	_, _ = db.Exec(`INSERT INTO ai_verdicts (sha256, verdict, confidence, reason, model, at, injected, cut, source, size) VALUES (?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(sha256) DO UPDATE SET verdict = excluded.verdict, confidence = excluded.confidence, reason = excluded.reason,
+		model = excluded.model, at = excluded.at, injected = excluded.injected, cut = excluded.cut, source = excluded.source,
+		size = CASE WHEN excluded.size > 0 THEN excluded.size ELSE ai_verdicts.size END`,
+		v.SHA256, v.Verdict, v.Confidence, v.Reason, v.Model, v.At, injected, cut, v.Source, v.Size)
+}
+
+// Analyze judges one file now (the "Check with AI" button).
+func (a *Analyzer) Analyze(ctx context.Context, j Job) (Verdict, error) {
+	if j.SHA256 == "" {
+		j.SHA256 = fileSHA(j.Path)
+	}
+	vs, err := a.AnalyzeBatch(ctx, []Job{j})
+	if len(vs) == 1 && vs[0].Verdict != "" {
+		return vs[0], nil
+	}
+	if err == nil {
+		err = errors.New("no verdict")
+	}
+	return Verdict{}, err
+}
+
+// AnalyzeBatch judges files with the configured provider and stores the
+// verdicts. The result is parallel to jobs; a job without a verdict has an
+// empty Verdict field.
+func (a *Analyzer) AnalyzeBatch(ctx context.Context, jobs []Job) ([]Verdict, error) {
+	cfg := a.Settings.Get().AI
+	out := make([]Verdict, len(jobs))
+	var err error
+	if cfg.Provider == "portal" {
+		out, err = a.analyzePortal(ctx, jobs, cfg)
+		// Findings still get the built-in model's opinion while the portal
+		// AI is unavailable; it is asked again later.
+		for i, v := range out {
+			if v.Verdict == "" && jobs[i].FindingID != 0 {
+				if b, berr := analyzeBuiltin(jobs[i]); berr == nil {
+					b.Source = "fallback"
+					out[i] = b
+				}
+			}
+		}
+	} else {
+		for i, j := range jobs {
+			v, berr := analyzeBuiltin(j)
+			if berr != nil {
+				err = berr
+				continue
+			}
+			out[i] = v
+		}
+	}
+	for i := range out {
+		if out[i].Verdict == "" {
+			continue
+		}
+		out[i].SHA256, out[i].At = jobs[i].SHA256, store.Now()
+		out[i].Confidence, out[i].Reason = clamp(out[i].Confidence), truncate(out[i].Reason, 600)
+		if st, serr := os.Stat(jobs[i].Path); serr == nil {
+			out[i].Size = st.Size()
+		}
+		Save(a.DB, out[i])
+	}
+	return out, err
 }
 
 func analyzeBuiltin(j Job) (Verdict, error) {
@@ -243,7 +307,7 @@ func analyzeBuiltin(j Job) (Verdict, error) {
 		return Verdict{}, err
 	}
 	sc := m.Score(raw)
-	v := Verdict{Verdict: m.Verdict(sc), Model: "builtin " + m.Version}
+	v := Verdict{Verdict: m.Verdict(sc), Model: "builtin " + m.Version, Source: "builtin"}
 	if v.Verdict == Clean {
 		v.Confidence = int((1 - sc) * 100)
 		v.Reason = fmt.Sprintf("Model score %.0f%%: the code looks like ordinary application code.", sc*100)
@@ -263,139 +327,17 @@ func readHead(p string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, ml.MaxBytes))
 }
 
-// prompt builds the user message sent to an LLM provider.
-func prompt(j Job, maxKB int) (string, error) {
-	raw, err := os.ReadFile(j.Path)
+func fileSHA(p string) string {
+	f, err := os.Open(p)
 	if err != nil {
-		return "", err
+		return ""
 	}
-	text, truncated := sample(raw, maxKB)
-	note := ""
-	if truncated {
-		note = fmt.Sprintf(" The file is %d bytes; only its beginning and end are included.", len(raw))
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
 	}
-	return fmt.Sprintf("File name: %s\nLocal engine match: %s.%s\n\n<file>\n%s\n</file>", baseName(j.Path), j.Signature, note, text), nil
-}
-
-type llmAnswer struct {
-	Verdict    string `json:"verdict"`
-	Confidence int    `json:"confidence"`
-	Reason     string `json:"reason"`
-}
-
-func (x llmAnswer) valid() bool {
-	return x.Verdict == Malicious || x.Verdict == Suspicious || x.Verdict == Clean
-}
-
-var httpClient = &http.Client{Timeout: 5 * time.Minute}
-
-// analyzeOllama asks a self-hosted Ollama server (free, no data leaves the
-// administrator's infrastructure).
-func (a *Analyzer) analyzeOllama(ctx context.Context, j Job, cfg settings.AI) (Verdict, error) {
-	user, err := prompt(j, cfg.MaxKB)
-	if err != nil {
-		return Verdict{}, err
-	}
-	body, _ := json.Marshal(map[string]any{
-		"model":    cfg.Model,
-		"stream":   false,
-		"format":   schema,
-		"options":  map[string]any{"temperature": 0},
-		"messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": user}},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.OllamaURL+"/api/chat", bytes.NewReader(body))
-	if err != nil {
-		return Verdict{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := httpClient.Do(req)
-	if err != nil {
-		return Verdict{}, fmt.Errorf("Ollama unreachable: %w", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		msg, _ := io.ReadAll(io.LimitReader(res.Body, 500))
-		return Verdict{}, fmt.Errorf("Ollama error %d: %s", res.StatusCode, strings.TrimSpace(string(msg)))
-	}
-	var out struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	}
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&out); err != nil {
-		return Verdict{}, err
-	}
-	var ans llmAnswer
-	if json.Unmarshal([]byte(out.Message.Content), &ans) != nil || !ans.valid() {
-		return Verdict{}, errors.New("unexpected answer from the Ollama model")
-	}
-	return Verdict{Verdict: ans.Verdict, Confidence: ans.Confidence, Reason: ans.Reason, Model: "ollama " + cfg.Model}, nil
-}
-
-// analyzeClaude asks Claude through the Anthropic API (paid, own key).
-func (a *Analyzer) analyzeClaude(ctx context.Context, j Job, cfg settings.AI) (Verdict, error) {
-	if cfg.APIKey == "" {
-		return Verdict{}, errors.New("no Anthropic API key configured")
-	}
-	user, err := prompt(j, cfg.MaxKB)
-	if err != nil {
-		return Verdict{}, err
-	}
-
-	opts := []option.RequestOption{option.WithAPIKey(cfg.APIKey), option.WithMaxRetries(2)}
-	if a.BaseURL != "" {
-		opts = append(opts, option.WithBaseURL(a.BaseURL))
-	}
-	client := anthropic.NewClient(opts...)
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
-	defer cancel()
-	params := anthropic.BetaMessageNewParams{
-		Model:     cfg.Model,
-		MaxTokens: 4096,
-		System:    []anthropic.BetaTextBlockParam{{Text: systemPrompt}},
-		Messages:  []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(user))},
-		OutputConfig: anthropic.BetaOutputConfigParam{
-			Effort: anthropic.BetaOutputConfigEffortMedium,
-			Format: anthropic.BetaJSONOutputFormatParam{Schema: schema},
-		},
-	}
-	// Malware analysis can trip the model's cyber-safety classifier; the
-	// server-side fallback lets another model answer instead of a refusal.
-	if cfg.Model == "claude-opus-5" || cfg.Model == "claude-fable-5-1" {
-		params.Fallbacks = anthropic.BetaFallbacksParamUnion{OfDefault: constant.ValueOf[constant.Default]()}
-		params.Betas = []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01}
-	}
-	msg, err := client.Beta.Messages.New(cctx, params)
-	if err != nil {
-		var apiErr *anthropic.Error
-		if errors.As(err, &apiErr) {
-			switch apiErr.StatusCode {
-			case 401, 403:
-				return Verdict{}, errors.New("the Anthropic API key was rejected")
-			case 429:
-				return Verdict{}, errors.New("Anthropic API rate limit reached; try again later")
-			}
-			return Verdict{}, fmt.Errorf("Anthropic API error %d", apiErr.StatusCode)
-		}
-		return Verdict{}, err
-	}
-	v := Verdict{Model: string(msg.Model)}
-	if msg.StopReason == "refusal" {
-		v.Verdict, v.Reason = Error, "the model declined to analyse this file"
-		return v, nil
-	}
-	var out llmAnswer
-	var body strings.Builder
-	for _, b := range msg.Content {
-		if t, ok := b.AsAny().(anthropic.BetaTextBlock); ok {
-			body.WriteString(t.Text)
-		}
-	}
-	if err := json.Unmarshal([]byte(body.String()), &out); err != nil || !out.valid() {
-		return Verdict{}, fmt.Errorf("unexpected answer (stop reason %s)", msg.StopReason)
-	}
-	v.Verdict, v.Confidence, v.Reason = out.Verdict, out.Confidence, out.Reason
-	return v, nil
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func clamp(n int) int {
@@ -414,53 +356,4 @@ func baseName(p string) string {
 		return p[i+1:]
 	}
 	return p
-}
-
-// PortalAI is the portal's AI gateway: the portal forwards to a free model it
-// hosts (Ollama), so agents need no AI setup and nothing is exposed publicly.
-type PortalAI struct {
-	URL      string // portal base URL
-	ServerID string
-	Sign     func(msg []byte) string // base64 Ed25519 signature
-}
-
-func (a *Analyzer) analyzePortal(ctx context.Context, j Job, cfg settings.AI) (Verdict, error) {
-	p := a.Portal
-	if p == nil || p.URL == "" || p.Sign == nil {
-		return Verdict{}, errors.New("this agent is not enrolled with a portal")
-	}
-	user, err := prompt(j, cfg.MaxKB)
-	if err != nil {
-		return Verdict{}, err
-	}
-	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	sum := sha256.Sum256([]byte(systemPrompt + "\n" + user))
-	sig := p.Sign([]byte("xg-ai-v1:" + p.ServerID + ":" + ts + ":" + hex.EncodeToString(sum[:])))
-	body, _ := json.Marshal(map[string]string{"server_id": p.ServerID, "ts": ts, "signature": sig, "system": systemPrompt, "prompt": user})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(p.URL, "/")+"/api/agent/ai", bytes.NewReader(body))
-	if err != nil {
-		return Verdict{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := httpClient.Do(req)
-	if err != nil {
-		return Verdict{}, fmt.Errorf("portal unreachable: %w", err)
-	}
-	defer res.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	if res.StatusCode != 200 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		_ = json.Unmarshal(raw, &e)
-		return Verdict{}, fmt.Errorf("portal AI: %s (HTTP %d)", e.Error, res.StatusCode)
-	}
-	var out struct {
-		llmAnswer
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(raw, &out) != nil || !out.valid() {
-		return Verdict{}, errors.New("unexpected answer from the portal AI")
-	}
-	return Verdict{Verdict: out.Verdict, Confidence: out.Confidence, Reason: out.Reason, Model: "portal " + out.Model}, nil
 }

@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 )
@@ -49,9 +50,18 @@ var (
 	defErr   error
 )
 
-// Default returns the model shipped with the agent (or the one an admin
-// trained, when /etc/xmartguard/ai-model.bin exists).
+// Default returns the model in use: the one shipped with the agent (or the
+// one an admin trained, when /etc/xmartguard/ai-model.bin exists), plus the
+// fleet's learned update when one is applied (see ApplyDelta).
 func Default() (*Model, error) {
+	if m := learned.Load(); m != nil {
+		return m, nil
+	}
+	return Base()
+}
+
+// Base returns the model without the fleet's learned update.
+func Base() (*Model, error) {
 	defOnce.Do(func() {
 		if raw, err := os.ReadFile(LocalModelPath); err == nil {
 			if m, err := Decode(raw); err == nil {
@@ -62,6 +72,57 @@ func Default() (*Model, error) {
 		defModel, defErr = Decode(embedded)
 	})
 	return defModel, defErr
+}
+
+// Delta is a learned update to the base model, trained on the portal from
+// verdicts the AI APIs gave for files on all linked servers.
+type Delta struct {
+	BaseVersion string       `json:"base_version"`
+	Version     int64        `json:"version"`
+	Bias        float32      `json:"bias"`
+	Entries     [][2]float64 `json:"entries"` // [feature index, weight change]
+	Samples     int          `json:"samples"`
+}
+
+var learned atomic.Pointer[Model]
+
+// ApplyDelta makes Default return base + d. A delta for another base model
+// (or an empty one) removes the update.
+func ApplyDelta(d *Delta) error {
+	base, err := Base()
+	if err != nil {
+		return err
+	}
+	if d == nil || d.BaseVersion != base.Version || (len(d.Entries) == 0 && d.Bias == 0) {
+		learned.Store(nil)
+		return nil
+	}
+	m := &Model{
+		Version:    fmt.Sprintf("%s+fleet.%d", base.Version, d.Version),
+		Bias:       base.Bias + d.Bias,
+		Weights:    append([]float32(nil), base.Weights...),
+		Suspicious: base.Suspicious,
+		Malicious:  base.Malicious,
+	}
+	for _, e := range d.Entries {
+		i := int(e[0])
+		if i < 0 || i >= Buckets || math.IsNaN(e[1]) || math.Abs(e[1]) > 10 {
+			return fmt.Errorf("ml: invalid delta entry %v", e)
+		}
+		m.Weights[i] += float32(e[1])
+	}
+	learned.Store(m)
+	return nil
+}
+
+// Logit returns the raw score of pre-computed features (the portal trains
+// the fleet update from base-model logits).
+func (m *Model) Logit(f []uint32) float64 {
+	z := float64(m.Bias)
+	for _, i := range f {
+		z += float64(m.Weights[i])
+	}
+	return z
 }
 
 // LocalModelPath is where a locally trained model is loaded from.
@@ -132,11 +193,7 @@ func (m *Model) Score(content []byte) float64 {
 }
 
 func (m *Model) scoreFeatures(f []uint32) float64 {
-	z := float64(m.Bias)
-	for _, i := range f {
-		z += float64(m.Weights[i])
-	}
-	return sigmoid(z)
+	return sigmoid(m.Logit(f))
 }
 
 // Verdict maps a score to malicious / suspicious / clean.

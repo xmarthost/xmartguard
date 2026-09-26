@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xmarthost/xmartguard/agent/internal/ai"
 	"github.com/xmarthost/xmartguard/agent/internal/captcha"
@@ -79,6 +80,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a := &Agent{Cfg: cfg, Log: log, DB: db, Settings: st, Mailer: &notify.Mailer{Hostname: host, Log: log}}
 	a.Scanner = scanner.New(db, st, log)
 	a.Scanner.OnFinding = a.onFinding
+	a.Scanner.OnClean = func(path string, _ os.FileInfo) { a.AI.EnqueueNew(path) }
 	a.Realtime = &scanner.Realtime{S: a.Scanner}
 	a.Firewall = &firewall.Manager{
 		DB: db, Settings: st, Log: log, NFT: firewall.FindNFT(), IPT: firewall.FindIPTables(),
@@ -146,6 +148,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.domainRepLoop(ctx)
 	go a.Captcha.Run(ctx)
 	go a.AI.Run(ctx)
+	go a.AI.RunSync(ctx)
 	go a.Monitor.Run(ctx)
 	go a.retentionLoop(ctx)
 	go a.reportLoop(ctx)
@@ -205,7 +208,10 @@ func (a *Agent) protectedIPs() []string {
 func (a *Agent) onFinding(f scanner.Finding) {
 	a.maybeSuspend(f)
 	a.maybeAutoClean(f)
-	if f.Category == scanner.CatSuspicious {
+	// Suspicious files get the AI's opinion. With the portal AI, detected
+	// malware is sent too: the AI locates injected code (for Trim) and its
+	// verdicts teach every linked server.
+	if f.Category == scanner.CatSuspicious || (f.Category == scanner.CatVirus && a.Settings.Get().AI.Provider == "portal" && f.Signature != scanner.LearnedLabel) {
 		if p, _, err := a.Scanner.ContentPath(f.ID); err == nil {
 			a.AI.Enqueue(ai.Job{FindingID: f.ID, Path: p, SHA256: f.SHA256, Signature: f.Signature})
 		}
@@ -401,6 +407,8 @@ func (a *Agent) Handlers() map[string]client.Handler {
 				err = a.Scanner.Disable(id)
 			case "delete":
 				err = a.Scanner.Delete(id)
+			case "trim":
+				err = a.trimFinding(id)
 			case "ignore":
 				var path string
 				path, err = a.Scanner.Ignore(id)
@@ -546,6 +554,38 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			return nil, err
 		}
 		return v, nil
+	}
+	// finding.content shows a detected file (from quarantine when it was
+	// moved there) with the lines the AI marked as injected.
+	h["finding.content"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID int64 `json:"id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		f, err := a.Scanner.Get(in.ID)
+		if err != nil {
+			return nil, err
+		}
+		raw, truncated, err := a.Scanner.Content(in.ID, 512<<10)
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]any{"finding": f, "truncated": truncated, "binary": !utf8.Valid(raw) && strings.ContainsRune(string(raw), 0)}
+		if out["binary"] == true {
+			out["content"] = ""
+		} else {
+			out["content"] = strings.ToValidUTF8(string(raw), "\uFFFD")
+		}
+		if v, ok := ai.Cached(a.DB, f.SHA256); ok {
+			out["ai"] = v
+		}
+		return out, nil
+	}
+	h["ai.sync"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		n, err := a.AI.Sync(ctx)
+		return map[string]any{"verdicts": n}, err
 	}
 	h["monitor.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
@@ -840,7 +880,6 @@ const secretMask = "********"
 // secretFields are settings values never sent back to the portal in full.
 var secretFields = [][2]string{
 	{"domain_reputation", "safe_browsing_key"},
-	{"ai", "api_key"},
 	{"captcha", "secret_key"},
 	{"notifications", "telegram_token"},
 	{"notifications", "slack_webhook"},
@@ -859,7 +898,6 @@ func maskValue(k string) string {
 
 func masked(s settings.Settings) settings.Settings {
 	s.DomainRep.SafeBrowsingKey = maskValue(s.DomainRep.SafeBrowsingKey)
-	s.AI.APIKey = maskValue(s.AI.APIKey)
 	s.Captcha.SecretKey = maskValue(s.Captcha.SecretKey)
 	s.Notifications.TelegramToken = maskValue(s.Notifications.TelegramToken)
 	s.Notifications.SlackWebhook = maskValue(s.Notifications.SlackWebhook)
@@ -909,16 +947,49 @@ func fwChanged(a, b settings.Firewall) bool {
 	return string(x) != string(y)
 }
 
-// onAIVerdict applies the virus action to a suspicious file the AI scanner
-// is confident is malicious, when the admin allowed it to act.
+// onAIVerdict acts on a verdict: trims injected code when allowed, applies
+// the virus action to files the AI is confident are malicious (when the
+// admin allowed it), and records malware the signatures missed ("all files"
+// mode).
 func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 	st := a.Settings.Get()
-	a.Log.Info("AI verdict", "path", j.Path, "verdict", v.Verdict, "confidence", v.Confidence, "model", v.Model)
-	if v.Verdict != ai.Malicious || v.Confidence < 80 || !st.AI.Act {
+	a.Log.Info("AI verdict", "path", j.Path, "verdict", v.Verdict, "confidence", v.Confidence, "model", v.Model, "source", v.Source)
+	if v.Verdict != ai.Malicious || v.Confidence < 80 {
 		return
 	}
+	if j.FindingID == 0 {
+		// A file the signatures passed: record it so it shows in the logs.
+		info, err := os.Lstat(j.Path)
+		if err != nil || !info.Mode().IsRegular() {
+			return
+		}
+		cat := scanner.CatSuspicious
+		if st.AI.Act {
+			cat = scanner.CatVirus
+		}
+		f, err := a.Scanner.Record(0, "ai", j.Path, info, scanner.Detection{Category: cat, Signature: "XG.AI.Malicious"})
+		if err != nil {
+			return
+		}
+		j.FindingID = f.ID
+	}
 	f, err := a.Scanner.Get(j.FindingID)
-	if err != nil || f.Status != "detected" {
+	if err != nil {
+		return
+	}
+	if st.Scanner.Trim && v.Injected && len(v.Cut) > 0 && (f.Status == "detected" || f.Status == "quarantined" || f.Status == "disabled") {
+		if err := a.Scanner.Trim(f.ID, v.Cut, st.Scanner.TrimMaxPercent); err != nil {
+			a.Log.Info("trim not possible", "path", f.Path, "err", err)
+		} else {
+			a.Log.Info("injected code trimmed", "path", f.Path, "lines", len(v.Cut))
+			if n := st.Notifications; n.Email != "" && n.OnVirus {
+				a.Mailer.Enqueue(n.Email, "injected code removed",
+					fmt.Sprintf("[AI %d%%] %s\n  file: %s\n  reason: %s\n  action: the injected code was trimmed; the site keeps running.\n  The original file is kept in quarantine.\n", v.Confidence, f.Signature, f.Path, v.Reason))
+			}
+			return
+		}
+	}
+	if !st.AI.Act || f.Status != "detected" {
 		return
 	}
 	switch st.Scanner.VirusAction {
@@ -937,4 +1008,18 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 		a.Mailer.Enqueue(n.Email, "AI scanner confirmed malware",
 			fmt.Sprintf("[AI %d%%] %s\n  file: %s\n  reason: %s\n  action: %s\n", v.Confidence, f.Signature, f.Path, v.Reason, st.Scanner.VirusAction))
 	}
+}
+
+// trimFinding removes the injected code the AI located in a finding's file
+// (the "Trim" button and command).
+func (a *Agent) trimFinding(id int64) error {
+	f, err := a.Scanner.Get(id)
+	if err != nil {
+		return err
+	}
+	v, ok := ai.Cached(a.DB, f.SHA256)
+	if !ok || v.Verdict != ai.Malicious || !v.Injected || len(v.Cut) == 0 {
+		return errors.New("the AI has not located injected code in this file (check it with the AI first)")
+	}
+	return a.Scanner.Trim(id, v.Cut, a.Settings.Get().Scanner.TrimMaxPercent)
 }

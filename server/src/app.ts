@@ -20,11 +20,13 @@ import { massRoutes } from './routes/mass.js';
 import { aiRoutes } from './routes/ai.js';
 import { GeoDB, initGeo } from './ipdb/geo.js';
 import { IPDBService } from './ipdb/service.js';
+import { AIGateway } from './ai/gateway.js';
 
 export interface App {
   app: FastifyInstance;
   hub: AgentHub;
   ipdb: IPDBService;
+  ai: AIGateway;
 }
 
 export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean } = {}): Promise<App> {
@@ -36,6 +38,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   const hub = new AgentHub(pool, app.log);
   const geo = new GeoDB();
   const ipdb = new IPDBService(pool, cfg, hub, geo, app.log);
+  const ai = new AIGateway(pool, cfg, app.log);
   void initGeo(geo, cfg.dataDir, cfg.geoUrl, app.log).then(() => ipdb.markDirty());
 
   await app.register(cookie);
@@ -58,7 +61,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   agentCommandRoutes(app, pool, cfg, hub);
   ipdbRoutes(app, pool, ipdb);
   massRoutes(app, pool, cfg, hub);
-  aiRoutes(app, pool, cfg);
+  aiRoutes(app, pool, ai);
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });
@@ -72,9 +75,11 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   }
 
   ipdb.start();
+  ai.start();
   app.addHook('onClose', async () => {
     ipdb.stop();
+    ai.stop();
     hub.closeAll();
   });
-  return { app, hub, ipdb };
+  return { app, hub, ipdb, ai };
 }

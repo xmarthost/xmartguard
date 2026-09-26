@@ -43,6 +43,14 @@ type Scanner struct {
 	// AutoClean removes injected code from infected files when the rest of
 	// the file is legitimate, instead of quarantining the whole file.
 	AutoClean bool `json:"auto_clean"`
+	// Trim removes only the injected code the AI scanner located (for
+	// example a backdoor added to the top of a legitimate plugin file) and
+	// keeps the site running, instead of quarantining the whole file. The
+	// original is kept in quarantine; nothing is changed when the result
+	// does not pass a syntax check and a rescan.
+	Trim bool `json:"trim"`
+	// TrimMaxPercent is the largest share of a file Trim may remove.
+	TrimMaxPercent int `json:"trim_max_percent"`
 	// UserScans lets cPanel users start scans of their own home.
 	UserScans bool `json:"user_scans"`
 	// YARA also runs YARA rules from /etc/xmartguard/yara when yara is installed.
@@ -103,20 +111,29 @@ type Captcha struct {
 	HTTPSPort    int    `json:"https_port"`
 }
 
-// AI gives suspicious files a second opinion ("AI scanner"). The default
-// provider is XMart Guard's built-in model: free, local, no network. Ollama
-// (a free self-hosted LLM) and Anthropic's Claude (paid API) are optional.
+// AI gives files a second opinion ("AI scanner"). The default provider is
+// XMart Guard's built-in model: free, local, no network. "portal" sends files
+// to the portal, which asks the free AI APIs configured there (Gemini, Groq,
+// OpenRouter, ...) with automatic failover between keys, and shares every
+// verdict with all linked servers.
 type AI struct {
-	Enabled   bool   `json:"enabled"`
-	Provider  string `json:"provider"` // builtin | portal | ollama | anthropic
-	APIKey    string `json:"api_key"`  // Anthropic API key
-	OllamaURL string `json:"ollama_url"`
-	Model     string `json:"model"` // LLM model name (ollama / anthropic)
-	// MaxKB caps how much of a file is sent.
+	Enabled  bool   `json:"enabled"`
+	Provider string `json:"provider"` // builtin | portal
+	// Scope is what the portal AI checks: "suspicious" findings only, or
+	// "all" new and changed code files (to learn from them).
+	Scope string `json:"scope"`
+	// MaxPerHour caps files sent to the portal per hour (scope "all").
+	MaxPerHour int `json:"max_per_hour"`
+	// MaxKB caps how much of a file is sent (the excerpt keeps the
+	// suspicious parts; long encoded strings are shortened).
 	MaxKB int `json:"max_kb"`
 	// Act lets a "malicious" verdict apply the virus action; otherwise the
 	// verdict is only shown.
 	Act bool `json:"act"`
+	// Learn uses the fleet's shared knowledge: files any linked server's AI
+	// found malicious are detected here at once, and the built-in model is
+	// updated with what the AI taught it.
+	Learn bool `json:"learn"`
 }
 
 // ProcessMonitor looks for malicious processes running under users.
@@ -280,7 +297,7 @@ func Defaults() Settings {
 			VirusAction: ActionNotify, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, UseClamAV: true, MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
-			DeleteSymlinks: false, AutoClean: false, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
+			DeleteSymlinks: false, AutoClean: false, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
@@ -304,7 +321,7 @@ func Defaults() Settings {
 			UserOutdated: "never", ExcludeUsers: []string{},
 		},
 		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 60, HTTPPort: 7780, HTTPSPort: 7743},
-		AI:        AI{Enabled: true, Provider: "builtin", OllamaURL: "http://127.0.0.1:11434", MaxKB: 48},
+		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
 		Cron:      CronMonitor{Enabled: true, WhitelistUsers: []string{}},
 		Rootkit:   Rootkit{Enabled: true},
@@ -447,21 +464,25 @@ func normalize(s *Settings) {
 		s.Captcha.HTTPSPort = 7743
 	}
 	s.Captcha.SiteKey, s.Captcha.SecretKey = strings.TrimSpace(s.Captcha.SiteKey), strings.TrimSpace(s.Captcha.SecretKey)
-	s.AI.APIKey = strings.TrimSpace(s.AI.APIKey)
-	if s.AI.Provider == "" {
+	switch s.AI.Provider {
+	case "":
 		s.AI.Provider = "builtin"
+	case "ollama", "anthropic":
+		// 0.5 per-server LLM providers: AI APIs are now configured once on
+		// the portal.
+		s.AI.Provider = "portal"
 	}
-	if s.AI.Model == "" {
-		switch s.AI.Provider {
-		case "anthropic":
-			s.AI.Model = "claude-opus-5"
-		case "ollama":
-			s.AI.Model = "qwen2.5-coder:7b"
-		}
+	if s.AI.Scope == "" {
+		s.AI.Scope = "suspicious"
 	}
-	s.AI.OllamaURL = strings.TrimRight(strings.TrimSpace(s.AI.OllamaURL), "/")
-	if s.AI.MaxKB <= 0 {
-		s.AI.MaxKB = 48
+	if s.AI.MaxPerHour <= 0 {
+		s.AI.MaxPerHour = 120
+	}
+	if s.AI.MaxKB <= 0 || s.AI.MaxKB == 48 {
+		s.AI.MaxKB = 12
+	}
+	if s.Scanner.TrimMaxPercent <= 0 {
+		s.Scanner.TrimMaxPercent = 20
 	}
 	s.Processes.WhitelistUsers = clean(s.Processes.WhitelistUsers, false)
 	s.Processes.WhitelistStrings = clean(s.Processes.WhitelistStrings, false)
@@ -617,19 +638,22 @@ func validate(s Settings) error {
 	}
 	switch s.AI.Provider {
 	case "builtin", "portal":
-	case "ollama":
-		if !strings.HasPrefix(s.AI.OllamaURL, "http://") && !strings.HasPrefix(s.AI.OllamaURL, "https://") {
-			return errors.New("the Ollama URL must start with http:// or https://")
-		}
-	case "anthropic":
-		if s.AI.Enabled && s.AI.APIKey == "" {
-			return errors.New("the Claude provider needs an Anthropic API key")
-		}
 	default:
 		return fmt.Errorf("invalid AI provider %q", s.AI.Provider)
 	}
-	if s.AI.MaxKB > 200 {
-		return errors.New("AI scanner: at most 200 KB per file")
+	switch s.AI.Scope {
+	case "suspicious", "all":
+	default:
+		return fmt.Errorf("invalid AI scope %q (suspicious or all)", s.AI.Scope)
+	}
+	if s.AI.MaxKB > 64 {
+		return errors.New("AI scanner: at most 64 KB per file")
+	}
+	if s.AI.MaxPerHour > 5000 {
+		return errors.New("AI scanner: at most 5000 files per hour")
+	}
+	if s.Scanner.TrimMaxPercent > 50 {
+		return errors.New("trim: at most 50% of a file may be removed")
 	}
 	switch s.Notifications.UserOutdated {
 	case "never", "weekly", "monthly":

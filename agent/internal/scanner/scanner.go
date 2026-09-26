@@ -44,8 +44,13 @@ type Finding struct {
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 	// AI scanner opinion, when one exists for this file content.
-	AIVerdict string `json:"ai_verdict,omitempty"`
-	AIReason  string `json:"ai_reason,omitempty"`
+	AIVerdict    string `json:"ai_verdict,omitempty"`
+	AIReason     string `json:"ai_reason,omitempty"`
+	AIConfidence int    `json:"ai_confidence,omitempty"`
+	AIModel      string `json:"ai_model,omitempty"`
+	// AIInjected: the AI found malicious code added to a legitimate file
+	// (it can be trimmed).
+	AIInjected bool `json:"ai_injected,omitempty"`
 }
 
 // Scan is one scan job.
@@ -69,6 +74,9 @@ type Scanner struct {
 	Log      *slog.Logger
 	// OnFinding is called for every new detection (notifications).
 	OnFinding func(Finding)
+	// OnClean is called for new or changed code files the realtime scanner
+	// found clean (the AI scanner's "all files" mode).
+	OnClean func(path string, info fs.FileInfo)
 
 	mu      sync.Mutex
 	cancels map[int64]context.CancelFunc
@@ -557,7 +565,13 @@ func (s *Scanner) ScanFile(path string) {
 		return
 	}
 	det, err := s.CheckFile(path, info, cfg)
-	if err != nil || det == nil {
+	if err != nil {
+		return
+	}
+	if det == nil {
+		if s.OnClean != nil && CodeExts[extOf(filepath.Base(path))] {
+			s.OnClean(path, info)
+		}
 		return
 	}
 	_, _ = s.Record(0, "realtime", path, info, *det)
@@ -639,8 +653,8 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	if err := s.DB.QueryRow(`SELECT count(*) FROM findings WHERE `+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(`SELECT id, scan_id, source, path, owner, category, signature, findings.sha256, size, status, created_at, updated_at,
-		coalesce(v.verdict, ''), coalesce(v.reason, '')
+	rows, err := s.DB.Query(`SELECT id, scan_id, findings.source, path, owner, category, signature, findings.sha256, findings.size, status, created_at, updated_at,
+		coalesce(v.verdict, ''), coalesce(v.reason, ''), coalesce(v.confidence, 0), coalesce(v.model, ''), coalesce(v.injected, 0)
 		FROM findings LEFT JOIN ai_verdicts v ON v.sha256 = findings.sha256 AND findings.sha256 != ''
 		WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -650,7 +664,7 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	out := []Finding{}
 	for rows.Next() {
 		var x Finding
-		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt, &x.AIVerdict, &x.AIReason); err != nil {
+		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt, &x.AIVerdict, &x.AIReason, &x.AIConfidence, &x.AIModel, &x.AIInjected); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, x)

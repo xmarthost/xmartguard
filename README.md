@@ -60,14 +60,36 @@ On cPanel servers the agent installs two plugins (and refreshes them on every up
 
 The plugins have no logic of their own: they talk to the agent's local socket, which identifies the caller by its Unix uid (kernel `SO_PEERCRED`). A cPanel account can only see and act on files inside its own home directory. To disable the plugins: `touch /etc/xmartguard/no-panel-plugin && xmartguard-agent panel uninstall`.
 
-Command line (root): `xmartguard-agent call overview`, `xmartguard-agent call fw.add '{"kind":"deny","addr":"203.0.113.9"}'`, `xmartguard-agent check /home/user/public_html` (offline scan).
+### Command line: `xgcli`
 
-## What it protects (0.5.1)
+Like cPanel's `cpgcli`, run as root on any server with the agent (`xgcli --help` lists everything):
+
+```bash
+xgcli status                                   # protection overview
+xgcli scan --path /home/user/public_html       # scan and show progress
+xgcli scan --list | --result ID [--export f.csv]
+xgcli logs --status quarantined                # detections (log IDs)
+xgcli view 123                                 # show a detected file, injected lines marked ">"
+xgcli log-action --quarantine --user bob --from '-24 hours' --to now
+xgcli log-action --trim --log-id 123           # remove only the code the AI located
+xgcli ai-scan --provider portal --scope all    # free AI APIs, check every new file
+xgcli trim --enable --max 20
+xgcli fw --deny-country CN,RU | --port tcp-in --add 2083 | --ipdb enable
+xgcli ip --temp-ban 203.0.113.9 --expiry 2h --reason 'scanner'
+xgcli ip --allow 10.0.0.1 --reason 'office' | --check 10.0.0.1
+xgcli whitelist --user --add alice | --file --add /home/a/public_html/cache
+xgcli waf --disable webshell | --whitelist --add 7700012
+xgcli config --export settings.json            # and --import FILE|URL on another server
+```
+
+Also: `scanner`, `dailyscan`, `weeklyscan`, `watch`, `blacklist`, `file-action`, `cleanup`, `lfd`, `bot-check`, `account-suspend`, `rootkit`, `process-monitor`, `cron-monitor`, `osm`, `ip-reputation`, `dbscan`, `notification`, `cms`, `upload-scanner`, `cloud`. Low level: `xmartguard-agent call ACTION '{json}'`, `xmartguard-agent check PATH` (offline scan).
+
+## What it protects (0.6.0)
 
 | Module | What it does |
 |---|---|
-| Malware scanner | Realtime (inotify), quick/full/path, daily and weekly scans; own heuristic analyzer + known-bad hash database + ClamAV + optional YARA rules (`/etc/xmartguard/yara/*.yar`); quarantine/restore/disable/delete; insecure symlink detection; auto clean of infected WordPress core files from the official release |
-| AI scanner | Second opinion on suspicious files. Default: **built-in model, free and local** (logistic regression over code features, trained on real quarantine data; retrain with `xmartguard-agent ai-train`). Free LLM on the portal (installer menu picks an Ollama model for the RAM), own Ollama, or Claude (own Anthropic API key) |
+| Malware scanner | Realtime (inotify), quick/full/path, daily and weekly scans; own heuristic analyzer + known-bad hash database + fleet-learned hashes + ClamAV + optional YARA rules (`/etc/xmartguard/yara/*.yar`); quarantine/restore/disable/delete/trim; view detected files from the logs; insecure symlink detection; auto clean of infected WordPress core files from the official release |
+| AI scanner | **Free AI APIs** (Gemini, Groq, OpenRouter, Cerebras, Mistral, GitHub Models, NVIDIA, Hugging Face, Cloudflare, any OpenAI-compatible) configured once in the portal for all servers, many keys per provider with automatic failover; batched, compact requests; **shared knowledge base** (a file judged on one server is known on all); **fleet training** of every server's built-in model; checks detections only or every new file; **Trim** removes only injected code and keeps the site live. Offline default: built-in model |
 | WAF | Own ModSecurity rules for Apache/LiteSpeed: uploads scanned by the malware engine, web shell protection, PHP-upload blocking, sensitive files, WordPress hardening, bad/SEO/AI/custom bots, protected login URLs, whitelisted domains; per-rule disable, config test with automatic rollback |
 | Brute force | SSH, cPanel/WHM/Webmail, Dovecot, Postfix, Exim, FTP, Apache denials and CMS logins; per-rule exclusion; addresses the WAF keeps blocking are banned ("N WAF blocked") |
 | Firewall | iptables+ipset (default) or nftables: allow/deny/temp ban/temp allow/ignore lists, ignored/allowed/blocked countries, DDNS allowlist, port filter (TCP/UDP in/out), DoS, self-healing; **CAPTCHA page for banned visitors** (built-in image challenge, or Turnstile/reCAPTCHA); live log of blocked connections |
@@ -96,32 +118,25 @@ bash /root/setup.sh --domain xmartguard.com --email you@example.com
 
 The script installs Docker, builds the portal, sets up HTTPS and prints the first admin password. Re-run the same two lines to update.
 
-### Free AI model (optional)
+### AI scanner (free AI APIs)
 
-During setup a menu lists free AI models (Ollama) with the RAM each needs and recommends one for the server's RAM (the portal leaves most RAM to itself and to websites). The model runs in Docker next to the portal and is never exposed; agents send suspicious files to the portal, signed with their key, and pick **XMart Guard AI server** as AI provider (Settings » Virus Scanner, or Mass Operations » "Use the portal AI model").
+Nothing runs on the portal server: open **AI Scanner** in the portal and add free API keys. Every linked server uses them through the portal (requests are signed with each agent's key).
 
-| Model | Download | RAM | Recommended for |
-|---|---|---|---|
-| qwen2.5-coder:1.5b | 1.0 GB | 2 GB | small VPS |
-| qwen2.5-coder:3b | 1.9 GB | 4 GB | 8 GB RAM |
-| qwen2.5-coder:7b | 4.7 GB | 6 GB | 16 GB RAM |
-| deepseek-coder-v2:16b | 8.9 GB | 11 GB | option |
-| qwen2.5-coder:14b | 9.0 GB | 12 GB | 32 GB RAM |
-| codestral:22b | 12.6 GB | 16 GB | option (slower) |
-| qwen3-coder:30b | 19 GB | 22 GB | 48–64 GB RAM (best on CPU) |
-| qwen2.5-coder:32b | 20 GB | 24 GB | option (slow on CPU) |
+| Provider | Free key | Free limits (approx.) |
+|---|---|---|
+| Google Gemini | [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) | 10–15 requests/min, daily cap per model |
+| Groq | [console.groq.com/keys](https://console.groq.com/keys) | 30 requests/min, 1,000/day per model |
+| OpenRouter | [openrouter.ai/keys](https://openrouter.ai/keys) | `:free` models, 20/min, 50/day (1,000/day after a $10 top-up) |
+| Mistral, Cerebras, GitHub Models, NVIDIA NIM, Hugging Face, Cloudflare Workers AI | see the portal | small free tiers |
 
-Options: `--ai MODEL` (no menu), `--ai none`, or run the model on a separate bigger server:
+- Add as many keys as you like (e.g. 5–7 Gemini keys, then Groq and OpenRouter). Lower priority numbers are tried first; keys with the same priority share the load. A key that hits its limit, fails or is rejected rests (as long as the provider's `Retry-After` says, an hour for daily quotas) and the next key answers.
+- **Fetch models** lists the models of a key (OpenRouter: only free ones by default).
+- Tokens stay low: files any server already had judged are answered from the shared knowledge base; up to 6 files share one request and one copy of the instructions; big files are reduced to their start, end and the lines around risky calls; long encoded strings are shortened; the fixed instructions come first so providers that cache prompts reuse them.
+- Per server (Settings » Virus Scanner » AI scanner): **XMart Guard AI** and which files go to the AI — detections only, or every new/changed code file (with an hourly cap) so the scanner learns from them.
+- **Learn from all servers**: files any server's AI found malicious (≥90%) become hash detections everywhere within 10 minutes, and the portal retrains a small update of the built-in model from the AI's verdicts that every agent applies. Correct a verdict under AI Scanner » Shared knowledge and all servers follow.
+- **Trim** (Settings » Virus Scanner): when the AI marks code injected into a legitimate file, only those lines are removed; the file must pass `php -l` and a rescan, and the original stays in quarantine (Restore puts it back).
 
-```bash
-# on the AI server (e.g. 64 GB RAM)
-curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-ai.sh -o setup-ai.sh
-bash setup-ai.sh --portal-ip PORTAL_SERVER_IP
-# then on the portal server
-bash /root/setup.sh --domain xmartguard.com --email you@example.com --ai-url http://AI_SERVER_IP:11434 --ai-model qwen3-coder:30b
-```
-
-Without any of this, every agent still uses its built-in free model.
+Upgrading from 0.5: re-running the setup script removes the local AI model (Ollama container, its downloaded models and a native Ollama installed by the old `setup-ai.sh`). Servers set to Ollama or Claude switch to XMart Guard AI automatically. On a separate AI server made with the old `setup-ai.sh`: `systemctl disable --now ollama && rm -rf /usr/local/bin/ollama /usr/local/lib/ollama /usr/share/ollama /etc/systemd/system/ollama.service*`.
 
 ## Development
 

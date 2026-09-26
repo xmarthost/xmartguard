@@ -122,6 +122,14 @@ func (s *Scanner) Restore(id int64) error {
 			return err
 		}
 	case "disabled":
+	case "trimmed":
+		// Put the original (untrimmed) file back.
+		if err := moveFile(r.qpath, r.path+".xg-restore", os.FileMode(r.mode)); err != nil {
+			return err
+		}
+		if err := os.Rename(r.path+".xg-restore", r.path); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("cannot restore a %s file", r.status)
 	}
@@ -145,6 +153,8 @@ func (s *Scanner) Delete(id int64) error {
 	case "quarantined":
 		target = r.qpath
 	case "detected", "disabled", "restored", "ignored":
+	case "trimmed":
+		_ = os.Remove(r.qpath) // the untrimmed original
 	default:
 		return fmt.Errorf("cannot delete a %s file", r.status)
 	}
@@ -195,7 +205,7 @@ func (s *Scanner) ContentPath(id int64) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	if r.status == "quarantined" && r.qpath != "" {
+	if (r.status == "quarantined" || r.status == "trimmed") && r.qpath != "" {
 		return r.qpath, r.status, nil
 	}
 	return r.path, r.status, nil

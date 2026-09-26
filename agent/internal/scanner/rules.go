@@ -44,6 +44,12 @@ var ScriptExts = map[string]bool{
 	".ico": true, ".jpg": true, ".png": true, ".gif": true, ".txt": true, ".htaccess": true, ".suspected": true, "": true,
 }
 
+// CodeExts are code files the AI scanner's "all files" mode checks.
+var CodeExts = map[string]bool{
+	".php": true, ".phtml": true, ".php5": true, ".php7": true, ".php8": true, ".inc": true, ".pht": true,
+	".js": true, ".html": true, ".htm": true, ".pl": true, ".cgi": true, ".py": true, ".sh": true, ".htaccess": true,
+}
+
 // eicar is the industry-standard antivirus test string.
 const eicar = `X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`
 

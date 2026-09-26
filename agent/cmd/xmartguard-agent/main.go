@@ -38,6 +38,14 @@ import (
 )
 
 func main() {
+	// Installed as /usr/local/bin/xgcli (a link to the agent binary).
+	if filepath.Base(os.Args[0]) == "xgcli" {
+		if err := cmdCLI(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -94,6 +102,8 @@ func main() {
 		}
 	case "call":
 		err = cmdCall(os.Args[2:])
+	case "cli":
+		err = cmdCLI(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
 	case "help", "--help", "-h":
@@ -121,6 +131,7 @@ Usage:
   xmartguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses)
   xmartguard-agent panel install|uninstall|status   manage the WHM/cPanel plugins
   xmartguard-agent call ACTION ['{"json":"params"}']  call the running agent (root)
+  xgcli COMMAND ...             command line like cpgcli (also: xmartguard-agent cli ...; xgcli --help)
   xmartguard-agent version
 `)
 }
@@ -200,6 +211,7 @@ func cmdRun() error {
 	defer a.DB.Close()
 	// Exit non-zero so systemd (Restart=on-failure) starts the new binary.
 	a.ExitForUpdate = func() { a.Mailer.Flush(); os.Exit(3) }
+	ensureCLILink(log)
 	a.Start(ctx)
 	go func() {
 		if err := a.LocalServer().Run(ctx); err != nil {
@@ -377,4 +389,26 @@ func cmdCall(args []string) error {
 	var v any
 	_ = json.Unmarshal(data, &v)
 	return printJSON(v)
+}
+
+// ensureCLILink provides the xgcli command on servers installed before it
+// existed (agents update themselves without re-running the installer).
+func ensureCLILink(log *slog.Logger) {
+	const link = "/usr/local/bin/xgcli"
+	if os.Geteuid() != 0 {
+		return
+	}
+	if _, err := os.Lstat(link); err == nil {
+		return
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	if r, err := filepath.EvalSymlinks(self); err == nil {
+		self = r
+	}
+	if err := os.Symlink(self, link); err != nil {
+		log.Debug("xgcli link not created", "err", err)
+	}
 }

@@ -35,6 +35,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'domainrep.get': { role: 'viewer', mutates: false },
   'suspend.list': { role: 'viewer', mutates: false },
   'dashboard.get': { role: 'viewer', mutates: false },
+  'finding.content': { role: 'operator', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },
   'scan.stop': { role: 'operator', mutates: true },
@@ -45,6 +46,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'fw.unblock': { role: 'operator', mutates: true },
   'fw.event_delete': { role: 'operator', mutates: true },
   'ai.check': { role: 'operator', mutates: true, timeoutMs: 300_000 },
+  'ai.sync': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'monitor.rootkit': { role: 'admin', mutates: true, timeoutMs: 3_600_000 },
   'reputation.check': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'cms.scan': { role: 'operator', mutates: true },

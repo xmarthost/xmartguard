@@ -3,6 +3,7 @@
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -137,6 +138,73 @@ describe('agent end-to-end', () => {
     expect((await cmd('fw.unblock', { addr: '198.51.100.0/24' })).status).toBe(200);
     expect((await cmd('fw.check', { ip: '198.51.100.9' })).body.status).toBe('none');
   });
+
+  it('asks the portal AI, trims injected code and serves xgcli', async () => {
+    // A fake OpenAI-compatible API: marks lines with eval( as injected.
+    const calls: any[] = [];
+    const api = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (d) => (raw += d));
+      req.on('end', () => {
+        const body = JSON.parse(raw || '{}');
+        calls.push(body);
+        const user: string = body.messages?.[1]?.content ?? '';
+        const results = [...user.matchAll(/<file id=(\d+)[^>]*>\n([\s\S]*?)\n<\/file>/g)].map(([, id, text]) => {
+          const bad = text.split('\n').filter((l) => l.includes('eval(')).map((l) => Number(l.split('|')[0]));
+          return bad.length
+            ? { id, verdict: 'malicious', confidence: 96, reason: 'eval of POST data added to a plugin', injected: true, cut: bad.map((n) => ({ from: n, to: n })) }
+            : { id, verdict: 'clean', confidence: 90, reason: 'ordinary code', injected: false, cut: [] };
+        });
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ results }) } }], usage: { prompt_tokens: 50, completion_tokens: 10 } }));
+      });
+    });
+    await new Promise<void>((r) => api.listen(0, '127.0.0.1', r));
+    try {
+      const url = `http://127.0.0.1:${(api.address() as any).port}/v1`;
+      expect((await c.req('POST', '/api/ai/providers', { kind: 'custom', name: 'Fake Gemini', base_url: url, api_key: 'k', model: 'm', priority: 1 })).status).toBe(200);
+      const set = await cmd('settings.set', { ai: { enabled: true, provider: 'portal', learn: true }, scanner: { trim: true, virus_action: 'notify' } });
+      expect(set.status).toBe(200);
+
+      const legit = ['function my_plugin_init() {', "  add_action('init', 'my_plugin_setup');", '}', ...Array.from({ length: 40 }, (_, i) => `// plugin line ${i}`)].join('\n');
+      const injected = ['<?php @ev', "al($_POST['x']); ?>"].join('') + '\n<?php\n' + legit + '\n';
+      const dir = path.join(webDir, 'plugin');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'plugin.php'), injected);
+      const start = await cmd('scan.start', { kind: 'path', path: dir });
+      const trimmed = await waitFor(async () => {
+        const r = await cmd('findings.list', { scan_id: start.body.id });
+        const f = r.body.findings?.[0];
+        return f && f.status === 'trimmed' ? f : null;
+      }, 30_000);
+      expect(trimmed.ai_verdict).toBe('malicious');
+      expect(trimmed.ai_injected).toBe(true);
+      // The site keeps running with only the injected line removed.
+      expect(fs.readFileSync(path.join(dir, 'plugin.php'), 'utf8')).toBe('<?php\n' + legit + '\n');
+      // The original is viewable from the logs, with the AI's cut marked.
+      const content = await cmd('finding.content', { id: trimmed.id });
+      expect(content.body.content).toBe(injected);
+      expect(content.body.ai.cut).toEqual([{ from: 1, to: 1 }]);
+      // The request carried an excerpt with line numbers, not the raw file.
+      expect(calls[0].messages[1].content).toContain("1|<?php @ev");
+      // The verdict joined the fleet's knowledge base.
+      const kb = await c.req('GET', '/api/ai/kb?verdict=malicious');
+      expect(kb.body.entries[0]).toMatchObject({ name: 'plugin.php', injected: true });
+
+      // xgcli talks to the same agent over the local socket.
+      const status = await run(['cli', 'status'], env());
+      expect(status).toContain('AI scanner');
+      expect(status).toMatch(/portal/);
+      const logs = await run(['cli', 'logs', '--status', 'trimmed'], env());
+      expect(logs).toContain('plugin.php');
+      const view = await run(['cli', 'view', String(trimmed.id)], env());
+      expect(view).toMatch(/^>\s+1 \| <\?php @eval/m);
+      await run(['cli', 'whitelist', '--user', '--add', 'carol'], env());
+      expect((await cmd('settings.get')).body.settings.scanner.whitelist_users).toContain('carol');
+    } finally {
+      api.close();
+    }
+  }, 60_000);
 
   it('rejects unknown actions and enforces roles on agent commands', async () => {
     expect((await cmd('shell.exec', { cmd: 'id' })).status).toBe(404);

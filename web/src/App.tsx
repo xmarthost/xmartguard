@@ -1,3 +1,4 @@
+import AIScanner from './pages/AIScanner';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { lazy, Suspense, type ReactNode } from 'react';
 import { AuthProvider, can, useAuth } from './auth';
@@ -56,6 +57,7 @@ export default function App() {
         <Route path="/servers/:id/security-monitor" element={<Protected><SecurityMonitor /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
+        <Route path="/ai" element={<Protected><AIScanner /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />

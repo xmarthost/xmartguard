@@ -41,11 +41,14 @@ export interface Config {
   adminEmail?: string;
   adminPassword?: string;
   logLevel: string;
-  /** Self-hosted Ollama used by the AI scanner gateway (empty disables). */
-  ollamaUrl: string;
-  ollamaModel: string;
-  aiConcurrency: number;
+  /** AI scanner gateway: seconds per AI API call before trying the next key. */
   aiTimeoutSeconds: number;
+  /** Files judged in one AI API request (fewer requests, one copy of the instructions). */
+  aiBatchFiles: number;
+  /** How long a request waits for more files to share its batch. */
+  aiBatchWaitMs: number;
+  /** Background retraining of the fleet model (disabled in tests). */
+  aiTraining: boolean;
 }
 
 function bool(v: string | undefined, def: boolean): boolean {
@@ -92,9 +95,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     adminEmail: env.ADMIN_EMAIL || undefined,
     adminPassword: env.ADMIN_PASSWORD || undefined,
     logLevel: env.LOG_LEVEL || 'info',
-    ollamaUrl: (env.OLLAMA_URL || '').replace(/\/+$/, ''),
-    ollamaModel: env.OLLAMA_MODEL || '',
-    aiConcurrency: int(env.AI_CONCURRENCY, 1),
-    aiTimeoutSeconds: int(env.AI_TIMEOUT_SECONDS, 300),
+    aiTimeoutSeconds: int(env.AI_TIMEOUT_SECONDS, 90),
+    aiBatchFiles: int(env.AI_BATCH_FILES, 6),
+    aiBatchWaitMs: int(env.AI_BATCH_WAIT_MS, 2500),
+    aiTraining: bool(env.AI_TRAINING, true),
   };
 }

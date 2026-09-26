@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Download, FileSearch, FolderSearch, RefreshCw, ScanSearch, Sparkles, Square, Trash2 } from 'lucide-react';
+import { Download, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Sparkles, Square, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { bytes } from '../format';
 import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
@@ -35,6 +35,19 @@ interface Finding {
   created_at: number;
   ai_verdict?: string;
   ai_reason?: string;
+  ai_confidence?: number;
+  ai_model?: string;
+  ai_injected?: boolean;
+}
+
+interface AIResult {
+  verdict: string;
+  confidence: number;
+  reason: string;
+  model: string;
+  source?: string;
+  injected?: boolean;
+  cut?: { from: number; to: number; text?: string }[];
 }
 
 const AI_STYLE: Record<string, string> = {
@@ -213,7 +226,8 @@ export function ScannerLogs() {
   const [offset, setOffset] = useState(0);
   const [sel, setSel] = useState<number[]>([]);
   const [detail, setDetail] = useState<Finding | null>(null);
-  const [aiRes, setAiRes] = useState<{ verdict: string; confidence: number; reason: string; model: string } | null>(null);
+  const [aiRes, setAiRes] = useState<AIResult | null>(null);
+  const [viewing, setViewing] = useState<Finding | null>(null);
   const limit = 25;
   const params = { scan_id: scanId, category, status, q: query, limit, offset };
   const list = useAgent<{ findings: Finding[]; total: number }>(id, 'findings.list', params, 15_000);
@@ -258,7 +272,7 @@ export function ScannerLogs() {
           </select>
           <select className="input w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
-            {['detected', 'quarantined', 'disabled', 'cleaned', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s}</option>)}
+            {['detected', 'quarantined', 'disabled', 'trimmed', 'cleaned', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
           <form onSubmit={(e) => (e.preventDefault(), setQuery(q))}>
             <input className="input w-56" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -364,7 +378,7 @@ export function ScannerLogs() {
               </div>
               {canAct && detail.status !== 'deleted' && detail.category !== 'symlink' && (
                 <button className="btn-outline px-3 py-1 text-xs" disabled={busy} onClick={async () => {
-                  const r = await run(() => agentCall<{ verdict: string; confidence: number; reason: string; model: string }>(id!, 'ai.check', { id: detail.id }));
+                  const r = await run(() => agentCall<AIResult>(id!, 'ai.check', { id: detail.id }));
                   if (r) {
                     setAiRes(r);
                     list.reload();
@@ -375,6 +389,37 @@ export function ScannerLogs() {
               )}
             </div>
             {(aiRes?.reason ?? detail.ai_reason) && <p className="mt-2 text-slate-600">{aiRes?.reason ?? detail.ai_reason}</p>}
+            {(aiRes?.injected ?? detail.ai_injected) && (
+              <p className="mt-2 text-blue-800">
+                The AI found code injected into an otherwise legitimate file
+                {aiRes?.cut?.length ? ` (lines ${aiRes.cut.map((c) => (c.from === c.to ? c.from : `${c.from}-${c.to}`)).join(', ')})` : ''}. Trim removes only that
+                code and keeps the site running.
+              </p>
+            )}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {canAct && detail.status !== 'deleted' && detail.category !== 'symlink' && (
+              <button className="btn-outline" onClick={() => setViewing(detail)}>
+                <FileCode2 className="h-4 w-4" /> View file
+              </button>
+            )}
+            {canAct && (aiRes?.injected ?? detail.ai_injected) && ['detected', 'quarantined', 'disabled'].includes(detail.status) && (
+              <button
+                className="btn-primary"
+                disabled={busy}
+                onClick={async () => {
+                  if (!confirm('Remove only the injected code the AI located and put the cleaned file live? The original stays in quarantine.')) return;
+                  const r = await run(() => agentCall<{ done: number; failed: Record<string, string> }>(id!, 'finding.action', { ids: [detail.id], action: 'trim' }));
+                  if (r && Object.keys(r.failed).length) alert(Object.values(r.failed)[0]);
+                  else if (r) {
+                    setDetail(null);
+                    list.reload();
+                  }
+                }}
+              >
+                <Scissors className="h-4 w-4" /> Trim injected code
+              </button>
+            )}
           </div>
           {canAct && (
             <div className="mt-6 flex flex-wrap gap-2">
@@ -398,6 +443,64 @@ export function ScannerLogs() {
           )}
         </Modal>
       )}
+      {viewing && <FileViewer serverId={id!} finding={viewing} onClose={() => setViewing(null)} />}
     </div>
+  );
+}
+
+interface Content {
+  content: string;
+  truncated: boolean;
+  binary: boolean;
+  ai?: AIResult;
+}
+
+/** Shows a detected file (from quarantine when it was moved there) with the AI's injected lines marked. */
+function FileViewer({ serverId, finding, onClose }: { serverId: string; finding: Finding; onClose: () => void }) {
+  const [data, setData] = useState<Content | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [wrap, setWrap] = useState(true);
+  useEffect(() => {
+    agentCall<Content>(serverId, 'finding.content', { id: finding.id }).then(setData, (e) => setErr(e.message));
+  }, [serverId, finding.id]);
+  const marked = new Map<number, string | undefined>();
+  for (const c of data?.ai?.cut ?? []) for (let n = c.from; n <= c.to; n++) marked.set(n, c.text);
+  const lines = data?.content.split('\n') ?? [];
+  return (
+    <Modal title={finding.path.split('/').pop() ?? 'File'} onClose={onClose} wide>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+        <span className="break-all">
+          {finding.path}
+          {finding.status === 'quarantined' && ' · shown from quarantine'}
+          {finding.status === 'trimmed' && ' · original before trimming'}
+        </span>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={wrap} onChange={(e) => setWrap(e.target.checked)} /> wrap long lines
+        </label>
+      </div>
+      {marked.size > 0 && (
+        <div className="mb-2 flex items-center gap-2 text-xs text-red-700">
+          <span className="inline-block h-3 w-3 rounded-sm bg-red-200" /> lines the AI marked as injected code
+        </div>
+      )}
+      {err && <ErrorBox message={err} />}
+      {!data && !err && <PageLoader />}
+      {data?.binary && <Empty text="Binary file: it cannot be shown as text." />}
+      {data && !data.binary && (
+        <div className="max-h-[65vh] overflow-auto rounded-lg border border-slate-200 bg-slate-950 text-[12px] leading-5 text-slate-100">
+          <table className="w-full border-collapse font-mono">
+            <tbody>
+              {lines.map((l, i) => (
+                <tr key={i} className={marked.has(i + 1) ? 'bg-red-900/60' : ''}>
+                  <td className="w-12 border-r border-slate-800 pr-2 text-right align-top text-slate-500 select-none">{i + 1}</td>
+                  <td className={`pl-3 align-top ${wrap ? 'break-all whitespace-pre-wrap' : 'whitespace-pre'}`}>{l || ' '}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {data?.truncated && <p className="mt-2 text-xs text-amber-700">Only the first 512 KB are shown.</p>}
+    </Modal>
   );
 }

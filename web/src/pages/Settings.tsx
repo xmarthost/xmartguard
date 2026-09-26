@@ -22,6 +22,8 @@ interface ScannerS {
   blacklist_names: string[];
   delete_symlinks: boolean;
   auto_clean: boolean;
+  trim: boolean;
+  trim_max_percent: number;
   user_scans: boolean;
   yara: boolean;
   db_whitelist: { id: string; reason: string }[];
@@ -29,12 +31,12 @@ interface ScannerS {
 }
 interface AIS {
   enabled: boolean;
-  provider: 'builtin' | 'portal' | 'ollama' | 'anthropic';
-  api_key: string;
-  ollama_url: string;
-  model: string;
+  provider: 'builtin' | 'portal';
+  scope: 'suspicious' | 'all';
+  max_per_hour: number;
   max_kb: number;
   act: boolean;
+  learn: boolean;
 }
 interface ProcS {
   enabled: boolean;
@@ -296,6 +298,28 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         <SettingRow title="Auto clean infected files" desc="When an infected file is a WordPress core file, restore the original from the official WordPress release (content, plugins and themes are not touched)" recommended>
           <Toggle on={s.auto_clean} disabled={dis} onChange={(v) => onSave({ auto_clean: v })} />
         </SettingRow>
+        <SettingRow
+          title="Trim injected code"
+          desc="When the AI finds hacker code added to a legitimate file (e.g. a backdoor at the top of a plugin file), remove only that code and keep the site running instead of quarantining the whole file. The change is kept only if the file still passes a PHP syntax check and a rescan; the original stays in quarantine and can be restored. Needs the XMart Guard AI (portal) provider."
+          recommended
+        >
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1 text-xs text-slate-500">
+              max
+              <input
+                className="input w-16 !py-1"
+                type="number"
+                min={1}
+                max={50}
+                defaultValue={s.trim_max_percent}
+                disabled={dis}
+                onBlur={(e) => Number(e.target.value) !== s.trim_max_percent && onSave({ trim_max_percent: Number(e.target.value) })}
+              />
+              % of file
+            </label>
+            <Toggle on={s.trim} disabled={dis} onChange={(v) => onSave({ trim: v })} />
+          </div>
+        </SettingRow>
         <SettingRow title="YARA rules" desc="Also run YARA rules placed in /etc/xmartguard/yara/*.yar (requires the yara package)">
           <Toggle on={s.yara} disabled={dis} onChange={(v) => onSave({ yara: v })} />
         </SettingRow>
@@ -376,27 +400,33 @@ function DBWhitelistEditor({ items, disabled, onChange }: { items: { id: string;
 }
 
 const AI_PROVIDERS = [
-  { v: 'builtin', l: 'Built-in AI model (free)', d: 'XMart Guard’s own model runs on the server. Free, private, nothing is sent anywhere. Retrained from real quarantine data with every release.' },
-  { v: 'portal', l: 'XMart Guard AI server (free)', d: 'The free AI model installed with the portal (setup script menu). Files go only to your own portal; nothing to configure on the servers.' },
-  { v: 'ollama', l: 'Ollama (free, self-hosted LLM)', d: 'A language model you run yourself with Ollama (e.g. qwen2.5-coder). Free; files are sent only to your Ollama server.' },
-  { v: 'anthropic', l: 'Claude (Anthropic API, paid)', d: 'Uses your own Anthropic API key. File contents are sent to Anthropic; billed per use.' },
+  {
+    v: 'builtin',
+    l: 'Built-in AI model (free, offline)',
+    d: 'XMart Guard’s own model runs on this server. Free, private, nothing is sent anywhere. It still learns from the fleet when "Learn from all servers" is on.',
+  },
+  {
+    v: 'portal',
+    l: 'XMart Guard AI (free AI APIs)',
+    d: 'Files go to your portal, which asks the free AI APIs you added under AI Scanner (Gemini, Groq, OpenRouter, …) and switches to the next key when one reaches its limit. Needed for Trim and for "all new files".',
+  },
 ] as const;
 
 function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: boolean; onSave: (p: Partial<AIS>) => void }) {
   const dis = !admin || busy;
-  const portalAI = useApi<{ enabled: boolean; model: string; reachable: boolean; installed: boolean }>('/api/ai/status');
-  const pa = portalAI.data;
+  const portalAI = useApi<{ providers: { enabled: number; ready: number } }>('/api/ai/status');
+  const pa = portalAI.data?.providers;
   const [f, setF] = useState(s);
   useEffect(() => setF(s), [s]);
   return (
     <div className="mt-6 border-t border-slate-200 pt-6">
-      <SettingRow title="AI scanner" desc="Check suspicious files with the AI scanner. A confident “malicious” verdict can apply the virus action automatically." recommended>
+      <SettingRow title="AI scanner" desc="Let AI check files. A confident “malicious” verdict can apply the virus action automatically." recommended>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </SettingRow>
       <div className="space-y-2 py-3">
         {AI_PROVIDERS.map((p) => (
           <label key={p.v} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${f.provider === p.v ? 'border-navy-600 bg-navy-100/40' : 'border-slate-200'}`}>
-            <input type="radio" className="mt-1" disabled={dis} checked={f.provider === p.v} onChange={() => setF({ ...f, provider: p.v, model: p.v === 'anthropic' ? 'claude-opus-5' : p.v === 'ollama' ? 'qwen2.5-coder:7b' : '' })} />
+            <input type="radio" className="mt-1" disabled={dis} checked={f.provider === p.v} onChange={() => setF({ ...f, provider: p.v })} />
             <div>
               <div className="text-sm font-medium text-navy-900">{p.l}</div>
               <div className="text-xs text-slate-500">{p.d}</div>
@@ -405,31 +435,58 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
         ))}
       </div>
       {f.provider === 'portal' && (
-        <div className={`mb-3 rounded-lg p-3 text-sm ${pa?.enabled && pa.reachable && pa.installed ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
-          {!pa
-            ? 'Checking the portal AI server…'
-            : !pa.enabled
-              ? 'No AI model is installed on the portal yet. Re-run the portal setup script and pick a model from the menu.'
-              : !pa.reachable
-                ? `The portal cannot reach its AI server (model ${pa.model}).`
-                : !pa.installed
-                  ? `Model ${pa.model} is still downloading on the AI server.`
-                  : `Ready: ${pa.model} on your portal.`}
-        </div>
+        <>
+          <div className={`mb-3 rounded-lg p-3 text-sm ${pa && pa.ready > 0 ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
+            {!pa ? (
+              'Checking the portal AI keys…'
+            ) : pa.enabled === 0 ? (
+              <>
+                No AI API keys yet. Add free keys under{' '}
+                <Link className="font-medium underline" to="/ai">
+                  AI Scanner
+                </Link>
+                ; until then this server uses its built-in model.
+              </>
+            ) : pa.ready === 0 ? (
+              'All AI API keys are resting after reaching their limits; files wait for the next free key (the built-in model answers meanwhile).'
+            ) : (
+              <>
+                Ready: {pa.ready} of {pa.enabled} AI API keys available.{' '}
+                <Link className="font-medium underline" to="/ai">
+                  Manage keys
+                </Link>
+              </>
+            )}
+          </div>
+          <div className="mb-2 text-sm font-medium text-navy-900">Which files go to the AI</div>
+          <div className="grid gap-2 pb-3 md:grid-cols-2">
+            {[
+              { v: 'suspicious', l: 'Detections only', d: 'Suspicious files and malware the scanner found (AI confirms, explains, and locates injected code for Trim). Uses few requests.' },
+              { v: 'all', l: 'Every new or changed code file', d: 'Also checks clean-looking PHP/JS/HTML files as they are uploaded or changed (not inside archives), to catch what signatures miss and teach the scanner.' },
+            ].map((o) => (
+              <label key={o.v} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${f.scope === o.v ? 'border-navy-600 bg-navy-100/40' : 'border-slate-200'}`}>
+                <input type="radio" className="mt-1" disabled={dis} checked={f.scope === o.v} onChange={() => setF({ ...f, scope: o.v as AIS['scope'] })} />
+                <div>
+                  <div className="text-sm font-medium text-navy-900">{o.l}</div>
+                  <div className="text-xs text-slate-500">{o.d}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+          {f.scope === 'all' && (
+            <SettingRow title="Files per hour" desc="Cap on clean files sent in “every new file” mode (detections are never capped). Files already known to any server cost nothing.">
+              <input className="input w-28" type="number" min={1} max={5000} value={f.max_per_hour} disabled={dis} onChange={(e) => setF({ ...f, max_per_hour: Number(e.target.value) })} />
+            </SettingRow>
+          )}
+          <SettingRow title="Excerpt size" desc="How much of a big file is sent (KB). The start, end and risky parts are kept; smaller = fewer tokens.">
+            <input className="input w-28" type="number" min={2} max={64} value={f.max_kb} disabled={dis} onChange={(e) => setF({ ...f, max_kb: Number(e.target.value) })} />
+          </SettingRow>
+        </>
       )}
-      {f.provider === 'ollama' && (
-        <div className="grid gap-3 pb-3 sm:grid-cols-2">
-          <input className="input" placeholder="http://127.0.0.1:11434" value={f.ollama_url} disabled={dis} onChange={(e) => setF({ ...f, ollama_url: e.target.value })} />
-          <input className="input" placeholder="model, e.g. qwen2.5-coder:7b" value={f.model} disabled={dis} onChange={(e) => setF({ ...f, model: e.target.value })} />
-        </div>
-      )}
-      {f.provider === 'anthropic' && (
-        <div className="grid gap-3 pb-3 sm:grid-cols-2">
-          <input className="input" type="password" placeholder="Anthropic API key (sk-ant-…)" value={f.api_key} disabled={dis} onChange={(e) => setF({ ...f, api_key: e.target.value })} />
-          <input className="input" placeholder="claude-opus-5" value={f.model} disabled={dis} onChange={(e) => setF({ ...f, model: e.target.value })} />
-        </div>
-      )}
-      <SettingRow title="Act on AI verdicts" desc="Quarantine or disable (per the virus action) suspicious files the AI is at least 80% sure are malicious">
+      <SettingRow title="Learn from all servers" desc="Files any linked server’s AI found malicious are detected here immediately, and this server’s built-in model gets the fleet’s training updates." recommended>
+        <Toggle on={f.learn} disabled={dis} onChange={(v) => setF({ ...f, learn: v })} />
+      </SettingRow>
+      <SettingRow title="Act on AI verdicts" desc="Quarantine or disable (per the virus action) files the AI is at least 80% sure are malicious">
         <Toggle on={f.act} disabled={dis} onChange={(v) => setF({ ...f, act: v })} />
       </SettingRow>
       <div className="flex justify-end">

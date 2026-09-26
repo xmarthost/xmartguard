@@ -34,10 +34,20 @@ var hashDB = loadHashDB()
 // HashDBPath is where the portal can push signature updates.
 func HashDBPath() string { return store.StateDir() + "/sigs/hashes.txt" }
 
+// LearnedHashPath lists files the AI scanner of any linked server found
+// malicious (the fleet's shared knowledge, synced from the portal).
+func LearnedHashPath() string { return store.StateDir() + "/sigs/learned.txt" }
+
+// LearnedLabel is the signature name of fleet-learned detections.
+const LearnedLabel = "XG.AI.Learned"
+
 func loadHashDB() *HashDB {
 	db := &HashDB{bySize: map[int64][]hashEntry{}}
 	db.merge(baselineHashes)
 	if raw, err := os.ReadFile(HashDBPath()); err == nil {
+		db.merge(string(raw))
+	}
+	if raw, err := os.ReadFile(LearnedHashPath()); err == nil {
 		db.merge(string(raw))
 	}
 	return db

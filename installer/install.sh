@@ -151,8 +151,10 @@ record dir "$HOME_DIR/data"
 rm -f /usr/local/bin/xmartguard-agent
 ln -sfn "$BIN" /usr/local/bin/xmartguard-agent
 ln -sfn "$BIN" /usr/local/bin/xmartguard
+ln -sfn "$BIN" /usr/local/bin/xgcli
 record file /usr/local/bin/xmartguard-agent
 record file /usr/local/bin/xmartguard
+record file /usr/local/bin/xgcli
 ok "Installed $BIN"
 
 # ---------------------------------------------------------------- enroll

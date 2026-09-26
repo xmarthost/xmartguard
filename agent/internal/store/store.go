@@ -293,8 +293,21 @@ func OpenPath(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
+	// Columns added after a table was first released ("duplicate column"
+	// errors mean the column already exists).
+	for _, stmt := range columnMigrations {
+		_, _ = db.Exec(stmt)
+	}
 	_ = os.Chmod(path, 0o600)
 	return db, nil
+}
+
+var columnMigrations = []string{
+	// AI verdicts: injected code that can be trimmed, and where the verdict came from.
+	`ALTER TABLE ai_verdicts ADD COLUMN injected INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE ai_verdicts ADD COLUMN cut TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE ai_verdicts ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE ai_verdicts ADD COLUMN size INTEGER NOT NULL DEFAULT 0`,
 }
 
 // Now is the clock used for timestamps (overridable in tests).

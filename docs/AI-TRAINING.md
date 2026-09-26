@@ -42,3 +42,28 @@ and ~50,000 clean files (WordPress 6.5–7.x, WooCommerce, Jetpack, Elementor,
 Yoast, Joomla, Drupal, Magento, OpenCart, PrestaShop, Laravel, Moodle,
 Nextcloud, phpMyAdmin, Roundcube …). Held out: 87% detected at 0.05% false
 positives (suspicious threshold).
+
+## Fleet training (0.6)
+
+Besides retraining the shipped model from quarantine data, every server can
+learn continuously from the AI APIs configured in the portal:
+
+1. With "Learn from all servers" on, the agent sends the built-in model's
+   feature indices and its logit (`z`) with each file it asks the portal AI
+   about. File contents are not stored for training.
+2. AI verdicts of at least 80% (malicious or clean) become training samples
+   (`ai_samples`); an administrator's correction in AI Scanner » Shared
+   knowledge overrides the label.
+3. Once there are at least 5 malicious and 5 clean examples (learning from
+   malicious files alone would raise the score of every PHP file), every 5
+   minutes (or with "Train fleet model now") the portal trains a small
+   update on top of the base model: logistic regression on `z + Σ delta`,
+   class-balanced, L2-decayed and clamped to ±3 per weight so a single wrong
+   verdict cannot swing it. Only weights that changed are kept.
+4. Agents download the update with the shared verdicts every 10 minutes and
+   score with `base + delta` (model version `<base>+fleet.<n>`). Malicious
+   verdicts of at least 90% also become hash detections (`XG.AI.Learned`).
+
+When a new agent release ships a retrained base model, samples are kept per
+base version and the update is trained again for the new base as servers send
+files.

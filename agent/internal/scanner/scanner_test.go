@@ -124,7 +124,10 @@ func TestPathScanFindsAllSamples(t *testing.T) {
 		fs, _, _ := s.ListFindings(FindingFilter{ScanID: id, Limit: 100})
 		t.Fatalf("infected=%d want %d: %+v", sc.Infected, len(malicious), fs)
 	}
-	fs, total, _ := s.ListFindings(FindingFilter{ScanID: id, Limit: 100})
+	fs, total, lerr := s.ListFindings(FindingFilter{ScanID: id, Limit: 100})
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
 	for _, f := range fs {
 		if !strings.Contains(f.Path, "/mal/") {
 			t.Errorf("false positive: %s (%s)", f.Path, f.Signature)
