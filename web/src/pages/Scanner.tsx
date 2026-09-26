@@ -50,6 +50,7 @@ interface AIResult {
   source?: string;
   injected?: boolean;
   cut?: { from: number; to: number; text?: string }[];
+  status?: string;
 }
 
 const AI_STYLE: Record<string, string> = {
@@ -341,7 +342,7 @@ export function ScannerLogs() {
           </select>
           <select className="input w-40" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">All statuses</option>
-            {['detected', 'quarantined', 'disabled', 'trimmed', 'cleaned', 'cleared', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s}</option>)}
+            {['detected', 'quarantined', 'disabled', 'trimmed', 'cleaned', 'cleared', 'ai_restored', 'restored', 'deleted', 'ignored'].map((s) => <option key={s} value={s}>{s === 'ai_restored' ? 'restored by AI' : s === 'cleared' ? 'false positive' : s}</option>)}
           </select>
           <form onSubmit={(e) => (e.preventDefault(), setQuery(q))}>
             <input className="input w-56" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -380,7 +381,45 @@ export function ScannerLogs() {
           <Empty text="No detections — this server looks clean" />
         ) : (
           <>
-            <table className="w-full text-sm">
+            {/* Phones: one card per detection. */}
+            <div className="md:hidden">
+              {canAct && (
+                <label className="mb-2 flex items-center gap-2 text-sm text-slate-500">
+                  <input type="checkbox" checked={sel.length === rows.length} onChange={(e) => setSel(e.target.checked ? rows.map((r) => r.id) : [])} /> Select all
+                </label>
+              )}
+              <div className="divide-y divide-slate-100">
+                {rows.map((f) => (
+                  <div key={f.id} className="flex gap-3 py-3" onClick={() => setDetail(f)}>
+                    {canAct && (
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4 shrink-0"
+                        checked={sel.includes(f.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setSel(e.target.checked ? [...sel, f.id] : sel.filter((x) => x !== f.id))}
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-medium break-all text-navy-900">{f.path.split('/').pop()}</div>
+                        <Badge value={f.status} />
+                      </div>
+                      <div className="mt-0.5 text-xs break-all text-slate-400">{f.path}</div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                        <Badge value={f.category} />
+                        <AIBadge v={f.ai_verdict} reason={f.ai_reason} confidence={f.ai_confidence} status={f.status} />
+                        <span className="font-mono break-all text-slate-600">{f.signature}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-400">
+                        {f.owner} · {fmtTime(f.created_at)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <table className="hidden w-full text-sm md:table">
               <thead>
                 <tr className="border-b text-left text-slate-500">
                   <th className="w-8 py-3">
@@ -426,12 +465,12 @@ export function ScannerLogs() {
 
       {detail && (
         <Modal title="Detection details" onClose={() => (setDetail(null), setAiRes(null))}>
-          <dl className="grid grid-cols-[140px_1fr] gap-y-2 text-sm">
-            {[
+          <dl className="grid grid-cols-[96px_minmax(0,1fr)] gap-x-2 gap-y-2 text-sm sm:grid-cols-[140px_minmax(0,1fr)]">
+            {([
               ['File', detail.path], ['Owner', detail.owner], ['Category', detail.category], ['Signature', detail.signature],
-              ['Status', detail.status], ['Found by', `${detail.source} scan${detail.scan_id ? ` #${detail.scan_id}` : ''}`],
+              ['Status', <Badge value={detail.status} />], ['Found by', `${detail.source} scan${detail.scan_id ? ` #${detail.scan_id}` : ''}`],
               ['Size', bytes(detail.size)], ['SHA-256', detail.sha256], ['Detected', fmtTime(detail.created_at)],
-            ].map(([k, v]) => (
+            ] as [string, React.ReactNode][]).map(([k, v]) => (
               <div key={k} className="contents">
                 <dt className="text-slate-500">{k}</dt>
                 <dd className="font-mono break-all text-navy-900">{v}</dd>
@@ -450,6 +489,7 @@ export function ScannerLogs() {
                   const r = await run(() => agentCall<AIResult>(id!, 'ai.check', { id: detail.id }));
                   if (r) {
                     setAiRes(r);
+                    if (r.status) setDetail({ ...detail, status: r.status });
                     list.reload();
                   }
                 }}>
@@ -463,6 +503,11 @@ export function ScannerLogs() {
                 The AI found code injected into an otherwise legitimate file
                 {aiRes?.cut?.length ? ` (lines ${aiRes.cut.map((c) => (c.from === c.to ? c.from : `${c.from}-${c.to}`)).join(', ')})` : ''}. Trim removes only that
                 code and keeps the site running.
+              </p>
+            )}
+            {detail.status === 'ai_restored' && (
+              <p className="mt-2 rounded-md bg-emerald-50 px-2.5 py-1.5 text-emerald-800">
+                Restored by AI: the file is back at its original location and will not be flagged again unless its content changes.
               </p>
             )}
           </div>

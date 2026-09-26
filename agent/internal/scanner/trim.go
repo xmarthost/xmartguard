@@ -288,6 +288,15 @@ func (s *Scanner) ReplaceWithOfficial(id int64, official []byte) error {
 // Clear marks a detection as a false positive: a quarantined or disabled
 // file is put back with its owner and permissions.
 func (s *Scanner) Clear(id int64) error {
+	return s.ClearAs(id, "cleared")
+}
+
+// StatusAIRestored marks a file the AI scanner found clean and put back.
+const StatusAIRestored = "ai_restored"
+
+// ClearAs is Clear with the final status (StatusAIRestored when the AI
+// scanner, not an administrator, cleared the file).
+func (s *Scanner) ClearAs(id int64, status string) error {
 	r, err := s.load(id)
 	if err != nil {
 		return err
@@ -301,7 +310,7 @@ func (s *Scanner) Clear(id int64) error {
 	default:
 		return fmt.Errorf("cannot clear a %s file", r.status)
 	}
-	return s.setStatus(id, "cleared", "")
+	return s.setStatus(id, status, "")
 }
 
 // Content returns a finding's current content (the quarantined copy, or the

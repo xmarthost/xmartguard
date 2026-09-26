@@ -611,11 +611,20 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		if f.Status == "deleted" {
 			return nil, errors.New("the file was deleted")
 		}
-		v, err := a.AI.Analyze(ctx, ai.Job{FindingID: f.ID, Path: path, SHA256: f.SHA256, Signature: f.Signature})
+		j := ai.Job{FindingID: f.ID, Path: path, SHA256: f.SHA256, Signature: f.Signature}
+		v, err := a.AI.Analyze(ctx, j)
 		if err != nil {
 			return nil, err
 		}
-		return v, nil
+		// Act on it now, as the background checks do: a confident "clean"
+		// puts the file back at once, a confident "malicious" applies the
+		// virus action or trims injected code.
+		a.onAIVerdict(j, v)
+		after, _ := a.Scanner.Get(in.ID)
+		return struct {
+			ai.Verdict
+			Status string `json:"status"`
+		}{v, after.Status}, nil
 	}
 	// finding.content shows a detected file (from quarantine when it was
 	// moved there) with the lines the AI marked as injected.
@@ -1112,7 +1121,7 @@ func (a *Agent) clearFalsePositive(j ai.Job, v ai.Verdict) {
 	if err != nil || (f.Status != "quarantined" && f.Status != "disabled" && f.Status != "detected") {
 		return
 	}
-	if err := a.Scanner.Clear(f.ID); err != nil {
+	if err := a.Scanner.ClearAs(f.ID, scanner.StatusAIRestored); err != nil {
 		a.Log.Warn("could not restore a file the AI found clean", "path", f.Path, "err", err)
 		return
 	}

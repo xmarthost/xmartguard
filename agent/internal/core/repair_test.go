@@ -88,7 +88,7 @@ func TestAICleanVerdictRestoresFalsePositive(t *testing.T) {
 	ai.Save(a.DB, v)
 	a.onAIVerdict(ai.Job{FindingID: id, Path: p, SHA256: sha}, v)
 	a.DB.QueryRow(`SELECT status FROM findings WHERE id = ?`, id).Scan(&status)
-	if status != "cleared" {
+	if status != scanner.StatusAIRestored {
 		t.Fatalf("status %q", status)
 	}
 	if st, err := os.Stat(p); err != nil || st.Mode().Perm() != 0o640 {

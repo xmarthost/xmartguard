@@ -64,7 +64,7 @@ func (s *Scanner) Quarantine(id int64) error {
 	if err != nil {
 		return err
 	}
-	if r.status != "detected" && r.status != "disabled" && r.status != "restored" {
+	if r.status != "detected" && r.status != "disabled" && r.status != "restored" && r.status != StatusAIRestored {
 		return fmt.Errorf("cannot quarantine a %s file", r.status)
 	}
 	st, err := os.Lstat(r.path)
@@ -94,7 +94,7 @@ func (s *Scanner) Disable(id int64) error {
 	if err != nil {
 		return err
 	}
-	if r.status != "detected" && r.status != "restored" {
+	if r.status != "detected" && r.status != "restored" && r.status != StatusAIRestored {
 		return fmt.Errorf("cannot disable a %s file", r.status)
 	}
 	if err := os.Chmod(r.path, 0o000); err != nil {
@@ -155,7 +155,7 @@ func (s *Scanner) Delete(id int64) error {
 	switch r.status {
 	case "quarantined":
 		target = r.qpath
-	case "detected", "disabled", "restored", "ignored":
+	case "detected", "disabled", "restored", "ignored", StatusAIRestored:
 	case "trimmed", "cleaned":
 		if r.qpath != "" {
 			_ = os.Remove(r.qpath) // the original kept in quarantine

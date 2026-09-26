@@ -488,7 +488,7 @@ func (a *Agent) pruneOld() {
 		}
 	}
 	for _, q := range []string{
-		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored') AND updated_at < ?`,
+		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored','ai_restored') AND updated_at < ?`,
 		`DELETE FROM fw_events WHERE status != 'blocked' AND created_at < ?`,
 		`DELETE FROM waf_events WHERE at < ?`,
 		`DELETE FROM osm_events WHERE at < ?`,

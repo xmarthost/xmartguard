@@ -144,7 +144,7 @@ xmartguard-agent check /home/user/public_html/folder --misses --no-hash   # rule
           changed content is scanned again like any new file.
         </p>
         <p className="mt-2">
-          The AI restores a quarantined file by itself only when an online AI provider says <b>clean</b> with at least 90% confidence. Lower-confidence
+          The AI restores a quarantined file by itself, at once, when an online AI provider says <b>clean</b> with at least 90% confidence (also after <b>Check with AI</b>); Scanner Logs then show <b>Restored by AI</b> and the unchanged file is not flagged again. Lower-confidence
           clean verdicts show an amber ring on the AI badge in Scanner Logs; review them and restore by hand, or use <b>Clear (false positive)</b> to tell
           every server that this content is clean.
         </p>

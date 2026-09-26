@@ -128,12 +128,12 @@ export function Recommended() {
 /** A labelled setting row with a control on the right. */
 export function SettingRow({ title, desc, children, recommended }: { title: string; desc?: string; children: ReactNode; recommended?: boolean }) {
   return (
-    <div className="flex items-start justify-between gap-6 border-b border-slate-100 py-4 last:border-0">
-      <div>
+    <div className="flex flex-col gap-3 border-b border-slate-100 py-4 last:border-0 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
+      <div className="min-w-0">
         <div className="font-medium text-navy-900">{title}</div>
         {desc && <div className="mt-0.5 text-sm text-slate-500">{desc}</div>}
       </div>
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex shrink-0 flex-wrap items-center gap-3">
         {recommended && <Recommended />}
         {children}
       </div>
@@ -275,10 +275,13 @@ const BADGE: Record<string, string> = {
   blocked: 'bg-navy-600 text-white', unblocked: 'bg-slate-100 text-slate-600', expired: 'bg-slate-100 text-slate-500',
   virus: 'bg-red-50 text-red-700', suspicious: 'bg-amber-50 text-amber-700', binary: 'bg-purple-50 text-purple-700',
   symlink: 'bg-indigo-50 text-indigo-700', cleaned: 'bg-green-100 text-green-700', trimmed: 'bg-green-100 text-green-700', cleared: 'bg-emerald-100 text-emerald-700',
+  ai_restored: 'bg-emerald-100 text-emerald-800',
 };
 
+const BADGE_LABEL: Record<string, string> = { ai_restored: 'Restored by AI', cleared: 'False positive' };
+
 export function Badge({ value }: { value: string }) {
-  return <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${BADGE[value] ?? 'bg-slate-100 text-slate-600'}`}>{value}</span>;
+  return <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${BADGE_LABEL[value] ? '' : 'capitalize'} ${BADGE[value] ?? 'bg-slate-100 text-slate-600'}`}>{BADGE_LABEL[value] ?? value.replace(/_/g, ' ')}</span>;
 }
 
 export function fmtTime(ts: number | undefined | null): string {

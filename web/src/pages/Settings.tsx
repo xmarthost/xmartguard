@@ -1052,7 +1052,7 @@ function About({ serverId }: { serverId: string }) {
     <div>
       <h2 className="mb-4 text-lg font-semibold text-navy-900">About XMart Guard</h2>
       <div className="rounded-xl bg-slate-50 p-5 text-sm">
-        <div className="grid grid-cols-[160px_1fr] gap-y-2">
+        <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-2 gap-y-2 sm:grid-cols-[160px_1fr]">
           <span className="text-slate-500">Agent version</span>
           <span className="font-medium">{cur || 'unknown'}</span>
           <span className="text-slate-500">Latest version</span>
