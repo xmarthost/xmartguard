@@ -18,7 +18,7 @@ The agent connects **out** to the portal, so managed servers don't need any inbo
 | `installer/` | One-line `install.sh` / `uninstall.sh` and the real-server `selftest.sh` (served by the portal with its URL baked in) |
 | `deploy/` | Docker Compose stack for the portal (PostgreSQL + portal + Caddy auto-HTTPS) |
 | `scripts/` | `build-agent.sh`, `test-installer.sh` |
-| `docs/` | `PLAN.md` (roadmap), `TESTING.md` (real-server test procedure) |
+| `docs/` | `PROJECT-REPORT.md` (complete A–Z report for new developers/AI), `PLAN.md` (roadmap), `TESTING.md` (real-server test procedure) |
 
 ## Install / uninstall on a server
 
