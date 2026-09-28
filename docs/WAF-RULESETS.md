@@ -103,11 +103,13 @@ added are disabled).
 
 The license/serial key is entered in the portal only (never in this
 repository), is shown masked and is sent only to the linked servers.
-After applying, the agent downloads the feed once the way ModSecurity does
-(`ModSec-key` header, cached for an hour) and reports "N rules downloaded"
-or the vendor's refusal (for example HTTP 403 when the server's IP is not on
-the license) under Rollout, because ModSecurity itself only logs a warning
-(`SecRemoteRulesFailAction Warn`) and keeps serving.
+After applying, the agent reads what ModSecurity logged while loading the
+feed (`Loaded N rules from: '…'` or `Problems loading external resources`)
+in the web server's error log and reports "N rules loaded" or the error
+under Rollout, because ModSecurity itself only logs a warning
+(`SecRemoteRulesFailAction Warn`) and keeps serving. The agent does not
+download the feed itself: Malware.Expert answers other clients with
+"Are you going to steal our rules ?" (HTTP 505).
 
 Malware.Expert replaces the OWASP CRS: on every server linked to an
 enabled Malware.Expert feed (or WHM vendor) the portal sends CRS switched

@@ -307,9 +307,9 @@ func (m *Manager) Apply() error {
 		}
 	}
 	// Remote feeds: ModSecurity only warns when the vendor refuses the
-	// download, so check it here and report the real outcome.
+	// download; report what it logged when loading them.
 	if err == nil && !m.NoSelfTest && extra != "" {
-		m.checkRemoteStates(states)
+		m.checkRemoteStates(states, t.ErrorLogs)
 	}
 	m.mu.Lock()
 	m.target = t
