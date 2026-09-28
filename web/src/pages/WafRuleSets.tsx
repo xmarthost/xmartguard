@@ -166,6 +166,7 @@ export default function WafRuleSets() {
   const [dirty, setDirty] = useState(false);
   const [adding, setAdding] = useState('');
   const [addingFeed, setAddingFeed] = useState('');
+  const [showVendors, setShowVendors] = useState(false);
   const { run, busy } = useAction();
 
   useEffect(() => {
@@ -209,6 +210,10 @@ export default function WafRuleSets() {
     ...cfg.vendors.filter((v) => v.enabled && (!v.servers?.length || v.servers.includes(s.id))).map((v) => v.name),
     ...(cfg.remote ?? []).filter((r) => r.enabled && (!r.servers?.length || r.servers.includes(s.id))).map((r) => r.name),
   ];
+  const isME = (x: { id?: string; url: string }) => x.id === 'malware_expert' || /^https:\/\/(?:rules|vendor)\.malware\.expert\//i.test(x.url);
+  const meServers = data.servers.filter((s) =>
+    [...cfg.vendors, ...(cfg.remote ?? [])].some((x) => x.enabled && isME(x) && (!x.servers?.length || x.servers.includes(s.id))),
+  );
   const current = (s: ServerRow) => s.version != null && s.version === data.version;
   const latest = data.crs.releases[0];
 
@@ -300,86 +305,19 @@ export default function WafRuleSets() {
             </button>
           )}
         </div>
+        {cfg.crs.enabled && meServers.length > 0 && (
+          <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">
+            Turned off automatically on the server(s) that use Malware.Expert, so two generic rule sets never run together: {meServers.map((s) => s.hostname).join(', ')}.
+          </p>
+        )}
         <p className="mt-2 text-xs text-slate-500">
           Where the server already loads its own CRS (cPanel's OWASP vendor, Debian's modsecurity-crs or RHEL's mod_security_crs package), the portal's copy is skipped: loading CRS twice would fail.
         </p>
       </Card>
 
       <Card
-        title="cPanel ModSecurity vendors"
-        desc="Commercial and free rule feeds that WHM installs and keeps updated itself (WHM » Security Center » ModSecurity Vendors). The agent adds each vendor from its configuration URL, enables it with automatic updates, and disables vendors you switch off here."
-      >
-        <div className="mt-3 space-y-3">
-          {cfg.vendors.length === 0 && <div className="text-sm text-slate-400">No vendors yet.</div>}
-          {cfg.vendors.map((v, i) => {
-            const p = data.presets.find((x) => x.id === v.id);
-            return (
-              <div key={v.id} className="rounded-xl border border-slate-200 p-3">
-                <div className="flex flex-wrap items-center gap-3">
-                  <input
-                    className="input w-full font-medium sm:w-64"
-                    value={v.name}
-                    disabled={!isAdmin}
-                    onChange={(e) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })}
-                  />
-                  {p && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{p.price}</span>}
-                  <div className="ml-auto flex items-center gap-2">
-                    <Toggle on={v.enabled} disabled={!isAdmin} onChange={(on) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, enabled: on } : x)) })} />
-                    {isAdmin && (
-                      <button className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-red-600 hover:bg-red-50" title="Remove" onClick={() => set({ ...cfg, vendors: cfg.vendors.filter((_, j) => j !== i) })}>
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <input
-                  className="input mt-2 font-mono text-xs"
-                  placeholder={p?.url_hint ?? 'https://…/meta_vendor.yaml'}
-                  value={v.url}
-                  disabled={!isAdmin}
-                  onChange={(e) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, url: e.target.value.trim() } : x)) })}
-                />
-                <ServerPicker
-                  servers={data.servers}
-                  value={v.servers ?? []}
-                  disabled={!isAdmin}
-                  onChange={(sv) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, servers: sv } : x)) })}
-                />
-                {p && (
-                  <p className="mt-1.5 text-xs text-slate-500">
-                    {p.note}{' '}
-                    {p.site && (
-                      <a href={p.site} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-blue-700 hover:underline">
-                        website <ExternalLink className="h-3 w-3" />
-                      </a>
-                    )}
-                  </p>
-                )}
-              </div>
-            );
-          })}
-          {isAdmin && (
-            <div className="flex flex-wrap items-center gap-2">
-              <select className="input w-full sm:w-72" value={adding} onChange={(e) => setAdding(e.target.value)}>
-                <option value="">Add a vendor…</option>
-                {data.presets.map((p) => (
-                  <option key={p.id} value={p.id} disabled={p.id !== 'custom' && cfg.vendors.some((v) => v.id === p.id)}>
-                    {p.name} — {p.price}
-                  </option>
-                ))}
-              </select>
-              <button className="btn-outline" disabled={!adding} onClick={() => addVendor(data.presets.find((p) => p.id === adding)!)}>
-                <Plus className="h-4 w-4" /> Add
-              </button>
-            </div>
-          )}
-          <p className="text-xs text-slate-500">Vendors are a cPanel/WHM feature; other servers report them as not supported. Only the account owner can add a vendor that is not in the list.</p>
-        </div>
-      </Card>
-
-      <Card
-        title="Remote rule feeds (SecRemoteRules)"
-        desc="For servers without WHM vendors (LiteSpeed, plain Apache): ModSecurity downloads the rules itself with your license key. Malware.Expert gives the key and URL with your subscription."
+        title="Third-party rule sets (Malware.Expert)"
+        desc="ModSecurity downloads the vendor's rules itself with your license key (SecRemoteRules), on cPanel, LiteSpeed and plain Apache servers alike. Link each feed to the servers its license covers."
       >
         <div className="mt-3 space-y-3">
           {(cfg.remote ?? []).length === 0 && <div className="text-sm text-slate-400">No remote feeds.</div>}
@@ -488,10 +426,92 @@ export default function WafRuleSets() {
             </div>
           )}
           <p className="text-xs text-slate-500">
-            The license key is shown masked here and sent only to the linked servers. Only the account owner can add a feed. Use either the WHM vendor or the remote feed for the same rules on a server, not both.
+            The license key is shown masked here and sent only to the linked servers. Only the account owner can add a feed.
+            {cfg.vendors.length === 0 && !showVendors && (
+              <>
+                {' '}
+                <button className="text-blue-700 hover:underline" onClick={() => setShowVendors(true)}>
+                  Add through WHM ModSecurity vendors instead (older method)
+                </button>
+              </>
+            )}
           </p>
         </div>
       </Card>
+
+      {(cfg.vendors.length > 0 || showVendors) && (
+      <Card
+        title="WHM ModSecurity vendors (older method)"
+        desc="The same rule sets installed through WHM » Security Center » ModSecurity Vendors instead of a remote feed; cPanel servers only. Use a remote feed above for Malware.Expert; keep a vendor here only if you already use one. Never use both for the same rules on a server."
+      >
+        <div className="mt-3 space-y-3">
+          {cfg.vendors.length === 0 && <div className="text-sm text-slate-400">No vendors yet.</div>}
+          {cfg.vendors.map((v, i) => {
+            const p = data.presets.find((x) => x.id === v.id);
+            return (
+              <div key={v.id} className="rounded-xl border border-slate-200 p-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    className="input w-full font-medium sm:w-64"
+                    value={v.name}
+                    disabled={!isAdmin}
+                    onChange={(e) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)) })}
+                  />
+                  {p && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{p.price}</span>}
+                  <div className="ml-auto flex items-center gap-2">
+                    <Toggle on={v.enabled} disabled={!isAdmin} onChange={(on) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, enabled: on } : x)) })} />
+                    {isAdmin && (
+                      <button className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-red-600 hover:bg-red-50" title="Remove" onClick={() => set({ ...cfg, vendors: cfg.vendors.filter((_, j) => j !== i) })}>
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <input
+                  className="input mt-2 font-mono text-xs"
+                  placeholder={p?.url_hint ?? 'https://…/meta_vendor.yaml'}
+                  value={v.url}
+                  disabled={!isAdmin}
+                  onChange={(e) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, url: e.target.value.trim() } : x)) })}
+                />
+                <ServerPicker
+                  servers={data.servers}
+                  value={v.servers ?? []}
+                  disabled={!isAdmin}
+                  onChange={(sv) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, servers: sv } : x)) })}
+                />
+                {p && (
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    {p.note}{' '}
+                    {p.site && (
+                      <a href={p.site} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-blue-700 hover:underline">
+                        website <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+          {isAdmin && (
+            <div className="flex flex-wrap items-center gap-2">
+              <select className="input w-full sm:w-72" value={adding} onChange={(e) => setAdding(e.target.value)}>
+                <option value="">Add a vendor…</option>
+                {data.presets.map((p) => (
+                  <option key={p.id} value={p.id} disabled={p.id !== 'custom' && cfg.vendors.some((v) => v.id === p.id)}>
+                    {p.name} — {p.price}
+                  </option>
+                ))}
+              </select>
+              <button className="btn-outline" disabled={!adding} onClick={() => addVendor(data.presets.find((p) => p.id === adding)!)}>
+                <Plus className="h-4 w-4" /> Add
+              </button>
+            </div>
+          )}
+          <p className="text-xs text-slate-500">Vendors are a cPanel/WHM feature; other servers report them as not supported. Only the account owner can add a vendor that is not in the list.</p>
+        </div>
+      </Card>
+      )}
 
       <Card
         title="Custom rules"
@@ -529,8 +549,8 @@ export default function WafRuleSets() {
                   ))}
                 </div>
               )}
-              {s.status?.rule_sets?.filter((r) => r.state === 'error' || r.state === 'unsupported').map((r) => (
-                <div key={r.id} className="mt-1 text-xs text-red-700">
+              {s.status?.rule_sets?.filter((r) => r.detail && r.state !== 'skipped' && (r.state !== 'active' || r.id.startsWith('remote:'))).map((r) => (
+                <div key={r.id} className={`mt-1 text-xs ${r.state === 'error' || r.state === 'unsupported' ? 'text-red-700' : r.state === 'active' ? 'text-emerald-700' : 'text-slate-500'}`}>
                   {r.name}: {r.detail}
                 </div>
               ))}

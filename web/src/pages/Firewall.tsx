@@ -449,12 +449,6 @@ export function FirewallPage() {
         </SettingRow>
       </Section>
 
-      <Section title="AI Bots" desc="Configure AI bot protection settings">
-        <SettingRow title="AI Bots" desc="Block AI training crawlers (GPTBot, CCBot, Bytespider…) with the WAF">
-          <Toggle on={all.waf.ai_bots} disabled={!isAdmin || busy} onChange={(v) => saveAny({ waf: { ai_bots: v } })} />
-        </SettingRow>
-      </Section>
-
       <Section title="Intrusion Defense (LFD)" desc="Monitor logs for suspicious activity and automatically temporary-ban abusive IP addresses">
         <SettingRow title="Intrusion Defense" desc="Detect and temporarily block abusive IP addresses based on log activity and security thresholds" recommended>
           <Toggle on={fw.bruteforce} disabled={!isAdmin || busy} onChange={(v) => save({ bruteforce: v })} />

@@ -28,6 +28,9 @@ type RuleSets struct {
 		Paranoia          int    `json:"paranoia"`
 		InboundThreshold  int    `json:"inbound_threshold"`
 		OutboundThreshold int    `json:"outbound_threshold"`
+		// ReplacedBy names the rule set used instead on this server
+		// (the portal turns CRS off where Malware.Expert is linked).
+		ReplacedBy string `json:"replaced_by,omitempty"`
 	} `json:"crs"`
 	Vendors []Vendor `json:"vendors"`
 	// Remote rule feeds loaded with SecRemoteRules (e.g. Malware.Expert
@@ -192,6 +195,9 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 	switch {
 	case !rs.CRS.Enabled:
 		crs.State = "off"
+		if rs.CRS.ReplacedBy != "" {
+			crs.Detail = "replaced by " + rs.CRS.ReplacedBy + " on this server"
+		}
 	case systemCRS(t) != "":
 		crs.State, crs.Detail = "skipped", "already loaded by "+systemCRS(t)+" on this server"
 	case !m.CRSInstalled(rs.CRS.Version):

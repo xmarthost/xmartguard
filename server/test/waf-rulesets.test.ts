@@ -90,7 +90,7 @@ async function agent(path: string, payload: unknown) {
 const config = (over: Record<string, unknown> = {}) => ({
   xmartguard: { enabled: true },
   crs: { enabled: true, version: 'latest', paranoia: 1, inbound_threshold: 5, outbound_threshold: 4 },
-  vendors: [{ id: 'malware_expert', name: 'Malware.Expert', url: 'https://malware.example/meta_licensed.yaml', enabled: true }],
+  vendors: [{ id: 'comodo', name: 'Comodo WAF', url: 'https://waf.example/meta_licensed.yaml', enabled: true }],
   custom: { enabled: true, rules: 'SecRule REQUEST_URI "@beginsWith /old-admin" "id:1000001,phase:1,deny,status:403,log"' },
   ...over,
 });
@@ -198,5 +198,40 @@ describe('linking feeds to servers', () => {
     expect(b.body.config.remote.map((r: { id: string }) => r.id)).toEqual(['all', 'me2']);
     const badRbl = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...remote[1], rbl: 'x" exec' }] }));
     expect(badRbl.status).toBe(400);
+  });
+});
+
+describe('Malware.Expert replaces the OWASP CRS', () => {
+  it('turns CRS off only on the servers linked to Malware.Expert', async () => {
+    const me = { id: 'malware_expert', name: 'Malware.Expert', key: 'SERIAL.1', url: 'https://rules.malware.expert/download.php?rules=generic', enabled: true };
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...me, servers: [serverId] }] }))).status).toBe(200);
+    const a = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
+    expect(a.body.config.crs.enabled).toBe(false);
+    expect(a.body.config.crs.replaced_by).toBe('Malware.Expert');
+    expect(a.body.crs).toBeUndefined();
+    // Switched off: CRS comes back.
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...me, enabled: false }] }))).status).toBe(200);
+    const b = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
+    expect(b.body.config.crs.enabled).toBe(true);
+    expect(b.body.crs.version).toBe('4.29.0');
+  });
+});
+
+describe('CRS replacement reaches servers that are up to date', () => {
+  it('resyncs a server still running CRS once Malware.Expert is linked', async () => {
+    const me = { id: 'malware_expert', name: 'Malware.Expert', key: 'SERIAL.1', url: 'https://rules.malware.expert/download.php?rules=generic', enabled: true, servers: [serverId] };
+    const put = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [me] }));
+    const v = put.body.version;
+    // Same version, but the server still reports CRS 4.29.0: not "unchanged".
+    const a = await agent('/api/agent/waf/config', { version: v, crs_version: '4.29.0' });
+    expect(a.body.unchanged).toBeUndefined();
+    expect(a.body.config.crs.enabled).toBe(false);
+    const b = await agent('/api/agent/waf/config', { version: v, crs_version: '' });
+    expect(b.body.unchanged).toBe(true);
+    // CRS never downloaded, but still switched on in the server's config.
+    const c = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: true });
+    expect(c.body.config.crs.enabled).toBe(false);
+    const d = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: false });
+    expect(d.body.unchanged).toBe(true);
   });
 });

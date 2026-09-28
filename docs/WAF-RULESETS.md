@@ -109,8 +109,28 @@ or the vendor's refusal (for example HTTP 403 when the server's IP is not on
 the license) under Rollout, because ModSecurity itself only logs a warning
 (`SecRemoteRulesFailAction Warn`) and keeps serving.
 
-Use either the WHM vendor or the remote feed for the same rules on a
-server, not both.
+Malware.Expert replaces the OWASP CRS: on every server linked to an
+enabled Malware.Expert feed (or WHM vendor) the portal sends CRS switched
+off ("replaced by Malware.Expert on this server" under Rollout), so two
+generic rule sets never run together. Other servers keep CRS. The agent
+reports whether it runs CRS (`crs_enabled`), so servers that are already up
+to date switch at their next sync.
+
+The WHM ModSecurity vendors card is the older way to install the same rule
+sets; it is hidden unless a vendor is configured. Use either the WHM vendor
+or the remote feed for the same rules on a server, not both.
+
+## Settings clean-up (0.9.6)
+
+- Captcha is switched on and set up on the Firewall page only; Settings »
+  WAF shows its state with a link.
+- IPDB switches live on the Firewall page only (Settings » IPDB removed).
+- AI crawler blocking lives in Settings » WAF only.
+- "Block PHP file uploads" appears once (Settings » WAF).
+- "Block SEO crawlers" merged into the Bad Bot blocker list (its crawlers
+  are added to the list while the blocker is on).
+- Malware.Expert rows show only on servers linked to Malware.Expert; rows
+  it also covers carry a "+ Malware.Expert" badge.
 
 ## Custom rules
 

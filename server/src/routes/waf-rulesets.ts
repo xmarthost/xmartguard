@@ -4,7 +4,7 @@ import type { Pool } from '../db.js';
 import type { AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
-import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, linkedTo, loadConfig, validateCustomRules } from '../waf/rulesets.js';
+import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, linkedTo, loadConfig, usesMalwareExpert, validateCustomRules } from '../waf/rulesets.js';
 
 /**
  * WAF Rule Sets: one ModSecurity configuration for all servers. Saving it
@@ -130,26 +130,33 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
   // ---- agents
 
   app.post('/api/agent/waf/config', { bodyLimit: 64 * 1024 }, async (req, reply) => {
-    const r = await signedPayload(pool, req.body, z.object({ version: z.number().int().min(0), crs_version: z.string().max(20) }), reply);
+    const r = await signedPayload(pool, req.body, z.object({ version: z.number().int().min(0), crs_version: z.string().max(20), crs_enabled: z.boolean().optional() }), reply);
     if (!r) return;
     const cur = await loadConfig(pool, r.accountId);
     const c = cur.version ? cur.config : DEFAULT_CONFIG;
-    const crsVersion = c.crs.enabled ? await crs.resolve(c.crs.version) : null;
-    const crsCurrent = !c.crs.enabled || !crsVersion || crsVersion === r.data.crs_version;
+    // Malware.Expert replaces the OWASP CRS on the servers that use it.
+    const replaced = c.crs.enabled && usesMalwareExpert(c, r.serverId);
+    const crsOn = c.crs.enabled && !replaced;
+    const crsVersion = crsOn ? await crs.resolve(c.crs.version) : null;
+    // The agent reports the CRS release it runs ('' = none), so a server
+    // that must drop CRS (or pick it up again) is resynced.
+    // Older agents only report the release.
+    const crsState = r.data.crs_enabled === undefined ? crsOn || r.data.crs_version === '' : r.data.crs_enabled === crsOn;
+    const crsCurrent = crsState && (!crsOn || !crsVersion || crsVersion === r.data.crs_version);
     if (cur.version === r.data.version && crsCurrent) return { unchanged: true };
     const config = {
       version: cur.version,
       // Unset until the account saves its rule sets, so existing per-server
       // WAF switches are left alone.
       xmartguard: cur.version ? c.xmartguard : undefined,
-      crs: { ...c.crs, version: crsVersion ?? '' },
+      crs: { ...c.crs, enabled: crsOn, version: crsVersion ?? '', replaced_by: replaced ? 'Malware.Expert' : undefined },
       // Licensed feeds go only to the servers they are linked to.
       vendors: c.vendors.filter((v) => linkedTo(v, r.serverId)).map(({ servers: _s, ...v }) => v),
       remote: c.remote.filter((x) => linkedTo(x, r.serverId)).map(({ servers: _s, ...x }) => x),
       custom: c.custom,
     };
     const out: Record<string, unknown> = { config };
-    if (c.crs.enabled && crsVersion && crsVersion !== r.data.crs_version) {
+    if (crsOn && crsVersion && crsVersion !== r.data.crs_version) {
       out.crs = { version: crsVersion, files: await crs.files(crsVersion) };
     }
     return out;

@@ -93,6 +93,20 @@ const Remote = z.object({
     .default(''),
 });
 
+/** Malware.Expert rules (remote feed or WHM vendor). */
+export function isMalwareExpert(x: { id?: string; url: string }): boolean {
+  return x.id === 'malware_expert' || /^https:\/\/(?:rules|vendor)\.malware\.expert\//i.test(x.url);
+}
+
+/**
+ * Servers that load Malware.Expert rules get no OWASP CRS: both are
+ * generic attack rule sets, and running the two together doubles false
+ * positives and load.
+ */
+export function usesMalwareExpert(c: { vendors: { id: string; url: string; enabled: boolean; servers?: string[] }[]; remote: { id: string; url: string; enabled: boolean; servers?: string[] }[] }, serverId: string): boolean {
+  return [...c.vendors, ...c.remote].some((x) => x.enabled && isMalwareExpert(x) && linkedTo(x, serverId));
+}
+
 /** Whether a feed or vendor applies to a server. */
 export function linkedTo(item: { servers?: string[] }, serverId: string): boolean {
   return !item.servers?.length || item.servers.includes(serverId);

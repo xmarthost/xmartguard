@@ -21,6 +21,17 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
   } catch {
     data = { error: text };
   }
+  // A firewall or proxy in front of the portal can answer with its own page
+  // (a captcha, a block page) or redirect the request to one: never report
+  // that as success.
+  const ctype = res.headers.get('content-type') ?? '';
+  if (res.ok && (res.redirected || (text && !ctype.includes('application/json')))) {
+    const title = /<title[^>]*>([^<]{1,120})/i.exec(text)?.[1]?.trim();
+    throw new ApiError(
+      res.status,
+      `The request did not reach the portal API${res.redirected ? ` (redirected to ${res.url})` : ''}${title ? `: "${title}"` : ''}. A firewall, WAF or proxy in front of the portal intercepted it; nothing was saved.`,
+    );
+  }
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('xg:unauthorized'));
     throw new ApiError(res.status, data?.error || res.statusText);

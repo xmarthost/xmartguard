@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, Globe2, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
+import { Bell, Bug, CheckCircle2, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -168,7 +168,6 @@ type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'ipdb'
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
-  { v: 'ipdb', l: 'IPDB Protection', icon: <Globe2 className="h-4 w-4" /> },
   { v: 'waf', l: 'WAF & Bruteforce', icon: <Shield className="h-4 w-4" /> },
   { v: 'cms', l: 'WordPress and CMS', icon: <LayoutTemplate className="h-4 w-4" /> },
   { v: 'suspension', l: 'Automatic Suspension', icon: <UserX className="h-4 w-4" /> },
@@ -249,7 +248,11 @@ export default function SettingsPage() {
         {section === 'cms' && st.cms && <CMSSection s={st.cms} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
         {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
         {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
-        {section === 'ipdb' && <IPDBSection s={st.ipdb ?? { enabled: true, report: true }} admin={admin} busy={busy} onSave={(p) => save({ ipdb: p })} />}
+        {section === 'ipdb' && (
+          <p className="text-sm text-slate-600">
+            IPDB protection moved to the <Link className="text-blue-600 hover:underline" to={`/servers/${id}/firewall`}>Firewall page</Link> (IPDB distributed firewall).
+          </p>
+        )}
         {section === 'notifications' && <NotificationsSection s={st.notifications} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
         {section === 'about' && <About serverId={id!} />}
       </div>
@@ -565,9 +568,6 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         </SettingRow>
         <ListEditor title="Whitelist Users" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />
       </div>
-      <SettingRow title="Block PHP files upload" desc="Prevent uploading PHP files through website forms (WAF rule)">
-        <Toggle on={st.waf.block_php_upload} disabled={dis} onChange={(v) => save({ waf: { block_php_upload: v } })} />
-      </SettingRow>
       <SettingRow title="Keep logs for" desc="How long to keep XMart Guard logs and quarantined files on the server">
         <select className="input w-40" value={st.scanner.keep_days} disabled={dis} onChange={(e) => save({ scanner: { keep_days: Number(e.target.value) } })}>
           {[[7, '1 Week'], [30, '1 Month'], [60, '2 Months'], [90, '3 Months'], [180, '6 Months'], [365, '1 Year']].map(([d, l]) => (
@@ -743,9 +743,15 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       return [];
     }
   })();
-  const v2 = (all.captcha?.provider ?? 'builtin') !== 'builtin';
+  // XMart Guard rows that a Malware.Expert extra module also covers.
+  const meCovers: Partial<Record<keyof WAFS, string>> = { bad_bots: 'scanner', webshell: 'webshell', ai_bots: 'crawler', proxy_ip_check: 'proxy' };
   const row = (key: keyof WAFS, title: string, desc: string, rec?: boolean) => (
     <SettingRow title={title} desc={desc} recommended={rec}>
+      {meCovers[key] && meExtras.includes(meCovers[key]!) && (
+        <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs text-sky-700" title="The Malware.Expert extra rules on this server cover this too; both can stay on.">
+          + Malware.Expert
+        </span>
+      )}
       <Toggle on={Boolean(s[key])} disabled={dis || !s.enabled} onChange={(v) => onSave({ [key]: v } as Partial<WAFS>)} />
     </SettingRow>
   );
@@ -770,41 +776,28 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>
       {row('bad_bots', 'SCANNER protection', 'Prevent bad User-Agents and crawlers: vulnerability scanners and attack tools (sqlmap, nikto, wpscan, nuclei…)', true)}
-      <SettingRow title="Captcha protection" desc="Distributed brute-force protection with CAPTCHA verification: a banned visitor can unblock their address by solving a CAPTCHA" recommended>
-        <Toggle on={captchaOn} disabled={dis} onChange={(v) => saveAll({ firewall: { captcha: v } } as any, v ? 'CAPTCHA protection on' : 'CAPTCHA protection off')} />
-      </SettingRow>
-      <SettingRow title="Captcha protection V2" desc="Alternative verification with Cloudflare Turnstile or Google reCAPTCHA instead of the built-in image challenge. Selecting this replaces the standard CAPTCHA (keys: Firewall » CAPTCHA page).">
-        <Toggle
-          on={v2}
-          disabled={dis}
-          onChange={(v) => {
-            if (v && !all.captcha?.site_key) {
-              alert('Add a Cloudflare Turnstile or Google reCAPTCHA site key and secret key first (server » Firewall » CAPTCHA page).');
-              return;
-            }
-            saveAll({ captcha: { provider: v ? 'turnstile' : 'builtin' } } as any, v ? 'CAPTCHA V2 on' : 'Built-in CAPTCHA');
-          }}
-        />
-      </SettingRow>
-      <SettingRow
-        title="Captcha by Malware.Expert"
-        desc={
-          meExtras.includes('recaptcha')
-            ? 'This server uses your Malware.Expert key: bots on WordPress and Joomla logins get the Malware.Expert reCaptcha, served by Malware.Expert. XMart Guard\'s own CAPTCHA above keeps working for firewall bans.'
-            : 'Servers that use your Malware.Expert key can also get the Malware.Expert reCaptcha on WordPress and Joomla logins. Turn it on in WAF Rule Sets » Malware.Expert » Extra rules.'
-        }
-      >
-        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${meExtras.includes('recaptcha') ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-          {meExtras.includes('recaptcha') ? 'Active (by Malware.Expert)' : meFeed ? 'Not enabled' : 'Not linked to this server'}
+      <SettingRow title="Captcha protection" desc="Blocked visitors can unblock their address by solving a CAPTCHA. Switched on and set up (built-in, Cloudflare Turnstile or Google reCAPTCHA) on the Firewall page, together with the temporary bans it belongs to.">
+        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${captchaOn ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+          {captchaOn ? `On (${{ builtin: 'built-in', turnstile: 'Turnstile', recaptcha: 'reCAPTCHA' }[all.captcha?.provider ?? 'builtin'] ?? 'built-in'})` : 'Off'}
         </span>
-        <Link to="/waf-rulesets" className="text-sm text-blue-700 hover:underline">
-          WAF Rule Sets
+        <Link to={`/servers/${serverId}/firewall`} className="text-sm text-blue-700 hover:underline">
+          Firewall » CAPTCHA
         </Link>
       </SettingRow>
-      {meExtras.length > 0 && (
-        <div className="border-b border-slate-100 py-3 text-sm text-slate-600">
-          Extra rules by Malware.Expert on this server: <b className="text-navy-900">{meExtras.join(', ')}</b>
-        </div>
+      {meFeed && (
+        <SettingRow
+          title="Malware.Expert on this server"
+          desc={`This server uses your Malware.Expert key (WAF Rule Sets). Extra rules: ${meExtras.length ? meExtras.join(', ') : 'none'}.${
+            meExtras.includes('recaptcha') ? ' Captcha by Malware.Expert: bots on WordPress and Joomla logins get the Malware.Expert reCaptcha; XMart Guard\'s CAPTCHA above keeps working for firewall bans.' : ''
+          } The OWASP Core Rule Set is off on this server.`}
+        >
+          <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${meExtras.includes('recaptcha') ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+            {meExtras.includes('recaptcha') ? 'Captcha by Malware.Expert: on' : 'Captcha by Malware.Expert: off'}
+          </span>
+          <Link to="/waf-rulesets" className="text-sm text-blue-700 hover:underline">
+            Change
+          </Link>
+        </SettingRow>
       )}
       {row('webshell', 'WEBSHELL protection', 'Web shell attack protection: block requests to well-known web shell files, their folders and exploit probes', true)}
       {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
@@ -858,10 +851,10 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       />
 
       <h3 className="mt-6 text-base font-semibold text-navy-900">More XMart Guard protections</h3>
-      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the XMart Guard engine before it is saved. PHP files uploaded through forms are refused.', true)}
+      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the XMart Guard engine before it is saved; malware is refused.', true)}
       {row('sensitive_files', 'Protect sensitive files', 'Block web access to .env, .git, config backups, logs and SQL dumps', true)}
       {row('wordpress', 'WordPress hardening', 'Block running PHP inside wp-content/uploads and XML-RPC multicall', true)}
-      {row('seo_bots', 'Block SEO crawlers', 'Ahrefs, Semrush, MJ12, DotBot and similar aggressive crawlers')}
+      {s.seo_bots && row('seo_bots', 'Block SEO crawlers (older option)', 'Now part of the Bad Bot blocker list above: turn the Bad Bot blocker on and this switch is merged into it.')}
       {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
       <ListEditor title="WAF whitelist" desc="These IPs are never inspected by XMart Guard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
       {info.data && (
@@ -1108,25 +1101,6 @@ function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: bo
             Save
           </button>
         </div>
-      </SettingRow>
-    </div>
-  );
-}
-
-function IPDBSection({ s, admin, busy, onSave }: { s: IPDBS; admin: boolean; busy: boolean; onSave: (p: Partial<IPDBS>) => void }) {
-  const dis = !admin || busy;
-  return (
-    <div>
-      <h2 className="text-lg font-semibold text-navy-900">IPDB Protection</h2>
-      <p className="mb-2 text-sm text-slate-500">
-        The IPDB is a blocklist shared by every server on this portal. Attackers banned on one server are blocked on all of
-        them. See the <Link className="text-blue-600 hover:underline" to="/ipdb">IPDB live monitor</Link>.
-      </p>
-      <SettingRow title="Block IPDB-listed addresses" desc="Drop all traffic from IPs in the shared IPDB list at the firewall" recommended>
-        <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
-      </SettingRow>
-      <SettingRow title="Report attackers to the IPDB" desc="Share this server's automatic brute-force and DoS bans so other servers can block them" recommended>
-        <Toggle on={s.report} disabled={dis} onChange={(v) => onSave({ report: v })} />
       </SettingRow>
     </div>
   );

@@ -228,6 +228,11 @@ var DefaultBotList = []string{"AhrefsBot", "Anonymizer", "Attributor", "Baidu", 
 	"WebCapture", "XX", "Yandex", "YebolBot", "MJ12bot", "masscan", "RSSingBot", "Scanbot", "betaBot", "DotBot",
 	"SemrushBot", "FeedFetcher", "seoscanners.net", "Moreover", "ltx71", "inboundlinks.win", "sitebot"}
 
+// SEOCrawlers are the aggressive SEO crawlers of the older "Block SEO
+// crawlers" switch; they now live in the Bad Bot blocker list.
+var SEOCrawlers = []string{"ahrefsbot", "semrushbot", "mj12bot", "dotbot", "blexbot", "petalbot", "dataforseobot",
+	"serpstatbot", "megaindex", "barkrowler", "seekportbot", "linkpadbot", "seznambot", "zoominfobot"}
+
 // foldUnique trims and drops empty and case-insensitive duplicate entries.
 func foldUnique(l []string) []string {
 	seen := map[string]bool{}
@@ -502,6 +507,12 @@ func normalize(s *Settings) {
 	// Custom bots of older versions join the Bad Bot blocker list.
 	s.WAF.BotList = foldUnique(append(s.WAF.BotList, s.WAF.CustomBots...))
 	s.WAF.CustomBots = []string{}
+	// "Block SEO crawlers" duplicated the Bad Bot blocker: its crawlers join
+	// the list (only while the blocker is on, so nothing stops being blocked).
+	if s.WAF.SEOBots && s.WAF.BotBlocker {
+		s.WAF.BotList = foldUnique(append(s.WAF.BotList, SEOCrawlers...))
+		s.WAF.SEOBots = false
+	}
 	s.CMS.BlacklistPlugins = clean(lower(s.CMS.BlacklistPlugins), false)
 	s.CMS.ExcludeUsers = clean(s.CMS.ExcludeUsers, false)
 	if s.CMS.WPCronHours <= 0 {

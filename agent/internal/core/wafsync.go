@@ -61,7 +61,7 @@ func (a *Agent) syncWAF(ctx context.Context, force bool) (WAFSyncResult, error) 
 			Files   map[string]string `json:"files"`
 		} `json:"crs"`
 	}
-	if err := a.AI.Portal.Post(ctx, "/api/agent/waf/config", map[string]any{"version": cur.Version, "crs_version": haveCRS}, &r); err != nil {
+	if err := a.AI.Portal.Post(ctx, "/api/agent/waf/config", map[string]any{"version": cur.Version, "crs_version": haveCRS, "crs_enabled": cur.CRS.Enabled}, &r); err != nil {
 		return WAFSyncResult{}, err
 	}
 	if r.Unchanged && !force {

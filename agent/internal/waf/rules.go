@@ -91,8 +91,7 @@ var (
 	BadBots = []string{"sqlmap", "nikto", "nmap scripting engine", "masscan", "zgrab", "nuclei", "wpscan", "acunetix",
 		"netsparker", "dirbuster", "gobuster", "feroxbuster", "fuzz faster u fool", "whatweb", "jorgee", "zmeu",
 		"morfeus", "havij", "w3af", "openvas", "arachni", "skipfish", "commix", "wfuzz"}
-	SEOBots = []string{"ahrefsbot", "semrushbot", "mj12bot", "dotbot", "blexbot", "petalbot", "dataforseobot",
-		"serpstatbot", "megaindex", "barkrowler", "seekportbot", "linkpadbot", "seznambot", "zoominfobot"}
+	SEOBots = settings.SEOCrawlers
 	AIBots = []string{"gptbot", "ccbot", "bytespider", "amazonbot", "perplexitybot", "claudebot", "anthropic-ai",
 		"imagesiftbot", "diffbot", "omgili", "cohere-ai", "meta-externalagent"}
 )
