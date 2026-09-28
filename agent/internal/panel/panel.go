@@ -115,6 +115,11 @@ const cpanelPHP = `<?php
 // XMart Guard cPanel plugin (managed by xmartguard-agent; do not edit).
 $bin = '` + BinPath + `';
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    // Only our JSON may be sent: drop anything buffered before it.
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    ini_set('display_errors', '0');
     header('Content-Type: application/json');
     header('Cache-Control: no-store');
     if (stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== 0) {
@@ -134,8 +139,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     fclose($pipes[1]);
     fclose($pipes[2]);
     proc_close($proc);
-    echo $out !== '' ? $out : '{"ok":false,"error":"no response from XMart Guard"}';
-    exit;
+    echo $out !== '' ? trim($out) : '{"ok":false,"error":"no response from XMart Guard"}';
+    flush();
+    exit(0);
 }
 require_once '/usr/local/cpanel/php/cpanel.php';
 $cpanel = new CPANEL();
