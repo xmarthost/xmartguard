@@ -1,11 +1,13 @@
-// Package notify sends alert emails through the server's local MTA
-// (sendmail/Exim), batching bursts into one message.
+// Package notify sends alerts by email through the server's local MTA
+// (sendmail/Exim) and to Slack and Telegram, batching bursts into one
+// message.
 package notify
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -46,11 +48,27 @@ type Mailer struct {
 // Sendmail is the MTA binary (overridable in tests).
 var Sendmail = "/usr/sbin/sendmail"
 
-// Enqueue adds an alert line for recipient.
+// adminKey queues the administrator's alerts: they go to the admin email
+// (when set), the extra address, Slack and Telegram, so chat alerts work
+// without an email address.
+const adminKey = "\x00admin"
+
+// EnqueueAdmin adds an alert line for the administrator's channels.
+func (m *Mailer) EnqueueAdmin(subject, line string) { m.enqueue(adminKey, subject, line) }
+
+// Enqueue adds an alert line for recipient (the admin address is routed to
+// all of the administrator's channels).
 func (m *Mailer) Enqueue(to, subject, line string) {
 	if _, err := mail.ParseAddress(to); err != nil {
 		return
 	}
+	if m.Admin != nil && to == m.Admin() {
+		to = adminKey
+	}
+	m.enqueue(to, subject, line)
+}
+
+func (m *Mailer) enqueue(to, subject, line string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.pending == nil {
@@ -92,14 +110,18 @@ func (m *Mailer) Flush() {
 		}
 		full := "[xPGuard] " + m.Hostname + ": " + subj
 		body := strings.Join(lines, "\n")
-		m.deliver(to, full, body, ch.From)
-		if to == admin {
-			if ch.Extra != "" && ch.Extra != to {
-				m.deliver(ch.Extra, full, body, ch.From)
-			}
-			if err := Chat(ch, full, body); err != nil && m.Log != nil {
-				m.Log.Warn("chat alert failed", "err", err)
-			}
+		if to != adminKey {
+			m.deliver(to, full, body, ch.From)
+			continue
+		}
+		if _, err := mail.ParseAddress(admin); err == nil {
+			m.deliver(admin, full, body, ch.From)
+		}
+		if ch.Extra != "" && ch.Extra != admin {
+			m.deliver(ch.Extra, full, body, ch.From)
+		}
+		if err := Chat(ch, full, body); err != nil && m.Log != nil {
+			m.Log.Warn("chat alert failed", "err", err)
 		}
 	}
 }
@@ -119,12 +141,46 @@ var (
 	chatClient  = &http.Client{Timeout: 20 * time.Second}
 )
 
+// TelegramToken cleans a bot token as pasted (spaces, a "bot" prefix or the
+// whole https://api.telegram.org/bot<token>/ URL).
+func TelegramToken(t string) string {
+	t = strings.TrimSpace(t)
+	if i := strings.Index(t, "/bot"); i >= 0 {
+		t = t[i+4:]
+	}
+	t = strings.TrimPrefix(t, "bot")
+	t, _, _ = strings.Cut(t, "/")
+	return strings.TrimSpace(t)
+}
+
+// telegramError reads Telegram's explanation ({"ok":false,"description":...}).
+func telegramError(res *http.Response) string {
+	var r struct {
+		Description string `json:"description"`
+	}
+	_ = json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&r)
+	msg := fmt.Sprintf("telegram: HTTP %d", res.StatusCode)
+	if r.Description != "" {
+		msg += ": " + r.Description
+	}
+	switch {
+	case res.StatusCode == 401 || res.StatusCode == 404:
+		msg += " (check the bot token from @BotFather)"
+	case strings.Contains(r.Description, "chat not found"):
+		msg += " (check the chat id, and send /start to the bot or add it to the group/channel first)"
+	case strings.Contains(r.Description, "bot was blocked") || strings.Contains(r.Description, "not enough rights"):
+		msg += " (unblock the bot, or make it an admin of the channel)"
+	}
+	return msg
+}
+
 // Chat posts an alert to the configured Slack webhook and Telegram chat.
 func Chat(ch Channels, subject, body string) error {
 	text := subject + "\n" + body
 	if len(text) > 3500 {
 		text = text[:3500] + "\n…"
 	}
+	ch.TelegramToken, ch.TelegramChat = TelegramToken(ch.TelegramToken), strings.TrimSpace(ch.TelegramChat)
 	var errs []string
 	if ch.SlackWebhook != "" {
 		payload, _ := json.Marshal(map[string]string{"text": text})
@@ -141,12 +197,12 @@ func Chat(ch Channels, subject, body string) error {
 		payload, _ := json.Marshal(map[string]any{"chat_id": ch.TelegramChat, "text": text, "disable_web_page_preview": true})
 		u := TelegramURL + "/bot" + url.PathEscape(ch.TelegramToken) + "/sendMessage"
 		if res, err := chatClient.Post(u, "application/json", bytes.NewReader(payload)); err != nil {
-			errs = append(errs, "telegram: request failed")
+			errs = append(errs, "telegram: cannot reach api.telegram.org from this server (outgoing HTTPS blocked?)")
 		} else {
-			res.Body.Close()
 			if res.StatusCode >= 300 {
-				errs = append(errs, fmt.Sprintf("telegram: HTTP %d", res.StatusCode))
+				errs = append(errs, telegramError(res))
 			}
+			res.Body.Close()
 		}
 	}
 	if len(errs) > 0 {

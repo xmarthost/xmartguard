@@ -48,7 +48,7 @@ code, signatures or rules are part of xPGuard.
 | Cms::check / reCheck / wpVerifyChecksum | daily / hourly / daily | CMS scan, WordPress checksum verification |
 | Reputation::ip / domain | twice daily / daily | IP and domain reputation loops |
 | Lynis::check | daily | not included (rkhunter weekly) |
-| UserChecks::process / cron / spam | 5 min / hourly | process and cron monitor, outgoing spam monitor |
+| UserChecks::process / cron / spam | 5 min / hourly | process monitor (kill), cron monitor every 10 min (malicious lines commented out with `#xpguard-disabled# `, re-enable from the portal), outgoing spam monitor |
 | SystemMonitor::check, ServerHealth::check | 5 min / hourly | metrics every heartbeat |
 | Report::daily / reportIPs / reportTempBlockedIPs | daily / hourly / 5 min | daily report, IPDB reports |
 | AppHealth::* | several | agent health in the portal |

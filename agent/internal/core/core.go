@@ -236,8 +236,8 @@ func portalPorts(serverURL string) []int {
 
 func (a *Agent) onDBFinding(s cms.Site, f cms.DBFinding) {
 	n := a.Settings.Get().Notifications
-	if n.Email != "" && n.OnVirus {
-		a.Mailer.Enqueue(n.Email, "database infection found",
+	if n.OnVirus {
+		a.alertAdmin("database infection found",
 			fmt.Sprintf("[%s] %s\n  site: %s (%s)\n  table: %s  row: %s\n", f.Signature, s.Domain, s.Path, s.User, f.Table, f.Row))
 	}
 }
@@ -295,23 +295,20 @@ func (a *Agent) afterFinding(f scanner.Finding, wordpress bool) {
 		}
 	}
 	n := a.Settings.Get().Notifications
-	if n.Email == "" {
-		return
-	}
 	if n.UserInfected && (f.Category == scanner.CatVirus || f.Category == scanner.CatSymlink) && f.Owner != "" {
 		a.notifyUser(f.Owner, "malware found in your account",
 			fmt.Sprintf("A malicious file was found in your hosting account:\n  %s\n  detection: %s\n  action taken: %s\n", f.Path, f.Signature, f.Status))
 	}
 	if (f.Category == scanner.CatVirus && n.OnVirus) || (f.Category == scanner.CatSuspicious && n.OnSuspicious) || (f.Category == scanner.CatBinary && n.OnBinary) {
-		a.Mailer.Enqueue(n.Email, "malware detected",
+		a.alertAdmin("malware detected",
 			fmt.Sprintf("[%s] %s\n  file: %s\n  owner: %s\n  status: %s\n", f.Category, f.Signature, f.Path, f.Owner, f.Status))
 	}
 }
 
 func (a *Agent) onBan(e firewall.Event) {
 	n := a.Settings.Get().Notifications
-	if n.Email != "" && n.OnBan {
-		a.Mailer.Enqueue(n.Email, "IP blocked", fmt.Sprintf("%s blocked: %s", e.IP, e.Reason))
+	if n.OnBan {
+		a.alertAdmin("IP blocked", fmt.Sprintf("%s blocked: %s", e.IP, e.Reason))
 	}
 }
 
@@ -384,14 +381,14 @@ func (a *Agent) checkReputation(ctx context.Context, ips []string) map[string]re
 		prev := reputation.Load(a.DB, ip)
 		_ = reputation.Save(a.DB, rep)
 		out[ip] = rep
-		if rep.ListedOn > 0 && (prev == nil || prev.ListedOn == 0) && cfg.Notifications.Email != "" && cfg.Notifications.OnBlacklist {
+		if rep.ListedOn > 0 && (prev == nil || prev.ListedOn == 0) && cfg.Notifications.OnBlacklist {
 			var names []string
 			for _, l := range rep.Results {
 				if l.Listed {
 					names = append(names, l.RBL)
 				}
 			}
-			a.Mailer.Enqueue(cfg.Notifications.Email, "IP blacklisted", fmt.Sprintf("%s is listed on: %s", ip, strings.Join(names, ", ")))
+			a.alertAdmin("IP blacklisted", fmt.Sprintf("%s is listed on: %s", ip, strings.Join(names, ", ")))
 		}
 	}
 	return out
@@ -774,6 +771,29 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		evs, total, err := a.Monitor.Events(in.Kind, in.Limit, in.Offset)
 		return map[string]any{"events": evs, "total": total, "status": a.Monitor.Status()}, err
+	}
+	h["monitor.cron_enable"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID int64 `json:"id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		var user, line, action string
+		if err := a.DB.QueryRow(`SELECT user, subject, action FROM monitor_events WHERE id = ? AND kind = 'cron'`, in.ID).Scan(&user, &line, &action); err != nil {
+			return nil, errors.New("cron alert not found")
+		}
+		if action != "disabled" {
+			return nil, errors.New("this cron job was not disabled by xPGuard")
+		}
+		if err := a.Monitor.EnableCron(user, line); err != nil {
+			return nil, err
+		}
+		_, _ = a.DB.Exec(`UPDATE monitor_events SET action = 're-enabled' WHERE id = ?`, in.ID)
+		return map[string]any{"ok": true}, nil
+	}
+	h["notify.test"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.testNotifications(), nil
 	}
 	h["monitor.rootkit"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
 		n, err := a.Monitor.RunRootkit(ctx)
@@ -1265,8 +1285,8 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 			a.Log.Info("trim not possible", "path", f.Path, "err", err)
 		} else {
 			a.Log.Info("injected code trimmed", "path", f.Path, "lines", len(v.Cut))
-			if n := st.Notifications; n.Email != "" && n.OnVirus {
-				a.Mailer.Enqueue(n.Email, "injected code removed",
+			if n := st.Notifications; n.OnVirus {
+				a.alertAdmin("injected code removed",
 					fmt.Sprintf("[AI %d%%] %s\n  file: %s\n  reason: %s\n  action: the injected code was trimmed; the site keeps running.\n  The original file is kept in quarantine.\n", v.Confidence, f.Signature, f.Path, v.Reason))
 			}
 			return
@@ -1287,8 +1307,8 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 		a.Log.Warn("AI action failed", "path", f.Path, "err", err)
 		return
 	}
-	if n := st.Notifications; n.Email != "" && n.OnVirus {
-		a.Mailer.Enqueue(n.Email, "AI scanner confirmed malware",
+	if n := st.Notifications; n.OnVirus {
+		a.alertAdmin("AI scanner confirmed malware",
 			fmt.Sprintf("[AI %d%%] %s\n  file: %s\n  reason: %s\n  action: %s\n", v.Confidence, f.Signature, f.Path, v.Reason, st.Scanner.VirusAction))
 	}
 }
@@ -1311,8 +1331,8 @@ func (a *Agent) clearFalsePositive(j ai.Job, v ai.Verdict) {
 		return
 	}
 	a.Log.Info("false positive cleared by the AI scanner", "path", f.Path, "signature", f.Signature, "confidence", v.Confidence)
-	if n := st.Notifications; n.Email != "" && n.OnVirus && f.Status != "detected" {
-		a.Mailer.Enqueue(n.Email, "false positive restored",
+	if n := st.Notifications; n.OnVirus && f.Status != "detected" {
+		a.alertAdmin("false positive restored",
 			fmt.Sprintf("[AI %d%% clean] %s\n  file: %s\n  reason: %s\n  action: restored from %s; the scanner will not flag this content again.\n", v.Confidence, f.Signature, f.Path, v.Reason, f.Status))
 	}
 }

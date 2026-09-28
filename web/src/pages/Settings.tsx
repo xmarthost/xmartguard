@@ -50,6 +50,7 @@ interface ProcS {
 }
 interface CronS {
   enabled: boolean;
+  disable?: boolean;
   whitelist_users: string[];
 }
 interface ReputationS {
@@ -253,7 +254,7 @@ export default function SettingsPage() {
             IPDB protection moved to the <Link className="text-blue-600 hover:underline" to={`/servers/${id}/firewall`}>Firewall page</Link> (IPDB distributed firewall).
           </p>
         )}
-        {section === 'notifications' && <NotificationsSection s={st.notifications} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
+        {section === 'notifications' && <NotificationsSection serverId={id!} s={st.notifications} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
         {section === 'about' && <About serverId={id!} />}
       </div>
     </div>
@@ -565,6 +566,9 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
       <div className="my-3 rounded-xl border border-slate-200 p-4">
         <SettingRow title="Cron monitor" desc="Monitor cron jobs and alert on suspicious cron activities">
           <Toggle on={st.cron.enabled} disabled={dis} onChange={(v) => save({ cron: { enabled: v } })} />
+        </SettingRow>
+        <SettingRow title="Disable malicious cron jobs" desc="Comment out malicious lines in the user's crontab (the rest is kept). Re-enable a line from Process & Cron Monitor. Off: alert only">
+          <Toggle on={st.cron.disable ?? true} disabled={dis || !st.cron.enabled} onChange={(v) => save({ cron: { disable: v } })} />
         </SettingRow>
         <ListEditor title="Whitelist Users" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />
       </div>
@@ -1132,7 +1136,7 @@ function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: bo
   );
 }
 
-function NotificationsSection({ s, meta, admin, busy, onSave }: { s: NotificationsS; meta: Meta; admin: boolean; busy: boolean; onSave: (p: Partial<NotificationsS>) => void }) {
+function NotificationsSection({ serverId, s, meta, admin, busy, onSave }: { serverId: string; s: NotificationsS; meta: Meta; admin: boolean; busy: boolean; onSave: (p: Partial<NotificationsS>) => void }) {
   const [f, setF] = useState(s);
   const [tab, setTab] = useState<'email' | 'slack' | 'telegram'>('email');
   useEffect(() => setF(s), [s]);
@@ -1140,6 +1144,11 @@ function NotificationsSection({ s, meta, admin, busy, onSave }: { s: Notificatio
   const changed = (keys: (keyof NotificationsS)[]) => keys.some((k) => f[k] !== s[k]);
   const pick = (keys: (keyof NotificationsS)[]) => Object.fromEntries(keys.map((k) => [k, f[k]])) as Partial<NotificationsS>;
   const emailKeys: (keyof NotificationsS)[] = ['email', 'extra_email', 'from'];
+  const test = useAction();
+  const [results, setResults] = useState<Record<string, string> | null>(null);
+  const sendTest = () =>
+    test.run(() => agentCall<Record<string, string>>(serverId, 'notify.test')).then((r) => r && setResults(r));
+  const unsaved = changed(['email', 'extra_email', 'from', 'slack_webhook', 'telegram_token', 'telegram_chat']);
   return (
     <div>
       <h2 className="text-lg font-semibold text-navy-900">Notifications</h2>
@@ -1176,7 +1185,29 @@ function NotificationsSection({ s, meta, admin, busy, onSave }: { s: Notificatio
             <input className="input" type="password" placeholder="Bot token (from @BotFather)" value={f.telegram_token ?? ''} disabled={dis} onChange={(e) => setF({ ...f, telegram_token: e.target.value })} />
             <input className="input" placeholder="Chat id" value={f.telegram_chat ?? ''} disabled={dis} onChange={(e) => setF({ ...f, telegram_chat: e.target.value })} />
             <button className="btn-primary" disabled={dis || !changed(['telegram_token', 'telegram_chat'])} onClick={() => onSave(pick(['telegram_token', 'telegram_chat']))}>Save</button>
+            <p className="text-xs text-slate-500 sm:col-span-3">
+              Create a bot with @BotFather and paste its token. Send <code>/start</code> to the bot (or add it to your group/channel), then use your chat id: open{' '}
+              <code>https://api.telegram.org/bot&lt;token&gt;/getUpdates</code> and copy <code>chat.id</code> (groups and channels start with <code>-100</code>).
+            </p>
           </div>
+        )}
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button className="btn-outline" disabled={!admin || test.busy || unsaved} onClick={sendTest}>
+            {test.busy ? 'Sending…' : 'Send test notification'}
+          </button>
+          <span className="text-xs text-slate-500">{unsaved ? 'Save your changes first.' : 'Sends a test message to every configured channel now and shows the result.'}</span>
+        </div>
+        {results && (
+          <ul className="mt-3 space-y-1 text-sm">
+            {Object.entries(results).map(([k, v]) => {
+              const ok = v === 'sent' || v.startsWith('sent to');
+              return (
+                <li key={k} className={ok ? 'text-emerald-700' : 'text-red-700'}>
+                  <b className="capitalize">{k.replace('_', ' ')}:</b> {v.replace(new RegExp(`^${k}: `, 'i'), '')}
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
       <SettingRow title="Virus detections">

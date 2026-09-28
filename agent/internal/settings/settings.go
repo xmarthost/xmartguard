@@ -173,7 +173,10 @@ type ProcessMonitor struct {
 
 // CronMonitor checks user crontabs for malicious entries.
 type CronMonitor struct {
-	Enabled        bool     `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// Disable comments malicious lines out of the user's crontab (like
+	// cPGuard); off = alert only.
+	Disable        bool     `json:"disable"`
 	WhitelistUsers []string `json:"whitelist_users"`
 }
 
@@ -390,7 +393,7 @@ func Defaults() Settings {
 		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 60, HTTPPort: 7780, HTTPSPort: 7743},
 		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true, RestoreClean: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
-		Cron:      CronMonitor{Enabled: true, WhitelistUsers: []string{}},
+		Cron:      CronMonitor{Enabled: true, Disable: true, WhitelistUsers: []string{}},
 		Rootkit:   Rootkit{Enabled: true},
 	}
 }

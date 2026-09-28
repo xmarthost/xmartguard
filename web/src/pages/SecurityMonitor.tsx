@@ -37,7 +37,7 @@ export default function SecurityMonitor() {
         <div>
           <h1 className="h-title">Process &amp; Cron Monitor</h1>
           <p className="text-sm text-slate-500">
-            Malicious processes and cron jobs of hosting users, and rootkit checks.{' '}
+            Malicious processes and cron jobs of hosting users (malicious cron lines are disabled in the user's crontab), and rootkit checks.{' '}
             {st && (st.rkhunter ? (st.rkhunter_last ? `Last rootkit check ${fmtTime(st.rkhunter_last)} (${st.rkhunter_warnings} warnings).` : 'Rootkit check not run yet.') : 'rkhunter is not installed.')}
           </p>
         </div>
@@ -77,7 +77,17 @@ export default function SecurityMonitor() {
                   <td className="py-3">{e.reason}</td>
                   <td className="max-w-md py-3 font-mono text-xs break-all text-slate-600">{e.subject}</td>
                   <td className="py-3">
-                    <span className={`rounded-full px-2 py-0.5 text-xs ${e.action === 'killed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>{e.action}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-xs ${e.action === 'killed' || e.action === 'disabled' ? 'bg-red-100 text-red-700' : e.action === 're-enabled' ? 'bg-slate-100 text-slate-700' : 'bg-amber-100 text-amber-800'}`}>{e.action}</span>
+                    {e.kind === 'cron' && e.action === 'disabled' && can(user, 'admin') && (
+                      <button
+                        className="ml-2 text-xs text-navy-700 underline disabled:opacity-50"
+                        disabled={busy}
+                        title="Put this line back into the user's crontab and never disable it again"
+                        onClick={() => confirm(`Re-enable this cron job for ${e.user}?\n\n${e.subject}`) && run(() => agentCall(id!, 'monitor.cron_enable', { id: e.id }).then(ev.reload), 'Cron job re-enabled')}
+                      >
+                        Re-enable
+                      </button>
+                    )}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-slate-500">{fmtTime(e.at)}</td>
                 </tr>

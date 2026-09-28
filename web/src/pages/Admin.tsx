@@ -137,7 +137,7 @@ export function AccountPage() {
         <h2 className="text-lg font-semibold text-navy-900">Change password</h2>
         <div>
           <label className="label">Current password</label>
-          <input className="input" type="password" required value={cur} onChange={(e) => setCur(e.target.value)} />
+          <input className="input" type="password" autoComplete="current-password" required value={cur} onChange={(e) => setCur(e.target.value)} />
         </div>
         <div>
           <label className="label">New password (10+ characters)</label>

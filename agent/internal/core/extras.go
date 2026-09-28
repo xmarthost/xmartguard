@@ -39,8 +39,8 @@ func (a *Agent) mailOwner(sender string) string {
 
 func (a *Agent) onOSMEvent(e mail.Event) {
 	n := a.Settings.Get().Notifications
-	if n.Email != "" && n.OnVirus {
-		a.Mailer.Enqueue(n.Email, "outgoing spam detected",
+	if n.OnVirus {
+		a.alertAdmin("outgoing spam detected",
 			fmt.Sprintf("%s sent %d messages (%s)\n  source: %s\n  account: %s\n  action: %s\n  %s\n", e.Sender, e.Count, e.Interval, e.Source, e.User, e.Action, e.Remarks))
 	}
 }
@@ -82,9 +82,7 @@ func (a *Agent) suspendAccount(user, reason string) {
 	}
 	_, _ = a.DB.Exec(`INSERT INTO suspensions (at, user, reason, status) VALUES (?,?,?,?)`, store.Now(), user, reason, status)
 	a.Log.Warn("automatic account suspension", "user", user, "status", status)
-	if nc := a.Settings.Get().Notifications; nc.Email != "" {
-		a.Mailer.Enqueue(nc.Email, "account suspended", fmt.Sprintf("cPanel account %s: %s (%s)\n", user, reason, status))
-	}
+	a.alertAdmin("account suspended", fmt.Sprintf("cPanel account %s: %s (%s)\n", user, reason, status))
 	if status == "suspended" && a.Settings.Get().Notifications.UserSuspension {
 		a.notifyUser(user, "your hosting account was suspended",
 			"Your hosting account was suspended automatically for security reasons:\n  "+reason+"\nPlease contact your hosting provider.")
@@ -183,8 +181,8 @@ func (a *Agent) checkDomains(ctx context.Context) error {
 	_ = store.SetKV(a.DB, "last_domainrep", strconv.FormatInt(time.Now().Unix(), 10))
 	n := a.Settings.Get().Notifications
 	for _, r := range res {
-		if r.Status == "listed" && !before[r.Domain] && n.Email != "" && n.OnBlacklist {
-			a.Mailer.Enqueue(n.Email, "domain blacklisted", fmt.Sprintf("%s (account %s) is listed: %s\n", r.Domain, r.User, strings.Join(r.Reasons, "; ")))
+		if r.Status == "listed" && !before[r.Domain] && n.OnBlacklist {
+			a.alertAdmin("domain blacklisted", fmt.Sprintf("%s (account %s) is listed: %s\n", r.Domain, r.User, strings.Join(r.Reasons, "; ")))
 		}
 		if r.Status == "listed" && !before[r.Domain] {
 			a.maybeSuspendDomain(r.Domain, r.User, strings.Join(r.Reasons, "; "))
@@ -216,9 +214,7 @@ func (a *Agent) maybeSuspendDomain(domain, user, reasons string) {
 // onCMSAutoAction reports automatic plugin/theme updates and deactivations.
 func (a *Agent) onCMSAutoAction(s cms.Site, actions []string) {
 	text := fmt.Sprintf("%s (%s):\n  %s\n", s.Domain, s.Path, strings.Join(actions, "\n  "))
-	if n := a.Settings.Get().Notifications; n.Email != "" {
-		a.Mailer.Enqueue(n.Email, "automatic CMS patches", text)
-	}
+	a.alertAdmin("automatic CMS patches", text)
 	if a.Settings.Get().Notifications.UserPatches {
 		a.notifyUser(s.User, "security updates applied to your website",
 			"xPGuard applied these security changes to your website:\n"+text)
@@ -445,8 +441,8 @@ func plural(n int) string {
 
 func (a *Agent) onMonitorEvent(e monitor.Event) {
 	n := a.Settings.Get().Notifications
-	if n.Email != "" && n.OnVirus {
-		a.Mailer.Enqueue(n.Email, e.Kind+" alert",
+	if n.OnVirus {
+		a.alertAdmin(e.Kind+" alert",
 			fmt.Sprintf("[%s] %s\n  user: %s\n  %s\n  action: %s\n", e.Kind, e.Reason, e.User, e.Subject, e.Action))
 	}
 }
@@ -527,8 +523,8 @@ func (a *Agent) maybeRepairCore(f scanner.Finding) bool {
 		return false
 	}
 	a.Log.Info("infected WordPress core file replaced with the official file", "file", f.Path, "version", version, "rel", rel)
-	if n := a.Settings.Get().Notifications; n.Email != "" && n.OnVirus {
-		a.Mailer.Enqueue(n.Email, "WordPress core file repaired",
+	if n := a.Settings.Get().Notifications; n.OnVirus {
+		a.alertAdmin("WordPress core file repaired",
 			fmt.Sprintf("[%s] %s\n  file: %s\n  action: replaced with the official WordPress %s file; the infected copy is kept in quarantine.\n", f.Category, f.Signature, f.Path, version))
 	}
 	return true

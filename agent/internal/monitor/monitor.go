@@ -301,9 +301,12 @@ var cronBad = []struct {
 	{regexp.MustCompile(`(?i)base64\s+(?:-d|--decode)[^|]*\|\s*(?:ba)?sh`), "runs base64-encoded commands"},
 	{regexp.MustCompile(`/dev/tcp/`), "opens a raw network connection"},
 	{regexp.MustCompile(`(?:^|\s)(?:/tmp/|/dev/shm/|/var/tmp/)\S+`), "runs a program from a temporary folder"},
-	{regexp.MustCompile(`(?i)stratum\+tcp|xmrig|minerd`), "cryptominer"},
+	{regexp.MustCompile(`(?i)stratum\+tcp|xmrig|minerd|\bkinsing\b|kdevtmpfsi|kthreaddi|\btsm64\b`), "cryptominer"},
+	{regexp.MustCompile(`(?i)gs-netcat|\bGS_ARGS\b|gsocket|\bdefunct\.dat\b`), "backdoor (gsocket)"},
 	{regexp.MustCompile(`(?i)\b(?:python[0-9.]*|perl|php)\s+-(?:c|e|r)\s+['"].*(?:base64|decode|exec|eval|socket)`), "runs inline encoded code"},
 	{regexp.MustCompile(`/\.[a-z0-9_-]{1,20}/[^ ]*\s*>\s*/dev/null\s+2>&1\s*&?$`), "silently runs a program from a hidden folder"},
+	{regexp.MustCompile(`(?i)^@reboot\s+(?:\S+/)?(?:nohup\s+)?\S*/\.[^/\s]+/`), "starts a program from a hidden folder at every boot"},
+	{regexp.MustCompile(`(?i)/(?:wp-content/)?uploads/\S+\.(?:php\d?|phtml|sh|pl|py|cgi)\b`), "runs a script from an uploads folder"},
 }
 
 // JudgeCron returns why a crontab line is malicious, if it is.
@@ -320,7 +323,35 @@ func JudgeCron(line string) (string, bool) {
 	return "", false
 }
 
-// CheckCron reads every user crontab once.
+// DisabledPrefix marks a crontab line the monitor switched off; the rest of
+// the line is the original, so removing the prefix restores it.
+const DisabledPrefix = "#xpguard-disabled# "
+
+var rePathToken = regexp.MustCompile(`/[^\s;|&'"<>]+`)
+
+// runsMalware reports whether the line runs a file the scanner found
+// malicious (still on disk or quarantined).
+func (m *Monitor) runsMalware(line string) bool {
+	for _, p := range rePathToken.FindAllString(line, 8) {
+		if !strings.HasPrefix(p, "/home") {
+			continue
+		}
+		var n int
+		_ = m.DB.QueryRow(`SELECT count(*) FROM findings WHERE path = ? AND category = 'virus' AND status IN ('detected','quarantined','disabled')`, p).Scan(&n)
+		if n > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func cronAllowKey(user, line string) string {
+	sum := sha256.Sum256([]byte(user + "|" + strings.TrimSpace(line)))
+	return "cron-allow:" + hex.EncodeToString(sum[:12])
+}
+
+// CheckCron reads every user crontab once; malicious lines are reported and,
+// with cron.disable, commented out.
 func (m *Monitor) CheckCron() {
 	m.init()
 	cfg := m.Settings.Get().Cron
@@ -330,21 +361,129 @@ func (m *Monitor) CheckCron() {
 			continue
 		}
 		for _, e := range entries {
-			if e.IsDir() || e.Name() == "root" || contains(cfg.WhitelistUsers, e.Name()) {
+			if e.IsDir() || e.Name() == "root" || strings.HasPrefix(e.Name(), ".") || strings.HasPrefix(e.Name(), "tmp.") || contains(cfg.WhitelistUsers, e.Name()) {
 				continue
 			}
-			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			file := filepath.Join(dir, e.Name())
+			raw, err := os.ReadFile(file)
 			if err != nil || len(raw) > 1<<20 {
 				continue
 			}
-			for _, line := range strings.Split(string(raw), "\n") {
+			lines := strings.Split(string(raw), "\n")
+			type hit struct {
+				i      int
+				reason string
+			}
+			var hits []hit
+			for i, line := range lines {
 				reason, bad := JudgeCron(line)
-				if bad && m.once("cron|"+e.Name()+"|"+line) {
-					m.record(Event{Kind: "cron", User: e.Name(), Subject: strings.TrimSpace(line), Reason: reason, Action: "alerted"})
+				if !bad && strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") && m.runsMalware(line) {
+					reason, bad = "runs a file detected as malware", true
+				}
+				if !bad || store.GetKV(m.DB, cronAllowKey(e.Name(), line)) != "" {
+					continue
+				}
+				hits = append(hits, hit{i, reason})
+			}
+			if len(hits) == 0 {
+				continue
+			}
+			disabled := false
+			if cfg.Disable {
+				out := append([]string(nil), lines...)
+				for _, h := range hits {
+					out[h.i] = DisabledPrefix + strings.TrimSpace(lines[h.i])
+				}
+				if err := m.writeCrontab(e.Name(), file, strings.Join(out, "\n")); err != nil {
+					m.Log.Warn("could not disable malicious cron job", "user", e.Name(), "err", err)
+				} else {
+					disabled = true
+				}
+			}
+			for _, h := range hits {
+				line := strings.TrimSpace(lines[h.i])
+				if disabled {
+					m.record(Event{Kind: "cron", User: e.Name(), Subject: line, Reason: h.reason, Action: "disabled"})
+				} else if m.once("cron|" + e.Name() + "|" + lines[h.i]) {
+					m.record(Event{Kind: "cron", User: e.Name(), Subject: line, Reason: h.reason, Action: "alerted"})
 				}
 			}
 		}
 	}
+}
+
+// Crontab is the crontab program (tests set it to "" to write files).
+var Crontab = "/usr/bin/crontab"
+
+// writeCrontab installs content as user's crontab. crontab(1) is used when
+// present so the cron daemon notices the change; otherwise the spool file
+// is replaced keeping its owner and mode.
+func (m *Monitor) writeCrontab(user, file, content string) error {
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if Crontab != "" {
+		if _, err := os.Stat(Crontab); err == nil {
+			// Debian's spool files start with a header crontab(1) writes
+			// itself; passing it back would add a second one.
+			for strings.HasPrefix(content, "# DO NOT EDIT THIS FILE") || strings.HasPrefix(content, "# (") {
+				_, content, _ = strings.Cut(content, "\n")
+			}
+			cmd := exec.Command(Crontab, "-u", user, "-")
+			cmd.Stdin = strings.NewReader(content)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("crontab: %v: %s", err, strings.TrimSpace(string(out)))
+			}
+			return nil
+		}
+	}
+	fi, err := os.Stat(file)
+	if err != nil {
+		return err
+	}
+	tmp := file + ".xgtmp"
+	if err := os.WriteFile(tmp, []byte(content), fi.Mode().Perm()); err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		_ = os.Chown(tmp, int(st.Uid), int(st.Gid))
+	}
+	return os.Rename(tmp, file)
+}
+
+// EnableCron puts a line the monitor disabled back into user's crontab and
+// remembers it as allowed, so it is not disabled again.
+func (m *Monitor) EnableCron(user, line string) error {
+	m.init()
+	line = strings.TrimSpace(line)
+	if user == "" || strings.ContainsAny(user, "/.") || line == "" {
+		return fmt.Errorf("invalid cron job")
+	}
+	for _, dir := range m.CronDirs {
+		file := filepath.Join(dir, user)
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(raw), "\n")
+		found := false
+		for i, l := range lines {
+			if strings.TrimSpace(l) == DisabledPrefix+line || strings.TrimSpace(l) == strings.TrimSpace(DisabledPrefix)+" "+line {
+				lines[i], found = line, true
+			}
+		}
+		if !found {
+			continue
+		}
+		_ = store.SetKV(m.DB, cronAllowKey(user, line), strconv.FormatInt(store.Now(), 10))
+		if err := m.writeCrontab(user, file, strings.Join(lines, "\n")); err != nil {
+			_ = store.SetKV(m.DB, cronAllowKey(user, line), "")
+			return err
+		}
+		m.Log.Info("cron job re-enabled by the administrator", "user", user)
+		return nil
+	}
+	return fmt.Errorf("the disabled cron job was not found in %s's crontab", user)
 }
 
 // ------------------------------------------------------------ rootkits

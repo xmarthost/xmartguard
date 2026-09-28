@@ -5,10 +5,14 @@ import App from './App';
 import { ToastProvider } from './components/controls';
 import './index.css';
 import { applyAppearance, applyCachedAppearance, type Appearance } from './theme';
+import { installNoAutofill } from './noAutofill';
 import { installTimeZone } from './timezone';
 
 // Every date and time in the portal is shown in PKT (Asia/Karachi).
 installTimeZone();
+
+// Settings fields are never filled with the browser's saved login.
+installNoAutofill();
 
 // The saved theme applies before the first paint, then the portal's copy.
 applyCachedAppearance();

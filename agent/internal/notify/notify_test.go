@@ -31,3 +31,48 @@ func TestChat(t *testing.T) {
 		t.Fatalf("slack %v tg %v %s", slack, tg, tgPath)
 	}
 }
+
+// Admin alerts reach Telegram even when no admin email is set (this used
+// to drop them: only email-queued alerts went to chat).
+func TestAdminAlertWithoutEmail(t *testing.T) {
+	got := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		json.NewDecoder(r.Body).Decode(&m)
+		got <- r.URL.Path + " " + m["text"].(string)
+	}))
+	defer srv.Close()
+	TelegramURL = srv.URL
+	Sendmail = "/nonexistent/sendmail"
+	m := &Mailer{Hostname: "h1", Admin: func() string { return "" },
+		Channels: func() Channels { return Channels{TelegramToken: " bot123:abc ", TelegramChat: " 42 "} }}
+	m.EnqueueAdmin("malware detected", "file x")
+	m.EnqueueAdmin("malware detected", "file y")
+	m.Flush()
+	select {
+	case s := <-got:
+		if !strings.HasPrefix(s, "/bot123:abc/sendMessage ") || !strings.Contains(s, "(+1 more)") || !strings.Contains(s, "file y") {
+			t.Fatal(s)
+		}
+	default:
+		t.Fatal("nothing sent to Telegram")
+	}
+}
+
+func TestTelegramErrorExplained(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}`))
+	}))
+	defer srv.Close()
+	TelegramURL = srv.URL
+	err := Chat(Channels{TelegramToken: "1:a", TelegramChat: "5"}, "s", "b")
+	if err == nil || !strings.Contains(err.Error(), "chat not found") || !strings.Contains(err.Error(), "/start") {
+		t.Fatal(err)
+	}
+	for in, want := range map[string]string{"123:abc": "123:abc", " bot123:abc\n": "123:abc", "https://api.telegram.org/bot123:abc/getUpdates": "123:abc"} {
+		if TelegramToken(in) != want {
+			t.Fatalf("%q -> %q", in, TelegramToken(in))
+		}
+	}
+}

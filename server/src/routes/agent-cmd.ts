@@ -50,6 +50,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'ai.check': { role: 'operator', mutates: true, timeoutMs: 300_000 },
   'ai.sync': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'monitor.rootkit': { role: 'admin', mutates: true, timeoutMs: 3_600_000 },
+  'notify.test': { role: 'admin', mutates: false, timeoutMs: 60_000 },
+  'monitor.cron_enable': { role: 'admin', mutates: true },
   'reputation.check': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'cms.scan': { role: 'operator', mutates: true },
   'db.archive': { role: 'operator', mutates: true },
