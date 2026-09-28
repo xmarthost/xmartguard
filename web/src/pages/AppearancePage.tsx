@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Moon, Palette, Save, Sun } from 'lucide-react';
 import { api } from '../api';
 import { can, useAuth } from '../auth';
-import { Breadcrumb } from '../components/ui';
+import { Breadcrumb, PageLoader } from '../components/ui';
 import { Card, useAction } from '../components/controls';
 import { THEMES, applyAppearance, resolveTheme, type Appearance, type ThemePreset } from '../theme';
 
@@ -44,7 +44,9 @@ export default function AppearancePage() {
   const { user } = useAuth();
   const admin = can(user, 'admin');
   const [saved, setSaved] = useState<Appearance | null>(null);
-  const [cur, setCur] = useState<Appearance>({ theme: 'navy', mode: 'light' });
+  // null until the saved appearance is loaded: nothing is applied (or
+  // remembered in the browser) before that.
+  const [cur, setCur] = useState<Appearance | null>(null);
   const { run, busy } = useAction();
 
   useEffect(() => {
@@ -58,9 +60,10 @@ export default function AppearancePage() {
   // back right after a save.)
   const savedRef = useRef<Appearance | null>(null);
   savedRef.current = saved;
-  useEffect(() => applyAppearance(cur), [cur]);
+  useEffect(() => void (cur && applyAppearance(cur)), [cur]);
   useEffect(() => () => void (savedRef.current && applyAppearance(savedRef.current)), []);
 
+  if (!cur) return <PageLoader />;
   const pick = (t: ThemePreset) => setCur({ theme: t.id, mode: t.mode });
   const custom = cur.theme === 'custom';
   const dirty = saved && JSON.stringify(saved) !== JSON.stringify(cur);

@@ -60,16 +60,25 @@ function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }
   // passes over it on the way to something near the left edge (a checkbox).
   const [expanded, setExpanded] = useState(false);
   const timer = useRef<number | undefined>(undefined);
-  // Expand only after the pointer has rested 450 ms well inside the rail;
-  // every movement restarts the wait, and the right edge (next to page
-  // checkboxes) never expands it.
-  const enter = (e: React.MouseEvent) => {
+  // Expand 250 ms after the pointer entered the rail. Small movements do not
+  // restart the wait (that made it feel slow); moving to the rail's right
+  // edge (next to page checkboxes) or leaving it cancels it.
+  const cancel = () => {
     window.clearTimeout(timer.current);
-    if (expanded || e.clientX > 64) return;
-    timer.current = window.setTimeout(() => setExpanded(true), 450);
+    timer.current = undefined;
+  };
+  const enter = (e: React.MouseEvent) => {
+    if (expanded) return;
+    if (e.clientX > 64) return cancel();
+    if (timer.current === undefined) {
+      timer.current = window.setTimeout(() => {
+        timer.current = undefined;
+        setExpanded(true);
+      }, 250);
+    }
   };
   const leave = () => {
-    window.clearTimeout(timer.current);
+    cancel();
     setExpanded(false);
     setOpen(null);
   };

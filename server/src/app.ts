@@ -79,16 +79,31 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   mcpRoutes(app, pool, cfg, hub);
   wafRulesetRoutes(app, pool, hub, crs);
   appearanceRoutes(app, pool);
+  // API answers are live data: never stored by browsers or proxies/CDNs.
+  app.addHook('onSend', async (req, reply, payload) => {
+    if (req.url.startsWith('/api/') && !reply.hasHeader('Cache-Control')) reply.header('Cache-Control', 'no-store');
+    return payload;
+  });
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
-    await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });
+    // Hashed build assets never change; index.html must always be checked so
+    // a portal update is picked up (an old cached page kept old code, e.g.
+    // an old theme, after updating).
+    await app.register(fastifyStatic, {
+      root: cfg.webDir,
+      wildcard: false,
+      cacheControl: false,
+      setHeaders: (res, file) => {
+        res.header('Cache-Control', file.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache');
+      },
+    });
     // SPA fallback for client-side routes. Machine paths (API, downloads,
     // MCP, /.well-known OAuth discovery) get a real 404 so AI clients see
     // that no sign-in service exists instead of an HTML page.
     const machine = ['/api/', '/downloads/', '/mcp', '/.well-known/'];
     app.setNotFoundHandler((req, reply) => {
       if (req.method === 'GET' && !machine.some((p) => req.url.startsWith(p))) {
-        return reply.type('text/html').sendFile('index.html');
+        return reply.type('text/html').header('Cache-Control', 'no-cache').sendFile('index.html');
       }
       return reply.code(404).send({ error: 'not found' });
     });
