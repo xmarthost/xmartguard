@@ -29,7 +29,22 @@ interface Rule {
   expires_at: number;
 }
 
+interface TrustedSvc {
+  id: string;
+  name: string;
+  group: string;
+  enabled: boolean;
+  addresses: number;
+  source: string;
+  updated: number;
+  error: string;
+}
+
+const TRUSTED_GROUPS: Record<string, string> = { search: 'Search engines', monitor: 'Uptime monitors', cdn: 'CDN', payment: 'Payments', vendor: 'Vendors' };
+
 interface FwSettings {
+  trusted_services?: boolean;
+  trusted_disabled?: string[];
   enabled: boolean;
   provider: 'iptables' | 'nftables';
   bruteforce: boolean;
@@ -69,7 +84,18 @@ interface FwMeta {
   ssh_ports: number[];
   portal: number[];
   captcha: boolean;
+  host_firewalls?: { tool: string; present: boolean; allowed: string[]; error?: string }[];
+  csf?: { installed: boolean; enabled: boolean; testing: boolean; exempt: number; hook: boolean; port_filter: boolean };
 }
+
+const HOST_FW_NAMES: Record<string, string> = {
+  csf: 'CSF / LFD',
+  firewalld: 'firewalld',
+  ufw: 'UFW',
+  apf: 'APF',
+  cphulk: 'cPHulk',
+  imunify360: 'Imunify360',
+};
 
 interface FwStatus {
   available: boolean;
@@ -251,6 +277,7 @@ export function FirewallPage() {
     meta: { firewall: FwStatus };
   }>(id, 'settings.get');
   const meta = useAgent<FwMeta>(id, 'fw.meta');
+  const trustedSvc = useAgent<{ enabled: boolean; services: TrustedSvc[] }>(id, 'trusted.status');
   const [cap, setCap] = useState<CaptchaSettings | null>(null);
   const [ddnsHost, setDdnsHost] = useState('');
   const [jail, setJail] = useState('');
@@ -508,7 +535,114 @@ export function FirewallPage() {
         </div>
       </Section>
 
+      <Section
+        title="Trusted services"
+        desc="Search engine crawlers, uptime monitors, Cloudflare, payment callbacks and vendor servers are never blocked: not by the firewall, IPDB, automatic bans or the WAF's bot rules, so websites keep their SEO and monitoring. Lists come from each provider's official source and are refreshed daily."
+      >
+        <SettingRow title="Protect trusted services" desc="Recommended. Turn a single service off below if you want to block it.">
+          <Toggle on={fw.trusted_services !== false} disabled={!isAdmin || busy} onChange={(v) => save({ trusted_services: v }, v ? 'Trusted services protected' : 'Trusted services protection off').then(trustedSvc.reload)} />
+        </SettingRow>
+        {!trustedSvc.data ? (
+          <SectionLoader />
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                <th className="py-2 pr-3">Service</th>
+                <th className="py-2 pr-3">Type</th>
+                <th className="py-2 pr-3">Addresses</th>
+                <th className="py-2 pr-3">Source</th>
+                <th className="py-2 text-right">Protected</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {trustedSvc.data.services.map((t) => (
+                <tr key={t.id}>
+                  <td className="py-2 pr-3 font-medium">
+                    {t.name}
+                    {t.error && <div className="text-xs font-normal text-amber-700" title={t.error}>last update failed, previous list kept</div>}
+                  </td>
+                  <td className="py-2 pr-3 text-slate-500">{TRUSTED_GROUPS[t.group] ?? t.group}</td>
+                  <td className="py-2 pr-3">{t.addresses}</td>
+                  <td className="py-2 pr-3 text-xs text-slate-500">
+                    {t.source === 'official' ? 'official list' : t.source === 'dns' ? 'DNS' : t.source === 'builtin' ? 'built-in' : '—'}
+                    {t.updated > 0 && <div>{fmtTime(t.updated)}</div>}
+                  </td>
+                  <td className="py-2 text-right">
+                    <Toggle
+                      on={t.enabled}
+                      disabled={!isAdmin || busy || fw.trusted_services === false}
+                      onChange={(v) => {
+                        const off = new Set(fw.trusted_disabled ?? []);
+                        if (v) off.delete(t.id);
+                        else off.add(t.id);
+                        save({ trusted_disabled: Array.from(off) }, `${t.name} ${v ? 'protected' : 'not protected'}`).then(trustedSvc.reload);
+                      }}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="mt-3 flex justify-end">
+          <button className="btn-outline" disabled={!isAdmin || busy} onClick={() => run(() => agentCall(id!, 'trusted.refresh').then(trustedSvc.reload), 'Trusted service lists updated')}>
+            <RefreshCw className="h-4 w-4" /> Update lists now
+          </button>
+        </div>
+      </Section>
+
+      <Section title="Server firewalls" desc="Other firewalls found on this server. The portal's address is allowed in each of them so the agent's connection is never cut; XMart Guard only removes the entries it added.">
+        {!meta.data ? (
+          <SectionLoader />
+        ) : (
+          <div className="space-y-3">
+            {meta.data.csf?.enabled && (
+              <div className="rounded-lg bg-sky-50 p-3 text-sm text-sky-900">
+                <b>CSF is active.</b> CSF keeps the port filter (its TCP_IN/TCP_OUT settings); XMart Guard adds its own blocks (IPDB, bans, country
+                blocks) next to it. {meta.data.csf.exempt} address{meta.data.csf.exempt === 1 ? '' : 'es'} from csf.allow / csf.ignore {meta.data.csf.exempt === 1 ? 'is' : 'are'} never
+                blocked by XMart Guard. {meta.data.csf.hook ? 'Rules are reloaded automatically after csf -r (csfpost.sh).' : 'The csfpost.sh hook is added on the next apply.'}
+                {meta.data.csf.testing && <div className="mt-1 text-amber-700">CSF is in TESTING mode: it flushes its rules every few minutes. Set TESTING = "0" in csf.conf when you are done testing.</div>}
+              </div>
+            )}
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                  <th className="py-2 pr-3">Firewall</th>
+                  <th className="py-2 pr-3">Status</th>
+                  <th className="py-2">Portal address allowed</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {(meta.data.host_firewalls ?? []).map((h) => (
+                  <tr key={h.tool}>
+                    <td className="py-2 pr-3 font-medium">{HOST_FW_NAMES[h.tool] ?? h.tool}</td>
+                    <td className="py-2 pr-3">{h.present ? <span className="text-green-600">active</span> : <span className="text-slate-400">not installed</span>}</td>
+                    <td className="py-2 font-mono text-xs">
+                      {h.present ? (h.allowed.length ? h.allowed.join(', ') : '—') : ''}
+                      {h.error && <div className="font-sans text-red-600">{h.error}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="flex justify-end">
+              <button
+                className="btn-outline"
+                disabled={!isAdmin || busy}
+                onClick={() => run(() => agentCall(id!, 'fw.host_sync').then(meta.reload), 'Portal address checked in every firewall')}
+              >
+                Check again
+              </button>
+            </div>
+          </div>
+        )}
+      </Section>
+
       <Section title="Port filter configuration" desc="Set allowed TCP/UDP ports for in/out traffic">
+        {meta.data?.csf?.enabled && (
+          <div className="mb-2 rounded-lg bg-sky-50 p-3 text-sm text-sky-900">CSF is active and filters ports on this server, so XMart Guard's port filter is not loaded. Change open ports in CSF (WHM » ConfigServer Security &amp; Firewall).</div>
+        )}
         <SettingRow title="Port filter" desc="Enable or disable firewall port filtering">
           <Toggle on={fw.port_filter} disabled={!isAdmin || busy} onChange={(v) => {
             if (v && !confirm('Enable the port filter? Every port not listed below will be closed.')) return;

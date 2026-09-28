@@ -391,6 +391,10 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		if r := Match(ext, content); r != nil {
 			return &Detection{r.Category, r.Name}, nil
 		}
+		// ClamAV-format databases (installed ClamAV, subscriptions).
+		if d := clamCheck(content); d != nil {
+			return d, nil
+		}
 		// Byte patterns from public feeds (Linux Malware Detect): reported
 		// as suspicious so the AI scanner confirms them first.
 		if name := feedPatterns.Match(content); name != "" {
@@ -877,6 +881,9 @@ type FindingFilter struct {
 	Offset   int    `json:"offset"`
 	// Under limits results to files below this directory (panel users).
 	Under string `json:"-"`
+	// Source: manual, realtime, scheduled, ai, or "background" (anything
+	// but manual scans).
+	Source string `json:"source"`
 }
 
 // ListFindings returns detections, newest first, with the total count.
@@ -897,6 +904,13 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	}
 	if f.Under != "" {
 		where, args = append(where, "substr(path, 1, ?) = ?"), append(args, len(f.Under)+1, f.Under+"/")
+	}
+	switch f.Source {
+	case "":
+	case "background":
+		where = append(where, "findings.source != 'manual'")
+	default:
+		where, args = append(where, "findings.source = ?"), append(args, f.Source)
 	}
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 50

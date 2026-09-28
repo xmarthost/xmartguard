@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
+	"github.com/xmarthost/xmartguard/agent/internal/hostfw"
 	"github.com/xmarthost/xmartguard/agent/internal/identity"
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/monitor"
@@ -35,6 +37,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
+	"github.com/xmarthost/xmartguard/agent/internal/trusted"
 	"github.com/xmarthost/xmartguard/agent/internal/updater"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
 	"github.com/xmarthost/xmartguard/agent/internal/waf"
@@ -71,6 +74,15 @@ type Agent struct {
 	protMu    sync.Mutex
 	protected []string
 	protAt    time.Time
+
+	// HostFW keeps the portal allowed in CSF, firewalld, UFW, APF, cPHulk
+	// and Imunify360 (nil in tests).
+	HostFW *hostfw.Host
+	// Trusted holds search engine, monitor, CDN and payment addresses.
+	Trusted   *trusted.Store
+	clam      clamState
+	hostMu    sync.Mutex
+	hostTrust []hostfw.Result
 }
 
 // New opens the local store and builds all modules.
@@ -97,11 +109,21 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return plugins.Known(path, sum)
 	}
 	a.Realtime = &scanner.Realtime{S: a.Scanner}
+	a.HostFW = hostfw.New(filepath.Join(store.StateDir(), "host-trust.json"))
 	a.Firewall = &firewall.Manager{
 		DB: db, Settings: st, Log: log, NFT: firewall.FindNFT(), IPT: firewall.FindIPTables(),
 		Geo:       &firewall.Geo{Dir: filepath.Join(store.StateDir(), "geo"), Log: log},
 		IPDB:      &firewall.IPDB{},
 		Protected: a.protectedIPs,
+	}
+	a.Trusted = trusted.New(filepath.Join(store.StateDir(), "trusted-services.json"))
+	a.Firewall.Trusted = a.trustedCIDRs
+	a.Firewall.TrustedMatch = func(ip string) string {
+		fw := a.Settings.Get().Firewall
+		if !fw.TrustedServices {
+			return ""
+		}
+		return a.Trusted.Match(ip, fw.TrustedDisabled)
 	}
 	a.Firewall.OnBan = a.onBan
 	a.Firewall.EssentialTCPOut = portalPorts(cfg.ServerURL)
@@ -129,7 +151,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
-		AgentBin: selfPath(), Firewall: a.Firewall}
+		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.trustedCIDRs}
 	a.CMS = &cms.Manager{DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
 		Accounts: func() []cms.Account {
 			var out []cms.Account
@@ -171,6 +193,10 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.Monitor.Run(ctx)
 	go a.retentionLoop(ctx)
 	go a.reportLoop(ctx)
+	go a.hostTrustLoop(ctx)
+	go a.proxyListLoop(ctx)
+	go a.trustedLoop(ctx)
+	go a.clamLoop(ctx)
 }
 
 // portalPorts returns the TCP port the agent uses to reach the portal.
@@ -509,6 +535,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	h["settings.set"] = func(ctx context.Context, p json.RawMessage) (any, error) {
 		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB
 		beforeWAF, beforeCaptcha := a.Settings.Get().WAF, a.Settings.Get().Captcha
+		beforeScan := a.Settings.Get().Scanner
 		p = keepSecrets(p, a.Settings.Get())
 		next, err := a.Settings.Patch(p)
 		if err != nil {
@@ -522,10 +549,14 @@ func (a *Agent) Handlers() map[string]client.Handler {
 				return nil, fmt.Errorf("settings saved, but the firewall could not be applied: %w", err)
 			}
 		}
-		if wafChanged(beforeWAF, next.WAF) {
+		// Trusted services changed: the WAF's trusted list follows.
+		if wafChanged(beforeWAF, next.WAF) || a.WAF.TrustedListChanged() {
 			if err := a.WAF.Apply(); err != nil {
-				return map[string]any{"settings": next, "warning": err.Error()}, nil
+				return map[string]any{"settings": masked(next), "warning": err.Error()}, nil
 			}
+		}
+		if beforeScan.ClamAV != next.Scanner.ClamAV || beforeScan.ClamAVURLs != next.Scanner.ClamAVURLs {
+			go a.reloadClam(context.Background(), true)
 		}
 		return map[string]any{"settings": masked(next)}, nil
 	}
@@ -592,7 +623,42 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			"ssh_ports": firewall.SSHPorts(),
 			"portal":    a.Firewall.EssentialTCPOut,
 			"captcha":   captcha.Wanted(a.Settings.Get()),
+			// Other firewalls on the server and the portal entries in them.
+			"host_firewalls": a.hostTrustResults(),
+			"csf":            a.Firewall.CSF(),
 		}, nil
+	}
+	// domains.list: websites hosted on the server (cPanel /etc/userdomains).
+	h["domains.list"] = func(context.Context, json.RawMessage) (any, error) {
+		d := reputation.HostedDomains(UserDomainsPath)
+		out := make([]map[string]string, 0, len(d))
+		for dom, user := range d {
+			out = append(out, map[string]string{"domain": dom, "user": user})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i]["domain"] < out[j]["domain"] })
+		return map[string]any{"domains": out}, nil
+	}
+	h["clamav.status"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.clamStatus(), nil
+	}
+	h["clamav.reload"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		a.reloadClam(ctx, true)
+		return a.clamStatus(), nil
+	}
+	h["trusted.status"] = func(context.Context, json.RawMessage) (any, error) {
+		fw := a.Settings.Get().Firewall
+		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil
+	}
+	h["trusted.refresh"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		a.refreshTrusted(ctx)
+		fw := a.Settings.Get().Firewall
+		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil
+	}
+	h["exim.rbls"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"rbls": mail.EximRBLStatus()}, nil
+	}
+	h["fw.host_sync"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.syncHostTrust(), nil
 	}
 	// ai.check judges one finding now (the "Check with AI" button).
 	h["ai.check"] = func(ctx context.Context, p json.RawMessage) (any, error) {
@@ -1001,6 +1067,7 @@ var secretFields = [][2]string{
 	{"captcha", "secret_key"},
 	{"notifications", "telegram_token"},
 	{"notifications", "slack_webhook"},
+	{"scanner", "clamav_urls"},
 }
 
 func maskValue(k string) string {
@@ -1019,6 +1086,7 @@ func masked(s settings.Settings) settings.Settings {
 	s.Captcha.SecretKey = maskValue(s.Captcha.SecretKey)
 	s.Notifications.TelegramToken = maskValue(s.Notifications.TelegramToken)
 	s.Notifications.SlackWebhook = maskValue(s.Notifications.SlackWebhook)
+	s.Scanner.ClamAVURLs = maskValue(s.Scanner.ClamAVURLs)
 	return s
 }
 

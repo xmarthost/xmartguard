@@ -49,15 +49,37 @@ func TestRenderRespectsSettings(t *testing.T) {
 	c.DisabledRules = []int{7700302, 950001}
 	c.WhitelistIPs = []string{"198.51.100.7"}
 	r := Render(c, Options{Dir: "/etc/xmartguard/waf", InspectPath: "/etc/xmartguard/waf/upload-scan", UploadScan: true})
-	for _, want := range []string{"id:7700001", "198.51.100.7", "ctl:ruleRemoveById=7700302", "ctl:ruleRemoveById=950001", "@inspectFile /etc/xmartguard/waf/upload-scan", "id:7700501", "id:7700401"} {
+	for _, want := range []string{"id:7700001", "198.51.100.7", "ctl:ruleRemoveById=7700302", "ctl:ruleRemoveById=950001", "@inspectFile /etc/xmartguard/waf/upload-scan", "id:7700501", "id:7700401", "id:7700504"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("rules missing %q", want)
 		}
 	}
-	for _, not := range []string{"id:7700502", "id:7700503", "id:7700504"} {
+	for _, not := range []string{"id:7700502", "id:7700503", "id:7700701"} {
 		if strings.Contains(r, not) {
 			t.Errorf("rules unexpectedly contain %q", not)
 		}
+	}
+	// Bad Bot blocker list and proxy IP check.
+	files := BotFiles(c)
+	for _, b := range []string{"AhrefsBot\n", "seoscanners.net\n", "Yandex\n"} {
+		if !strings.Contains(files[FileCustomBots], b) {
+			t.Errorf("bot list missing %q", b)
+		}
+	}
+	if strings.Count(strings.ToLower(files[FileCustomBots]), "yandex\n") != 1 {
+		t.Error("duplicate bot entries")
+	}
+	c.ProxyIPCheck = true
+	r = Render(c, Options{Dir: "/d"})
+	if !strings.Contains(r, `"@ipMatchFromFile /d/proxy-ranges.txt" "id:7700701,phase:1,t:none,deny`) || !strings.Contains(r, `SecRule TX:1 "@ipMatchFromFile /d/blocked-ips.txt"`) {
+		t.Errorf("proxy rule missing:\n%s", r)
+	}
+	pf := ProxyFiles([]string{"203.0.113.9/32", "not-an-ip", "198.51.100.0/24", "203.0.113.9"})
+	if pf[FileBlockedIPs] != "198.51.100.0/24\n203.0.113.9\n" || !strings.Contains(pf[FileProxyRanges], "173.245.48.0/20") {
+		t.Errorf("proxy files %+v", pf)
+	}
+	if ProxyFiles(nil)[FileBlockedIPs] != placeholderIP+"\n" {
+		t.Error("empty blocked list must hold the placeholder")
 	}
 	c.UploadScan = false
 	if strings.Contains(Render(c, Options{Dir: "/d", InspectPath: "/x", UploadScan: true}), "inspectFile") {

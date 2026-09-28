@@ -8,11 +8,15 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/cms"
 	"github.com/xmarthost/xmartguard/agent/internal/local"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
+	"github.com/xmarthost/xmartguard/agent/internal/waf"
 )
 
 // portalOnly commands are never exposed on the local socket.
@@ -96,12 +100,49 @@ func (a *Agent) userHandlers(u *user.User) map[string]local.Handler {
 			"realtime": a.Settings.Get().Scanner.Realtime,
 		}, nil
 	}
+	h["dashboard"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.userDashboard(name, home), nil
+	}
+	// dirs lists the account's folders for the path scan (two levels).
+	h["dirs"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"dirs": userDirs(home, web)}, nil
+	}
+	h["cms.list"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		f, err := decode[cms.SiteFilter](p)
+		if err != nil {
+			return nil, err
+		}
+		f.User = name
+		sites, total, err := a.CMS.Sites(f)
+		return map[string]any{"sites": sites, "total": total}, err
+	}
+	h["waf.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		f, err := decode[waf.EventFilter](p)
+		if err != nil {
+			return nil, err
+		}
+		f.User = name
+		ev, total, err := a.WAF.Events(f)
+		return map[string]any{"events": ev, "total": total}, err
+	}
 	h["scan.start"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
 			Path string `json:"path"`
+			// Kind: full (the whole account), quick (the website), path.
+			Kind string `json:"kind"`
 		}](p)
 		if err != nil {
 			return nil, err
+		}
+		kind := "path"
+		switch in.Kind {
+		case "full":
+			in.Path = home
+		case "quick":
+			in.Path, kind = web, "quick"
+			if web == "" {
+				in.Path = home
+			}
 		}
 		if !a.Settings.Get().Scanner.Enabled {
 			return nil, errors.New("the virus scanner is disabled by the server administrator")
@@ -131,7 +172,7 @@ func (a *Agent) userHandlers(u *user.User) map[string]local.Handler {
 				return nil, errors.New("a scan of your account is already running")
 			}
 		}
-		id, err := a.Scanner.Start("path", real, "cpanel:"+name)
+		id, err := a.Scanner.Start(kind, real, "cpanel:"+name)
 		return map[string]any{"id": id}, err
 	}
 	h["scan.list"] = func(context.Context, json.RawMessage) (any, error) {
@@ -195,4 +236,82 @@ func (a *Agent) userHandlers(u *user.User) map[string]local.Handler {
 		return map[string]any{"done": done, "failed": failed}, nil
 	}
 	return h
+}
+
+// userDirs lists the folders a cPanel account can scan: the home folder's
+// visible folders and those inside the website root.
+func userDirs(home, web string) []string {
+	out := []string{}
+	add := func(dir string) {
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range ents {
+			n := e.Name()
+			if !e.IsDir() || strings.HasPrefix(n, ".") || n == "mail" || n == "etc" || n == "tmp" || n == "logs" || n == "ssl" {
+				continue
+			}
+			out = append(out, filepath.Join(dir, n))
+			if len(out) >= 400 {
+				return
+			}
+		}
+	}
+	add(home)
+	if web != "" {
+		add(web)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// userDashboard is the cPanel account's home page: threats stopped and
+// attacks blocked on its websites (30 days, with the previous 30 days for
+// comparison), CMS issues and daily charts.
+func (a *Agent) userDashboard(name, home string) map[string]any {
+	now := time.Now().Unix()
+	from, prevFrom := now-30*86400, now-60*86400
+	count := func(q string, args ...any) int {
+		var n int
+		_ = a.DB.QueryRow(q, args...).Scan(&n)
+		return n
+	}
+	under := []any{len(home) + 1, home + "/"}
+	threats := count(`SELECT count(*) FROM findings WHERE substr(path, 1, ?) = ? AND created_at >= ?`, append(under, from)...)
+	threatsPrev := count(`SELECT count(*) FROM findings WHERE substr(path, 1, ?) = ? AND created_at >= ? AND created_at < ?`, append(under, prevFrom, from)...)
+	attacks := count(`SELECT count(*) FROM waf_events WHERE user = ? AND action LIKE 'Access denied%' AND at >= ?`, name, from)
+	attacksPrev := count(`SELECT count(*) FROM waf_events WHERE user = ? AND action LIKE 'Access denied%' AND at >= ? AND at < ?`, name, prevFrom, from)
+	daily := func(q string, args ...any) []map[string]any {
+		out := []map[string]any{}
+		rows, err := a.DB.Query(q, args...)
+		if err != nil {
+			return out
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d string
+			var n int
+			if rows.Scan(&d, &n) == nil {
+				out = append(out, map[string]any{"day": d, "n": n})
+			}
+		}
+		return out
+	}
+	cmsIssues := 0
+	if sites, _, err := a.CMS.Sites(cms.SiteFilter{User: name, Limit: 500}); err == nil {
+		for _, s := range sites {
+			if s.CoreIssues > 0 || s.DBIssues > 0 || s.Vulnerable > 0 {
+				cmsIssues++
+			}
+		}
+	}
+	return map[string]any{
+		"user": name, "version": version.Version,
+		"threats": threats, "threats_prev": threatsPrev,
+		"attacks": attacks, "attacks_prev": attacksPrev,
+		"cms_issues":    cmsIssues,
+		"daily_threats": daily(`SELECT date(created_at, 'unixepoch') d, count(*) FROM findings WHERE substr(path, 1, ?) = ? AND created_at >= ? GROUP BY d ORDER BY d`, append(under, from)...),
+		"daily_attacks": daily(`SELECT date(at, 'unixepoch') d, count(*) FROM waf_events WHERE user = ? AND action LIKE 'Access denied%' AND at >= ? GROUP BY d ORDER BY d`, name, from),
+	}
 }

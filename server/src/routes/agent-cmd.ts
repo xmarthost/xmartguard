@@ -57,6 +57,13 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
 
   'settings.set': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'fw.apply': { role: 'admin', mutates: true, timeoutMs: 120_000 },
+  'fw.host_sync': { role: 'admin', mutates: true, timeoutMs: 180_000 },
+  'exim.rbls': { role: 'viewer', mutates: false },
+  'domains.list': { role: 'viewer', mutates: false },
+  'trusted.status': { role: 'viewer', mutates: false },
+  'trusted.refresh': { role: 'admin', mutates: true, timeoutMs: 360_000 },
+  'clamav.status': { role: 'viewer', mutates: false },
+  'clamav.reload': { role: 'admin', mutates: true, timeoutMs: 1_500_000 },
   'waf.apply': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'waf.rule': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'waf.sync': { role: 'admin', mutates: true, timeoutMs: 300_000 },

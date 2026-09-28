@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -33,6 +34,10 @@ type Manager struct {
 	RulesDir string
 	AgentBin string
 	Firewall Banner
+	// BlockedIPs returns the firewall's blocked addresses (proxy IP check).
+	BlockedIPs func() []string
+	// TrustedIPs returns trusted services' addresses (bot rules skip them).
+	TrustedIPs func() []string
 
 	mu       sync.Mutex
 	target   Target
@@ -56,6 +61,8 @@ type Status struct {
 	Error     string `json:"error"`
 	Warning   string `json:"warning"`
 	Rules     int    `json:"rules"`
+	// EnabledSince is when the rules were first hooked into the web server.
+	EnabledSince int64 `json:"enabled_since"`
 	// Logs the agent reads ModSecurity hits from.
 	Logs     []string       `json:"logs"`
 	RuleSets []RuleSetState `json:"rule_sets"`
@@ -86,8 +93,9 @@ func (m *Manager) Status() Status {
 	if t.Plain && !t.Hooked && cfg.Enabled {
 		warn = "One step left in LiteSpeed: " + t.Hint
 	}
+	since, _ := strconv.ParseInt(store.GetKV(m.DB, "waf_enabled_since"), 10, 64)
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
-		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest}
+		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest, EnabledSince: since}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {
@@ -106,14 +114,73 @@ func categoryEnabled(c settings.WAF, cat string) bool {
 		return c.SEOBots
 	case "ai_bots":
 		return c.AIBots
-	case "custom_bots":
-		return len(c.CustomBots) > 0
+	case "bot_blocker":
+		return c.BotBlocker && len(c.BotList) > 0
+	case "proxy_ip_check":
+		return c.ProxyIPCheck
 	case "webshell":
 		return c.Webshell
 	case "block_php_upload":
 		return c.BlockPHPUpload
 	}
 	return false
+}
+
+func (m *Manager) trustedList() []string {
+	if m.TrustedIPs == nil {
+		return nil
+	}
+	var ok []string
+	seen := map[string]bool{}
+	for _, a := range m.TrustedIPs() {
+		if a = modsecAddr(a); validAddr(a) && !seen[a] {
+			seen[a] = true
+			ok = append(ok, a)
+		}
+	}
+	sort.Strings(ok)
+	return ok
+}
+
+// TrustedListChanged reports whether trusted-ips.txt is out of date.
+func (m *Manager) TrustedListChanged() bool {
+	cur, _ := os.ReadFile(filepath.Join(m.RulesDir, FileTrustedIPs))
+	l := m.trustedList()
+	if len(l) == 0 {
+		return len(cur) > 0
+	}
+	return string(cur) != strings.Join(l, "\n")+"\n"
+}
+
+// listFiles returns the list files the rules read.
+func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
+	files := BotFiles(cfg)
+	if l := m.trustedList(); len(l) > 0 {
+		files[FileTrustedIPs] = strings.Join(l, "\n") + "\n"
+	}
+	if cfg.ProxyIPCheck {
+		var blocked []string
+		if m.BlockedIPs != nil {
+			blocked = m.BlockedIPs()
+		}
+		for k, v := range ProxyFiles(blocked) {
+			files[k] = v
+		}
+	}
+	return files
+}
+
+// BlockedListChanged reports whether the proxy IP check's blocked list on
+// disk differs from the firewall's current list (so a reload is due).
+func (m *Manager) BlockedListChanged() bool {
+	if !m.Settings.Get().WAF.ProxyIPCheck || m.BlockedIPs == nil {
+		return false
+	}
+	cur, err := os.ReadFile(filepath.Join(m.RulesDir, FileBlockedIPs))
+	if err != nil {
+		return true
+	}
+	return string(cur) != ProxyFiles(m.BlockedIPs())[FileBlockedIPs]
 }
 
 // ToggleRule returns the settings change that switches one of our rules on
@@ -177,10 +244,11 @@ func (m *Manager) Apply() error {
 		}
 	case !cfg.Enabled && extra == "":
 		err = m.uninstall(t)
+		_ = store.SetKV(m.DB, "waf_enabled_since", "")
 	default:
 		rules := ""
 		if cfg.Enabled {
-			opts := Options{Dir: m.RulesDir, UploadScan: true}
+			opts := Options{Dir: m.RulesDir, UploadScan: true, Trusted: len(m.trustedList()) > 0}
 			if cfg.UploadScan {
 				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
 			}
@@ -189,7 +257,7 @@ func (m *Manager) Apply() error {
 			rules = "# XMart Guard's own rules are turned off; rule sets from the portal follow.\n"
 		}
 		rules = selfTestRule + "\n" + rules
-		bots := BotFiles(cfg)
+		bots := m.listFiles(cfg)
 		for k, v := range extraFiles {
 			bots[strings.TrimPrefix(k, m.RulesDir+"/")] = v
 		}
@@ -202,11 +270,14 @@ func (m *Manager) Apply() error {
 			}
 			extra = ""
 			if cfg.Enabled {
-				err = m.install(t, rules, BotFiles(cfg))
+				err = m.install(t, rules, m.listFiles(cfg))
 			} else {
 				err = m.uninstall(t)
 			}
 		}
+	}
+	if err == nil && t.ModSec && t.IncludeFile != "" && (cfg.Enabled || extra != "") && store.GetKV(m.DB, "waf_enabled_since") == "" {
+		_ = store.SetKV(m.DB, "waf_enabled_since", strconv.FormatInt(time.Now().Unix(), 10))
 	}
 	// Prove the rules are enforced, not just written.
 	var st *SelfTest
@@ -526,6 +597,8 @@ func (m *Manager) maybeBanBlocked(e Event, c *counter) {
 
 // EventFilter narrows Events.
 type EventFilter struct {
+	// User limits events to one hosting account's websites (panel users).
+	User     string `json:"-"`
 	Category string `json:"category"`
 	Query    string `json:"q"`
 	Limit    int    `json:"limit"`
@@ -535,6 +608,9 @@ type EventFilter struct {
 // Events lists ModSecurity hits, newest first.
 func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 	where, args := []string{"1=1"}, []any{}
+	if f.User != "" {
+		where, args = append(where, "user = ?"), append(args, f.User)
+	}
 	if f.Category != "" {
 		where, args = append(where, "category = ?"), append(args, f.Category)
 	}

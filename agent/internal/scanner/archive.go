@@ -66,6 +66,9 @@ func scanZip(file string, size int64) *Detection {
 		if d := analyze(ext, content); d != nil && d.Category == CatVirus && !inTestsDir(f.Name) {
 			return &Detection{CatVirus, "Archive." + d.Signature}
 		}
+		if d := clamCheck(content); d != nil && d.Category == CatVirus && !inTestsDir(f.Name) {
+			return &Detection{CatVirus, "Archive." + d.Signature}
+		}
 	}
 	return nil
 }

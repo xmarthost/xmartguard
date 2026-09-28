@@ -331,6 +331,24 @@ func (m *Manager) ApplyIPDB(version string, items []string) (int, error) {
 }
 
 // ipdbEntries returns the list minus anything covering a protected address.
+// BlockedAddrs lists every address the firewall blocks (deny list,
+// temporary bans, IPDB). The WAF uses it to recognise the same visitors
+// behind a CDN, where the firewall only sees the CDN's address.
+func (m *Manager) BlockedAddrs() []string {
+	var out []string
+	if rules, err := m.rules(""); err == nil {
+		for _, r := range rules {
+			if r.Kind == KindDeny || r.Kind == KindTempBan {
+				out = append(out, r.CIDR)
+			}
+		}
+	}
+	if m.IPDB != nil && m.Settings.Get().IPDB.Enabled {
+		out = append(out, m.ipdbEntries()...)
+	}
+	return out
+}
+
 func (m *Manager) ipdbEntries() []string {
 	_, entries := m.IPDB.Snapshot()
 	if len(entries) == 0 {

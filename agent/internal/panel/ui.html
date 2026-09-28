@@ -28,6 +28,18 @@
 #xg .msg.ok{display:block;background:#dcfce7;color:#166534}#xg .msg.err{display:block;background:#fee2e2;color:#991b1b}
 #xg .muted{color:var(--muted)}#xg .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
 #xg .empty{padding:24px;text-align:center;color:var(--muted)}
+#xg .hero{display:grid;grid-template-columns:1fr 1.4fr;gap:12px;margin-bottom:16px}
+#xg .scanbox{background:linear-gradient(135deg,#06a5c1,#26c0da);color:#fff;border-radius:12px;padding:22px}
+#xg .scanbox h2{margin:0 0 4px;font-size:30px;font-weight:600;letter-spacing:.5px}
+#xg .scanbox .btn{background:#4caf50;border-color:#4caf50;margin-top:14px;font-size:15px;padding:10px 18px}
+#xg .scanbox .last{margin-top:12px;font-weight:600;font-size:13px}
+#xg .scanbox select,#xg .scanbox input{width:100%;margin-top:14px}
+#xg .seg{display:flex;gap:0;margin:-22px -22px 0;border-bottom:1px solid rgba(255,255,255,.35)}
+#xg .seg button{flex:1;background:none;border:0;color:#fff;padding:14px;font-weight:600;cursor:pointer;opacity:.75;text-transform:uppercase;font-size:13px}
+#xg .seg button.on{opacity:1;background:rgba(255,255,255,.12)}
+#xg .trend{font-size:12px;float:right}#xg .up{color:var(--red)}#xg .down{color:var(--green)}
+#xg svg.chart{width:100%;height:220px}
+@media (max-width:760px){#xg .hero{grid-template-columns:1fr}}
 </style>
 <div id="xg">
   <div class="top">
@@ -64,7 +76,7 @@
 
   var TABS = MODE === 'whm'
     ? [['overview', 'Overview'], ['scan', 'Virus Scanner'], ['findings', 'Detected Files'], ['firewall', 'Firewall'], ['ipdb', 'IPDB']]
-    : [['overview', 'Overview'], ['scan', 'Scan My Account'], ['findings', 'Detected Files']];
+    : [['home', 'Home'], ['scan', 'Virus Scanner'], ['logs', 'Scanner Logs'], ['findings', 'Detected Files'], ['cms', 'CMS Threats'], ['waf', 'WAF'], ['bots', 'Bot Attacks']];
 
   function tabs(cur) {
     document.getElementById('xg-tabs').innerHTML = TABS.map(function (t) {
@@ -79,7 +91,8 @@
     if (timer) { clearInterval(timer); timer = null; }
     tabs(name);
     body.innerHTML = '<div class="empty">Loading…</div>';
-    ({ overview: overview, scan: scan, findings: findings, firewall: firewall, ipdb: ipdb })[name]()
+    ({ overview: overview, home: home, scan: scan, logs: logs, findings: findings, cms: cmsThreats, waf: function () { return wafLogs('waf'); },
+       bots: function () { return wafLogs('bot'); }, firewall: firewall, ipdb: ipdb })[name]()
       .catch(function (e) { body.innerHTML = '<div class="card red">' + esc(e.message) + '</div>'; });
   }
 
@@ -119,6 +132,159 @@
     });
   }
 
+
+  function trend(cur, prev) {
+    if (!prev && !cur) return '';
+    if (!prev) return '<span class="trend up">▲ 100%</span>';
+    var p = Math.round((cur - prev) * 100 / prev);
+    return '<span class="trend ' + (p > 0 ? 'up' : 'down') + '">' + (p > 0 ? '▲ ' : '▼ ') + Math.abs(p) + '%</span>';
+  }
+
+  // chart draws a small line chart of {day, n} points (no library).
+  function chart(points) {
+    if (!points || points.length < 2) return '<div class="empty">Not enough data yet</div>';
+    var W = 700, H = 200, L = 34, B = 24, max = 1;
+    points.forEach(function (p) { if (p.n > max) max = p.n; });
+    var x = function (i) { return L + i * (W - L - 10) / (points.length - 1); };
+    var y = function (v) { return H - B - v * (H - B - 10) / max; };
+    var path = points.map(function (p, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.n).toFixed(1); }).join(' ');
+    var grid = [0, 0.5, 1].map(function (f) {
+      var v = Math.round(max * f);
+      return '<line x1="' + L + '" x2="' + W + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="#e2e8f0"/><text x="' + (L - 6) + '" y="' + (y(v) + 4) + '" font-size="11" text-anchor="end" fill="#64748b">' + v + '</text>';
+    }).join('');
+    var labels = points.map(function (p, i) {
+      return '<circle cx="' + x(i) + '" cy="' + y(p.n) + '" r="3.5" fill="#1f3a7a"><title>' + esc(p.day) + ': ' + p.n + '</title></circle>' +
+        '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="11" text-anchor="middle" fill="#64748b">' + esc(p.day.slice(8)) + '</text>';
+    }).join('');
+    return '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' + grid +
+      '<path d="' + path + '" fill="none" stroke="#1f3a7a" stroke-width="2.5"/>' + labels + '</svg>';
+  }
+
+  function home() {
+    return call('dashboard').then(function (d) {
+      document.getElementById('xg-ver').textContent = 'v' + d.version;
+      document.getElementById('xg-sub').textContent = 'Dashboard · ' + d.user + ' · last 30 days';
+      body.innerHTML = '<div class="grid">' +
+        '<div class="card stat">' + trend(d.threats, d.threats_prev) + '<div class="v">' + num(d.threats) + '</div><div class="l">Threats Stopped</div></div>' +
+        '<div class="card stat">' + trend(d.attacks, d.attacks_prev) + '<div class="v">' + num(d.attacks) + '</div><div class="l">Attacks Blocked</div></div>' +
+        '<div class="card stat"><div class="v ' + (d.cms_issues ? 'red' : '') + '">' + num(d.cms_issues) + '</div><div class="l">CMS Issues</div></div></div>' +
+        '<div class="card"><h3>Virus Infections</h3>' + chart(d.daily_threats) + '</div>' +
+        '<div class="card"><h3>Attacks blocked by WAF</h3><div class="muted">' + num(d.attacks) + ' total attacks blocked ' + trend(d.attacks, d.attacks_prev) + '</div>' + chart(d.daily_attacks) + '</div>';
+    });
+  }
+
+  function scanType(s, home) {
+    if (s.kind === 'quick') return 'Quick scan';
+    if (s.target === home) return 'Full scan';
+    return 'Path scan';
+  }
+
+  function userScan() {
+    var info = {};
+    var render = function () {
+      return call('scan.list').then(function (d) {
+        var list = d.scans, last = { full: null, quick: null, path: null };
+        list.forEach(function (s) { var t = scanType(s, info.home).split(' ')[0].toLowerCase(); if (!last[t]) last[t] = s; });
+        document.getElementById('xg-last-full').textContent = last.full ? when(last.full.started_at) : 'Never';
+        document.getElementById('xg-last-other').textContent = (last.quick || last.path) ? when((last.quick || last.path).started_at) : 'Never';
+        document.getElementById('xg-scans').innerHTML = list.length ? '<table><tr><th>Scan type</th><th>Target</th><th>Tested files</th><th>Infected files</th><th>Status</th><th>Time</th><th></th></tr>' +
+          list.map(function (s) {
+            return '<tr><td>' + scanType(s, info.home) + '</td><td class="mono">' + esc(s.target) + '</td><td>' + num(s.files) + (s.total ? ' / ' + num(s.total) : '') +
+              '</td><td class="' + (s.infected ? 'red' : '') + '">' + num(s.infected) + '</td><td>' + badge(s.status) + (s.error ? '<div class="muted">' + esc(s.error) + '</div>' : '') +
+              '</td><td>' + when(s.started_at) + '</td><td>' + (s.status === 'running' || s.status === 'queued' ? '<button class="btn o" data-stop="' + s.id + '">Stop</button>' : '') + '</td></tr>';
+          }).join('') + '</table>' : '<div class="empty">No data available in table</div>';
+        var busy = list.some(function (s) { return s.status === 'running' || s.status === 'queued'; });
+        document.getElementById('xg-refresh').textContent = busy ? 'Refreshing every 3s' : '';
+        if (busy && !timer) timer = setInterval(render, 3000);
+        if (!busy && timer) { clearInterval(timer); timer = null; }
+      });
+    };
+    var start = function (kind, path) {
+      call('scan.start', { kind: kind, path: path || '' }).then(function (r) { flash('Scan #' + r.id + ' started', true); render(); })
+        .catch(function (e) { flash(e.message); });
+    };
+    return Promise.all([call('overview'), call('dirs')]).then(function (res) {
+      info = res[0];
+      var dirs = res[1].dirs || [];
+      body.innerHTML = '<div class="hero">' +
+        '<div class="scanbox"><h2>FULL SCAN</h2><div>Start a full scan of the account</div><button class="btn" id="xg-full">RUN SCAN</button><div class="last">LAST SCAN : <span id="xg-last-full"></span></div></div>' +
+        '<div class="scanbox"><div class="seg"><button class="on" data-mode="quick">Quick scan</button><button data-mode="path">Path scan</button></div>' +
+        '<div id="xg-mode-quick"><p>Scans your website folder: ' + esc(info.web_root || info.home) + '</p></div>' +
+        '<div id="xg-mode-path" style="display:none"><select id="xg-dir"><option value="">Choose a directory…</option>' +
+        dirs.map(function (d) { return '<option>' + esc(d) + '</option>'; }).join('') + '</select></div>' +
+        '<button class="btn" id="xg-other">RUN SCAN</button><div class="last">LAST SCAN : <span id="xg-last-other"></span></div></div></div>' +
+        '<div class="card"><div class="row"><h3 style="margin:0">Manual Scans</h3><span class="muted" id="xg-refresh" style="margin-left:auto"></span></div><div id="xg-scans"></div></div>';
+      var mode = 'quick';
+      body.querySelector('.seg').onclick = function (e) {
+        var m = e.target.getAttribute('data-mode'); if (!m) return;
+        mode = m;
+        body.querySelectorAll('.seg button').forEach(function (b) { b.className = b.getAttribute('data-mode') === m ? 'on' : ''; });
+        document.getElementById('xg-mode-quick').style.display = m === 'quick' ? '' : 'none';
+        document.getElementById('xg-mode-path').style.display = m === 'path' ? '' : 'none';
+      };
+      document.getElementById('xg-full').onclick = function () { start('full'); };
+      document.getElementById('xg-other').onclick = function () {
+        if (mode === 'quick') return start('quick');
+        var dir = document.getElementById('xg-dir').value;
+        if (!dir) return flash('Choose a directory first');
+        start('path', dir);
+      };
+      document.getElementById('xg-scans').onclick = function (e) {
+        var id = e.target.getAttribute('data-stop');
+        if (id) call('scan.stop', { ID: Number(id) }).then(render).catch(function (x) { flash(x.message); });
+      };
+      return render();
+    });
+  }
+
+  var lState = { q: '', offset: 0 };
+  function logs() {
+    body.innerHTML = '<div class="card"><div class="row"><h3 style="margin:0">Background Scanner Logs</h3><input id="xg-q" placeholder="Search by name, category or description" style="margin-left:auto;min-width:260px"></div><div id="xg-list"></div></div>';
+    var q = document.getElementById('xg-q');
+    q.value = lState.q;
+    q.onchange = function () { lState.q = q.value; load(); };
+    function load() {
+      return call('findings.list', { source: 'background', q: lState.q, limit: 100 }).then(function (d) {
+        document.getElementById('xg-list').innerHTML = d.findings.length ? '<table><tr><th>Filename</th><th>Category</th><th>Virus description</th><th>Status</th><th>Time</th></tr>' +
+          d.findings.map(function (f) {
+            return '<tr><td class="mono">' + esc(f.path) + '</td><td>' + badge(f.category) + '</td><td class="mono">' + esc(f.signature) + '</td><td>' + badge(f.status) + '</td><td>' + when(f.created_at) + '</td></tr>';
+          }).join('') + '</table>' : '<div class="empty">No data available in table</div>';
+      });
+    }
+    return load();
+  }
+
+  function cmsThreats() {
+    return call('cms.list', { limit: 200 }).then(function (d) {
+      body.innerHTML = '<div class="card"><h3>CMS Threats</h3>' + (d.sites.length ? '<table><tr><th>Website</th><th>CMS</th><th>Version</th><th>Core files</th><th>Database</th><th>Vulnerable</th><th>Outdated</th><th>Risk</th></tr>' +
+        d.sites.map(function (s) {
+          return '<tr><td>' + esc(s.domain || s.path) + '<div class="muted mono">' + esc(s.path) + '</div></td><td>' + esc(s.type) + '</td><td>' + esc(s.version) +
+            (s.latest && s.latest !== s.version ? ' <span class="amber">(latest ' + esc(s.latest) + ')</span>' : '') + '</td><td class="' + (s.core_issues ? 'red' : '') + '">' + num(s.core_issues) +
+            '</td><td class="' + (s.db_issues ? 'red' : '') + '">' + num(s.db_issues) + '</td><td class="' + (s.vulnerable ? 'red' : '') + '">' + num(s.vulnerable) + '</td><td>' +
+            num((s.outdated_plugins || 0) + (s.outdated_themes || 0)) + '</td><td>' + badge(s.risk || 'ok') + '</td></tr>';
+        }).join('') + '</table>' : '<div class="empty">No WordPress, Joomla or OpenCart sites found yet</div>') + '</div>';
+    });
+  }
+
+  var wState = { q: '' };
+  function wafLogs(cat) {
+    var title = cat === 'bot' ? 'Bot Attacks' : 'WAF Logs';
+    body.innerHTML = '<div class="card"><div class="row"><h3 style="margin:0">' + title + '</h3><input id="xg-q" placeholder="Search by IP, Domain, URI, etc..." style="margin-left:auto;min-width:260px"></div><div id="xg-list"></div></div>';
+    var q = document.getElementById('xg-q');
+    q.value = wState.q;
+    q.onchange = function () { wState.q = q.value; load(); };
+    function load() {
+      return call('waf.events', { category: cat, q: wState.q, limit: 200 }).then(function (d) {
+        document.getElementById('xg-list').innerHTML = d.events.length ? '<table><tr><th>IP address</th><th>Reason</th><th>Hostname</th><th>Action</th><th>Time</th></tr>' +
+          d.events.map(function (e) {
+            return '<tr><td class="mono">' + esc(e.ip) + '</td><td>' + esc(e.msg) + '<div class="muted mono">' + esc(e.method) + ' ' + esc(e.uri) + '</div></td><td>' + esc(e.host) +
+              '</td><td>' + esc(e.action) + '</td><td>' + when(e.at) + '</td></tr>';
+          }).join('') + '</table>' : '<div class="empty">No data available in table</div>';
+      });
+    }
+    return load();
+  }
+
   function startUserScan(path) {
     return call('scan.start', { path: path }).then(function (r) { flash('Scan #' + r.id + ' started', true); show('scan'); })
       .catch(function (e) { flash(e.message); });
@@ -135,6 +301,7 @@
   }
 
   function scan() {
+    if (MODE === 'cpanel') return userScan();
     var form = MODE === 'whm'
       ? '<div class="row"><select id="xg-kind"><option value="quick">Quick scan (website folders)</option><option value="full">Full scan (all accounts)</option><option value="path">Custom path</option></select>' +
         '<input id="xg-path" placeholder="/home/user/public_html" style="flex:1;min-width:240px"><button class="btn" id="xg-start">Start scan</button></div>'
@@ -244,6 +411,6 @@
     });
   }
 
-  show('overview');
+  show(MODE === 'cpanel' ? 'home' : 'overview');
 })();
 </script>

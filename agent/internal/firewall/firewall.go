@@ -59,6 +59,11 @@ type Manager struct {
 	IPDB     *IPDB
 	// Protected returns IPs that must never be blocked (server + portal IPs).
 	Protected func() []string
+	// Trusted returns the addresses of trusted services (search engine
+	// crawlers, uptime monitors, CDN, payment callbacks): never blocked.
+	Trusted func() []string
+	// TrustedMatch names the trusted service an address belongs to ("" = none).
+	TrustedMatch func(ip string) string
 	// OnBan is called for automatic bans (notifications).
 	OnBan func(Event)
 	// EssentialTCPOut are outgoing TCP ports the agent itself needs (the
@@ -171,6 +176,15 @@ func (m *Manager) Build() (Ruleset, error) {
 	if m.Protected != nil {
 		rs.Ignore = append(rs.Ignore, m.Protected()...)
 	}
+	if m.Trusted != nil {
+		rs.Ignore = append(rs.Ignore, m.Trusted()...)
+	}
+	// With CSF active, what CSF allows or ignores is exempt here too, and
+	// CSF keeps the port filter.
+	csf := DetectCSF()
+	if csf.Enabled {
+		rs.Ignore = append(rs.Ignore, CSFExempt()...)
+	}
 	if m.Geo != nil {
 		rs.CountryBlock = m.Geo.CIDRs(cfg.BlockedCountries)
 		rs.CountryAllow = m.Geo.CIDRs(cfg.AllowedCountries)
@@ -182,7 +196,7 @@ func (m *Manager) Build() (Ruleset, error) {
 		rs.IPDB = m.ipdbEntries()
 		rs.LogIPDB = cfg.LogBlocked && all2.IPDB.Log
 	}
-	if cfg.PortFilter {
+	if cfg.PortFilter && !csf.Enabled {
 		rs.Ports = m.portFilter(cfg)
 	}
 	if cfg.Captcha || (all2.IPDB.Enabled && all2.IPDB.Captcha) {
@@ -210,6 +224,11 @@ func (m *Manager) Apply() error {
 		if err == nil {
 			err = b.Apply(rs)
 		}
+		if DetectCSF().Enabled {
+			if herr := EnsureCSFHook(); herr != nil {
+				m.Log.Warn("could not add the csfpost.sh hook", "err", herr)
+			}
+		}
 	}
 	m.mu.Lock()
 	m.lastError = ""
@@ -235,6 +254,13 @@ func (m *Manager) isProtected(addr string) bool {
 	return false
 }
 
+func (m *Manager) trustedService(addr string) string {
+	if m.TrustedMatch == nil || strings.Contains(addr, "/") {
+		return ""
+	}
+	return m.TrustedMatch(addr)
+}
+
 // Add stores a rule and applies it. ttl is used for temp kinds.
 func (m *Manager) Add(kind, addr, comment string, ttl time.Duration) (Rule, error) {
 	c, err := ParseAddr(addr)
@@ -246,6 +272,9 @@ func (m *Manager) Add(kind, addr, comment string, ttl time.Duration) (Rule, erro
 	case KindDeny, KindTempBan:
 		if m.isProtected(c) {
 			return Rule{}, fmt.Errorf("%s belongs to this server or the XMart Guard portal and cannot be blocked", c)
+		}
+		if svc := m.trustedService(c); svc != "" {
+			return Rule{}, fmt.Errorf("%s belongs to %s, a trusted service that is never blocked (turn it off under Firewall » Trusted services to block it)", c, svc)
 		}
 	case KindTempAllow:
 	default:
@@ -473,6 +502,10 @@ func (m *Manager) expire() {
 func (m *Manager) AutoBan(ip, reason, source string) {
 	c, err := ParseAddr(ip)
 	if err != nil || m.isProtected(c) {
+		return
+	}
+	if svc := m.trustedService(c); svc != "" {
+		m.Log.Debug("automatic ban skipped: trusted service", "ip", c, "service", svc, "reason", reason)
 		return
 	}
 	for _, r := range mustRules(m) {

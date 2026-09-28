@@ -26,15 +26,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/clamdb"
 	"github.com/xmarthost/xmartguard/agent/internal/client"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/core"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
+	"github.com/xmarthost/xmartguard/agent/internal/hostfw"
 	"github.com/xmarthost/xmartguard/agent/internal/identity"
 	"github.com/xmarthost/xmartguard/agent/internal/local"
+	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/panel"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
+	"github.com/xmarthost/xmartguard/agent/internal/store"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
 	"github.com/xmarthost/xmartguard/agent/internal/waf"
@@ -80,7 +84,12 @@ func main() {
 		_ = firewall.FindIPTables().Remove()
 		_ = firewall.FindNFT().Remove()
 		waf.RemoveInclude(waf.Detect())
-		fmt.Println("firewall rules and WAF include removed")
+		// Withdraw the portal entries added to CSF, firewalld, UFW, APF,
+		// cPHulk and Imunify360, and the CSF hook.
+		n := hostfw.New(filepath.Join(store.StateDir(), "host-trust.json")).RemoveAll()
+		firewall.RemoveCSFHook()
+		mail.RemoveEximRBLs()
+		fmt.Printf("firewall rules, WAF include and %d host firewall entries removed\n", n)
 	case "panel":
 		err = cmdPanel(os.Args[2:])
 	case "panel-cgi":
@@ -229,6 +238,12 @@ func cmdRun() error {
 			log.Warn("panel plugin install failed", "err", err)
 		}
 	}
+	// Extra Exim blocklists in WHM (added switched off).
+	if added, err := mail.EnsureEximRBLs(); err != nil {
+		log.Warn("could not add Exim RBL definitions", "err", err)
+	} else if len(added) > 0 {
+		log.Info("Exim RBL definitions added (off until enabled in WHM)", "rbls", added)
+	}
 
 	s := &client.Session{Cfg: cfg, ID: id, Log: log, Collector: sysinfo.NewCollector(), Security: a.SecuritySummary}
 	a.Session = s
@@ -333,6 +348,19 @@ func cmdCheck(args []string) error {
 	cfg.MaxFileSizeMB = 20
 	sc := scanner.NewOffline()
 	sc.NoHash = *noHash
+	// Same ClamAV-format databases as the running agent (installed ClamAV
+	// and downloaded subscriptions).
+	if !*noHash {
+		srcs := append(clamdb.FindLocal(clamdb.LocalDirs), clamdb.FindLocal([]string{filepath.Join(store.StateDir(), "clamav")})...)
+		for i := range srcs {
+			if strings.HasPrefix(srcs[i].Path, store.StateDir()) {
+				srcs[i].Unofficial = true
+			}
+		}
+		if e := clamdb.Load(srcs); !e.Empty() {
+			scanner.SetClamDB(e)
+		}
+	}
 	type job struct {
 		path string
 		info iofs.FileInfo

@@ -143,7 +143,7 @@ export function SettingRow({ title, desc, children, recommended }: { title: stri
 
 /** Editable string list with an input + Add button, like the portal's whitelist editors. */
 export function ListEditor({
-  title, desc, items, onChange, placeholder = 'Type here', options, empty = 'Nothing added yet', validate, disabled,
+  title, desc, items, onChange, placeholder = 'Type here', options, empty = 'Nothing added yet', validate, disabled, scroll, header,
 }: {
   title: string;
   desc?: string;
@@ -154,6 +154,10 @@ export function ListEditor({
   empty?: string;
   validate?: (v: string) => string | null;
   disabled?: boolean;
+  /** Long lists scroll inside a box. */
+  scroll?: boolean;
+  /** Element shown next to the title (e.g. a toggle). */
+  header?: ReactNode;
 }) {
   const [value, setValue] = useState('');
   const [err, setErr] = useState('');
@@ -173,8 +177,13 @@ export function ListEditor({
   };
   return (
     <div className="border-b border-slate-100 py-4 last:border-0">
-      <div className="font-medium text-navy-900">{title}</div>
-      {desc && <div className="mb-3 text-sm text-slate-500">{desc}</div>}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-medium text-navy-900">{title}</div>
+          {desc && <div className="mb-3 text-sm text-slate-500">{desc}</div>}
+        </div>
+        {header}
+      </div>
       <div className="flex gap-3">
         {options ? (
           <select className="input" value={value} onChange={(e) => setValue(e.target.value)} disabled={disabled}>
@@ -198,7 +207,7 @@ export function ListEditor({
         </button>
       </div>
       {err && <div className="mt-2 text-sm text-red-600">{err}</div>}
-      <div className="mt-3">
+      <div className={`mt-3 ${scroll ? 'max-h-72 overflow-y-auto pr-2' : ''}`}>
         {items.length === 0 ? (
           <div className="text-sm text-slate-400">{empty}</div>
         ) : (

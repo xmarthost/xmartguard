@@ -193,6 +193,27 @@ func TestPanelSocketIsolatesAccounts(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bob.HomeDir, "public_html/shell.php")); err != nil {
 		t.Fatal("bob's file was touched")
 	}
+	// WAF logs and the dashboard only show Alice's websites.
+	now := time.Now().Unix()
+	a.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		now, "203.0.113.1", "GET", "alice.example", "/x", 1, "attack on alice", "waf", "Access denied with code 403", "xgpanela", "")
+	a.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		now, "203.0.113.2", "GET", "bob.example", "/y", 1, "attack on bob", "waf", "Access denied with code 403", "xgpanelb", "")
+	r = as(alice, "waf.events", map[string]any{"category": "waf"})
+	if !r.OK || !strings.Contains(string(r.Data), "attack on alice") || strings.Contains(string(r.Data), "attack on bob") {
+		t.Fatalf("waf.events not scoped: %+v %s", r, r.Data)
+	}
+	r = as(alice, "dashboard", nil)
+	if !r.OK || !strings.Contains(string(r.Data), `"attacks":1`) || !strings.Contains(string(r.Data), `"threats":1`) {
+		t.Fatalf("dashboard: %+v %s", r, r.Data)
+	}
+	r = as(alice, "dirs", nil)
+	if !r.OK || !strings.Contains(string(r.Data), filepath.Join(alice.HomeDir, "public_html")) || strings.Contains(string(r.Data), bob.HomeDir) {
+		t.Fatalf("dirs: %+v %s", r, r.Data)
+	}
+	if r := as(alice, "scan.start", map[string]any{"kind": "full"}); !r.OK {
+		t.Fatalf("full scan: %+v", r)
+	}
 	// Alice quarantines and restores her own file.
 	r = as(alice, "finding.action", map[string]any{"ids": []int64{aliceFinding}, "action": "quarantine"})
 	if !strings.Contains(string(r.Data), `"done":1`) {

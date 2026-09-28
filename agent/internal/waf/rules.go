@@ -10,6 +10,7 @@ package waf
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,6 +23,7 @@ const (
 	IDWhitelist     = 7700001
 	IDWhiteDomains  = 7700002
 	IDDisable       = 7700003
+	IDTrusted       = 7700004
 	IDUploadMalware = 7700101
 	IDUploadPHP     = 7700102
 	IDSensitive     = 7700201
@@ -45,6 +47,7 @@ const (
 	IDWebshell      = 7700601
 	IDWebshellDir   = 7700602
 	IDExploitProbe  = 7700603
+	IDProxyBlocked  = 7700701
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -79,7 +82,8 @@ var Catalog = []RuleInfo{
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
 	{IDSEOBots, "seo_bots", "Block aggressive SEO crawlers", "block"},
 	{IDAIBots, "ai_bots", "Block AI training crawlers", "block"},
-	{IDCustomBots, "custom_bots", "Block custom User-Agents", "block"},
+	{IDCustomBots, "bot_blocker", "Bad Bot blocker: block the User-Agents in the list", "block"},
+	{IDProxyBlocked, "proxy_ip_check", "Block blacklisted visitors behind Cloudflare or a local proxy (real IP from CF-Connecting-IP / X-Forwarded-For)", "block"},
 }
 
 // Bot lists (matched case-insensitively as substrings of the User-Agent).
@@ -108,13 +112,33 @@ const (
 	FileSEOBots    = "seo-bots.txt"
 	FileAIBots     = "ai-bots.txt"
 	FileCustomBots = "custom-bots.txt"
+	// Proxy IP check: the proxies whose forwarded-for header is trusted,
+	// and the addresses to block (the firewall's deny list, bans and IPDB).
+	FileProxyRanges = "proxy-ranges.txt"
+	FileBlockedIPs  = "blocked-ips.txt"
+	FileTrustedIPs  = "trusted-ips.txt"
 )
+
+// ProxyRanges are Cloudflare's published networks plus local reverse
+// proxies (nginx or LiteSpeed in front of Apache).
+var ProxyRanges = []string{"127.0.0.1", "::1",
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+	"190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32"}
+
+// placeholderIP keeps an empty list loadable (@ipMatchFromFile refuses an
+// empty file); it is a documentation address no visitor has.
+const placeholderIP = "192.0.2.255"
 
 // Options tune rendering for what the local ModSecurity supports.
 type Options struct {
 	Dir         string // where the rules and bot lists live
 	InspectPath string // upload approver script
 	UploadScan  bool   // false when @inspectFile is unusable
+	// Trusted: trusted-ips.txt lists search engine crawlers, uptime monitors
+	// and other trusted services; bot rules never apply to them.
+	Trusted bool
 }
 
 // Render builds the rules file for the given settings.
@@ -125,7 +149,11 @@ func Render(c settings.WAF, o Options) string {
 	w("# Configure them in the XMart Guard portal (Settings » WAF & Bruteforce).")
 	w("")
 	if len(c.WhitelistIPs) > 0 {
-		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=7700002-7709999"`, strings.Join(c.WhitelistIPs, ","), IDWhitelist)
+		ips := make([]string, len(c.WhitelistIPs))
+		for i, a := range c.WhitelistIPs {
+			ips[i] = modsecAddr(a)
+		}
+		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=7700002-7709999"`, strings.Join(ips, ","), IDWhitelist)
 	}
 	if len(c.WhitelistDomains) > 0 {
 		var alt []string
@@ -133,6 +161,13 @@ func Render(c settings.WAF, o Options) string {
 			alt = append(alt, strings.ReplaceAll(regexp.QuoteMeta(d), `\*`, `[^.]+`))
 		}
 		w(`SecRule SERVER_NAME "@rx ^(?:%s)$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=7700003-7709999"`, strings.Join(alt, "|"), IDWhiteDomains)
+	}
+	if o.Trusted {
+		// Crawlers and monitors keep their User-Agent: the bot rules, the
+		// empty User-Agent rule and the XML-RPC GET rule skip them, and a
+		// blacklisted address behind a trusted proxy is still checked.
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDCustomBots, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet)
 	}
 	off := map[int]bool{}
 	for _, id := range c.DisabledRules {
@@ -244,7 +279,14 @@ func Render(c settings.WAF, o Options) string {
 	bot(c.BadBots, FileBadBots, IDBadBots, "Bad bot")
 	bot(c.SEOBots, FileSEOBots, IDSEOBots, "SEO crawler")
 	bot(c.AIBots, FileAIBots, IDAIBots, "AI crawler")
-	bot(len(c.CustomBots) > 0, FileCustomBots, IDCustomBots, "Custom bot")
+	bot(c.BotBlocker && len(c.BotList) > 0, FileCustomBots, IDCustomBots, "Bad bot")
+	if c.ProxyIPCheck && !off[IDProxyBlocked] {
+		// Disruptive action and metadata sit on the chain's first rule
+		// (ModSecurity 2); the client address is the first one in the header.
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'XMartGuard - Blacklisted IP behind proxy',tag:'xmartguard/proxy',chain"`, o.Dir, FileProxyRanges, IDProxyBlocked)
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
+		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
+	}
 	return b.String()
 }
 
@@ -255,8 +297,46 @@ func BotFiles(c settings.WAF) map[string]string {
 		FileBadBots:    join(BadBots),
 		FileSEOBots:    join(SEOBots),
 		FileAIBots:     join(AIBots),
-		FileCustomBots: join(c.CustomBots),
+		FileCustomBots: join(c.BotList),
 	}
+}
+
+// ProxyFiles returns the proxy IP check lists (blocked: the firewall's
+// blocked addresses).
+func ProxyFiles(blocked []string) map[string]string {
+	var ok []string
+	seen := map[string]bool{}
+	for _, a := range blocked {
+		if a = modsecAddr(a); validAddr(a) && !seen[a] {
+			seen[a] = true
+			ok = append(ok, a)
+		}
+	}
+	if len(ok) == 0 {
+		ok = []string{placeholderIP}
+	}
+	sort.Strings(ok)
+	return map[string]string{
+		FileProxyRanges: strings.Join(ProxyRanges, "\n") + "\n", // no host masks
+		FileBlockedIPs:  strings.Join(ok, "\n") + "\n",
+	}
+}
+
+// modsecAddr writes an address the way @ipMatchFromFile accepts it:
+// ModSecurity 2 refuses "/32" (IPv4) and "/128" (IPv6) host masks.
+func modsecAddr(a string) string {
+	if strings.Contains(a, ":") {
+		return strings.TrimSuffix(a, "/128")
+	}
+	return strings.TrimSuffix(a, "/32")
+}
+
+func validAddr(a string) bool {
+	if net.ParseIP(a) != nil {
+		return true
+	}
+	_, _, err := net.ParseCIDR(a)
+	return err == nil
 }
 
 func quoteAll(l []string) []string {

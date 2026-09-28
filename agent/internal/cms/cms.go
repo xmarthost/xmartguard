@@ -308,6 +308,8 @@ func (m *Manager) save(s Site) {
 
 // SiteFilter narrows Sites.
 type SiteFilter struct {
+	// User limits the list to one hosting account (panel users).
+	User   string `json:"-"`
 	Type   string `json:"type"`
 	Risk   string `json:"risk"`
 	Query  string `json:"q"`
@@ -341,6 +343,9 @@ func (m *Manager) Sites(f SiteFilter) ([]Site, int, error) {
 	where, args := []string{"1=1"}, []any{}
 	if f.Type != "" {
 		where, args = append(where, "type = ?"), append(args, f.Type)
+	}
+	if f.User != "" {
+		where, args = append(where, "user = ?"), append(args, f.User)
 	}
 	if f.Risk != "" {
 		where, args = append(where, "risk = ?"), append(args, f.Risk)

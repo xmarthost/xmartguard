@@ -23,6 +23,8 @@ interface ScannerS {
   auto_clean: boolean;
   wp_core_repair: boolean;
   feeds: boolean;
+  clamav: boolean;
+  clamav_urls: string;
   trim: boolean;
   trim_max_percent: number;
   user_scans: boolean;
@@ -93,6 +95,9 @@ interface WAFS {
   webshell: boolean;
   block_php_upload: boolean;
   whitelist_domains: string[];
+  bot_blocker: boolean;
+  bot_list: string[];
+  proxy_ip_check: boolean;
 }
 interface CMSS {
   enabled: boolean;
@@ -137,6 +142,8 @@ interface IPDBS {
   report: boolean;
 }
 interface AllSettings {
+  firewall?: { captcha: boolean };
+  captcha?: { provider: string; site_key: string };
   scanner: ScannerS;
   ipdb: IPDBS;
   waf: WAFS;
@@ -221,14 +228,24 @@ export default function SettingsPage() {
 
       <div className="card p-6">
         {!admin && <div className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">You can view settings; only admins can change them.</div>}
-        {section === 'scanner' && <ScannerSection s={st.scanner} meta={meta} admin={admin} busy={busy} onSave={setScanner} />}
+        {section === 'scanner' && (
+          <>
+            <ScannerSection s={st.scanner} meta={meta} admin={admin} busy={busy} onSave={setScanner} />
+            <ClamAVSection serverId={id!} s={st.scanner} admin={admin} busy={busy} onSave={setScanner} />
+          </>
+        )}
         {section === 'scanner' && st.ai && <AISection s={st.ai} admin={admin} busy={busy} onSave={(p) => save({ ai: p })} />}
         {section === 'additional' && st.processes && (
           <AdditionalSection serverId={id!} st={st} meta={meta} admin={admin} busy={busy} save={save} />
         )}
-        {section === 'rbl' && <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />}
+        {section === 'rbl' && (
+          <>
+            <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />
+            <EximRBLs serverId={id!} />
+          </>
+        )}
         {section === 'rbl' && st.domain_reputation && <DomainRepSection s={st.domain_reputation} admin={admin} busy={busy} onSave={(p) => save({ domain_reputation: p })} />}
-        {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} onReload={res.reload} />}
+        {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} all={st} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} saveAll={save} onReload={res.reload} />}
         {section === 'cms' && st.cms && <CMSSection s={st.cms} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
         {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
         {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
@@ -562,6 +579,90 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
   );
 }
 
+/** ClamAV-format signature databases matched inside the agent. */
+function ClamAVSection({ serverId, s, admin, busy, onSave }: { serverId: string; s: ScannerS; admin: boolean; busy: boolean; onSave: (p: Partial<ScannerS>) => void }) {
+  const st = useAgent<{ enabled: boolean; loaded_at: number; stats: { hashes: number; body: number; logical: number; skipped: number; databases: string[] }; errors: Record<string, string> }>(serverId, 'clamav.status');
+  const { run } = useAction();
+  const [urls, setUrls] = useState(s.clamav_urls ?? '');
+  useEffect(() => setUrls(s.clamav_urls ?? ''), [s.clamav_urls]);
+  const dis = !admin || busy;
+  const total = st.data ? st.data.stats.hashes + st.data.stats.body + st.data.stats.logical : 0;
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-4">
+      <SettingRow
+        title="ClamAV-format signatures"
+        desc="Match ClamAV signature databases inside the XMart Guard agent: no clamscan or clamd process is started, scans stay one XMart Guard process. The databases of an installed ClamAV (cPanel's ClamAV plugin, kept current by freshclam) are used automatically, filtered to web and script signatures."
+        recommended
+      >
+        <Toggle on={s.clamav !== false} disabled={dis} onChange={(v) => onSave({ clamav: v })} />
+      </SettingRow>
+      <div className="border-b border-slate-100 py-4">
+        <div className="font-medium text-navy-900">Signature subscriptions</div>
+        <div className="mb-2 text-sm text-slate-500">
+          One database URL per line (.ndb, .hdb, .hsb, .ldb, .cvd or .cld), for example a commercial PHP malware signature subscription with your own
+          license key. Downloaded by the agent every 6 hours; the URL is stored on the server and shown masked here.
+        </div>
+        <textarea className="input h-20 font-mono text-xs" placeholder="https://example.com/signatures/php.ndb?key=YOUR-LICENSE" value={urls} disabled={dis || s.clamav === false} onChange={(e) => setUrls(e.target.value)} />
+        <div className="mt-2 flex justify-end gap-2">
+          <button className="btn-outline" disabled={dis || s.clamav === false} onClick={() => run(() => agentCall(serverId, 'clamav.reload').then(st.reload), 'Signature databases reloaded')}>
+            Reload now
+          </button>
+          <button className="btn-primary" disabled={dis || urls === (s.clamav_urls ?? '')} onClick={() => onSave({ clamav_urls: urls.trim() })}>
+            Save
+          </button>
+        </div>
+      </div>
+      {st.data?.enabled && (
+        <div className="py-3 text-sm text-slate-600">
+          {total > 0 ? (
+            <>
+              <b>{total.toLocaleString()}</b> signatures loaded ({st.data.stats.hashes.toLocaleString()} hashes, {st.data.stats.body.toLocaleString()} body,{' '}
+              {st.data.stats.logical.toLocaleString()} logical{st.data.stats.skipped ? `, ${st.data.stats.skipped.toLocaleString()} executable-only skipped` : ''})
+              {st.data.loaded_at > 0 && <> · {new Date(st.data.loaded_at * 1000).toLocaleString()}</>}
+              <div className="mt-1 text-xs text-slate-500">{st.data.stats.databases.join(' · ')}</div>
+            </>
+          ) : (
+            <span className="text-slate-500">No ClamAV databases on this server yet. Install ClamAV (WHM » Manage Plugins » ClamAV for cPanel) or add a subscription URL.</span>
+          )}
+          {Object.entries(st.data.errors ?? {}).map(([u, e]) => (
+            <div key={u} className="mt-1 text-xs text-red-600">
+              {u}: {e}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Extra blocklists added to Exim on cPanel (switched on in WHM). */
+function EximRBLs({ serverId }: { serverId: string }) {
+  const r = useAgent<{ rbls: { name: string; zone: string; defined: boolean; enabled: boolean }[] | null }>(serverId, 'exim.rbls');
+  if (!r.data?.rbls?.length) return null;
+  return (
+    <div className="mt-6 border-t border-slate-200 pt-4">
+      <div className="font-medium text-navy-900">Exim RBLs (cPanel)</div>
+      <p className="mb-2 text-sm text-slate-500">
+        Extra blocklists added to WHM » Exim Configuration Manager » RBLs, switched off. Turn on the ones you want there; Exim then refuses mail from listed
+        addresses. Spamhaus ZEN and SpamCop are built into cPanel.
+      </p>
+      <table className="w-full text-sm">
+        <tbody className="divide-y divide-slate-100">
+          {r.data.rbls.map((x) => (
+            <tr key={x.name}>
+              <td className="py-2 pr-3 font-medium">{x.name}</td>
+              <td className="py-2 pr-3 font-mono text-xs text-slate-500">{x.zone}</td>
+              <td className="py-2 text-right text-xs">
+                {!x.defined ? <span className="text-slate-400">not added</span> : x.enabled ? <span className="text-green-600">on in Exim</span> : <span className="text-slate-500">added, off</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function RBLSection({ s, meta, admin, busy, onSave }: { s: ReputationS; meta: Meta; admin: boolean; busy: boolean; onSave: (p: Partial<ReputationS>) => void }) {
   const [rbls, setRbls] = useState(s.rbls);
   useEffect(() => setRbls(s.rbls), [s.rbls]);
@@ -623,13 +724,16 @@ interface WafRule {
   enabled: boolean;
 }
 
-function WAFSection({ serverId, s, admin, busy, onSave, onReload }: { serverId: string; s: WAFS; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void; onReload: () => void }) {
+function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }: { serverId: string; s: WAFS; all: AllSettings; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void; saveAll: (p: Partial<Record<keyof AllSettings, any>>, msg?: string) => Promise<unknown>; onReload: () => void }) {
   const { run } = useAction();
-  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string }; rules: WafRule[] }>(serverId, 'waf.status');
+  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string; enabled_since: number }; rules: WafRule[] }>(serverId, 'waf.status');
+  const doms = useAgent<{ domains: { domain: string; user: string }[] }>(serverId, 'domains.list');
   const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
   useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
   const dis = !admin || busy;
   const st = info.data?.status;
+  const captchaOn = Boolean(all.firewall?.captcha);
+  const v2 = (all.captcha?.provider ?? 'builtin') !== 'builtin';
   const row = (key: keyof WAFS, title: string, desc: string, rec?: boolean) => (
     <SettingRow title={title} desc={desc} recommended={rec}>
       <Toggle on={Boolean(s[key])} disabled={dis || !s.enabled} onChange={(v) => onSave({ [key]: v } as Partial<WAFS>)} />
@@ -639,23 +743,44 @@ function WAFSection({ serverId, s, admin, busy, onSave, onReload }: { serverId: 
     <div>
       <div className="mb-2 flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-navy-900">WAF &amp; Bruteforce</h2>
-          <p className="text-sm text-slate-500">
-            XMart Guard ModSecurity rules for {st?.web_server ?? 'the web server'}.{' '}
-            {st && !st.available && <span className="text-amber-600">ModSecurity is not installed (cPanel: EasyApache 4 » ea-apache24-mod_security2).</span>}
-          </p>
+          <h2 className="text-lg font-semibold text-navy-900">WAF Integration</h2>
+          {st?.available && s.enabled && st.enabled_since > 0 ? (
+            <p className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+              <CheckCircle2 className="h-5 w-5 text-green-600" /> WAF is enabled in Web Server configuration since {new Date(st.enabled_since * 1000).toLocaleString()}.
+            </p>
+          ) : (
+            <p className="text-sm text-slate-500">
+              XMart Guard ModSecurity rules for {st?.web_server ?? 'the web server'}.{' '}
+              {st && !st.available && <span className="text-amber-600">ModSecurity is not installed (cPanel: EasyApache 4 » ea-apache24-mod_security2).</span>}
+            </p>
+          )}
           {st?.error && <p className="mt-1 text-sm text-red-600">{st.error}</p>}
           {st?.warning && <p className="mt-1 text-sm text-amber-700">{st.warning}</p>}
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>
-      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the XMart Guard engine before it is saved. PHP files uploaded through forms are refused.', true)}
-      {row('sensitive_files', 'Protect sensitive files', 'Block web access to .env, .git, config backups, logs and SQL dumps', true)}
-      {row('wordpress', 'WordPress hardening', 'Block running PHP inside wp-content/uploads and XML-RPC multicall', true)}
-      {row('bad_bots', 'Block bad bots', 'Vulnerability scanners and abusive tools', true)}
-      {row('seo_bots', 'Block SEO crawlers', 'Ahrefs, Semrush, MJ12, DotBot and similar aggressive crawlers')}
-      {row('ai_bots', 'Block AI crawlers', 'GPTBot, CCBot, Bytespider, ClaudeBot and similar training crawlers')}
-      {row('bruteforce', 'CMS login brute-force protection', 'Ban IPs that repeatedly fail WordPress, Joomla or OpenCart logins', true)}
+      {row('bad_bots', 'SCANNER protection', 'Prevent bad User-Agents and crawlers: vulnerability scanners and attack tools (sqlmap, nikto, wpscan, nuclei…)', true)}
+      <SettingRow title="Captcha protection" desc="Distributed brute-force protection with CAPTCHA verification: a banned visitor can unblock their address by solving a CAPTCHA" recommended>
+        <Toggle on={captchaOn} disabled={dis} onChange={(v) => saveAll({ firewall: { captcha: v } } as any, v ? 'CAPTCHA protection on' : 'CAPTCHA protection off')} />
+      </SettingRow>
+      <SettingRow title="Captcha protection V2" desc="Alternative verification with Cloudflare Turnstile or Google reCAPTCHA instead of the built-in image challenge. Selecting this replaces the standard CAPTCHA (keys: Firewall » CAPTCHA page).">
+        <Toggle
+          on={v2}
+          disabled={dis}
+          onChange={(v) => {
+            if (v && !all.captcha?.site_key) {
+              alert('Add a Cloudflare Turnstile or Google reCAPTCHA site key and secret key first (server » Firewall » CAPTCHA page).');
+              return;
+            }
+            saveAll({ captcha: { provider: v ? 'turnstile' : 'builtin' } } as any, v ? 'CAPTCHA V2 on' : 'Built-in CAPTCHA');
+          }}
+        />
+      </SettingRow>
+      {row('webshell', 'WEBSHELL protection', 'Web shell attack protection: block requests to well-known web shell files, their folders and exploit probes', true)}
+      {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
+      {row('proxy_ip_check', 'Proxy IP check', 'Enables IP blacklist checks using the real client IP behind Cloudflare or a local proxy (blocked, banned and IPDB addresses)')}
+      <div className="mt-2 border-t border-slate-200" />
+      {row('bruteforce', 'Bruteforce & Bot protection', 'Ban IPs that repeatedly fail logins on the protected URLs below (WordPress, Joomla, OpenCart and your own)', true)}
       <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 py-4">
         <label className="text-sm">
           <div className="label">Failed logins before ban</div>
@@ -669,21 +794,46 @@ function WAFSection({ serverId, s, admin, busy, onSave, onReload }: { serverId: 
           Save
         </button>
       </div>
-      {row('webshell', 'WEBSHELL protection', 'Block requests to well-known web shell files and their working folders', true)}
-      {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
-      <ListEditor title="Protected login URLs" desc="Failed logins on these URLs count towards brute-force bans (with CAPTCHA on, banned visitors can unblock themselves)" items={s.login_urls ?? []} disabled={dis} placeholder="/wp-login.php" validate={(v) => (v.startsWith('/') ? null : 'Enter a path starting with /')} onChange={(v) => onSave({ login_urls: v })} />
-      <ListEditor title="Whitelisted domains" desc="Websites XMart Guard's WAF rules never inspect (*.example.com allowed)" items={s.whitelist_domains ?? []} disabled={dis} placeholder="example.com" onChange={(v) => onSave({ whitelist_domains: v.map((x) => x.toLowerCase()) })} />
-      <ListEditor title="Custom bots" desc="Block requests whose User-Agent contains any of these" items={s.custom_bots} disabled={dis} placeholder="e.g. badcrawler" onChange={(v) => onSave({ custom_bots: v })} />
-      <ListEditor title="WAF whitelist" desc="These IPs are never inspected by XMart Guard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
+      <ListEditor title="Captcha Protected URLs" desc="List of URLs that are protected by the WAF brute-force and CAPTCHA module" items={s.login_urls ?? []} disabled={dis} placeholder="Type here" validate={(v) => (v.startsWith('/') ? null : 'Enter a path starting with /')} onChange={(v) => onSave({ login_urls: v })} />
       <ListEditor
-        title="Disabled rules"
-        desc="ModSecurity rule ids switched off on this server (ours or any vendor's). Use the button in WAF Logs to disable a rule causing false positives."
+        title="Bad Bot blocker"
+        desc="Block web requests from the bad bots listed below with ModSecurity (the User-Agent contains the entry, any case)"
+        header={<Toggle on={s.bot_blocker} disabled={dis || !s.enabled} onChange={(v) => onSave({ bot_blocker: v })} />}
+        items={s.bot_list ?? []}
+        scroll
+        disabled={dis}
+        placeholder="UserAgent"
+        validate={(v) => (v.length >= 2 && !/["'\\]/.test(v) ? null : 'Enter at least 2 characters, without quotes')}
+        onChange={(v) => onSave({ bot_list: v })}
+      />
+      <ListEditor
+        title="Whitelisted rules"
+        desc="Disable certain WAF rules by adding specific rule ID (ours or any vendor's). WAF Logs also has a button to disable a rule causing false positives."
         items={s.disabled_rules.map(String)}
         disabled={dis}
-        placeholder="rule id"
+        placeholder="Type here"
+        empty="No whitelisted rules"
         validate={(v) => (/^\d{1,8}$/.test(v) ? null : 'Enter a numeric rule id')}
         onChange={(v) => onSave({ disabled_rules: v.map(Number) })}
       />
+      <ListEditor
+        title="Whitelisted domains"
+        desc="Choose domains that should always be allowed by the WAF and CAPTCHA rules"
+        items={s.whitelist_domains ?? []}
+        options={doms.data?.domains?.length ? doms.data.domains.map((d) => d.domain) : undefined}
+        placeholder="example.com"
+        empty="No whitelisted domains"
+        disabled={dis}
+        onChange={(v) => onSave({ whitelist_domains: v.map((x) => x.toLowerCase()) })}
+      />
+
+      <h3 className="mt-6 text-base font-semibold text-navy-900">More XMart Guard protections</h3>
+      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the XMart Guard engine before it is saved. PHP files uploaded through forms are refused.', true)}
+      {row('sensitive_files', 'Protect sensitive files', 'Block web access to .env, .git, config backups, logs and SQL dumps', true)}
+      {row('wordpress', 'WordPress hardening', 'Block running PHP inside wp-content/uploads and XML-RPC multicall', true)}
+      {row('seo_bots', 'Block SEO crawlers', 'Ahrefs, Semrush, MJ12, DotBot and similar aggressive crawlers')}
+      {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
+      <ListEditor title="WAF whitelist" desc="These IPs are never inspected by XMart Guard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
       {info.data && (
         <div className="py-4">
           <div className="mb-1 font-medium text-navy-900">XMart Guard rules</div>

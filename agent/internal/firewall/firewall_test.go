@@ -211,6 +211,18 @@ func TestManagerLifecycleOnKernel(t *testing.T) {
 			t.Fatalf("temp bans = %v, %v", els, err)
 		}
 		m.AutoBan("192.0.2.250", "x", "bruteforce") // protected: ignored
+		// Trusted services (Googlebot here) are never banned or blocked.
+		m.TrustedMatch = func(ip string) string {
+			if ip == "66.249.66.1" {
+				return "Googlebot"
+			}
+			return ""
+		}
+		m.AutoBan("66.249.66.1", "x", "bruteforce")
+		if _, err := m.Add(KindDeny, "66.249.66.1", "", 0); err == nil || !strings.Contains(err.Error(), "Googlebot") {
+			t.Fatalf("trusted address blocked: %v", err)
+		}
+		m.TrustedMatch = nil
 		if _, total, _ := m.Events(EventFilter{}); total != 3 {
 			t.Fatalf("events %d", total)
 		}

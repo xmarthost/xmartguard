@@ -45,6 +45,14 @@ type Scanner struct {
 	// Feeds adds public malware signatures the portal collects (Linux
 	// Malware Detect MD5/hex, web shell YARA rules).
 	Feeds bool `json:"feeds"`
+	// ClamAV matches ClamAV-format signature databases inside the agent (no
+	// clamd/clamscan process): databases of an installed ClamAV (freshclam
+	// keeps them current) and the subscription URLs below.
+	ClamAV bool `json:"clamav"`
+	// ClamAVURLs: one database URL per line (.ndb/.hdb/.hsb/.ldb or a
+	// .cvd/.cld), e.g. a commercial PHP signature subscription. May hold a
+	// license key, so it is masked in the portal.
+	ClamAVURLs string `json:"clamav_urls"`
 	// WPCoreRepair replaces an infected WordPress core file with the
 	// official file of the site's WordPress version (verified against the
 	// official checksum); the infected copy stays in quarantine.
@@ -98,6 +106,11 @@ type Firewall struct {
 	// Captcha lets people behind a temporarily banned address unblock
 	// themselves by solving a CAPTCHA (web traffic only).
 	Captcha bool `json:"captcha"`
+	// TrustedServices exempts search engine crawlers, uptime monitors, CDN
+	// and payment callbacks from every block; TrustedDisabled lists the
+	// service ids turned off.
+	TrustedServices bool     `json:"trusted_services"`
+	TrustedDisabled []string `json:"trusted_disabled"`
 	// PortFilter restricts traffic to the listed ports.
 	PortFilter bool   `json:"port_filter"`
 	TCPIn      string `json:"tcp_in"`
@@ -195,6 +208,40 @@ type WAF struct {
 	BlockPHPUpload bool `json:"block_php_upload"`
 	// WhitelistDomains are websites our rules never inspect.
 	WhitelistDomains []string `json:"whitelist_domains"`
+	// BotBlocker blocks requests whose User-Agent contains an entry of
+	// BotList (editable; starts with DefaultBotList).
+	BotBlocker bool     `json:"bot_blocker"`
+	BotList    []string `json:"bot_list"`
+	// ProxyIPCheck blocks blacklisted visitors behind a CDN or proxy
+	// (Cloudflare): their real address comes from CF-Connecting-IP /
+	// X-Forwarded-For when the request arrives from the proxy's network.
+	ProxyIPCheck bool `json:"proxy_ip_check"`
+}
+
+// DefaultBotList is the Bad Bot blocker's starting list: crawlers, scrapers
+// and tools hosting companies commonly refuse. Matched case-insensitively
+// as part of the User-Agent.
+var DefaultBotList = []string{"AhrefsBot", "Anonymizer", "Attributor", "Baidu", "Bandit", "BatchFTP", "Bigfoot", "Black.Hole",
+	"Bork-edition", "DataCha0s", "Deepnet Explorer", "desktopsmiley", "DigExt", "feedfinder", "gamingharbor", "heritrix",
+	"ia_archiver", "Indy Library", "Jakarta", "juicyaccess", "larbin", "linkdex", "Missigua", "MRSPUTNIK", "Nutch",
+	"panscient", "plaNETWORK", "Snapbot", "Sogou", "TinEye", "TwengaBot", "Twitturly", "User-Agent", "Viewzi",
+	"WebCapture", "XX", "Yandex", "YebolBot", "MJ12bot", "masscan", "RSSingBot", "Scanbot", "betaBot", "DotBot",
+	"SemrushBot", "FeedFetcher", "seoscanners.net", "Moreover", "ltx71", "inboundlinks.win", "sitebot"}
+
+// foldUnique trims and drops empty and case-insensitive duplicate entries.
+func foldUnique(l []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, v := range l {
+		v = strings.TrimSpace(v)
+		k := strings.ToLower(v)
+		if v == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, v)
+	}
+	return out
 }
 
 // CMS controls WordPress/Joomla/OpenCart monitoring.
@@ -307,13 +354,13 @@ func Defaults() Settings {
 			VirusAction: ActionQuarantine, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
-			DeleteSymlinks: false, AutoClean: false, Feeds: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
+			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
 			DoS: false, DoSThreshold: 150, BlockedCountries: []string{}, AllowedCountries: []string{}, LogBlocked: true,
 			IgnoredCountries: []string{}, DDNS: []string{}, ExcludedJails: []string{}, WAFBan: true, WAFBanThreshold: 15,
-			Captcha: false, TCPIn: DefaultTCPIn, UDPIn: DefaultUDPIn, TCPOut: DefaultTCPOut, UDPOut: DefaultUDPOut,
+			Captcha: false, TrustedServices: true, TrustedDisabled: []string{}, TCPIn: DefaultTCPIn, UDPIn: DefaultUDPIn, TCPOut: DefaultTCPOut, UDPOut: DefaultUDPOut,
 		},
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
 		IPDB:       IPDB{Enabled: true, Report: true, Log: true},
@@ -325,7 +372,8 @@ func Defaults() Settings {
 		DomainRep:   DomainReputation{Enabled: true, IntervalHours: 12},
 		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
 			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{},
-			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, WhitelistDomains: []string{}},
+			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, WhitelistDomains: []string{},
+			BotBlocker: true, BotList: append([]string{}, DefaultBotList...)},
 		Notifications: Notifications{
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
 			UserOutdated: "never", ExcludeUsers: []string{},
@@ -442,6 +490,7 @@ func normalize(s *Settings) {
 	s.Firewall.IgnoredCountries = clean(s.Firewall.IgnoredCountries, true)
 	s.Firewall.DDNS = clean(lower(s.Firewall.DDNS), false)
 	s.Firewall.ExcludedJails = clean(s.Firewall.ExcludedJails, false)
+	s.Firewall.TrustedDisabled = clean(s.Firewall.TrustedDisabled, false)
 	if s.Firewall.WAFBanThreshold <= 0 {
 		s.Firewall.WAFBanThreshold = 15
 	}
@@ -450,6 +499,9 @@ func normalize(s *Settings) {
 	}
 	s.WAF.LoginURLs = clean(s.WAF.LoginURLs, false)
 	s.WAF.WhitelistDomains = clean(lower(s.WAF.WhitelistDomains), false)
+	// Custom bots of older versions join the Bad Bot blocker list.
+	s.WAF.BotList = foldUnique(append(s.WAF.BotList, s.WAF.CustomBots...))
+	s.WAF.CustomBots = []string{}
 	s.CMS.BlacklistPlugins = clean(lower(s.CMS.BlacklistPlugins), false)
 	s.CMS.ExcludeUsers = clean(s.CMS.ExcludeUsers, false)
 	if s.CMS.WPCronHours <= 0 {
@@ -573,9 +625,14 @@ func validate(s Settings) error {
 	if s.Firewall.Provider != "iptables" && s.Firewall.Provider != "nftables" {
 		return fmt.Errorf("invalid firewall provider %q", s.Firewall.Provider)
 	}
-	for _, b := range s.WAF.CustomBots {
-		if len(b) < 3 || strings.ContainsAny(b, "\n\r\"'\\") {
-			return fmt.Errorf("invalid bot name %q", b)
+	for _, u := range strings.Fields(s.Scanner.ClamAVURLs) {
+		if !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+			return fmt.Errorf("invalid signature database URL %q (http:// or https://)", u)
+		}
+	}
+	for _, b := range s.WAF.BotList {
+		if len(b) < 2 || len(b) > 100 || strings.ContainsAny(b, "\n\r\"'\\") {
+			return fmt.Errorf("invalid User-Agent %q (2 to 100 characters, no quotes or backslashes)", b)
 		}
 	}
 	for _, id := range s.WAF.DisabledRules {
