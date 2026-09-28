@@ -676,6 +676,19 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		n, err := a.Monitor.RunRootkit(ctx)
 		return map[string]any{"warnings": n}, err
 	}
+	h["waf.event_delete"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IDs []int64 `json:"ids"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if len(in.IDs) == 0 || len(in.IDs) > 1000 {
+			return nil, errors.New("select between 1 and 1000 log entries")
+		}
+		n, err := a.WAF.DeleteEvents(in.IDs)
+		return map[string]any{"deleted": n}, err
+	}
 	h["fw.event_delete"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
 			ID int64 `json:"id"`

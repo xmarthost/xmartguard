@@ -29,6 +29,10 @@ const (
 	IDXMLRPCMulti   = 7700302
 	IDUserEnum      = 7700303
 	IDRestUsers     = 7700304
+	IDPHPInAssets   = 7700305
+	IDHiddenPHP     = 7700306
+	IDXMLRPCGet     = 7700307
+	IDEmptyUAWP     = 7700308
 	IDLoginWP       = 7700401
 	IDLoginXMLRPC   = 7700402
 	IDLoginJoomla   = 7700403
@@ -60,6 +64,10 @@ var Catalog = []RuleInfo{
 	{IDXMLRPCMulti, "wordpress", "Block XML-RPC system.multicall (password guessing amplification)", "block"},
 	{IDUserEnum, "wordpress", "Block WordPress user enumeration (?author=N) for visitors who are not logged in", "block"},
 	{IDRestUsers, "wordpress", "Block the REST API user list (/wp-json/wp/v2/users) for visitors who are not logged in", "block"},
+	{IDPHPInAssets, "wordpress", "Block running PHP files inside images, fonts, css and js folders of wp-content and wp-includes", "block"},
+	{IDHiddenPHP, "wordpress", "Block running hidden PHP files (/.name.php), a common backdoor trick", "block"},
+	{IDXMLRPCGet, "wordpress", "Allow only POST requests to xmlrpc.php (GET is used by scanners)", "block"},
+	{IDEmptyUAWP, "wordpress", "Block requests without a User-Agent to WordPress PHP files (bots and exploit tools)", "block"},
 	{IDLoginWP, "bruteforce", "Count failed WordPress logins", "count"},
 	{IDLoginXMLRPC, "bruteforce", "Count WordPress XML-RPC login calls", "count"},
 	{IDLoginJoomla, "bruteforce", "Count Joomla administrator logins", "count"},
@@ -154,10 +162,26 @@ func Render(c settings.WAF, o Options) string {
 		rule(IDUploadPHP, `SecRule FILES "@rx \.(?:php[0-9]?|phtml|phar|pht|phps)$" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'XMartGuard - PHP file upload blocked',tag:'xmartguard/upload'"`, IDUploadPHP)
 	}
 	if c.SensitiveFiles {
-		rule(IDSensitive, `SecRule REQUEST_FILENAME "@rx /(?:\.env$|\.git/|\.svn/|\.hg/|\.htpasswd$|\.DS_Store$|wp-config\.php(?:\.bak|\.old|\.orig|\.save|\.swp|\.txt|~)$|debug\.log$|error_log$|[^/]+\.sql(?:\.gz|\.zip)?$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Access to sensitive file blocked',tag:'xmartguard/files'"`, IDSensitive)
+		rule(IDSensitive, `SecRule REQUEST_FILENAME "@rx /(?:\.env$|\.git/|\.svn/|\.hg/|\.htpasswd$|\.DS_Store$|\.env\.[a-z0-9_-]+$|[^/]+\.php[0-9]?(?:\.bak|\.old|\.orig|\.save|\.swp|\.txt|\.zip|~)$|debug\.log$|error_log$|[^/]+\.sql(?:\.gz|\.zip)?$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Access to sensitive file blocked',tag:'xmartguard/files'"`, IDSensitive)
 	}
 	if c.WordPress {
 		rule(IDUploadsPHP, `SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - PHP execution in uploads blocked',tag:'xmartguard/wordpress'"`, IDUploadsPHP)
+		rule(IDPHPInAssets, `SecRule REQUEST_FILENAME "@rx /(?:wp-content|wp-includes)/(?:[^?]*/)?(?:images?|img|fonts?|css|js)/[^/]*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - PHP execution in an assets folder blocked',tag:'xmartguard/wordpress',chain"`, IDPHPInAssets)
+		if !off[IDPHPInAssets] {
+			// WordPress core's own TinyMCE loader lives in wp-includes/js.
+			w(`  SecRule REQUEST_FILENAME "!@endsWith /wp-includes/js/tinymce/wp-tinymce.php" "t:none,t:lowercase"`)
+		}
+		rule(IDHiddenPHP, `SecRule REQUEST_FILENAME "@rx /\.[^/]+\.(?:php[0-9]?|phtml|phar)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Hidden PHP file request blocked',tag:'xmartguard/wordpress'"`, IDHiddenPHP)
+		if !off[IDXMLRPCGet] {
+			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'XMartGuard - XML-RPC accepts only POST',tag:'xmartguard/wordpress',chain"`, IDXMLRPCGet)
+			w(`  SecRule REQUEST_METHOD "!@streq POST" "t:none"`)
+		}
+		if !off[IDEmptyUAWP] {
+			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Request without User-Agent to a WordPress file blocked',tag:'xmartguard/wordpress',chain"`, IDEmptyUAWP)
+			w(`  SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
+			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Request without User-Agent to a WordPress file blocked',tag:'xmartguard/wordpress',chain"`, IDEmptyUAWP+1000)
+			w(`  SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
+		}
 		if !off[IDXMLRPCMulti] {
 			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'XMartGuard - XML-RPC multicall blocked',tag:'xmartguard/wordpress',chain"`, IDXMLRPCMulti)
 			w(`  SecRule REQUEST_BODY "@contains system.multicall" "t:none,t:lowercase"`)

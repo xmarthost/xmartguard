@@ -67,7 +67,7 @@ export type RuleSetsConfig = z.infer<typeof RuleSetsConfig>;
 
 export const DEFAULT_CONFIG: RuleSetsConfig = {
   xmartguard: { enabled: true },
-  crs: { enabled: false, version: 'latest', paranoia: 1, inbound_threshold: 5, outbound_threshold: 4 },
+  crs: { enabled: true, version: 'latest', paranoia: 1, inbound_threshold: 5, outbound_threshold: 4 },
   vendors: [],
   custom: { enabled: false, rules: '' },
 };

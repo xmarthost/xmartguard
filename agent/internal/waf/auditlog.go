@@ -129,21 +129,34 @@ func (a *auditEntry) event() (Event, bool) {
 	} else {
 		e.Action = "Access denied"
 	}
+	e.Detail = matchDetail(line)
 	// OWASP CRS blocks with a score rule; name the attack that scored.
 	if isScoreRule(e.RuleID) {
+		best, bestRank := "", -1
 		for _, m := range a.msgs {
 			if strings.Contains(m, "Access denied") {
 				continue
 			}
-			if f := reMsg.FindStringSubmatch(m); f != nil {
-				e.Msg = scoreMsg(f[1], e.Msg)
-				break
+			f := reMsg.FindStringSubmatch(m)
+			if f == nil {
+				continue
+			}
+			rank := 0
+			if id := reIDField.FindStringSubmatch(m); id != nil {
+				n, _ := strconv.Atoi(id[1])
+				rank = attackRank(n)
+			}
+			if rank > bestRank {
+				best, bestRank = f[1], rank
 			}
 		}
+		e.Msg = scoreMsg(best, e.Msg)
 	}
 	e.Category = classify(e.RuleID, e.Msg)
 	return e, true
 }
+
+var reIDField = regexp.MustCompile(`\[id "(\d+)"\]`)
 
 var reMsg = regexp.MustCompile(`\[msg "((?:[^"\\]|\\.)*)"\]`)
 
@@ -164,12 +177,31 @@ func scoreMsg(attack, score string) string {
 // the attack when OWASP CRS blocks it by score in a later log line.
 type reasons struct {
 	mu   sync.Mutex
-	msg  map[string]string
+	msg  map[string]reason
 	ring []string
 	pos  int
 }
 
-func newReasons(n int) *reasons { return &reasons{msg: map[string]string{}, ring: make([]string, n)} }
+func newReasons(n int) *reasons { return &reasons{msg: map[string]reason{}, ring: make([]string, n)} }
+
+// attackRank ranks CRS rules for naming a block: attack-injection rules
+// (930xxx-944xxx) over scanner detection (913xxx) over protocol checks.
+func attackRank(id int) int {
+	switch {
+	case id >= 930000 && id < 945000:
+		return 3
+	case id >= 913000 && id < 914000:
+		return 2
+	case id >= 920000 && id < 922000:
+		return 1
+	}
+	return 0
+}
+
+type reason struct {
+	msg  string
+	rank int
+}
 
 func (r *reasons) apply(e Event) Event {
 	if e.UID == "" {
@@ -179,12 +211,19 @@ func (r *reasons) apply(e Event) Event {
 	defer r.mu.Unlock()
 	if isScoreRule(e.RuleID) {
 		if m, ok := r.msg[e.UID]; ok {
-			e.Msg = scoreMsg(m, e.Msg)
+			e.Msg = scoreMsg(m.msg, e.Msg)
 			e.Category = classify(e.RuleID, e.Msg)
 		}
 		return e
 	}
-	if _, ok := r.msg[e.UID]; ok || e.Msg == "" || strings.HasPrefix(e.Action, "Access denied") {
+	if e.Msg == "" || strings.HasPrefix(e.Action, "Access denied") {
+		return e
+	}
+	rank := attackRank(e.RuleID)
+	if old, ok := r.msg[e.UID]; ok {
+		if rank > old.rank {
+			r.msg[e.UID] = reason{e.Msg, rank}
+		}
 		return e
 	}
 	if old := r.ring[r.pos]; old != "" {
@@ -192,7 +231,7 @@ func (r *reasons) apply(e Event) Event {
 	}
 	r.ring[r.pos] = e.UID
 	r.pos = (r.pos + 1) % len(r.ring)
-	r.msg[e.UID] = e.Msg
+	r.msg[e.UID] = reason{e.Msg, rank}
 	return e
 }
 

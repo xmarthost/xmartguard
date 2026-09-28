@@ -99,7 +99,7 @@ describe('WAF rule sets', () => {
   it('starts with defaults and leaves servers alone until saved', async () => {
     const r = await admin.req('GET', '/api/waf/rulesets');
     expect(r.body.version).toBe(0);
-    expect(r.body.config.crs.enabled).toBe(false);
+    expect(r.body.config.crs.enabled).toBe(true); // OWASP CRS is on by default
     expect(r.body.presets.map((p: any) => p.id)).toContain('malware_expert');
     const a = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
     expect(a.body.unchanged).toBe(true);

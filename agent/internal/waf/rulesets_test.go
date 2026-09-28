@@ -252,3 +252,26 @@ func TestSelfTestReportsUnenforcedRules(t *testing.T) {
 		t.Fatal("rule id")
 	}
 }
+
+func TestCRSNamePrefersTheAttack(t *testing.T) {
+	r := newReasons(8)
+	for _, l := range []string{
+		`[client 1.2.3.4:1] ModSecurity: Warning. Matched. [file "/x"] [id "920350"] [msg "Host header is a numeric IP address"] [uri "/"] [unique_id "U2"]`,
+		`[client 1.2.3.4:1] ModSecurity: Warning. Matched. [file "/x"] [id "942100"] [msg "SQL Injection Attack Detected via libinjection"] [uri "/"] [unique_id "U2"]`,
+	} {
+		e, _ := ParseLine(l)
+		r.apply(e)
+	}
+	d, _ := ParseLine(`[client 1.2.3.4:1] ModSecurity: Access denied with code 403 (phase 2). Operator GE matched 5 at TX:anomaly_score. [file "/x"] [id "949110"] [msg "Inbound Anomaly Score Exceeded (Total Score: 8)"] [uri "/"] [unique_id "U2"]`)
+	d = r.apply(d)
+	if !strings.HasPrefix(d.Msg, "SQL Injection") || d.Detail != "Operator GE matched 5 at TX:anomaly_score." {
+		t.Fatalf("%q / %q", d.Msg, d.Detail)
+	}
+}
+
+func TestMatchDetailUnescapes(t *testing.T) {
+	l := `[client 1.2.3.4:1] ModSecurity: Access denied with code 403 (phase 1). Pattern match "/\\\\.[^/]+\\\\.(?:php)$" at REQUEST_FILENAME. [file "/x"] [id "7700306"]`
+	if d := matchDetail(l); d != `Pattern match "/\.[^/]+\.(?:php)$" at REQUEST_FILENAME.` {
+		t.Fatalf("%q", d)
+	}
+}

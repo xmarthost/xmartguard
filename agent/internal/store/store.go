@@ -311,6 +311,8 @@ var columnMigrations = []string{
 	// Scan progress: files to check (counted while the scan runs) and path now.
 	`ALTER TABLE scans ADD COLUMN total INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE scans ADD COLUMN current TEXT NOT NULL DEFAULT ''`,
+	// WAF hits: what the rule matched ("justification"), HTTP version.
+	`ALTER TABLE waf_events ADD COLUMN detail TEXT NOT NULL DEFAULT ''`,
 }
 
 // Now is the clock used for timestamps (overridable in tests).

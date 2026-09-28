@@ -24,6 +24,15 @@ Not included:
   Atomicorp's own tools; the old free "delayed" feed is no longer offered.
   If Atomicorp gives you a cPanel vendor URL, add it as "Other cPanel vendor".
 
+## Defaults
+
+OWASP CRS is **on by default** (paranoia level 1). XMart Guard's own rules
+stay on next to it for what CRS does not cover: WordPress hardening (PHP
+running in uploads, images, fonts, css and js folders; hidden `.php` files;
+GET on `xmlrpc.php`; requests without a User-Agent to WordPress files; user
+enumeration), PHP backups and `.env.*` files, upload scanning with the
+malware engine, bad bots and login brute force.
+
 ## How blocking works
 
 - XMart Guard rules deny directly (403).

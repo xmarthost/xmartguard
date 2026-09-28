@@ -45,6 +45,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'fw.remove': { role: 'operator', mutates: true },
   'fw.unblock': { role: 'operator', mutates: true },
   'fw.event_delete': { role: 'operator', mutates: true },
+  'waf.event_delete': { role: 'operator', mutates: true },
   'ai.check': { role: 'operator', mutates: true, timeoutMs: 300_000 },
   'ai.sync': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'monitor.rootkit': { role: 'admin', mutates: true, timeoutMs: 3_600_000 },

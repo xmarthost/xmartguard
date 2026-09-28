@@ -306,6 +306,8 @@ type Event struct {
 	Category string `json:"category"`
 	Action   string `json:"action"`
 	User     string `json:"user"`
+	// Detail is what the rule matched ("Pattern match ... at REQUEST_URI").
+	Detail string `json:"detail"`
 	// UID is ModSecurity's unique_id (dedupes error and audit log copies).
 	UID string `json:"-"`
 }
@@ -346,6 +348,7 @@ func ParseLine(line string) (Event, bool) {
 	if u := reUniqueID.FindStringSubmatch(line); u != nil {
 		e.UID = u[1]
 	}
+	e.Detail = matchDetail(line)
 	if d := reDenied.FindStringSubmatch(line); d != nil && d[1] != "" {
 		e.Action = "Access denied with code " + d[1]
 	} else {
@@ -444,6 +447,10 @@ func (m *Manager) tailLogs(ctx context.Context) {
 		if isSelfTest(ev) || !dedupe.add(ev.UID) {
 			return
 		}
+		// Summary lines without the request or reason duplicate a full entry.
+		if ev.URI == "" && ev.Msg == "" {
+			return
+		}
 		m.record(ev)
 		if ev.Category == "login" {
 			m.maybeBan(ev, counter)
@@ -481,8 +488,8 @@ func (m *Manager) noteSource(path string) {
 }
 
 func (m *Manager) record(e Event) {
-	_, _ = m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`, e.At, e.IP, e.Method, e.Host, e.URI, e.RuleID, e.Msg, e.Category, e.Action, e.User)
+	_, _ = m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`, e.At, e.IP, e.Method, e.Host, e.URI, e.RuleID, e.Msg, e.Category, e.Action, e.User, e.Detail)
 	// Keep the table bounded.
 	if e.ID%512 == 0 {
 		_, _ = m.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, store.Now()-30*86400)
@@ -535,7 +542,7 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 		where, args = append(where, "(ip LIKE ? OR host LIKE ? OR uri LIKE ? OR msg LIKE ?)"),
 			append(args, "%"+f.Query+"%", "%"+f.Query+"%", "%"+f.Query+"%", "%"+f.Query+"%")
 	}
-	if f.Limit <= 0 || f.Limit > 500 {
+	if f.Limit <= 0 || f.Limit > 1000 {
 		f.Limit = 50
 	}
 	cond := strings.Join(where, " AND ")
@@ -543,7 +550,7 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 	if err := m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE `+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := m.DB.Query(`SELECT id, at, ip, method, host, uri, rule_id, msg, category, action, user
+	rows, err := m.DB.Query(`SELECT id, at, ip, method, host, uri, rule_id, msg, category, action, user, detail
 		FROM waf_events WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -552,12 +559,43 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 	out := []Event{}
 	for rows.Next() {
 		var e Event
-		if err := rows.Scan(&e.ID, &e.At, &e.IP, &e.Method, &e.Host, &e.URI, &e.RuleID, &e.Msg, &e.Category, &e.Action, &e.User); err != nil {
+		if err := rows.Scan(&e.ID, &e.At, &e.IP, &e.Method, &e.Host, &e.URI, &e.RuleID, &e.Msg, &e.Category, &e.Action, &e.User, &e.Detail); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, e)
 	}
 	return out, total, rows.Err()
+}
+
+// DeleteEvents removes hits from the log (not from the web server's logs).
+func (m *Manager) DeleteEvents(ids []int64) (int64, error) {
+	var n int64
+	for _, id := range ids {
+		r, err := m.DB.Exec(`DELETE FROM waf_events WHERE id = ?`, id)
+		if err != nil {
+			return n, err
+		}
+		c, _ := r.RowsAffected()
+		n += c
+	}
+	return n, nil
+}
+
+var reMatch = regexp.MustCompile(`(?:Access denied with code \d+ \(phase \d\)\.|Warning\.)\s*(.*?)\s*\[file "`)
+
+// matchDetail extracts what the rule matched, e.g.
+// `Pattern match "\.env$" at REQUEST_FILENAME.`
+func matchDetail(line string) string {
+	m := reMatch.FindStringSubmatch(line)
+	if m == nil {
+		return ""
+	}
+	// The log escapes backslashes in patterns ("\\.env" means "\.env").
+	d := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(m[1]), `\\\\`, `\`), `\\`, `\`)
+	if len(d) > 300 {
+		d = d[:300] + "…"
+	}
+	return d
 }
 
 // Stats summarises WAF activity for dashboards.
