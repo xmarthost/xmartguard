@@ -2,11 +2,12 @@
 # xPGuard agent uninstaller.
 #
 #   curl -fsSL __XG_PORTAL_URL__/uninstall.sh | bash
-#   bash /opt/xmartguard/uninstall.sh [--dry-run] [--keep-logs] [--no-unenroll]
+#   bash /opt/xpguard/uninstall.sh [--dry-run] [--keep-logs] [--no-unenroll]
 #
-# Removes exactly what install.sh recorded in /opt/xmartguard/manifest
-# (or /var/lib/xmartguard/manifest for installs before 0.3.0), including the
-# cPanel/WHM plugins, then prints a residue report.
+# Removes exactly what install.sh recorded in /opt/xpguard/manifest
+# (/opt/xmartguard/manifest or /var/lib/xmartguard/manifest on servers set up
+# before the xPGuard name), including the cPanel/WHM plugins, then prints a
+# residue report.
 set -Euo pipefail
 
 DRY=0
@@ -22,14 +23,20 @@ for a in "$@"; do
   esac
 done
 
-HOME_DIR=/opt/xmartguard
+HOME_DIR=/opt/xpguard
+CONF_DIR=/etc/xpguard
 STATE_DIR=$HOME_DIR
 LOG_DIR=$HOME_DIR/logs
+# Paths of versions before the xPGuard name (directories not moved yet, or
+# the links left at the old paths after the move).
+OLD_HOME=/opt/xmartguard
+OLD_CONF=/etc/xmartguard
 LEGACY_DIRS=(/var/lib/xmartguard /var/log/xmartguard)
 MANIFEST=$STATE_DIR/manifest
+[ -f "$MANIFEST" ] || MANIFEST=$OLD_HOME/manifest
 [ -f "$MANIFEST" ] || MANIFEST=/var/lib/xmartguard/manifest
-BIN=/opt/xpguard/bin/xpguard-agent
-[ -x "$BIN" ] || BIN=$HOME_DIR/bin/xmartguard-agent
+BIN=$HOME_DIR/bin/xpguard-agent
+[ -x "$BIN" ] || BIN=$OLD_HOME/bin/xmartguard-agent
 [ -x "$BIN" ] || BIN=/usr/local/bin/xmartguard-agent
 UNIT_NAME=xpguard-agent.service
 OLD_UNIT_NAME=xmartguard-agent.service
@@ -46,11 +53,15 @@ echo ""
 echo "${c_bld}xPGuard uninstaller${c_off}$([ "$DRY" -eq 1 ] && echo ' (dry run)')"
 echo ""
 
-# Paths we may remove. Only /etc/xmartguard, /opt/xmartguard, the pre-0.3.0
-# /var/lib + /var/log dirs, /run/xmartguard, /usr/local/bin/xmartguard* and our
-# unit are ever touched (panel plugin files are removed by the agent itself).
+# Paths we may remove. Only /etc/xpguard, /opt/xpguard, /run/xpguard, their
+# counterparts from before the xPGuard name (xmartguard), the pre-0.3.0
+# /var/lib + /var/log dirs, our links in /usr/local/bin and our units are
+# ever touched (panel plugin files are removed by the agent itself).
 safe_path() {
   case "$1" in
+    /etc/xpguard|/etc/xpguard/*) return 0 ;;
+    /run/xpguard|/run/xpguard/*) return 0 ;;
+    /etc/sysctl.d/xpguard.conf) return 0 ;;
     /etc/xmartguard|/etc/xmartguard/*) return 0 ;;
     /opt/xmartguard|/opt/xmartguard/*) return 0 ;;
     /run/xmartguard|/run/xmartguard/*) return 0 ;;
@@ -79,13 +90,13 @@ if [ -f "$MANIFEST" ]; then
   [ -L /usr/local/bin/xgcli ] && FILES+=(/usr/local/bin/xgcli)
   # Created by the agent when it moved to the xpguard-agent service name.
   for f in /opt/xpguard/bin/xpguard-agent /usr/local/bin/xpguard-agent; do { [ -e "$f" ] || [ -L "$f" ]; } && FILES+=("$f"); done
-  [ -d /opt/xpguard ] && DIRS+=(/opt/xpguard/bin /opt/xpguard)
+  DIRS+=("$HOME_DIR/bin" "$HOME_DIR" "$CONF_DIR")
   UNITS+=("/etc/systemd/system/$UNIT_NAME" "/etc/systemd/system/$OLD_UNIT_NAME")
   ok "Loaded install manifest (${#FILES[@]} files, ${#DIRS[@]} directories)"
 else
   warn "No install manifest found; removing the default locations."
-  FILES=("$BIN" /opt/xpguard/bin/xpguard-agent /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli)
-  DIRS=(/etc/xmartguard "$HOME_DIR" /opt/xpguard "${LEGACY_DIRS[@]}")
+  FILES=("$BIN" "$HOME_DIR/bin/xpguard-agent" /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli)
+  DIRS=("$CONF_DIR" "$HOME_DIR" "$OLD_CONF" "$OLD_HOME" "${LEGACY_DIRS[@]}")
   UNITS=("/etc/systemd/system/$UNIT_NAME" "/etc/systemd/system/$OLD_UNIT_NAME")
 fi
 
@@ -140,15 +151,21 @@ for f in "${FILES[@]}"; do
 done
 ok "Removed agent files"
 
+# Links left at the old paths after the move to /etc/xpguard, /opt/xpguard.
+for l in "$OLD_CONF" "$OLD_HOME" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard; do
+  [ -L "$l" ] && run rm -f "$l"
+done
 # The copy of this script lives in STATE_DIR; bash has already read it.
-DIRS+=(/run/xmartguard "$HOME_DIR")
+DIRS+=(/run/xpguard /run/xmartguard "$HOME_DIR")
+# Directories not moved yet (the agent moves them on its first start).
+for d in "$OLD_CONF" "$OLD_HOME"; do [ -d "$d" ] && [ ! -L "$d" ] && DIRS+=("$d"); done
 # Never delete a portal checkout that an old portal setup left in /opt/xmartguard:
 # remove only the agent's own entries there.
-if [ -d "$HOME_DIR/.git" ]; then
+if [ -d "$OLD_HOME/.git" ]; then
   keep=()
-  for d in "${DIRS[@]}"; do [ "$d" = "$HOME_DIR" ] || keep+=("$d"); done
-  DIRS=("${keep[@]}" "$HOME_DIR/bin" "$HOME_DIR/data" "$HOME_DIR/logs")
-  for f in "$HOME_DIR/manifest" "$HOME_DIR/uninstall.sh"; do [ -e "$f" ] && run rm -f "$f"; done
+  for d in "${DIRS[@]}"; do [ "$d" = "$OLD_HOME" ] || keep+=("$d"); done
+  DIRS=("${keep[@]}" "$OLD_HOME/bin" "$OLD_HOME/data" "$OLD_HOME/logs")
+  for f in "$OLD_HOME/manifest" "$OLD_HOME/uninstall.sh"; do [ -e "$f" ] && run rm -f "$f"; done
 fi
 for d in "${LEGACY_DIRS[@]}"; do [ -e "$d" ] && DIRS+=("$d"); done
 mapfile -t SORTED < <(printf '%s\n' "${DIRS[@]}" | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
@@ -169,21 +186,25 @@ ok "Removed configuration and state directories"
 [ "$DRY" -eq 1 ] && { echo ""; echo "Dry run complete; nothing was changed."; exit 0; }
 LEFT=()
 KEEP_HOME=()
-[ "$KEEP_LOGS" -eq 0 ] && [ ! -d "$HOME_DIR/.git" ] && KEEP_HOME=("$HOME_DIR")
-for p in "$BIN" /opt/xpguard /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
+[ "$KEEP_LOGS" -eq 0 ] && KEEP_HOME=("$HOME_DIR")
+[ -d "$OLD_HOME/.git" ] || KEEP_HOME+=("$OLD_HOME")
+for p in "$BIN" /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli "$CONF_DIR" "$OLD_CONF" "${KEEP_HOME[@]}" /run/xpguard /run/xmartguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xpguard /usr/local/cpanel/base/frontend/jupiter/xpguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard /usr/local/cpanel/base/frontend/jupiter/xmartguard \
          "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME; do
   { [ -e "$p" ] || [ -L "$p" ]; } && LEFT+=("$p")
 done
 [ "$KEEP_LOGS" -eq 0 ] && [ -e "$LOG_DIR" ] && LEFT+=("$LOG_DIR")
-for w in /etc/apache2/conf.d/includes/xmartguard-waf.conf /etc/apache2/conf-available/xmartguard-waf.conf /etc/httpd/conf.d/xmartguard-waf.conf; do
+for w in /etc/apache2/conf.d/includes/xmartguard-waf.conf /etc/apache2/conf-available/xmartguard-waf.conf /etc/httpd/conf.d/xmartguard-waf.conf \
+         /etc/apache2/conf-available/xpguard-waf.conf /etc/httpd/conf.d/xpguard-waf.conf; do
   [ -e "$w" ] && LEFT+=("WAF include $w")
 done
 if pgrep -f "$BIN run" >/dev/null 2>&1; then LEFT+=("running process: $BIN"); fi
-if command -v iptables >/dev/null 2>&1 && iptables -w -S XMARTGUARD >/dev/null 2>&1; then LEFT+=("iptables chain XMARTGUARD"); fi
+for c in XPGUARD XMARTGUARD; do
+  if command -v iptables >/dev/null 2>&1 && iptables -w -S "$c" >/dev/null 2>&1; then LEFT+=("iptables chain $c"); fi
+done
 if command -v ipset >/dev/null 2>&1 && ipset list -n 2>/dev/null | grep -q '^xg_'; then LEFT+=("ipset sets xg_*"); fi
-if command -v nft >/dev/null 2>&1 && nft list tables 2>/dev/null | grep -q 'inet xmartguard'; then LEFT+=("nftables table inet xmartguard"); fi
+if command -v nft >/dev/null 2>&1 && nft list tables 2>/dev/null | grep -qE 'inet (xpguard|xmartguard)$'; then LEFT+=("nftables table inet xpguard"); fi
 
 echo ""
 if [ ${#LEFT[@]} -eq 0 ]; then

@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/layout"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 	"github.com/xmarthost/xmartguard/agent/internal/wpcore"
@@ -75,7 +76,7 @@ type Scan struct {
 
 // Scanner owns scan jobs and the quarantine.
 type Scanner struct {
-	// NoHash skips the known-bad hash list (xmartguard-agent check --no-hash,
+	// NoHash skips the known-bad hash list (xpguard-agent check --no-hash,
 	// to measure what the rules catch on their own).
 	NoHash   bool
 	DB       *sql.DB
@@ -147,7 +148,7 @@ func ValidateTarget(p string) (string, error) {
 	if p == "/" {
 		return "", errors.New("scanning / is not allowed; use a Full scan")
 	}
-	if systemPath(p) || underAny(p, []string{store.StateDir(), store.HomeDir}) {
+	if systemPath(p) || underAny(p, []string{store.StateDir(), store.HomeDir, layout.OldHomeDir}) {
 		return "", fmt.Errorf("%s is a system path and cannot be scanned", p)
 	}
 	st, err := os.Stat(p)

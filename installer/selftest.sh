@@ -6,7 +6,7 @@
 #   bash selftest.sh              # check the installed agent
 #   bash selftest.sh --uninstall  # also uninstall and check for leftovers
 #
-# Prints a report and saves it to /root/xmartguard-selftest-<time>.txt.
+# Prints a report and saves it to /root/xpguard-selftest-<time>.txt.
 # The report contains no secrets (the identity key is never printed).
 set -uo pipefail
 
@@ -14,7 +14,7 @@ UNINSTALL=0
 [ "${1:-}" = "--uninstall" ] && UNINSTALL=1
 [ "$(id -u)" -eq 0 ] || { echo "please run as root"; exit 1; }
 
-REPORT=/root/xmartguard-selftest-$(date +%Y%m%d-%H%M%S).txt
+REPORT=/root/xpguard-selftest-$(date +%Y%m%d-%H%M%S).txt
 exec > >(tee "$REPORT") 2>&1
 
 pass=0; fail=0; warnc=0
@@ -34,16 +34,16 @@ command -v imunify360-agent >/dev/null && warn "Imunify360 is installed (fine fo
 command -v csf >/dev/null && echo "csf:       $(csf -v 2>/dev/null | head -1)"
 
 section "agent install"
-check "agent binary present"            '[ -x /usr/local/bin/xmartguard-agent ]'
-echo "version:   $(/usr/local/bin/xmartguard-agent version 2>/dev/null)"
-check "config present"                  '[ -f /etc/xmartguard/agent.json ]'
-check "config mode 600"                 '[ "$(stat -c %a /etc/xmartguard/agent.json)" = 600 ]'
-check "identity key mode 600"           '[ "$(stat -c %a /etc/xmartguard/identity.key)" = 600 ]'
-check "config dir mode 700"             '[ "$(stat -c %a /etc/xmartguard)" = 700 ]'
-check "install manifest present"        '[ -f /opt/xmartguard/manifest ]'
-check "local uninstaller present"       '[ -x /opt/xmartguard/uninstall.sh ]'
-echo "--- manifest"; grep -v '^#' /opt/xmartguard/manifest 2>/dev/null
-echo "--- status"; /usr/local/bin/xmartguard-agent status 2>&1
+check "agent binary present"            '[ -x /usr/local/bin/xpguard-agent ]'
+echo "version:   $(/usr/local/bin/xpguard-agent version 2>/dev/null)"
+check "config present"                  '[ -f /etc/xpguard/agent.json ]'
+check "config mode 600"                 '[ "$(stat -c %a /etc/xpguard/agent.json)" = 600 ]'
+check "identity key mode 600"           '[ "$(stat -c %a /etc/xpguard/identity.key)" = 600 ]'
+check "config dir mode 700"             '[ "$(stat -c %a /etc/xpguard)" = 700 ]'
+check "install manifest present"        '[ -f /opt/xpguard/manifest ]'
+check "local uninstaller present"       '[ -x /opt/xpguard/uninstall.sh ]'
+echo "--- manifest"; grep -v '^#' /opt/xpguard/manifest 2>/dev/null
+echo "--- status"; /usr/local/bin/xpguard-agent status 2>&1
 
 section "service"
 check "unit enabled"                    'systemctl is-enabled xpguard-agent'
@@ -52,65 +52,65 @@ systemctl status xpguard-agent --no-pager -l 2>&1 | head -15
 echo "--- restart test"
 systemctl restart xpguard-agent; sleep 5
 check "active after restart"            'systemctl is-active xpguard-agent'
-check "reconnected after restart"       'tail -n 20 /opt/xmartguard/logs/agent.log | grep -q "connected to portal"'
+check "reconnected after restart"       'tail -n 20 /opt/xpguard/logs/agent.log | grep -q "connected to portal"'
 echo "--- memory/cpu of agent"
 ps -o pid,rss,pcpu,etime,cmd -p "$(pgrep -d, -f 'xpguard-agent run')" 2>/dev/null
 echo "--- listening sockets of agent (should be none)"
-ss -ltnp 2>/dev/null | grep xmartguard || echo "(none)"
-check "agent opens no listening port"   '! ss -ltnp | grep -q xmartguard'
+ss -ltnp 2>/dev/null | grep xpguard || echo "(none)"
+check "agent opens no listening port"   '! ss -ltnp | grep -q xpguard'
 
 section "local control socket and panel plugins"
-check "control socket answers"          '/usr/local/bin/xmartguard-agent call overview >/dev/null'
+check "control socket answers"          '/usr/local/bin/xpguard-agent call overview >/dev/null'
 if [ -f /usr/local/cpanel/version ]; then
   check "WHM plugin installed"          '[ -x /usr/local/cpanel/whostmgr/docroot/cgi/xpguard/index.cgi ]'
   check "WHM plugin registered"         '[ -f /var/cpanel/apps/xpguard.conf ]'
   check "cPanel plugin installed"       '[ -f /usr/local/cpanel/base/frontend/jupiter/xpguard/index.live.php ]'
 fi
-echo "--- IPDB"; /usr/local/bin/xmartguard-agent call ipdb.status 2>&1 | head -12
+echo "--- IPDB"; /usr/local/bin/xpguard-agent call ipdb.status 2>&1 | head -12
 
 section "firewall"
 command -v ipset >/dev/null && echo "ipset:     $(ipset version 2>/dev/null | head -1)" || warn "ipset is not installed"
 echo "--- XMARTGUARD chain"; iptables -w -S XMARTGUARD 2>&1 | head -20
 echo "--- INPUT jump"; iptables -w -S INPUT 2>/dev/null | grep XMARTGUARD || echo "(no jump)"
 echo "--- ipsets"; ipset list -n 2>/dev/null | grep '^xg_' || echo "(none)"
-nft list tables 2>/dev/null | grep -q 'inet xmartguard' && echo "nftables table inet xmartguard present"
+nft list tables 2>/dev/null | grep -q "inet xpguard" && echo "nftables table inet xpguard present"
 command -v csf >/dev/null && echo "CSF present: $(csf -v 2>/dev/null | head -1)"
-check "firewall rules loaded"          'iptables -w -C INPUT -j XMARTGUARD || nft list table inet xmartguard'
+check "firewall rules loaded"          'iptables -w -C INPUT -j XPGUARD || nft list table inet xpguard'
 
 section "scanner"
-ls -la /opt/xmartguard/ /opt/xmartguard/data/ 2>&1 | head
+ls -la /opt/xpguard/ /opt/xpguard/data/ 2>&1 | head
 echo "inotify max_user_watches: $(cat /proc/sys/fs/inotify/max_user_watches)"
 
 section "portal connectivity"
-PORTAL=$(sed -n 's/.*"server_url": *"\([^"]*\)".*/\1/p' /etc/xmartguard/agent.json 2>/dev/null)
+PORTAL=$(sed -n 's/.*"server_url": *"\([^"]*\)".*/\1/p' /etc/xpguard/agent.json 2>/dev/null)
 echo "portal:    $PORTAL"
 check "portal /api/health reachable"    "curl -fsS --max-time 15 '$PORTAL/api/health'"
-check "agent binary downloadable"       "curl -fsS --max-time 30 -o /dev/null '$PORTAL/downloads/xmartguard-agent-linux-amd64.sha256'"
+check "agent binary downloadable"       "curl -fsS --max-time 30 -o /dev/null '$PORTAL/downloads/xpguard-agent-linux-amd64.sha256'"
 
 section "detected inventory"
-/usr/local/bin/xmartguard-agent info 2>&1
+/usr/local/bin/xpguard-agent info 2>&1
 
 section "agent log (last 30 lines)"
-tail -n 30 /opt/xmartguard/logs/agent.log 2>&1
+tail -n 30 /opt/xpguard/logs/agent.log 2>&1
 echo "--- install log"
-tail -n 20 /opt/xmartguard/logs/install.log 2>&1
+tail -n 20 /opt/xpguard/logs/install.log 2>&1
 
 if [ "$UNINSTALL" -eq 1 ]; then
   section "uninstall"
-  bash /opt/xmartguard/uninstall.sh 2>&1 || true
+  bash /opt/xpguard/uninstall.sh 2>&1 || true
   section "leftovers after uninstall"
-  check "binary removed"          '[ ! -e /opt/xmartguard/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard ]'
-  check "config removed"          '[ ! -e /etc/xmartguard ]'
-  check "state removed"           '[ ! -e /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
+  check "binary removed"          '[ ! -e /opt/xpguard/bin/xpguard-agent ] && [ ! -L /usr/local/bin/xpguard-agent ] && [ ! -L /usr/local/bin/xmartguard-agent ]'
+  check "config removed"          '[ ! -e /etc/xpguard ] && [ ! -e /etc/xmartguard ]'
+  check "state removed"           '[ ! -e /opt/xpguard ] && [ ! -e /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
   check "plugins removed"         '[ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xpguard ] && [ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ]'
   check "unit removed"            '[ ! -e /etc/systemd/system/xpguard-agent.service ] && [ ! -e /etc/systemd/system/xmartguard-agent.service ]'
   check "unit unknown to systemd" '! systemctl cat xpguard-agent'
   check "no agent process"        '! pgrep -f "xpguard-agent run" && ! pgrep -f "xmartguard-agent run"'
-  check "no iptables chain"       '! iptables -w -S XMARTGUARD'
+  check "no iptables chain"       '! iptables -w -S XPGUARD && ! iptables -w -S XMARTGUARD'
   check "no ipsets"               '! ipset list -n 2>/dev/null | grep -q "^xg_"'
-  check "no nftables table"       '! nft list tables 2>/dev/null | grep -q "inet xmartguard"'
-  echo "--- any file named *xmartguard* left on disk (outside /proc,/sys,/home):"
-  find / -xdev \( -path /proc -o -path /sys -o -path /home -o -path /root \) -prune -o -iname '*xmartguard*' -print 2>/dev/null | head -20
+  check "no nftables table"       '! nft list tables 2>/dev/null | grep -qE "inet (xpguard|xmartguard)$"'
+  echo "--- any file named *xpguard* or *xmartguard* left on disk (outside /proc,/sys,/home):"
+  find / -xdev \( -path /proc -o -path /sys -o -path /home -o -path /root \) -prune -o \( -iname '*xpguard*' -o -iname '*xmartguard*' \) -print 2>/dev/null | head -20
 fi
 
 section "summary"

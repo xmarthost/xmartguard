@@ -39,7 +39,7 @@ func localCaller(action string, params any) (json.RawMessage, error) {
 	defer cancel()
 	data, err := local.Call(ctx, action, params)
 	if err != nil && strings.Contains(err.Error(), "connect") {
-		return nil, fmt.Errorf("%w (is the agent running? systemctl status xmartguard-agent)", err)
+		return nil, fmt.Errorf("%w (is the agent running? systemctl status xpguard-agent)", err)
 	}
 	return data, err
 }
@@ -1687,7 +1687,7 @@ func cliConfig(c *cli) error {
 		}
 		name := c.raw("--export")
 		if name == "" {
-			name = "xmartguard-settings-" + time.Now().Format("20060102") + ".json"
+			name = "xpguard-settings-" + time.Now().Format("20060102") + ".json"
 		}
 		b, _ := json.MarshalIndent(s, "", "  ")
 		if err := os.WriteFile(name, append(b, '\n'), 0o600); err != nil {

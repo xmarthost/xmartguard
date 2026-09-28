@@ -459,7 +459,7 @@ func wpCLI() ([]string, error) {
 	if p, err := exec.LookPath("wp"); err == nil {
 		return []string{p}, nil
 	}
-	for _, p := range []string{"/usr/local/bin/wp", "/opt/xmartguard/bin/wp-cli.phar"} {
+	for _, p := range []string{"/usr/local/bin/wp", "/opt/xpguard/bin/wp-cli.phar"} {
 		if _, err := os.Stat(p); err == nil {
 			php := "php"
 			for _, c := range []string{"/usr/local/bin/php", "/usr/bin/php"} {

@@ -349,7 +349,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
             <Toggle on={s.trim} disabled={dis} onChange={(v) => onSave({ trim: v })} />
           </div>
         </SettingRow>
-        <SettingRow title="YARA rules" desc="Also run YARA rules placed in /etc/xmartguard/yara/*.yar (requires the yara package)">
+        <SettingRow title="YARA rules" desc="Also run YARA rules placed in /etc/xpguard/yara/*.yar (requires the yara package)">
           <Toggle on={s.yara} disabled={dis} onChange={(v) => onSave({ yara: v })} />
         </SettingRow>
         <SettingRow title="Maximum file size" desc="Larger files are skipped (MB)">

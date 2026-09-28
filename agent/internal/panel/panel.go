@@ -29,10 +29,15 @@ import (
 //go:embed ui.html
 var uiHTML string
 
-// Icon is the plugin icon (both panels): the xPGuard "XP" mark.
+// Icon is the plugin icon (both panels): the xPGuard shield as a vector
+// image. cPanel's Jupiter theme shows its generic tile for PNG icons that
+// are not exactly the size it expects; SVG is shown as drawn at any size.
 //
-//go:embed xpguard-icon.png
+//go:embed xpguard-icon.svg
 var Icon string
+
+// IconName is the icon's file name in both panels.
+const IconName = PluginID + ".svg"
 
 // mark is the xPGuard shield shown in the plugin page header.
 //
@@ -60,7 +65,7 @@ func root() string {
 func p(rel string) string { return filepath.Join(root(), rel) }
 
 // OptOutPath disables automatic plugin installation when it exists.
-const OptOutPath = "/etc/xmartguard/no-panel-plugin"
+const OptOutPath = "/etc/xpguard/no-panel-plugin"
 
 // EnsureBin makes BinPath point at the running agent (installs from before
 // 0.3.0 kept the binary in /usr/local/bin).
@@ -122,7 +127,7 @@ url=/cgi/` + PluginID + `/index.cgi
 entryurl=` + PluginID + `/index.cgi
 acls=all
 displayname=xPGuard
-icon=` + PluginID + `.png
+icon=` + IconName + `
 target=_self
 `
 
@@ -219,7 +224,7 @@ func runTool(args ...string) error {
 
 // pluginTarball is what cPanel's install_plugin expects: install.json + icon.
 // The legacy tarball only serves to uninstall the plugin of older versions.
-func pluginTarball() ([]byte, error) { return tarball(PluginID, PluginID+".png", Icon) }
+func pluginTarball() ([]byte, error) { return tarball(PluginID, IconName, Icon) }
 
 func legacyTarball() ([]byte, error) {
 	return tarball(legacyID, legacyID+".svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
@@ -260,7 +265,10 @@ func Install() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	c2, _ := writeIfChanged(p("usr/local/cpanel/whostmgr/docroot/addon_plugins/"+PluginID+".png"), Icon, 0o644)
+	c2, _ := writeIfChanged(p("usr/local/cpanel/whostmgr/docroot/addon_plugins/"+IconName), Icon, 0o644)
+	if os.Remove(p("usr/local/cpanel/whostmgr/docroot/addon_plugins/"+PluginID+".png")) == nil {
+		c2 = true // 0.10.1 shipped a PNG icon
+	}
 	c3, err := writeIfChanged(p("var/cpanel/apps/"+PluginID+".conf"), appConfig, 0o600)
 	if err != nil {
 		return nil, err

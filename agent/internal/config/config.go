@@ -7,11 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/xmarthost/xmartguard/agent/internal/layout"
 )
 
 // Default paths. They can be overridden with XG_CONFIG_DIR for tests.
 const (
-	DefaultDir = "/etc/xmartguard"
+	DefaultDir = layout.ConfDir
 	fileName   = "agent.json"
 	keyName    = "identity.key"
 )
@@ -29,7 +31,8 @@ func Dir() string {
 	if d := os.Getenv("XG_CONFIG_DIR"); d != "" {
 		return d
 	}
-	return DefaultDir
+	// A server not yet moved from /etc/xmartguard keeps using it.
+	return layout.Pick(DefaultDir, layout.OldConfDir, fileName)
 }
 
 // Path returns the config file path.

@@ -10,12 +10,12 @@
 #   --force           re-install even if the agent is already installed
 #
 # Layout:
-#   /etc/xmartguard          configuration, identity key, security policy
-#   /opt/xmartguard/bin      agent binary (symlinked into /usr/local/bin)
-#   /opt/xmartguard/data     local database, signatures, IPDB list, quarantine
-#   /opt/xmartguard/logs     agent and install logs
+#   /etc/xpguard          configuration, identity key, security policy
+#   /opt/xpguard/bin      agent binary (symlinked into /usr/local/bin)
+#   /opt/xpguard/data     local database, signatures, IPDB list, quarantine
+#   /opt/xpguard/logs     agent and install logs
 # Every file and change this script makes is recorded in
-# /opt/xmartguard/manifest so uninstall.sh can remove exactly those.
+# /opt/xpguard/manifest so uninstall.sh can remove exactly those.
 set -Eeuo pipefail
 
 PORTAL_URL="__XG_PORTAL_URL__"
@@ -23,12 +23,14 @@ TOKEN=""
 INSECURE=0
 FORCE=0
 
-HOME_DIR=/opt/xmartguard
-BIN=/opt/xpguard/bin/xpguard-agent
-OLD_BIN=$HOME_DIR/bin/xmartguard-agent
-CONF_DIR=/etc/xmartguard
+HOME_DIR=/opt/xpguard
+BIN=$HOME_DIR/bin/xpguard-agent
+CONF_DIR=/etc/xpguard
 STATE_DIR=$HOME_DIR
 LOG_DIR=$HOME_DIR/logs
+# Directories of versions before the xPGuard name (moved by migrate-layout).
+OLD_HOME=/opt/xmartguard
+OLD_CONF=/etc/xmartguard
 LEGACY_MANIFEST=/var/lib/xmartguard/manifest
 UNIT=/etc/systemd/system/xpguard-agent.service
 OLD_UNIT=/etc/systemd/system/xmartguard-agent.service
@@ -79,15 +81,15 @@ esac
 OS_NAME="unknown"
 if [ -r /etc/os-release ]; then . /etc/os-release; OS_NAME="${PRETTY_NAME:-$ID}"; fi
 
-if [ -d "$HOME_DIR/.git" ]; then
-  die "$HOME_DIR holds the xPGuard portal code from an older portal setup. Re-run deploy/setup-almalinux.sh on this server first (it moves the portal to /opt/xmartguard-portal)."
+if [ -d "$OLD_HOME/.git" ]; then
+  die "$OLD_HOME holds the xPGuard portal code from an older portal setup. Re-run deploy/setup-almalinux.sh on this server first (it moves the portal to /opt/xmartguard-portal)."
 fi
 
-if { [ -f "$MANIFEST" ] || [ -f "$LEGACY_MANIFEST" ]; } && [ "$FORCE" -ne 1 ]; then
+if { [ -f "$MANIFEST" ] || [ -f "$OLD_HOME/manifest" ] || [ -f "$LEGACY_MANIFEST" ]; } && [ "$FORCE" -ne 1 ]; then
   die "xPGuard is already installed. Uninstall first, or pass --force to re-install."
 fi
 
-# /opt/xmartguard must be traversable: cPanel accounts run the plugin binary.
+# /opt/xpguard must be traversable: cPanel accounts run the plugin binary.
 mkdir -p "$HOME_DIR/bin" "$LOG_DIR"; chmod 0755 "$HOME_DIR" "$HOME_DIR/bin"; chmod 0750 "$LOG_DIR"
 : >>"$INSTALL_LOG"
 ok "OS: $OS_NAME ($ARCH)"
@@ -109,7 +111,7 @@ fi
 # Not /tmp: hardened servers (cPanel "securetmp") mount it noexec.
 TMP=$(mktemp -d -p "$HOME_DIR" .install.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT
-FILE="xmartguard-agent-linux-$ARCH"
+FILE="xpguard-agent-linux-$ARCH"
 "${CURL[@]}" -o "$TMP/$FILE" "$PORTAL_URL/downloads/$FILE" || die "could not download the agent from $PORTAL_URL"
 "${CURL[@]}" -o "$TMP/$FILE.sha256" "$PORTAL_URL/downloads/$FILE.sha256" || die "could not download the agent checksum"
 EXPECTED=$(awk '{print $1}' "$TMP/$FILE.sha256")
@@ -119,6 +121,21 @@ chmod 0755 "$TMP/$FILE"
 "$TMP/$FILE" version >/dev/null || die "downloaded agent does not run on this system"
 ok "Agent downloaded and verified ($("$TMP/$FILE" version))"
 
+# Stop an existing agent when re-installing (current and older service name).
+for u in xpguard-agent xmartguard-agent; do
+  if systemctl is-active --quiet "$u" 2>/dev/null; then systemctl stop "$u" || true; fi
+done
+# Re-install over a version from before the xPGuard name: move its
+# configuration and data to /etc/xpguard and /opt/xpguard.
+if { [ -d "$OLD_CONF" ] && [ ! -L "$OLD_CONF" ]; } || { [ -d "$OLD_HOME" ] && [ ! -L "$OLD_HOME" ]; }; then
+  if OUT=$("$TMP/$FILE" migrate-layout 2>&1); then
+    ok "Moved $OLD_CONF and $OLD_HOME to $CONF_DIR and $HOME_DIR"
+  else
+    say "$OUT"
+    die "could not move $OLD_CONF / $OLD_HOME to the new locations"
+  fi
+fi
+
 # ---------------------------------------------------------------- manifest
 # Manifest line format:  <kind> <path>
 #   file   - created by us, delete on uninstall
@@ -126,7 +143,7 @@ ok "Agent downloaded and verified ($("$TMP/$FILE" version))"
 #   unit   - systemd unit we installed
 if [ ! -f "$MANIFEST" ]; then
   {
-    echo "# xmartguard install manifest v1"
+    echo "# xpguard install manifest v1"
     echo "# installed_at $(date -u +%FT%TZ)"
     echo "dir $STATE_DIR"
     echo "dir $LOG_DIR"
@@ -135,33 +152,23 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 record() { grep -qxF "$1 $2" "$MANIFEST" 2>/dev/null || echo "$1 $2" >>"$MANIFEST"; }
 
-# Stop an existing agent when re-installing (current and older service name).
-for u in xpguard-agent xmartguard-agent; do
-  if systemctl is-active --quiet "$u" 2>/dev/null; then systemctl stop "$u" || true; fi
-done
-
 # ---------------------------------------------------------------- install files
 [ -d "$CONF_DIR" ] || { mkdir -p "$CONF_DIR"; }
 chmod 0700 "$CONF_DIR"
 record dir "$CONF_DIR"
 
-mkdir -p "$(dirname "$BIN")" "$HOME_DIR/bin"
+mkdir -p "$HOME_DIR/bin"
 install -m 0755 "$TMP/$FILE" "$BIN"
 record file "$BIN"
-record dir "$(dirname "$BIN")"
 record dir "$HOME_DIR/bin"
 record dir "$HOME_DIR/data"
-# Older versions ran the program from $OLD_BIN: keep that path working.
-rm -f "$OLD_BIN"
-ln -sfn "$BIN" "$OLD_BIN"
-record file "$OLD_BIN"
 ln -sfn "$BIN" /usr/local/bin/xpguard-agent
 ln -sfn "$BIN" /usr/local/bin/xgcli
 record file /usr/local/bin/xpguard-agent
 record file /usr/local/bin/xgcli
-# Links of older versions follow the new program.
+# Links of versions before the xPGuard name.
 for l in /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard; do
-  if [ -e "$l" ] || [ -L "$l" ]; then rm -f "$l"; ln -sfn "$BIN" "$l"; record file "$l"; fi
+  if [ -L "$l" ]; then rm -f "$l"; fi
 done
 ok "Installed $BIN"
 
@@ -180,7 +187,7 @@ ok "$OUT"
 # ---------------------------------------------------------------- kernel / CSF
 # The realtime scanner watches every account's home with inotify; keep the
 # limit across reboots.
-SYSCTL=/etc/sysctl.d/xmartguard.conf
+SYSCTL=/etc/sysctl.d/xpguard.conf
 if [ ! -f "$SYSCTL" ]; then
   echo "fs.inotify.max_user_watches = 10000000" >"$SYSCTL"
   record file "$SYSCTL"
@@ -224,6 +231,10 @@ record file "$LOG_DIR/agent.log"
 if [ -f "$OLD_UNIT" ]; then
   systemctl disable xmartguard-agent >/dev/null 2>&1 || true
   rm -f "$OLD_UNIT"
+fi
+# The old program path is not used any more.
+if [ -f /etc/csf/csf.pignore ] && grep -qxF "exe:$OLD_HOME/bin/xmartguard-agent" /etc/csf/csf.pignore; then
+  grep -vxF "exe:$OLD_HOME/bin/xmartguard-agent" /etc/csf/csf.pignore >/etc/csf/csf.pignore.xg && cat /etc/csf/csf.pignore.xg >/etc/csf/csf.pignore && rm -f /etc/csf/csf.pignore.xg
 fi
 systemctl daemon-reload
 systemctl enable --now xpguard-agent >/dev/null 2>&1

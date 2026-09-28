@@ -9,7 +9,7 @@ const LoginBody = z.object({ email: z.string().email().max(200), password: z.str
 const PasswordBody = z.object({ current_password: z.string().min(1).max(200), new_password: z.string().min(10).max(200) });
 
 // A real hash so unknown-email logins take as long as wrong-password ones.
-const DUMMY_HASH = hashPassword('xmartguard-timing-dummy');
+const DUMMY_HASH = hashPassword('xpguard-timing-dummy');
 
 export function authRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void {
   const cookieOpts = {

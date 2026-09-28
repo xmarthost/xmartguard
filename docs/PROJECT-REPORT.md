@@ -45,7 +45,7 @@ context. Read it top to bottom once; later use the tables as a map.
                           | outbound WebSocket (TLS),         AI keys, WAF rule sets…)
                           | Ed25519-signed session
                     xpguard-agent (Go, systemd, root)  — one per hosting server
-                          |  local Unix socket /run/xmartguard/agent.sock
+                          |  local Unix socket /run/xpguard/agent.sock
                           +── WHM plugin (root)  +── cPanel plugin (each account)
 ```
 
@@ -65,7 +65,7 @@ context. Read it top to bottom once; later use the tables as a map.
 | Path | Content |
 |---|---|
 | `agent/` | Go agent (module `github.com/xmarthost/xmartguard/agent`) |
-| `agent/cmd/xmartguard-agent/` | `main.go` (commands: `enroll`, `run`, `status`, `check`, `cleanup`, `panel …`, `panel-cgi`, `panel-api`, `call`, `cli`/`xgcli`), `cli.go` (xgcli, cpgcli-like) |
+| `agent/cmd/xpguard-agent/` | `main.go` (commands: `enroll`, `run`, `status`, `check`, `cleanup`, `panel …`, `panel-cgi`, `panel-api`, `call`, `cli`/`xgcli`), `cli.go` (xgcli, cpgcli-like) |
 | `agent/internal/…` | agent packages (table below) |
 | `server/` | Portal API: Fastify + TypeScript + PostgreSQL (`server/src`) and tests (`server/test`, vitest) |
 | `web/` | Portal UI: React + Vite + Tailwind v4 + Recharts (`web/src`) |
@@ -98,7 +98,7 @@ context. Read it top to bottom once; later use the tables as a map.
 | `local` | Local Unix socket server/client, uid-based access |
 | `client` | Portal WebSocket session |
 | `settings` | `settings.json` model (`Settings` struct), defaults, `normalize`, `validate`, `Patch` |
-| `store` | SQLite database (`/opt/xmartguard/data`), schema and column migrations, KV |
+| `store` | SQLite database (`/opt/xpguard/data`), schema and column migrations, KV |
 | `identity`, `config` | Ed25519 identity, agent config/paths |
 | `notify` | Email/Slack/Telegram notifications, daily report |
 | `sysinfo`, `logtail`, `updater`, `protocol`, `version` | inventory/metrics, log tailing, self-update, wire types, version |
@@ -139,13 +139,13 @@ Automatic Suspension, Additional, Outgoing Spam, Notifications, About), `AIScann
 
 | Path | Purpose |
 |---|---|
-| `/opt/xpguard/bin/xpguard-agent` | agent program under `xpguard-agent.service` (links `/usr/local/bin/xpguard-agent`, `xgcli`, and `/opt/xmartguard/bin/xmartguard-agent` for older scripts). Installs from before 0.10.1 are switched over by the agent itself (transient systemd job, rolls back to the old unit if the new one is not active after 20 s). |
-| `/etc/xmartguard/agent.json`, `identity.key`, `settings.json` | config, private key, security policy |
-| `/etc/xmartguard/waf/` | generated ModSecurity rules and lists (`rules.conf`, bot lists, `trusted-ips.txt`, `blocked-ips.txt`, `proxy-ranges.txt`, CRS) |
-| `/opt/xmartguard/data/` | SQLite DB, quarantine, signature caches, `clamav/` subscriptions, `trusted-services.json`, `host-trust.json` |
-| `/run/xmartguard/agent.sock` | local control socket (plugins, `xpguard-agent call ACTION '{json}'`) |
+| `/opt/xpguard/bin/xpguard-agent` | agent program under `xpguard-agent.service` (links `/usr/local/bin/xpguard-agent` and `xgcli`). Installs from before 0.10.1 are switched over by the agent itself (transient systemd job, rolls back to the old unit if the new one is not active after 20 s). |
+| `/etc/xpguard/agent.json`, `identity.key`, `settings.json` | config, private key, security policy |
+| `/etc/xpguard/waf/` | generated ModSecurity rules and lists (`rules.conf`, bot lists, `trusted-ips.txt`, `blocked-ips.txt`, `proxy-ranges.txt`, CRS) |
+| `/opt/xpguard/data/` | SQLite DB, quarantine, signature caches, `clamav/` subscriptions, `trusted-services.json`, `host-trust.json` |
+| `/run/xpguard/agent.sock` | local control socket (plugins, `xpguard-agent call ACTION '{json}'`) |
 | `/etc/systemd/system/xpguard-agent.service` | service |
-| Hooks written | `modsec2.user.conf` Include (cPanel), `/etc/sysctl.d/xmartguard.conf` (inotify), `csf.pignore`, `csfpost.sh` line, `/var/cpanel/rbl_info/*.yaml` (+ `exim.conf.localopts`), host firewall entries; all removed by `uninstall.sh` → `xpguard-agent cleanup` |
+| Hooks written | `modsec2.user.conf` Include (cPanel), `/etc/sysctl.d/xpguard.conf` (inotify), `csf.pignore`, `csfpost.sh` line, `/var/cpanel/rbl_info/*.yaml` (+ `exim.conf.localopts`), host firewall entries; all removed by `uninstall.sh` → `xpguard-agent cleanup` |
 
 ## 5. Features (A to Z)
 
@@ -245,9 +245,9 @@ cd server && ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=... PUBLIC_URL=http://
   bash /root/setup.sh --domain app.xpguard.org --email you@example.com
   ```
 - **Agents:** update automatically after a portal update, or per server
-  **Update agent**; check with `xmartguard status`.
+  **Update agent**; check with `xpguard-agent status`.
 - **Server install:** Add Server in the portal → one-line `install.sh` with a
-  one-time token. Uninstall: `bash /opt/xmartguard/uninstall.sh`.
+  one-time token. Uninstall: `bash /opt/xpguard/uninstall.sh`.
 
 ## 9. Release history
 
@@ -314,10 +314,15 @@ The product is branded **xPGuard** and the portal runs at
 4. When every server shows online under the new name, the old domain can be
    removed.
 
-Internal names were kept on purpose so installed servers keep working:
-the service and binary `xpguard-agent`, `/opt/xmartguard`,
-`/etc/xmartguard`, `/var/log/xmartguard`, the firewall table, the database
-name and the `xmartguard` JSON keys between portal and agent. Everything a
-customer, cPanel user or site visitor sees says xPGuard (cPanel/WHM plugin
-id `xpguard`, CAPTCHA URLs `/.xpguard/…`, WAF rule messages and tags,
-e-mail sender `xpguard@<host>`).
+Since 0.11 the internal names follow too: `/etc/xpguard`, `/opt/xpguard`,
+`/run/xpguard`, `/etc/sysctl.d/xpguard.conf`, the WAF include files
+(`xpguard_modsec.conf`, `xpguard-waf.conf`), the nftables table `inet xpguard`,
+the iptables chains `XPGUARD*` and the download `xpguard-agent-linux-<arch>`.
+Existing servers are moved by the agent on the first start of 0.11 (package
+`layout`: a rename on the same file system, links left at the old paths until
+no web server include, service or cron file names them, then removed; WAF
+includes are swapped with the usual config test and rollback; the old firewall
+table/chains are deleted in the same step that loads the new ones). Only the
+`xmartguard` JSON keys between portal and agent, the portal's own install
+directory and database name, and the GitHub repository keep the old name;
+none of them is on a customer server.

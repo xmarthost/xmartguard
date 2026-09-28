@@ -8,10 +8,10 @@ OUT="${OUT:-dist/downloads}"
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 for arch in amd64 arm64; do
-  f="$OUT/xmartguard-agent-linux-$arch"
+  f="$OUT/xpguard-agent-linux-$arch"
   (cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
     -ldflags "-s -w -X github.com/xmarthost/xmartguard/agent/internal/version.Version=$VERSION" \
-    -o "$f" ./cmd/xmartguard-agent)
+    -o "$f" ./cmd/xpguard-agent)
   (cd "$OUT" && sha256sum "$(basename "$f")" > "$(basename "$f").sha256")
   echo "built $f ($VERSION)"
 done

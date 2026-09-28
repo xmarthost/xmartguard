@@ -16,8 +16,8 @@ import (
 // so process lists (ps, WHM » Process Manager) show the product's name.
 // Installs from before the xPGuard name run the same program as
 // /opt/xmartguard/bin/xmartguard-agent under xmartguard-agent.service; they
-// are moved once, the first time the new version starts. Configuration and
-// data stay where they are (web server configuration points at them).
+// are moved once, the first time the new version starts; the restart that
+// follows moves /etc/xmartguard and /opt/xmartguard too (package layout).
 const (
 	NewBinPath   = "/opt/xpguard/bin/xpguard-agent"
 	NewUnitName  = "xpguard-agent.service"
@@ -107,6 +107,8 @@ if systemctl enable --now %[2]s && sleep 20 && systemctl is-active -q %[2]s; the
   for l in /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli; do [ -L "$l" ] && ln -sfn %[5]s "$l"; done
   ln -sfn %[5]s /usr/local/bin/xpguard-agent
   %[6]s
+  # Started once more without the old service: its directories move now.
+  systemctl restart %[2]s
 else
   systemctl disable --now %[2]s >/dev/null 2>&1
   systemctl enable --now %[1]s

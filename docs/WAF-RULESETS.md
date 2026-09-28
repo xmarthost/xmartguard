@@ -7,12 +7,12 @@ reports back what it applied, shown under **Rollout**.
 
 | Rule set | Source | Price | How it reaches the server | Updates |
 |---|---|---|---|---|
-| xPGuard rules | built in | free | agent renders them (`/etc/xmartguard/waf/rules.conf`) | with agent releases |
+| xPGuard rules | built in | free | agent renders them (`/etc/xpguard/waf/rules.conf`) | with agent releases |
 | OWASP Core Rule Set | [github.com/coreruleset/coreruleset](https://github.com/coreruleset/coreruleset) (Apache 2.0) | free | portal downloads the official release, agents install it next to our rules | portal checks GitHub every 12 h; "latest" follows new releases, or pin a version |
 | Malware.Expert | [malware.expert](https://malware.expert/modsecurity-rules/) | paid (single server / 50 / unlimited) | cPanel vendor: agent runs `whmapi1 modsec_add_vendor url=…` with the vendor URL from your subscription, then enables it with automatic updates | by WHM from the vendor |
 | Comodo WAF (CWAF) | [waf.comodo.com](https://waf.comodo.com/) | free (registration) | cPanel vendor (`meta_comodo_apache.yaml`; LiteSpeed servers get `meta_comodo_litespeed.yaml`) | by WHM; the service has been unreliable, servers report download errors |
 | Any other cPanel vendor | vendor YAML URL | depends | cPanel vendor | by WHM |
-| Custom rules | typed in the portal | free | `/etc/xmartguard/waf/custom.conf`, loaded last | when you save |
+| Custom rules | typed in the portal | free | `/etc/xpguard/waf/custom.conf`, loaded last | when you save |
 
 Not included:
 
@@ -52,7 +52,7 @@ configuration is tested; if it fails, the extra rule sets are left out
 
 ## Self-test
 
-After every change the agent requests `/xmartguard-waf-selftest` from the
+After every change the agent requests `/xpguard-waf-selftest` from the
 local web server (127.0.0.1, http then https); rule 7700000 must answer 403.
 With OWASP CRS active it also sends a harmless XSS-looking query that CRS
 must block. Rollout shows "self-test passed" or the exact problem (for
@@ -60,9 +60,12 @@ example "a test request that must be blocked got HTTP 200"), and the
 dashboard marks the WAF as not working. Self-test requests are not counted
 as attacks.
 
-On cPanel the rules are hooked in through `/etc/apache2/conf.d/zz-xmartguard-waf.conf`
-(httpd.conf loads every `conf.d/*.conf`; Apache and LiteSpeed both read it).
-Agents before 0.7.7 used `conf.d/includes/`, which cPanel does not load.
+On cPanel the rules are hooked in through WHM's user rules file
+(`modsec2.user.conf`: `Include "/etc/xpguard/waf/xpguard_modsec.conf"`; Apache
+and LiteSpeed both read it). Include files of older versions
+(`conf.d/includes/`, `conf.d/zz-xmartguard-waf.conf`,
+`/etc/xmartguard/waf/xmartguard_modsec.conf`) are removed when the current one
+is written.
 
 ## Where the hits are counted
 
@@ -180,7 +183,7 @@ before the page opens; the rest of the website never shows it.
 
 - Rules 7700902 (no Cookie header) and 7700903 (no valid `xg_gate` in it):
   a request for a protected URL is redirected (302) to
-  `https://<host>:<captcha HTTPS port>/.xmartguard/gate?back=<uri>`. They use
+  `https://<host>:<captcha HTTPS port>/.xpguard/gate?back=<uri>`. They use
   no TX counters or SERVER_PORT, which LiteSpeed's own engine did not run.
   Logged by the web server, but not recorded as attacks.
 - Solving it sets `xg_gate` (HttpOnly, SameSite=Lax, valid for the CAPTCHA
@@ -191,7 +194,7 @@ before the page opens; the rest of the website never shows it.
   still get the CAPTCHA on the whole site and are unbanned when they solve
   it (Firewall » CAPTCHA).
 - The CAPTCHA ports (default 7780/7743) are opened in xPGuard's port
-  filter and, under CSF, with an `iptables -I INPUT … xmartguard-captcha`
+  filter and, under CSF, with an `iptables -I INPUT … xpguard-captcha`
   rule that csfpost.sh restores after `csf -r`.
 
 Malware.Expert on LiteSpeed: LiteSpeed does not log "Loaded N rules", so a

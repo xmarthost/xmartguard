@@ -2,7 +2,7 @@
 // model over code features that scores how likely a PHP/JS file is
 // malicious. It runs inside the agent with no network access and no API
 // costs, and it is retrained from real quarantine data (see Train and the
-// "xmartguard-agent ai-train" command), so it improves as more quarantined
+// "xpguard-agent ai-train" command), so it improves as more quarantined
 // files are collected.
 package ml
 
@@ -51,7 +51,7 @@ var (
 )
 
 // Default returns the model in use: the one shipped with the agent (or the
-// one an admin trained, when /etc/xmartguard/ai-model.bin exists), plus the
+// one an admin trained, when /etc/xpguard/ai-model.bin exists), plus the
 // fleet's learned update when one is applied (see ApplyDelta).
 func Default() (*Model, error) {
 	if m := learned.Load(); m != nil {

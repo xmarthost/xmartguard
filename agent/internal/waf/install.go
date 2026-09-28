@@ -33,6 +33,9 @@ type Target struct {
 	// HookFile, when set, gets an "Include IncludeFile" line (cPanel's
 	// modsec2.user.conf, where cPGuard hooks its rules in too).
 	HookFile string `json:"hook_file,omitempty"`
+	// OldIncludes are include files of earlier versions (before the xPGuard
+	// name): removed when the current one is written.
+	OldIncludes []string `json:"-"`
 
 	configTest []string // command that validates the config
 	reload     []string // command that reloads the web server
@@ -46,7 +49,7 @@ func engineSetting(globs ...string) string {
 	for _, g := range globs {
 		files, _ := filepath.Glob(g)
 		for _, f := range files {
-			if strings.Contains(f, "xmartguard") {
+			if strings.Contains(f, "xpguard") || strings.Contains(f, "xmartguard") {
 				continue
 			}
 			b, err := os.ReadFile(f)
@@ -112,6 +115,7 @@ func Detect() Target {
 			// LiteSpeed read it).
 			IncludeFile: CPanelInclude,
 			HookFile:    CPanelHookFile,
+			OldIncludes: oldCPanelIncludes,
 			WebServer:   "Apache (cPanel EA4)",
 			ErrorLogs:   []string{"/etc/apache2/logs/error_log", "/usr/local/apache/logs/error_log"},
 			configTest:  []string{firstBin("/scripts/restartsrv_httpd"), "--check"},
@@ -134,24 +138,32 @@ func Detect() Target {
 	case exists("/usr/local/lsws/bin/lswsctrl"):
 		// Stand-alone LiteSpeed (Enhance, CyberPanel, plain LSWS): LiteSpeed
 		// loads ModSecurity rules from a WAF rule set defined in WebAdmin.
+		// The rule set is defined by hand in WebAdmin: a server set up
+		// before the xPGuard name keeps the file name it refers to.
 		conf, _ := os.ReadFile("/usr/local/lsws/conf/httpd_config.xml")
+		name := "xpguard-waf.conf"
+		if strings.Contains(string(conf), "xmartguard-waf.conf") {
+			name = "xmartguard-waf.conf"
+		}
 		return Target{Name: "litespeed", ModSec: true, LiteSpeed: true, Plain: true,
-			IncludeFile: "/usr/local/lsws/conf/xmartguard-waf.conf",
-			Hooked:      strings.Contains(string(conf), "xmartguard-waf.conf"),
+			IncludeFile: "/usr/local/lsws/conf/" + name,
+			Hooked:      strings.Contains(string(conf), name),
 			Hint: "In LiteSpeed WebAdmin (https://SERVER_IP:7080) » Configuration » Server » Security: Enable WAF: Yes, Scan Request Body: Yes. " +
-				"Then add a WAF Rule Set: Name: xPGuard, Action: deny,log,status:403, Enabled: Yes, Rules Definition: Include $SERVER_ROOT/conf/xmartguard-waf.conf — and restart LiteSpeed.",
+				"Then add a WAF Rule Set: Name: xPGuard, Action: deny,log,status:403, Enabled: Yes, Rules Definition: Include $SERVER_ROOT/conf/xpguard-waf.conf — and restart LiteSpeed.",
 			WebServer: "LiteSpeed", ErrorLogs: []string{"/usr/local/lsws/logs/error.log"}, Engine: "On",
 			reload: []string{"/usr/local/lsws/bin/lswsctrl", "restart"}}
 	case exists("/etc/httpd/conf.d") && hasModule(firstBin("/usr/sbin/httpd", "httpd")):
-		return Target{Name: "rhel", ModSec: true, IncludeFile: "/etc/httpd/conf.d/xmartguard-waf.conf",
-			WebServer: "Apache", ErrorLogs: []string{"/var/log/httpd/error_log"},
+		return Target{Name: "rhel", ModSec: true, IncludeFile: "/etc/httpd/conf.d/xpguard-waf.conf",
+			OldIncludes: []string{"/etc/httpd/conf.d/xmartguard-waf.conf"},
+			WebServer:   "Apache", ErrorLogs: []string{"/var/log/httpd/error_log"},
 			Engine:     engineSetting("/etc/httpd/conf.d/mod_security.conf", "/etc/httpd/modsecurity.d/*.conf"),
 			configTest: []string{firstBin("/usr/sbin/httpd", "httpd"), "-t"},
 			reload:     []string{firstBin("apachectl", "/usr/sbin/apachectl"), "graceful"}}
 	// Debian/Ubuntu: apache2ctl loads /etc/apache2/envvars; plain "apache2 -M" fails without them.
 	case exists("/etc/apache2/conf-available") && hasModule(firstBin("apache2ctl", "/usr/sbin/apache2ctl")):
-		return Target{Name: "debian", ModSec: true, IncludeFile: "/etc/apache2/conf-available/xmartguard-waf.conf",
-			WebServer: "Apache", ErrorLogs: []string{"/var/log/apache2/error.log"},
+		return Target{Name: "debian", ModSec: true, IncludeFile: "/etc/apache2/conf-available/xpguard-waf.conf",
+			OldIncludes: []string{"/etc/apache2/conf-available/xmartguard-waf.conf"},
+			WebServer:   "Apache", ErrorLogs: []string{"/var/log/apache2/error.log"},
 			Engine:     engineSetting("/etc/modsecurity/*.conf", "/etc/apache2/mods-enabled/security2.conf"),
 			configTest: []string{firstBin("apache2ctl", "/usr/sbin/apache2ctl"), "-t"},
 			reload:     []string{firstBin("apache2ctl", "/usr/sbin/apache2ctl"), "graceful"}}
@@ -167,13 +179,20 @@ func Detect() Target {
 // On cPanel the agent's ModSecurity file is included from WHM's user rules
 // file, like other security products do.
 const (
-	CPanelInclude  = "/etc/xmartguard/waf/xmartguard_modsec.conf"
+	CPanelInclude  = "/etc/xpguard/waf/xpguard_modsec.conf"
 	CPanelHookFile = "/etc/apache2/conf.d/modsec/modsec2.user.conf"
 )
 
-// Earlier hook files: conf.d/includes/ (before 0.7.7, never loaded) and
-// conf.d/zz-xmartguard-waf.conf (0.7.7-0.7.8).
-var oldCPanelIncludes = []string{"/etc/apache2/conf.d/includes/xmartguard-waf.conf", "/etc/apache2/conf.d/zz-xmartguard-waf.conf"}
+// Earlier hook files: conf.d/includes/ (before 0.7.7, never loaded),
+// conf.d/zz-xmartguard-waf.conf (0.7.7-0.7.8) and the WHM user rules
+// include of 0.7.9-0.10 (under /etc/xmartguard, moved to /etc/xpguard).
+var oldCPanelIncludes = []string{"/etc/apache2/conf.d/includes/xmartguard-waf.conf", "/etc/apache2/conf.d/zz-xmartguard-waf.conf",
+	"/etc/xmartguard/waf/xmartguard_modsec.conf", "/etc/xpguard/waf/xmartguard_modsec.conf"}
+
+// legacyHook matches Include lines of earlier versions.
+func legacyHook(l string) bool {
+	return strings.Contains(l, "xmartguard-waf.conf") || strings.Contains(l, "xmartguard_modsec.conf")
+}
 
 func hookLine(include string) string { return `Include "` + include + `"` }
 
@@ -181,7 +200,7 @@ func hookLine(include string) string { return `Include "` + include + `"` }
 func withHook(content, include string) string {
 	var out []string
 	for _, l := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
-		if strings.Contains(l, include) || strings.Contains(l, "xmartguard-waf.conf") {
+		if strings.Contains(l, include) || legacyHook(l) {
 			continue
 		}
 		out = append(out, l)
@@ -193,11 +212,11 @@ func withHook(content, include string) string {
 	return strings.TrimLeft(strings.Join(out, "\n"), "\n") + "\n"
 }
 
-// withoutHook removes the agent's Include line.
+// withoutHook removes the agent's Include line (and those of earlier versions).
 func withoutHook(content, include string) string {
 	var out []string
 	for _, l := range strings.Split(content, "\n") {
-		if strings.Contains(l, include) {
+		if strings.Contains(l, include) || legacyHook(l) {
 			continue
 		}
 		out = append(out, l)
@@ -247,11 +266,6 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if t.Name == "cpanel" {
-		for _, o := range oldCPanelIncludes {
-			_ = os.Remove(o)
-		}
-	}
 	engine := ""
 	if t.Engine == "" {
 		// Nothing turns ModSecurity on (Debian/Ubuntu without modsecurity.conf):
@@ -276,7 +290,20 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 		files[filepath.Join(dir, name)] = body
 	}
 	prev := map[string][]byte{}
-	changed := false
+	// Include files of earlier versions: removed with the same rollback.
+	var stale []string
+	for _, o := range t.OldIncludes {
+		if o == t.IncludeFile {
+			continue
+		}
+		if fi, err := os.Lstat(o); err == nil && fi.Mode().IsRegular() {
+			if b, err := os.ReadFile(o); err == nil {
+				prev[o] = b
+				stale = append(stale, o)
+			}
+		}
+	}
+	changed := len(stale) > 0
 	for path, body := range files {
 		old, err := os.ReadFile(path)
 		if err == nil {
@@ -297,6 +324,12 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 				_ = os.Remove(path)
 			}
 		}
+		for _, o := range stale {
+			_ = os.WriteFile(o, prev[o], 0o644)
+		}
+		if t.Name == "debian" && len(stale) > 0 {
+			a2conf("a2enconf", "xmartguard-waf")
+		}
 	}
 	for path, body := range files {
 		if err := writeIfChanged(path, body, 0o644); err != nil {
@@ -306,9 +339,13 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 	}
 	// Debian keeps includes under conf-available; enable it once.
 	if t.Name == "debian" {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		_ = exec.CommandContext(ctx, firstBin("a2enconf", "/usr/sbin/a2enconf"), "xmartguard-waf").Run()
-		cancel()
+		a2conf("a2enconf", "xpguard-waf")
+		if len(stale) > 0 {
+			a2conf("a2disconf", "xmartguard-waf")
+		}
+	}
+	for _, o := range stale {
+		_ = os.Remove(o)
 	}
 	if out, err := m.runTimeout(t.configTest, 60*time.Second); err != nil {
 		// Roll back so a bad rule never takes the web server down.
@@ -333,22 +370,43 @@ func (m *Manager) uninstall(t Target) error {
 	return os.RemoveAll(m.RulesDir)
 }
 
+// a2conf runs a2enconf/a2disconf (Debian) for one include.
+func a2conf(tool, name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	args := []string{name}
+	if tool == "a2disconf" {
+		args = []string{"-q", name}
+	}
+	_ = exec.CommandContext(ctx, firstBin(tool, "/usr/sbin/"+tool), args...).Run()
+}
+
 // RemoveInclude unhooks the rules from the web server and reloads it. The
-// uninstaller calls it (through "xmartguard-agent cleanup") before deleting
-// /etc/xmartguard, so Apache never references a missing file.
+// uninstaller calls it (through "xpguard-agent cleanup") before deleting
+// /etc/xpguard, so Apache never references a missing file.
 func RemoveInclude(t Target) {
-	if t.Name == "cpanel" {
-		for _, o := range oldCPanelIncludes {
+	had := false
+	for _, o := range t.OldIncludes {
+		if exists(o) {
+			had = true
 			_ = os.Remove(o)
+		}
+	}
+	if t.Name == "debian" && had {
+		a2conf("a2disconf", "xmartguard-waf")
+	}
+	if t.HookFile != "" {
+		if cur, err := os.ReadFile(t.HookFile); err == nil {
+			if nb := withoutHook(string(cur), t.IncludeFile); nb != string(cur) {
+				_ = os.WriteFile(t.HookFile, []byte(nb), 0o644)
+			}
 		}
 	}
 	if t.IncludeFile == "" || !exists(t.IncludeFile) {
 		return
 	}
 	if t.Name == "debian" {
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		_ = exec.CommandContext(ctx, firstBin("a2disconf", "/usr/sbin/a2disconf"), "-q", "xmartguard-waf").Run()
-		cancel()
+		a2conf("a2disconf", "xpguard-waf")
 	}
 	_ = os.Remove(t.IncludeFile)
 	m := &Manager{}

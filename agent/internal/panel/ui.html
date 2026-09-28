@@ -40,6 +40,22 @@
 #xg .seg button.on{opacity:1;background:rgba(255,255,255,.12)}
 #xg .trend{font-size:12px;float:right}#xg .up{color:var(--red)}#xg .down{color:var(--green)}
 #xg svg.chart{width:100%;height:220px}
+#xg .pick{position:relative;margin-top:14px;color:#0f172a;text-align:left}
+#xg .pick-btn{width:100%;display:flex;align-items:center;gap:10px;background:#fff;border:1px solid rgba(255,255,255,.7);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13px;color:#0f172a;box-shadow:0 2px 8px rgba(15,23,42,.12);text-align:left}
+#xg .pick-btn .ph{color:var(--muted)}#xg .pick-btn .val{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#xg .pick-btn .car{transition:transform .15s;color:var(--muted)}#xg .pick.open .pick-btn .car{transform:rotate(180deg)}
+#xg .pick-pop{display:none;position:absolute;z-index:60;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(15,23,42,.18),0 2px 6px rgba(15,23,42,.08);overflow:hidden}
+#xg .pick.open .pick-pop{display:block;animation:xgpop .12s ease-out}
+@keyframes xgpop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+#xg .pick-s{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);background:#f8fafc;color:var(--muted)}
+#xg .scanbox .pick-s input,#xg .pick-s input{flex:1;width:auto;margin:0;border:0;background:none;padding:2px 0;font-size:13px;outline:none;color:#0f172a}
+#xg .pick-list{max-height:280px;overflow:auto;padding:6px}
+#xg .pick-i{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:#0f172a}
+#xg .pick-i svg{flex:none;color:#0ea5e9}#xg .pick-i .p{flex:1;min-width:0;word-break:break-all}#xg .pick-i .p i{font-style:normal;color:#94a3b8}
+#xg .pick-i:hover,#xg .pick-i.hl{background:#eff6ff}#xg .pick-i.sel{background:#e0f2fe;font-weight:600}
+#xg .pick-i .ck{visibility:hidden;color:#0284c7}#xg .pick-i.sel .ck{visibility:visible}
+#xg .pick-n{padding:8px 12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);background:#f8fafc}
+#xg .pick-e{padding:18px;text-align:center;color:var(--muted);font-size:13px}
 @media (max-width:760px){#xg .hero{grid-template-columns:1fr}}
 </style>
 <div id="xg">
@@ -262,10 +278,10 @@
         '<div class="scanbox"><h2>FULL SCAN</h2><div>Start a full scan of the account</div><button class="btn" id="xg-full">RUN SCAN</button><div class="last">LAST SCAN : <span id="xg-last-full"></span></div></div>' +
         '<div class="scanbox"><div class="seg"><button class="on" data-mode="quick">Quick scan</button><button data-mode="path">Path scan</button></div>' +
         '<div id="xg-mode-quick"><p>Scans your website folder: ' + esc(info.web_root || info.home) + '</p></div>' +
-        '<div id="xg-mode-path" style="display:none"><select id="xg-dir"><option value="">Choose a directory…</option>' +
-        dirs.map(function (d) { return '<option>' + esc(d) + '</option>'; }).join('') + '</select></div>' +
+        '<div id="xg-mode-path" style="display:none"><div id="xg-dir"></div></div>' +
         '<button class="btn" id="xg-other">RUN SCAN</button><div class="last">LAST SCAN : <span id="xg-last-other"></span></div></div></div>' +
         '<div class="card"><div class="row"><h3 style="margin:0">Manual Scans</h3><span class="muted" id="xg-refresh" style="margin-left:auto"></span></div><div id="xg-scans"></div></div>';
+      var dirPick = picker(document.getElementById('xg-dir'), dirs, info.home, 'Choose a directory…');
       var mode = 'quick';
       body.querySelector('.seg').onclick = function (e) {
         var m = e.target.getAttribute('data-mode'); if (!m) return;
@@ -277,7 +293,7 @@
       document.getElementById('xg-full').onclick = function () { start('full'); };
       document.getElementById('xg-other').onclick = function () {
         if (mode === 'quick') return start('quick');
-        var dir = document.getElementById('xg-dir').value;
+        var dir = dirPick.value();
         if (!dir) return flash('Choose a directory first');
         start('path', dir);
       };
@@ -287,6 +303,57 @@
       };
       return render();
     });
+  }
+
+  var FOLDER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg>';
+
+  // picker turns el into a searchable directory list. Paths under home are
+  // shown with the home part dimmed; the full path is what is returned.
+  function picker(el, items, home, placeholder) {
+    var cur = '', hl = -1, shown = [];
+    el.className = 'pick';
+    el.innerHTML = '<button type="button" class="pick-btn"><span class="val ph">' + esc(placeholder) + '</span><span class="car">&#9662;</span></button>' +
+      '<div class="pick-pop"><div class="pick-s"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>' +
+      '<input type="text" placeholder="Search folders…" autocomplete="off"></div><div class="pick-list"></div><div class="pick-n"></div></div>';
+    var btn = el.querySelector('.pick-btn'), input = el.querySelector('input'), list = el.querySelector('.pick-list'), note = el.querySelector('.pick-n');
+    function label(d) {
+      if (home && d.indexOf(home + '/') === 0) return '<i>' + esc(home) + '/</i>' + esc(d.slice(home.length + 1));
+      return esc(d);
+    }
+    function draw() {
+      var q = input.value.trim().toLowerCase();
+      shown = items.filter(function (d) { return !q || d.toLowerCase().indexOf(q) >= 0; });
+      if (hl >= shown.length) hl = shown.length - 1;
+      list.innerHTML = shown.length ? shown.slice(0, 500).map(function (d, i) {
+        return '<div class="pick-i' + (d === cur ? ' sel' : '') + (i === hl ? ' hl' : '') + '" data-i="' + i + '">' + FOLDER + '<span class="p">' + label(d) + '</span><span class="ck">&#10003;</span></div>';
+      }).join('') : '<div class="pick-e">' + (items.length ? 'No folder matches “' + esc(input.value) + '”' : 'No folders found') + '</div>';
+      note.textContent = shown.length + ' of ' + items.length + ' folders' + (shown.length > 500 ? ' (first 500 shown; type to narrow)' : '');
+      var h = list.querySelector('.hl'); if (h && h.scrollIntoView) h.scrollIntoView({ block: 'nearest' });
+    }
+    function open(on) {
+      el.classList.toggle('open', on);
+      if (on) { input.value = ''; hl = -1; draw(); setTimeout(function () { input.focus(); }, 0); }
+    }
+    function choose(d) {
+      cur = d;
+      var v = btn.querySelector('.val'); v.className = 'val'; v.innerHTML = label(d); v.title = d;
+      open(false);
+    }
+    btn.onclick = function () { open(!el.classList.contains('open')); };
+    input.oninput = function () { hl = 0; draw(); };
+    input.onkeydown = function (e) {
+      if (e.key === 'ArrowDown') { hl = Math.min(hl + 1, shown.length - 1); draw(); e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { hl = Math.max(hl - 1, 0); draw(); e.preventDefault(); }
+      else if (e.key === 'Enter') { if (shown[hl < 0 ? 0 : hl]) choose(shown[hl < 0 ? 0 : hl]); e.preventDefault(); }
+      else if (e.key === 'Escape') { open(false); btn.focus(); }
+    };
+    list.onmousedown = function (e) { e.preventDefault(); };
+    list.onclick = function (e) {
+      var it = e.target.closest ? e.target.closest('.pick-i') : null;
+      if (it) choose(shown[Number(it.getAttribute('data-i'))]);
+    };
+    document.addEventListener('mousedown', function (e) { if (!el.contains(e.target)) el.classList.remove('open'); });
+    return { value: function () { return cur; } };
   }
 
   var lState = { q: '', offset: 0 };

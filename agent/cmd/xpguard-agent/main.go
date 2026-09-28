@@ -1,11 +1,11 @@
-// Command xmartguard-agent is the xPGuard server agent.
+// Command xpguard-agent is the xPGuard server agent.
 //
-//	xmartguard-agent enroll --server URL --token TOKEN [--insecure]
-//	xmartguard-agent run
-//	xmartguard-agent status
-//	xmartguard-agent unenroll
-//	xmartguard-agent info
-//	xmartguard-agent version
+//	xpguard-agent enroll --server URL --token TOKEN [--insecure]
+//	xpguard-agent run
+//	xpguard-agent status
+//	xpguard-agent unenroll
+//	xpguard-agent info
+//	xpguard-agent version
 package main
 
 import (
@@ -33,6 +33,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/hostfw"
 	"github.com/xmarthost/xmartguard/agent/internal/identity"
+	"github.com/xmarthost/xmartguard/agent/internal/layout"
 	"github.com/xmarthost/xmartguard/agent/internal/local"
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/panel"
@@ -90,6 +91,14 @@ func main() {
 		firewall.RemoveCSFHook()
 		mail.RemoveEximRBLs()
 		fmt.Printf("firewall rules, WAF include and %d host firewall entries removed\n", n)
+	case "migrate-layout":
+		// Used by install.sh (services stopped): move /etc/xmartguard and
+		// /opt/xmartguard of versions before the xPGuard name.
+		notes, merr := layout.Migrate(true)
+		for _, n := range notes {
+			fmt.Println(n)
+		}
+		err = merr
 	case "panel":
 		err = cmdPanel(os.Args[2:])
 	case "panel-cgi":
@@ -134,17 +143,17 @@ func usage() {
 	fmt.Fprint(os.Stderr, `xPGuard agent `+version.Version+`
 
 Usage:
-  xmartguard-agent enroll --server URL --token TOKEN [--insecure]
-  xmartguard-agent run          run the agent (used by systemd)
-  xmartguard-agent status       show enrollment status
-  xmartguard-agent unenroll     remove this server from the portal
-  xmartguard-agent info         print detected host inventory
-  xmartguard-agent cleanup      remove all xPGuard firewall rules
-  xmartguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses, --no-hash)
-  xmartguard-agent panel install|uninstall|status   manage the WHM/cPanel plugins
-  xmartguard-agent call ACTION ['{"json":"params"}']  call the running agent (root)
-  xgcli COMMAND ...             command line like cpgcli (also: xmartguard-agent cli ...; xgcli --help)
-  xmartguard-agent version
+  xpguard-agent enroll --server URL --token TOKEN [--insecure]
+  xpguard-agent run          run the agent (used by systemd)
+  xpguard-agent status       show enrollment status
+  xpguard-agent unenroll     remove this server from the portal
+  xpguard-agent info         print detected host inventory
+  xpguard-agent cleanup      remove all xPGuard firewall rules
+  xpguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses, --no-hash)
+  xpguard-agent panel install|uninstall|status   manage the WHM/cPanel plugins
+  xpguard-agent call ACTION ['{"json":"params"}']  call the running agent (root)
+  xgcli COMMAND ...             command line like cpgcli (also: xpguard-agent cli ...; xgcli --help)
+  xpguard-agent version
 `)
 }
 
@@ -208,13 +217,24 @@ func load() (*config.Config, *identity.Identity, error) {
 
 func cmdRun() error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Directories of versions before the xPGuard name move before anything
+	// opens them.
+	if os.Geteuid() == 0 {
+		notes, err := layout.Migrate(false)
+		for _, n := range notes {
+			log.Info("layout: " + n)
+		}
+		if err != nil {
+			log.Warn("layout: old directories kept", "err", err)
+		}
+	}
 	cfg, id, err := load()
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	log.Info("starting xmartguard-agent", "version", version.Version, "portal", cfg.ServerURL)
+	log.Info("starting xpguard-agent", "version", version.Version, "portal", cfg.ServerURL)
 
 	a, err := core.New(cfg, log)
 	if err != nil {
@@ -225,6 +245,7 @@ func cmdRun() error {
 	a.ExitForUpdate = func() { a.Mailer.Flush(); os.Exit(3) }
 	ensureCLILink(log)
 	a.Start(ctx)
+	go dropOldPaths(ctx, log)
 	go func() {
 		if err := a.LocalServer().Run(ctx); err != nil {
 			log.Warn("local control socket unavailable", "err", err)
@@ -348,7 +369,7 @@ func cmdCheck(args []string) error {
 		return err
 	}
 	if len(paths) == 0 {
-		return errors.New("usage: xmartguard-agent check [--json] [--misses] [--no-hash] PATH...")
+		return errors.New("usage: xpguard-agent check [--json] [--misses] [--no-hash] PATH...")
 	}
 	cfg := settings.Defaults().Scanner
 	cfg.MaxFileSizeMB = 20
@@ -418,7 +439,7 @@ func cmdCheck(args []string) error {
 
 func cmdPanel(args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: xmartguard-agent panel install|uninstall|status")
+		return errors.New("usage: xpguard-agent panel install|uninstall|status")
 	}
 	switch args[0] {
 	case "install":
@@ -435,14 +456,14 @@ func cmdPanel(args []string) error {
 	case "status":
 		fmt.Printf("cpanel detected: %v\nplugin installed: %v\n", panel.Detected(), panel.Installed())
 	default:
-		return errors.New("usage: xmartguard-agent panel install|uninstall|status")
+		return errors.New("usage: xpguard-agent panel install|uninstall|status")
 	}
 	return nil
 }
 
 func cmdCall(args []string) error {
 	if len(args) < 1 || len(args) > 2 {
-		return errors.New("usage: xmartguard-agent call ACTION ['{json params}']")
+		return errors.New("usage: xpguard-agent call ACTION ['{json params}']")
 	}
 	params := json.RawMessage("{}")
 	if len(args) == 2 {
@@ -481,5 +502,30 @@ func ensureCLILink(log *slog.Logger) {
 	}
 	if err := os.Symlink(self, link); err != nil {
 		log.Debug("xgcli link not created", "err", err)
+	}
+}
+
+// dropOldPaths removes the links left at /etc/xmartguard and /opt/xmartguard
+// once the web server configuration and services no longer name them (the
+// WAF include is rewritten shortly after start).
+func dropOldPaths(ctx context.Context, log *slog.Logger) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	for i := 0; i < 24*6; i++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Minute):
+		}
+		if layout.Pending() {
+			return // not moved (yet): the next start tries again
+		}
+		if layout.DropLinks() {
+			return
+		}
+		if i == 0 {
+			log.Info("layout: old paths kept while still referenced", "files", strings.Join(layout.References(), ", "))
+		}
 	}
 }

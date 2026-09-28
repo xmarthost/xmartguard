@@ -17,7 +17,7 @@ beforeAll(async () => {
   // The "release" bundled with the portal.
   execFileSync('bash', ['scripts/build-agent.sh'], { cwd: repo, env: { ...process.env, VERSION: '9.9.9', OUT: path.join(tmp, 'downloads') }, stdio: 'inherit' });
   // The old agent installed on the server.
-  execFileSync('go', ['build', '-ldflags', '-X github.com/xmarthost/xmartguard/agent/internal/version.Version=0.1.0', '-o', path.join(tmp, 'agent'), './cmd/xmartguard-agent'], { cwd: path.join(repo, 'agent'), stdio: 'inherit' });
+  execFileSync('go', ['build', '-ldflags', '-X github.com/xmarthost/xmartguard/agent/internal/version.Version=0.1.0', '-o', path.join(tmp, 'agent'), './cmd/xpguard-agent'], { cwd: path.join(repo, 'agent'), stdio: 'inherit' });
   h = await startHarness({ autoUpdateAgents: true, downloadsDir: path.join(tmp, 'downloads') });
 }, 300_000);
 
@@ -51,3 +51,12 @@ it('auto-updates an outdated agent', async () => {
   expect(srv.agent_version).toBe('9.9.9');
   again.kill('SIGTERM');
 }, 60_000);
+
+it('serves the agent under its old name to agents before 0.11', async () => {
+  const c = new Client(h.url);
+  const cur = await c.req('GET', '/downloads/xpguard-agent-linux-amd64.sha256');
+  const old = await c.req('GET', '/downloads/xmartguard-agent-linux-amd64.sha256');
+  expect(cur.status).toBe(200);
+  expect(old.status).toBe(200);
+  expect(old.body).toBe(cur.body);
+});

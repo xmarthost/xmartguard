@@ -75,8 +75,8 @@ func (n NFT) Healthy() bool {
 
 // Chain names and ipset names used by the iptables provider.
 const (
-	ChainMain = "XMARTGUARD"
-	ChainDoS  = "XMARTGUARD_DOS"
+	ChainMain = "XPGUARD"
+	ChainDoS  = "XPGUARD_DOS"
 )
 
 type ipset struct {
@@ -96,7 +96,7 @@ func ipsets() []ipset {
 }
 
 // IPTables drives iptables/ip6tables with ipset. It owns only the
-// XMARTGUARD chains (jumped to from the top of INPUT) and the xg_* sets.
+// XPGUARD chains (jumped to from the top of INPUT) and the xg_* sets.
 type IPTables struct {
 	IPT, IP6T, Restore, Restore6, IPSet string
 }
@@ -194,16 +194,43 @@ func renderIPSet(r Ruleset) string {
 // jumps (its rule counter counts the packet); the sub-chain logs a
 // rate-limited sample and drops.
 const (
-	ChainIPDB    = "XMARTGUARD_IPDB"
-	ChainDeny    = "XMARTGUARD_DENY"
-	ChainTempBan = "XMARTGUARD_TBAN"
-	ChainCountry = "XMARTGUARD_CTRY"
-	ChainOut     = "XMARTGUARD_OUT"
-	ChainCaptcha = "XMARTGUARD_CAPTCHA" // nat table
+	ChainIPDB    = "XPGUARD_IPDB"
+	ChainDeny    = "XPGUARD_DENY"
+	ChainTempBan = "XPGUARD_TBAN"
+	ChainCountry = "XPGUARD_CTRY"
+	ChainOut     = "XPGUARD_OUT"
+	ChainCaptcha = "XPGUARD_CAPTCHA" // nat table
 )
 
 func allChains() []string {
 	return []string{ChainMain, ChainDoS, ChainIPDB, ChainDeny, ChainTempBan, ChainCountry, ChainOut}
+}
+
+// Chains of versions before the xPGuard name (XMARTGUARD*): removed once
+// the current chains are in place.
+func legacyChains() []string {
+	out := []string{}
+	for _, c := range allChains() {
+		out = append(out, "XMARTGUARD"+strings.TrimPrefix(c, "XPGUARD"))
+	}
+	return out
+}
+
+// removeChains unhooks and deletes chains (filter table) and the CAPTCHA
+// redirect chain (nat table).
+func removeChains(ctx context.Context, ipt string, chains []string, nat string) {
+	main, out := chains[0], chains[len(chains)-1]
+	ensureJump(ctx, ipt, "INPUT", main, false)
+	ensureJump(ctx, ipt, "OUTPUT", out, false)
+	ensureJumpArgs(ctx, []string{ipt, "-t", "nat"}, "PREROUTING", nat, false)
+	_, _ = run(ctx, "", ipt, "-w", "-t", "nat", "-F", nat)
+	_, _ = run(ctx, "", ipt, "-w", "-t", "nat", "-X", nat)
+	for _, c := range chains {
+		_, _ = run(ctx, "", ipt, "-w", "-F", c)
+	}
+	for _, c := range chains {
+		_, _ = run(ctx, "", ipt, "-w", "-X", c)
+	}
 }
 
 // multiport splits a port list into chunks iptables accepts (15 ports per
@@ -382,8 +409,19 @@ func (t IPTables) Apply(r Ruleset) error {
 			natIPT := []string{f.ipt, "-t", "nat"}
 			ensureJumpArgs(ctx, natIPT, "PREROUTING", ChainCaptcha, r.Captcha != nil)
 		}
+		dropLegacyChains(ctx, f.ipt)
 	}
 	return nil
+}
+
+// dropLegacyChains removes the chains of versions before the xPGuard name,
+// when present.
+func dropLegacyChains(ctx context.Context, ipt string) {
+	old := legacyChains()
+	if _, err := run(ctx, "", ipt, "-w", "-n", "-L", old[0]); err != nil {
+		return
+	}
+	removeChains(ctx, ipt, old, "XMARTGUARD_CAPTCHA")
 }
 
 // ensureJump makes sure chain `from` jumps to `to` exactly when want is set.
@@ -413,17 +451,8 @@ func (t IPTables) Remove() error {
 	ctx, cancel := ctx60()
 	defer cancel()
 	for _, f := range t.families() {
-		ensureJump(ctx, f.ipt, "INPUT", ChainMain, false)
-		ensureJump(ctx, f.ipt, "OUTPUT", ChainOut, false)
-		ensureJumpArgs(ctx, []string{f.ipt, "-t", "nat"}, "PREROUTING", ChainCaptcha, false)
-		_, _ = run(ctx, "", f.ipt, "-w", "-t", "nat", "-F", ChainCaptcha)
-		_, _ = run(ctx, "", f.ipt, "-w", "-t", "nat", "-X", ChainCaptcha)
-		for _, c := range allChains() {
-			_, _ = run(ctx, "", f.ipt, "-w", "-F", c)
-		}
-		for _, c := range allChains() {
-			_, _ = run(ctx, "", f.ipt, "-w", "-X", c)
-		}
+		removeChains(ctx, f.ipt, allChains(), ChainCaptcha)
+		dropLegacyChains(ctx, f.ipt)
 	}
 	if t.IPSet != "" {
 		for _, s := range ipsets() {

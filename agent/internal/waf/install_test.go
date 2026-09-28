@@ -49,7 +49,7 @@ func TestInstallIntoRealApache(t *testing.T) {
 	defer func() {
 		st.Patch([]byte(`{"waf":{"enabled":false}}`))
 		m.Apply()
-		exec.Command("a2disconf", "xmartguard-waf").Run()
+		exec.Command("a2disconf", "xpguard-waf").Run()
 		if exists(tg.IncludeFile) {
 			t.Error("include left behind after disabling the WAF")
 		}
@@ -92,7 +92,7 @@ func TestInstallIntoRealApache(t *testing.T) {
 	if c := get("Mozilla/5.0"); c != 200 {
 		t.Fatalf("site down after rollback: %d", c)
 	}
-	// Deleting the rules (e.g. /etc/xmartguard removed by hand) must not
+	// Deleting the rules (e.g. /etc/xpguard removed by hand) must not
 	// break Apache: the include is optional.
 	os.RemoveAll(m.RulesDir)
 	if out, err := exec.Command("apache2ctl", "-t").CombinedOutput(); err != nil {
@@ -100,7 +100,7 @@ func TestInstallIntoRealApache(t *testing.T) {
 	}
 	// The uninstaller's cleanup unhooks the include.
 	RemoveInclude(Detect())
-	if exists(tg.IncludeFile) || exists("/etc/apache2/conf-enabled/xmartguard-waf.conf") {
+	if exists(tg.IncludeFile) || exists("/etc/apache2/conf-enabled/xpguard-waf.conf") {
 		t.Fatal("RemoveInclude left files behind")
 	}
 }

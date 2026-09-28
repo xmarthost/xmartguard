@@ -21,7 +21,7 @@ let proc: ChildProcess | null = null;
 let serverId = '';
 
 beforeAll(async () => {
-  execFileSync('go', ['build', '-o', agentBin, './cmd/xmartguard-agent'], { cwd: path.join(repo, 'agent'), stdio: 'inherit' });
+  execFileSync('go', ['build', '-o', agentBin, './cmd/xpguard-agent'], { cwd: path.join(repo, 'agent'), stdio: 'inherit' });
   h = await startHarness({ metricsIntervalSeconds: 5 });
   c = new Client(h.url);
   await c.login();

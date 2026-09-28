@@ -10,7 +10,7 @@ alarms.
 The model improves with more real quarantine data. To retrain:
 
 1. Collect quarantined malware from your servers into one folder (for
-   example `/opt/xmartguard/data/quarantine` from several servers, or another
+   example `/opt/xpguard/data/quarantine` from several servers, or another
    product's quarantine). Encoded/binary quarantine files are skipped
    automatically.
 2. Collect clean code: current WordPress releases, popular plugins/themes,
@@ -21,7 +21,7 @@ The model improves with more real quarantine data. To retrain:
    xpguard-agent ai-train -v \
      --malicious /path/to/quarantine \
      --clean /path/to/wordpress --clean /path/to/woocommerce --clean /path/to/joomla \
-     --out /etc/xmartguard/ai-model.bin
+     --out /etc/xpguard/ai-model.bin
    ```
 
    The command prints the held-out detection rate and false-positive rate and
@@ -30,7 +30,7 @@ The model improves with more real quarantine data. To retrain:
    engine does not flag, are dropped as probable false positives of the tool
    that quarantined them.
 4. Restart the agent (`systemctl restart xpguard-agent`) to use
-   `/etc/xmartguard/ai-model.bin`; without it the model shipped in the agent
+   `/etc/xpguard/ai-model.bin`; without it the model shipped in the agent
    is used. `xpguard-agent ai-score FILE…` shows a file's score and the
    strongest indicators.
 

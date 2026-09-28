@@ -3,8 +3,10 @@ package identity
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,5 +46,18 @@ func TestLoadRejectsGarbage(t *testing.T) {
 	os.WriteFile(path, []byte("not a key"), 0o600)
 	if _, err := Load(path); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestLegacyKeyRelabelled(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "identity.key")
+	id, _ := Generate()
+	os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: legacyPEMType, Bytes: id.priv.Seed()}), 0o600)
+	got, err := Load(p)
+	if err != nil || !got.priv.Equal(id.priv) {
+		t.Fatal("legacy key not loaded", err)
+	}
+	if b, _ := os.ReadFile(p); !strings.Contains(string(b), pemType) || strings.Contains(string(b), "XMART") {
+		t.Fatalf("not relabelled: %s", b)
 	}
 }

@@ -1,5 +1,5 @@
 // Package settings holds the agent's security policy. It lives on the server
-// (/etc/xmartguard/settings.json) so protection keeps working when the portal
+// (/etc/xpguard/settings.json) so protection keeps working when the portal
 // is unreachable; the portal reads and writes it through agent commands.
 package settings
 
@@ -67,7 +67,7 @@ type Scanner struct {
 	TrimMaxPercent int `json:"trim_max_percent"`
 	// UserScans lets cPanel users start scans of their own home.
 	UserScans bool `json:"user_scans"`
-	// YARA also runs YARA rules from /etc/xmartguard/yara when yara is installed.
+	// YARA also runs YARA rules from /etc/xpguard/yara when yara is installed.
 	YARA bool `json:"yara"`
 	// DBWhitelist lists database-scanner signature ids to ignore.
 	DBWhitelist []Exclusion `json:"db_whitelist"`

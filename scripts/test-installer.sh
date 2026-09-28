@@ -7,7 +7,8 @@
 #
 #   PORTAL=http://localhost:8080 ADMIN_EMAIL=... ADMIN_PASSWORD=... scripts/test-installer.sh
 #
-# DESTRUCTIVE: installs into /opt/xpguard, /opt/xmartguard, /etc/xmartguard and /usr/local/bin.
+# DESTRUCTIVE: installs into /opt/xpguard, /etc/xpguard and /usr/local/bin (and
+# fakes a server from before the xPGuard name in /opt/xmartguard, /etc/xmartguard).
 set -euo pipefail
 
 PORTAL="${PORTAL:-http://localhost:8080}"
@@ -84,20 +85,39 @@ TOKEN=$(new_token)
 curl -fsSL "$PORTAL/install.sh" | bash -s -- --token "$TOKEN" | tee "$WORK/install.out"
 check "binary installed in /opt"  '[ -x /opt/xpguard/bin/xpguard-agent ] && [ ! -L /opt/xpguard/bin/xpguard-agent ]'
 check "binary linked into PATH"   '[ "$(readlink /usr/local/bin/xpguard-agent)" = /opt/xpguard/bin/xpguard-agent ]'
-check "old program path kept"     '[ "$(readlink /opt/xmartguard/bin/xmartguard-agent)" = /opt/xpguard/bin/xpguard-agent ]'
-check "config is 0600"            '[ "$(stat -c %a /etc/xmartguard/agent.json)" = 600 ]'
-check "identity key is 0600"      '[ "$(stat -c %a /etc/xmartguard/identity.key)" = 600 ]'
-check "config dir is 0700"        '[ "$(stat -c %a /etc/xmartguard)" = 700 ]'
-check "manifest written"          'grep -q "^file /opt/xpguard/bin/xpguard-agent$" /opt/xmartguard/manifest'
+check "no old name on disk"       '[ ! -e /opt/xmartguard ] && [ ! -e /etc/xmartguard ] && [ ! -e /usr/local/bin/xmartguard-agent ]'
+check "config is 0600"            '[ "$(stat -c %a /etc/xpguard/agent.json)" = 600 ]'
+check "identity key is 0600"      '[ "$(stat -c %a /etc/xpguard/identity.key)" = 600 ]'
+check "config dir is 0700"        '[ "$(stat -c %a /etc/xpguard)" = 700 ]'
+check "manifest written"          'grep -q "^file /opt/xpguard/bin/xpguard-agent$" /opt/xpguard/manifest && ! grep -q xmartguard /opt/xpguard/manifest'
 check "unit written"              'grep -q "ExecStart=/opt/xpguard/bin/xpguard-agent run" /etc/systemd/system/xpguard-agent.service'
 check "agent running"             'systemctl is-active --quiet xpguard-agent'
 check "process shows xpguard"     'pgrep -f "/opt/xpguard/bin/xpguard-agent run" >/dev/null && ! pgrep -f "xmartguard-agent run" >/dev/null'
-check "local uninstaller saved"   '[ -x /opt/xmartguard/uninstall.sh ]'
+check "local uninstaller saved"   '[ -x /opt/xpguard/uninstall.sh ]'
 sleep 3
 check "server appears in portal"  '[ "$(server_count)" -eq $((before+1)) ]'
-check "agent log shows connection" 'grep -q "connected to portal" /opt/xmartguard/logs/agent.log'
-check "data dir created"          '[ -f /opt/xmartguard/data/agent.db ] && [ "$(stat -c %a /opt/xmartguard/data)" = 700 ]'
-check "local control socket"      'xpguard-agent call overview | grep -q "\"version\""'
+check "agent log shows connection" 'grep -q "connected to portal" /opt/xpguard/logs/agent.log'
+check "data dir created"          '[ -f /opt/xpguard/data/agent.db ] && [ "$(stat -c %a /opt/xpguard/data)" = 700 ]'
+check "local control socket"      'xpguard-agent call overview | grep -q "\"version\"" && [ -S /run/xpguard/agent.sock ]'
+
+echo "== a server from before the xPGuard name moves to the new folders =="
+# Put this install back into the old layout (as 0.10.1 left it), then start.
+systemctl stop xpguard-agent
+mv /etc/xpguard /etc/xmartguard
+mkdir -p /opt/xmartguard/bin
+for d in data logs manifest uninstall.sh; do mv "/opt/xpguard/$d" /opt/xmartguard/; done
+ln -s /opt/xpguard/bin/xpguard-agent /opt/xmartguard/bin/xmartguard-agent
+sed -i 's#/opt/xpguard/logs#/opt/xmartguard/logs#' /etc/systemd/system/xpguard-agent.service
+sed -i 's#/opt/xpguard#/opt/xmartguard#g; s#/etc/xpguard#/etc/xmartguard#g' /opt/xmartguard/manifest
+check "old layout in place"       '[ -f /etc/xmartguard/agent.json ] && [ -f /opt/xmartguard/data/agent.db ] && [ ! -e /etc/xpguard ]'
+systemctl start xpguard-agent
+sleep 5
+check "config moved"              '[ -f /etc/xpguard/agent.json ] && [ -L /etc/xmartguard ]'
+check "data moved"                '[ -f /opt/xpguard/data/agent.db ] && [ -L /opt/xmartguard ] && [ -f /opt/xpguard/manifest ]'
+check "unit uses new log path"    'grep -q "append:/opt/xpguard/logs/agent.log" /etc/systemd/system/xpguard-agent.service'
+check "manifest rewritten"        '! grep -q xmartguard /opt/xpguard/manifest'
+check "agent still enrolled"      'xpguard-agent status | grep -q "\"enrolled\""'
+check "control socket after move" 'xpguard-agent call overview | grep -q "\"version\""'
 
 echo "== second install is refused without --force =="
 check "reinstall refused" '! curl -fsSL "$PORTAL/install.sh" | bash -s -- --token "$(new_token)" >/dev/null 2>&1'
@@ -106,16 +126,16 @@ echo "== used token is rejected =="
 check "used token rejected" '! /usr/local/bin/xpguard-agent enroll --force --server "$PORTAL" --token "$TOKEN" >/dev/null 2>&1'
 
 echo "== uninstall dry run changes nothing =="
-bash /opt/xmartguard/uninstall.sh --dry-run >/dev/null
+bash /opt/xpguard/uninstall.sh --dry-run >/dev/null
 check "dry run kept files" '[ -x /usr/local/bin/xpguard-agent ] && systemctl is-active --quiet xpguard-agent'
 
 echo "== uninstall =="
 curl -fsSL "$PORTAL/uninstall.sh" | bash | tee "$WORK/uninstall.out"
 check "uninstaller reports clean"  'grep -q "removed completely" "$WORK/uninstall.out"'
 check "binary removed"             '[ ! -L /usr/local/bin/xpguard-agent ] && [ ! -e /opt/xpguard ] && [ ! -L /usr/local/bin/xmartguard-agent ]'
-check "config removed"             '[ ! -e /etc/xmartguard ]'
-check "state and logs removed"     '[ ! -e /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
-check "socket removed"             '[ ! -e /run/xmartguard ]'
+check "config removed"             '[ ! -e /etc/xpguard ] && [ ! -e /etc/xmartguard ] && [ ! -L /etc/xmartguard ]'
+check "state and logs removed"     '[ ! -e /opt/xmartguard ] && [ ! -L /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
+check "socket removed"             '[ ! -e /run/xpguard ] && [ ! -e /run/xmartguard ]'
 check "unit removed"               '[ ! -e /etc/systemd/system/xpguard-agent.service ] && [ ! -e /etc/systemd/system/xmartguard-agent.service ]'
 check "agent stopped"              '! pgrep -f "xpguard-agent run" >/dev/null'
 check "server removed from portal" '[ "$(server_count)" -eq "$before" ]'
@@ -125,7 +145,7 @@ out=$(curl -fsSL "$PORTAL/install.sh" | bash -s -- --token XG-AAAA-BBBB-CCCC-DDD
 check "bad token message"   'grep -q "enrollment failed" <<<"$out"'
 check "no service after failure" '! systemctl is-active --quiet xpguard-agent'
 bash <(curl -fsSL "$PORTAL/uninstall.sh") --no-unenroll >/dev/null 2>&1 || true
-check "cleanup after failed install" '[ ! -e /etc/xmartguard ] && [ ! -e /opt/xmartguard ] && [ ! -e /opt/xpguard ] && [ ! -L /usr/local/bin/xpguard-agent ]'
+check "cleanup after failed install" '[ ! -e /etc/xpguard ] && [ ! -e /etc/xmartguard ] && [ ! -e /opt/xmartguard ] && [ ! -e /opt/xpguard ] && [ ! -L /usr/local/bin/xpguard-agent ]'
 
 echo ""
 echo "installer tests: $pass passed, $fail failed"

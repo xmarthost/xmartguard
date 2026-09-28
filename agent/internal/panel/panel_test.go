@@ -39,6 +39,12 @@ func TestInstallUninstall(t *testing.T) {
 	if cgi.Mode().Perm() != 0o700 {
 		t.Fatalf("cgi mode %v", cgi.Mode())
 	}
+	if b, _ := os.ReadFile(filepath.Join(root, "usr/local/cpanel/whostmgr/docroot/addon_plugins/xpguard.svg")); !strings.HasPrefix(string(b), "<svg") {
+		t.Fatal("WHM icon is not the SVG shield")
+	}
+	if !strings.Contains(installJSON(PluginID, IconName), `"icon":"xpguard.svg"`) {
+		t.Fatal("cPanel icon is not the SVG")
+	}
 	php, _ := os.ReadFile(filepath.Join(root, "usr/local/cpanel/base/frontend/jupiter/xpguard/index.live.php"))
 	if !strings.Contains(string(php), "panel-api") {
 		t.Fatal("php relay missing")

@@ -26,7 +26,11 @@ import (
 type Handler = func(context.Context, json.RawMessage) (any, error)
 
 // DefaultSocket is where the agent listens.
-const DefaultSocket = "/run/xmartguard/agent.sock"
+const DefaultSocket = "/run/xpguard/agent.sock"
+
+// oldSocket is where versions before 0.11 listened; a client tries it while
+// such an agent is still running (during an update).
+const oldSocket = "/run/xmartguard/agent.sock"
 
 // SocketPath honours XG_SOCKET (tests).
 func SocketPath() string {
@@ -34,6 +38,18 @@ func SocketPath() string {
 		return p
 	}
 	return DefaultSocket
+}
+
+func dialPath() string {
+	p := SocketPath()
+	if p == DefaultSocket {
+		if _, err := os.Stat(p); err != nil {
+			if _, err := os.Stat(oldSocket); err == nil {
+				return oldSocket
+			}
+		}
+	}
+	return p
 }
 
 // Server routes calls by the caller's uid.
@@ -181,10 +197,10 @@ func CallRaw(ctx context.Context, body []byte) (json.RawMessage, error) {
 	hc := &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
-			return d.DialContext(ctx, "unix", SocketPath())
+			return d.DialContext(ctx, "unix", dialPath())
 		},
 	}}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://xmartguard/v1/call", bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://xpguard/v1/call", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := hc.Do(req)
 	if err != nil {

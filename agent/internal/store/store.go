@@ -11,18 +11,20 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/xmarthost/xmartguard/agent/internal/layout"
 )
 
 // Install layout (mirrors /etc/<product> + /opt/<product>):
 //
-//	/etc/xmartguard            agent.json, identity.key, settings.json
-//	/opt/xmartguard/bin        the agent binary
-//	/opt/xmartguard/data       local database, signatures, IPDB list, quarantine
-//	/opt/xmartguard/logs       agent and install logs
+//	/etc/xpguard            agent.json, identity.key, settings.json
+//	/opt/xpguard/bin        the agent binary
+//	/opt/xpguard/data       local database, signatures, IPDB list, quarantine
+//	/opt/xpguard/logs       agent and install logs
 //
 // DefaultStateDir can be overridden with XG_STATE_DIR (tests).
 const (
-	HomeDir         = "/opt/xmartguard"
+	HomeDir         = layout.HomeDir
 	DefaultStateDir = HomeDir + "/data"
 	// LegacyStateDir is where agents before 0.3.0 kept their data.
 	LegacyStateDir = "/var/lib/xmartguard"
@@ -36,7 +38,8 @@ func StateDir() string {
 	if stateOverride != "" {
 		return stateOverride
 	}
-	return DefaultStateDir
+	// A server not yet moved from /opt/xmartguard keeps using it.
+	return layout.Pick(DefaultStateDir, layout.OldHomeDir+"/data", "agent.db")
 }
 
 // stateOverride keeps a legacy install on /var/lib/xmartguard when its data
@@ -252,6 +255,11 @@ func Open() (*sql.DB, error) {
 		}
 	}
 	db, err := OpenPath(filepath.Join(dir, "agent.db"))
+	if err == nil && dir == DefaultStateDir {
+		// Records of files quarantined before /opt/xmartguard was renamed.
+		_, _ = db.Exec(`UPDATE findings SET qpath = ? || substr(qpath, ?) WHERE qpath LIKE ?`,
+			HomeDir, len(layout.OldHomeDir)+1, layout.OldHomeDir+"/%")
+	}
 	if err == nil && moved {
 		// Quarantined files keep their records: point them at the new location.
 		_, _ = db.Exec(`UPDATE findings SET qpath = ? || substr(qpath, ?) WHERE qpath LIKE ?`,
@@ -261,7 +269,7 @@ func Open() (*sql.DB, error) {
 }
 
 // migrateLegacy moves data from the pre-0.3.0 location (/var/lib/xmartguard)
-// into /opt/xmartguard/data once. The install manifest stays where it is so
+// into the data directory once. The install manifest stays where it is so
 // the uninstaller that shipped with that install still works.
 func migrateLegacy(dir string) (moved, ok bool) {
 	if _, err := os.Stat(filepath.Join(dir, "agent.db")); err == nil {

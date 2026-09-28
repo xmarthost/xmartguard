@@ -100,7 +100,7 @@ func TestRenderIsValidNFT(t *testing.T) {
 		Captcha: &CaptchaRedirect{HTTPPort: 7780, HTTPSPort: 7743, TempBan: true, IPDB: true},
 	}
 	script := rs.Render()
-	for _, want := range []string{"delete table inet xmartguard", "@deny4 counter jump drop_deny", "update @dos4", "198.51.100.9 timeout 3600s",
+	for _, want := range []string{"delete table inet xpguard", "@deny4 counter jump drop_deny", "update @dos4", "198.51.100.9 timeout 3600s",
 		"tcp dport { 22, 80, 8000-8100 } accept", "chain output", "redirect to :7780", "ct status dnat tcp dport { 7780, 7743 } accept"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script missing %q", want)
@@ -347,9 +347,9 @@ func TestRenderIPTables(t *testing.T) {
 		Captcha: &CaptchaRedirect{HTTPPort: 7780, HTTPSPort: 7743, TempBan: true}}
 	out := renderRules(rs, false)
 	for _, want := range []string{
-		`--comment "xg-ipdb" -j XMARTGUARD_IPDB`,
-		`-A XMARTGUARD_IPDB -m limit`,
-		`-A XMARTGUARD_OUT -p udp -m multiport --dports 53 -j RETURN`,
+		`--comment "xg-ipdb" -j XPGUARD_IPDB`,
+		`-A XPGUARD_IPDB -m limit`,
+		`-A XPGUARD_OUT -p udp -m multiport --dports 53 -j RETURN`,
 		`--dports 7780,7743 -m conntrack --ctstate DNAT -j ACCEPT`,
 	} {
 		if !strings.Contains(out, want) {
@@ -357,7 +357,7 @@ func TestRenderIPTables(t *testing.T) {
 		}
 	}
 	// 14 items with 5 ranges = 19 multiport slots: split into two rules.
-	if n := strings.Count(out, "-A XMARTGUARD -p tcp -m multiport --dports"); n != 3 { // 2 + captcha rule
+	if n := strings.Count(out, "-A XPGUARD -p tcp -m multiport --dports"); n != 3 { // 2 + captcha rule
 		t.Errorf("multiport chunks: %d\n%s", n, out)
 	}
 	nat := renderNAT(rs, false)

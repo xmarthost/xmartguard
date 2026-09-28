@@ -208,7 +208,7 @@ export function SupportPage() {
       </p>
       <p className="text-sm text-slate-500">
         Useful commands on the server: <code className="rounded bg-slate-100 px-1">systemctl status xpguard-agent</code>,{' '}
-        <code className="rounded bg-slate-100 px-1">tail -n 100 /opt/xmartguard/logs/agent.log</code>
+        <code className="rounded bg-slate-100 px-1">tail -n 100 /opt/xpguard/logs/agent.log</code>
       </p>
     </div>
   );

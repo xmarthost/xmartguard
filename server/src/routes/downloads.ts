@@ -3,8 +3,9 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Config } from '../config.js';
 
-// Only these files are ever served from downloadsDir.
-const ALLOWED = /^xmartguard-agent-linux-(amd64|arm64)(\.sha256)?$/;
+// Only these files are ever served from downloadsDir. Agents before 0.11
+// (and their installers) ask for the program by its old name.
+const ALLOWED = /^(?:xpguard|xmartguard)-agent-linux-(amd64|arm64)(\.sha256)?$/;
 
 /**
  * Serves the one-line installer scripts (with this portal's URL baked in) and
@@ -26,13 +27,17 @@ export function downloadRoutes(app: FastifyInstance, cfg: Config): void {
   app.get('/downloads/:file', async (req, reply) => {
     const file = (req.params as { file: string }).file;
     if (!ALLOWED.test(file)) return reply.code(404).send({ error: 'not found' });
-    const full = path.join(cfg.downloadsDir, file);
-    let data: Buffer;
-    try {
-      data = await fs.readFile(full);
-    } catch {
-      return reply.code(404).send({ error: 'not found' });
+    let data: Buffer | null = null;
+    const names = [file.replace(/^xmartguard-/, 'xpguard-'), file];
+    for (const name of names) {
+      try {
+        data = await fs.readFile(path.join(cfg.downloadsDir, name));
+        break;
+      } catch {
+        /* try the next name */
+      }
     }
+    if (!data) return reply.code(404).send({ error: 'not found' });
     reply.header('Cache-Control', 'no-cache');
     reply.type(file.endsWith('.sha256') ? 'text/plain; charset=utf-8' : 'application/octet-stream');
     return data;

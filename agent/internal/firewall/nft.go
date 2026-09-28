@@ -1,5 +1,5 @@
 // Package firewall manages xPGuard's own nftables table ("inet
-// xmartguard"). It never edits other tables, so it coexists with firewalld,
+// xpguard"). It never edits other tables, so it coexists with firewalld,
 // CSF and cPanel's rules: our drops always apply, our accepts only exempt
 // traffic from xPGuard's own blocks.
 package firewall
@@ -17,7 +17,13 @@ import (
 )
 
 // Table is the nftables table name owned by the agent.
-const Table = "xmartguard"
+const Table = "xpguard"
+
+// legacyTable is the table of versions before the xPGuard name; it is
+// deleted in the same transaction that loads the current one.
+const legacyTable = "xmartguard"
+
+var dropLegacy = fmt.Sprintf("add table inet %s\ndelete table inet %s\n", legacyTable, legacyTable)
 
 // Ruleset is the desired state rendered into nft syntax.
 type Ruleset struct {
@@ -278,7 +284,7 @@ func (n NFT) run(ctx context.Context, stdin string, args ...string) ([]byte, err
 func (n NFT) Apply(r Ruleset) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	script := r.Render()
+	script := dropLegacy + r.Render()
 	if _, err := n.run(ctx, script, "-c", "-f", "-"); err != nil {
 		// Old nftables cannot count per set element, and some kernels lack
 		// the log expression: fall back step by step.
@@ -289,7 +295,7 @@ func (n NFT) Apply(r Ruleset) error {
 			func() { r.LogDrops, r.LogIPDB = false, false },
 		} {
 			fix()
-			script = r.Render()
+			script = dropLegacy + r.Render()
 			if _, err2 := n.run(ctx, script, "-c", "-f", "-"); err2 == nil {
 				ok = true
 				break
@@ -307,7 +313,7 @@ func (n NFT) Apply(r Ruleset) error {
 func (n NFT) Remove() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := n.run(ctx, fmt.Sprintf("add table inet %s\ndelete table inet %s\n", Table, Table), "-f", "-")
+	_, err := n.run(ctx, dropLegacy+fmt.Sprintf("add table inet %s\ndelete table inet %s\n", Table, Table), "-f", "-")
 	return err
 }
 

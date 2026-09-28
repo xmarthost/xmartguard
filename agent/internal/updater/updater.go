@@ -27,7 +27,7 @@ func Update(ctx context.Context, hc *http.Client, portal, expectSHA string) (str
 		return "", err
 	}
 	self, _ = filepath.EvalSymlinks(self)
-	name := "xmartguard-agent-linux-" + runtime.GOARCH
+	name := "xpguard-agent-linux-" + runtime.GOARCH
 	get := func(u string, limit int64) ([]byte, error) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		res, err := hc.Do(req)

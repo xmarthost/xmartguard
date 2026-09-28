@@ -22,8 +22,8 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 // cmdAITrain retrains the built-in AI scanner from quarantined malware and
 // clean code, e.g.:
 //
-//	xmartguard-agent ai-train --malicious /opt/xmartguard/data/quarantine \
-//	    --clean /home/*/public_html/wp-admin --out /etc/xmartguard/ai-model.bin
+//	xpguard-agent ai-train --malicious /opt/xpguard/data/quarantine \
+//	    --clean /home/*/public_html/wp-admin --out /etc/xpguard/ai-model.bin
 func cmdAITrain(args []string) error {
 	fs := flag.NewFlagSet("ai-train", flag.ContinueOnError)
 	var bad, good multiFlag

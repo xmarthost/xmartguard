@@ -52,6 +52,6 @@ bash /root/selftest.sh               # checks the installed agent
 bash /root/selftest.sh --uninstall   # also uninstalls and checks for leftovers
 ```
 
-Send back the full output (it is also saved as `/root/xmartguard-selftest-*.txt`). It contains no secrets.
+Send back the full output (it is also saved as `/root/xpguard-selftest-*.txt`). It contains no secrets.
 
 Also useful to send: screenshots of the portal's server dashboard and System Monitoring pages.

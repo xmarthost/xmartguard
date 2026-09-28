@@ -13,7 +13,10 @@ import (
 	"path/filepath"
 )
 
-const pemType = "XMARTGUARD ED25519 PRIVATE KEY"
+const pemType = "XPGUARD ED25519 PRIVATE KEY"
+
+// legacyPEMType is the key type written before the xPGuard name.
+const legacyPEMType = "XMARTGUARD ED25519 PRIVATE KEY"
 
 // Identity wraps an Ed25519 key pair.
 type Identity struct {
@@ -36,13 +39,17 @@ func Load(path string) (*Identity, error) {
 		return nil, err
 	}
 	block, _ := pem.Decode(raw)
-	if block == nil || block.Type != pemType {
+	if block == nil || (block.Type != pemType && block.Type != legacyPEMType) {
 		return nil, errors.New("identity: invalid key file")
 	}
 	if len(block.Bytes) != ed25519.SeedSize {
 		return nil, errors.New("identity: invalid seed length")
 	}
-	return &Identity{priv: ed25519.NewKeyFromSeed(block.Bytes)}, nil
+	id := &Identity{priv: ed25519.NewKeyFromSeed(block.Bytes)}
+	if block.Type == legacyPEMType {
+		_ = id.Save(path) // same key, current label
+	}
+	return id, nil
 }
 
 // Save writes the key seed with mode 0600, atomically.

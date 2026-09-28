@@ -28,28 +28,28 @@ The portal's **Add Server** page generates a one-time token (valid 24 h, single 
 curl -fsSL https://app.xpguard.org/install.sh | bash -s -- --token XG-XXXX-XXXX-XXXX-XXXX-XXXX
 ```
 
-Uninstall (removes exactly what the installer recorded in `/opt/xmartguard/manifest`, including the cPanel/WHM plugins, and prints a residue report):
+Uninstall (removes exactly what the installer recorded in `/opt/xpguard/manifest`, including the cPanel/WHM plugins, and prints a residue report):
 
 ```bash
 curl -fsSL https://app.xpguard.org/uninstall.sh | bash
-# or offline:  bash /opt/xmartguard/uninstall.sh [--dry-run] [--keep-logs]
+# or offline:  bash /opt/xpguard/uninstall.sh [--dry-run] [--keep-logs]
 ```
 
 Files on a managed server (same `/etc` + `/opt` layout as other hosting security suites):
 
 | Path | Purpose |
 |---|---|
-| `/etc/xmartguard/agent.json` (0600) | portal URL and server ID |
-| `/etc/xmartguard/identity.key` (0600) | Ed25519 private key; never leaves the server |
-| `/etc/xmartguard/settings.json` (0600) | security policy (scanner, firewall, IPDB, notifications) |
-| `/opt/xpguard/bin/xpguard-agent` | agent program (process name `xpguard-agent`; linked as `/usr/local/bin/xpguard-agent`, `xgcli` and, for older scripts, `/opt/xmartguard/bin/xmartguard-agent`) |
-| `/opt/xmartguard/data/` (0700) | local database, signature updates, IPDB list, `quarantine/` |
-| `/opt/xmartguard/logs/` | `agent.log`, `install.log` |
-| `/opt/xmartguard/manifest`, `uninstall.sh` | install manifest and local uninstaller |
-| `/run/xmartguard/agent.sock` | local control socket (plugins, `xpguard-agent call`) |
+| `/etc/xpguard/agent.json` (0600) | portal URL and server ID |
+| `/etc/xpguard/identity.key` (0600) | Ed25519 private key; never leaves the server |
+| `/etc/xpguard/settings.json` (0600) | security policy (scanner, firewall, IPDB, notifications) |
+| `/opt/xpguard/bin/xpguard-agent` | agent program (process name `xpguard-agent`; linked as `/usr/local/bin/xpguard-agent` and `xgcli`) |
+| `/opt/xpguard/data/` (0700) | local database, signature updates, IPDB list, `quarantine/` |
+| `/opt/xpguard/logs/` | `agent.log`, `install.log` |
+| `/opt/xpguard/manifest`, `uninstall.sh` | install manifest and local uninstaller |
+| `/run/xpguard/agent.sock` | local control socket (plugins, `xpguard-agent call`) |
 | `/etc/systemd/system/xpguard-agent.service` | systemd unit |
 
-Servers installed with 0.2.x (`/var/lib/xmartguard`) are migrated automatically when the agent updates.
+Servers installed before the xPGuard name (`/etc/xmartguard`, `/opt/xmartguard`, and `/var/lib/xmartguard` from 0.2.x) are moved to these paths automatically when the agent updates to 0.11; web server includes, the service, CSF and the firewall table/chains are renamed with them, and the old paths disappear once nothing refers to them.
 
 ### cPanel / WHM plugins
 
@@ -58,7 +58,7 @@ On cPanel servers the agent installs two plugins (and refreshes them on every up
 - **WHM » Plugins » xPGuard** (root): overview, virus scans (quick/full/path), detected files with quarantine/restore/disable/delete/ignore, firewall block/allow/check, IPDB status.
 - **cPanel » Security » xPGuard** (every account, like cPGuard's): Home dashboard (threats stopped, attacks blocked, CMS issues, charts), full/quick/path scans with the manual scans list, background scanner logs, detected files (quarantine/restore/delete), CMS threats, WAF logs and bot attacks — only for the account's own files and websites.
 
-The plugins have no logic of their own: they talk to the agent's local socket, which identifies the caller by its Unix uid (kernel `SO_PEERCRED`). A cPanel account can only see and act on files inside its own home directory. To disable the plugins: `touch /etc/xmartguard/no-panel-plugin && xpguard-agent panel uninstall`.
+The plugins have no logic of their own: they talk to the agent's local socket, which identifies the caller by its Unix uid (kernel `SO_PEERCRED`). A cPanel account can only see and act on files inside its own home directory. To disable the plugins: `touch /etc/xpguard/no-panel-plugin && xpguard-agent panel uninstall`.
 
 ### Command line: `xgcli`
 
@@ -122,7 +122,7 @@ The script installs Docker, builds the portal, sets up HTTPS and prints the firs
 
 ### AI connector (MCP)
 
-Open **AI Connector** (admins), create a connector and copy its URL (`https://your-portal/mcp/xgm_…`, shown once). In Claude: **Settings » Connectors » Add custom connector**, paste the URL, **Continue**, and choose Authentication **No sign-in** ("Sign in now" fails; the token in the URL is the login). Other clients: `claude mcp add --transport http xmartguard https://your-portal/mcp/<token>` or `POST /mcp` with `Authorization: Bearer <token>`. Read-only connectors see everything; read & write connectors can also run actions, recorded in the Security Log as `mcp.*`. Revoke a connector to cut access at once.
+Open **AI Connector** (admins), create a connector and copy its URL (`https://your-portal/mcp/xgm_…`, shown once). In Claude: **Settings » Connectors » Add custom connector**, paste the URL, **Continue**, and choose Authentication **No sign-in** ("Sign in now" fails; the token in the URL is the login). Other clients: `claude mcp add --transport http xpguard https://your-portal/mcp/<token>` or `POST /mcp` with `Authorization: Bearer <token>`. Read-only connectors see everything; read & write connectors can also run actions, recorded in the Security Log as `mcp.*`. Revoke a connector to cut access at once.
 
 ### AI scanner (free AI APIs)
 

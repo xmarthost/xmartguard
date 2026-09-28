@@ -107,7 +107,7 @@ xpguard-agent check /home/user/public_html/folder --misses --no-hash   # rules o
           LiteSpeed's <code>@inspectFile</code> exit-code convention.
         </p>
         <p className="mt-3">
-          <b>Standalone LiteSpeed (Enhance, CyberPanel, no control panel):</b> the agent writes <code>/usr/local/lsws/conf/xmartguard-waf.conf</code>;
+          <b>Standalone LiteSpeed (Enhance, CyberPanel, no control panel):</b> the agent writes <code>/usr/local/lsws/conf/xpguard-waf.conf</code>;
           add it once in LiteSpeed WebAdmin (port 7080):
         </p>
         <Steps
@@ -116,7 +116,7 @@ xpguard-agent check /home/user/public_html/folder --misses --no-hash   # rules o
             <>Add a <b>WAF Rule Set</b>: Name <code>xPGuard</code>, Action <code>deny,log,status:403</code>, Enabled Yes, Rules Definition:</>,
           ]}
         />
-        <Code>{`Include /usr/local/lsws/conf/xmartguard-waf.conf`}</Code>
+        <Code>{`Include /usr/local/lsws/conf/xpguard-waf.conf`}</Code>
         <p>Save and do a graceful restart. The WAF Logs page shows a hint until the Include is present.</p>
       </>
     ),
@@ -127,8 +127,8 @@ xpguard-agent check /home/user/public_html/folder --misses --no-hash   # rules o
     body: (
       <>
         <p>
-          On plain Apache the agent hooks in automatically: <code>/etc/httpd/conf.d/xmartguard-waf.conf</code> (AlmaLinux, Rocky, CentOS) or{' '}
-          <code>/etc/apache2/conf-available/xmartguard-waf.conf</code> (Debian, Ubuntu). ModSecurity (<code>mod_security2</code>) must be installed and
+          On plain Apache the agent hooks in automatically: <code>/etc/httpd/conf.d/xpguard-waf.conf</code> (AlmaLinux, Rocky, CentOS) or{' '}
+          <code>/etc/apache2/conf-available/xpguard-waf.conf</code> (Debian, Ubuntu). ModSecurity (<code>mod_security2</code>) must be installed and
           no other vendor rule set should be active.
         </p>
         <p className="mt-2">

@@ -9,24 +9,24 @@ code, signatures or rules are part of xPGuard.
 
 | | cPGuard | xPGuard |
 |---|---|---|
-| Runtime | bundled nginx + PHP-FPM 8.1 + ClamAV libs under `/opt/cpguard`, PHP app (ionCube) | one Go binary (`/opt/xmartguard/bin/xmartguard-agent`), no web server on the host |
+| Runtime | bundled nginx + PHP-FPM 8.1 + ClamAV libs under `/opt/cpguard`, PHP app (ionCube) | one Go binary (`/opt/xpguard/bin/xpguard-agent`), no web server on the host |
 | Scheduling | `/etc/cron.d/cpguard`: `crons/main.php` every minute runs a job table (27 jobs) | systemd service with internal schedulers |
 | Portal link | agent API on port 9098 reached by vendor IPs | agent keeps an outbound websocket to the portal (no open port) |
-| Config | `/etc/cpguard/conf/main.conf`, `config.db` (109 keys) | `/etc/xmartguard/settings.json` edited from the portal |
-| Data | one SQLite file per module under `app/data` | one SQLite database (`/opt/xmartguard/data`) |
+| Config | `/etc/cpguard/conf/main.conf`, `config.db` (109 keys) | `/etc/xpguard/settings.json` edited from the portal |
+| Data | one SQLite file per module under `app/data` | one SQLite database (`/opt/xpguard/data`) |
 | CLI | `cpgcli` | `xgcli` |
 
 ## Where things are hooked into the server
 
 | Integration | cPGuard | xPGuard |
 |---|---|---|
-| ModSecurity on cPanel | `Include /etc/cpguard/cpguard_modsec100.conf` appended to `/etc/apache2/conf.d/modsec/modsec2.user.conf` | same place since 0.7.9: `Include /etc/xmartguard/waf/xmartguard_modsec.conf` in `modsec2.user.conf` |
+| ModSecurity on cPanel | `Include /etc/cpguard/cpguard_modsec100.conf` appended to `/etc/apache2/conf.d/modsec/modsec2.user.conf` | same place since 0.7.9: `Include /etc/xpguard/waf/xpguard_modsec.conf` in `modsec2.user.conf` |
 | Commercial WAF rules | Malware.Expert through `SecRemoteRules` with cPGuard's license | your own Malware.Expert license: WHM vendor URL, or `SecRemoteRules` key + URL (WAF Rule Sets) |
 | Upload scan | `@inspectFile` PHP script | `@inspectFile` shell wrapper calling the agent's scanner |
-| Bad bots | `@pmFromFile /etc/cpguard/badbots.txt` | `@pmFromFile` bot lists in `/etc/xmartguard/waf/` |
+| Bad bots | `@pmFromFile /etc/cpguard/badbots.txt` | `@pmFromFile` bot lists in `/etc/xpguard/waf/` |
 | WAF self-test | test rule `cpg_test_rule` + hourly health check | self-test URL after every change, shown in Rollout |
 | WAF hits | read from `modsec_audit.log` every minute | error log + audit log, live |
-| inotify | `fs.inotify.max_user_watches = 10000000` in `/etc/sysctl.d/cpguard.conf` | persisted in `/etc/sysctl.d/xmartguard.conf` since 0.7.9 |
+| inotify | `fs.inotify.max_user_watches = 10000000` in `/etc/sysctl.d/cpguard.conf` | persisted in `/etc/sysctl.d/xpguard.conf` since 0.7.9 |
 | CSF | allows vendor IPs, `csf.pignore user:cpguard` | `csf.pignore exe:` for the agent; since 0.9.0 the portal's address in `csf.allow` + `csf.ignore`, CSF keeps the port filter, csf.allow/csf.ignore addresses are never blocked by xPGuard, `csfpost.sh` reloads our rules after `csf -r` |
 | Other firewalls | UFW rule for port 9098 | since 0.9.0 the portal's address is allowed in firewalld (trusted zone), UFW, APF, cPHulk and Imunify360; only entries xPGuard added are removed on uninstall |
 | WHM / cPanel plugin | `register_appconfig`, `install_plugin` (jupiter) | same |

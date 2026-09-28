@@ -16,10 +16,13 @@ export function currentRelease(downloadsDir: string): Release | null {
     const version = fs.readFileSync(path.join(downloadsDir, 'VERSION'), 'utf8').trim();
     const sha256: Record<string, string> = {};
     for (const arch of ['amd64', 'arm64']) {
-      try {
-        sha256[arch] = fs.readFileSync(path.join(downloadsDir, `xmartguard-agent-linux-${arch}.sha256`), 'utf8').split(/\s+/)[0];
-      } catch {
-        /* arch not built */
+      for (const name of [`xpguard-agent-linux-${arch}.sha256`, `xmartguard-agent-linux-${arch}.sha256`]) {
+        try {
+          sha256[arch] = fs.readFileSync(path.join(downloadsDir, name), 'utf8').split(/\s+/)[0];
+          break;
+        } catch {
+          /* arch not built under this name */
+        }
       }
     }
     if (version) rel = { version, sha256 };
