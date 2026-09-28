@@ -154,3 +154,17 @@ Adding a vendor lets that vendor's rules run on every server; only the
 account owner can add a vendor that is not in the preset list. Every save
 is recorded in the Security Log (`waf.rulesets_saved`), and servers apply
 changes only after the web server accepts the configuration.
+
+## Portal behind a WAF (0.9.7)
+
+The web app sends PUT/PATCH/DELETE as `POST` with `X-HTTP-Method-Override`
+(many WAFs, including OWASP CRS rule 911100, allow only GET/HEAD/POST).
+`deploy/setup-almalinux.sh` also turns ModSecurity off for the portal's own
+vhost: the portal saves ModSecurity rules, keys and rule URLs by design,
+which any WAF would block. On an existing install run:
+
+```
+F=$(ls /etc/apache2/conf.d/userdata/ssl/2_4/*/YOUR-PORTAL-DOMAIN/xmartguard.conf)
+printf '<IfModule security2_module>\n  SecRuleEngine Off\n</IfModule>\n' >> "$F"
+/usr/local/cpanel/scripts/rebuildhttpdconf && /usr/local/cpanel/scripts/restartsrv_httpd
+```

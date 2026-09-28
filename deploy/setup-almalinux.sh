@@ -258,6 +258,13 @@ ProxyPreserveHost On
 ProxyPass /.well-known !
 ProxyPass / http://127.0.0.1:$PORTAL_PORT/ upgrade=websocket timeout=3600 keepalive=On
 ProxyPassReverse / http://127.0.0.1:$PORTAL_PORT/
+# The portal saves ModSecurity rules, license keys and rule URLs by design;
+# a WAF on this vhost blocks those saves (and cPanel's error page then comes
+# back from the portal as its home page). The portal has its own login,
+# roles and CSRF checks.
+<IfModule security2_module>
+  SecRuleEngine Off
+</IfModule>
 EOF
   /usr/local/cpanel/scripts/rebuildhttpdconf >/dev/null
   if ! httpd -t >/dev/null 2>&1; then

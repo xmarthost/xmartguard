@@ -235,3 +235,15 @@ describe('CRS replacement reaches servers that are up to date', () => {
     expect(d.body.unchanged).toBe(true);
   });
 });
+
+describe('method override', () => {
+  it('accepts PUT sent as POST with X-HTTP-Method-Override (firewalls block PUT)', async () => {
+    const r = await admin.req('POST', '/api/waf/rulesets', config({ remote: [] }), { 'x-http-method-override': 'PUT' });
+    expect(r.status).toBe(200);
+    expect(typeof r.body.version).toBe('number');
+    // Without the header a POST is not a save.
+    expect((await admin.req('POST', '/api/waf/rulesets', config({ remote: [] }))).status).toBe(404);
+    // Only PUT/PATCH/DELETE can be requested.
+    expect((await admin.req('POST', '/api/waf/rulesets', config({ remote: [] }), { 'x-http-method-override': 'GET' })).status).toBe(404);
+  });
+});

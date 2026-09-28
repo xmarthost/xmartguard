@@ -44,6 +44,15 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
     logger: opts.logger === false ? false : { level: cfg.logLevel },
     trustProxy: cfg.trustProxy,
     bodyLimit: 256 * 1024,
+    // Firewalls in front of the portal often refuse PUT/PATCH/DELETE (OWASP
+    // CRS allows only GET/HEAD/POST/OPTIONS by default), so the web app sends
+    // them as POST with X-HTTP-Method-Override. A custom header cannot be set
+    // cross-site without a CORS preflight, so this adds no CSRF risk.
+    rewriteUrl: (req) => {
+      const o = String(req.headers['x-http-method-override'] ?? '').toUpperCase();
+      if (req.method === 'POST' && req.url?.startsWith('/api/') && (o === 'PUT' || o === 'PATCH' || o === 'DELETE')) req.method = o;
+      return req.url ?? '/';
+    },
   });
   const hub = new AgentHub(pool, app.log);
   const geo = new GeoDB();
@@ -102,7 +111,9 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
     // that no sign-in service exists instead of an HTML page.
     const machine = ['/api/', '/downloads/', '/mcp', '/.well-known/'];
     app.setNotFoundHandler((req, reply) => {
-      if (req.method === 'GET' && !machine.some((p) => req.url.startsWith(p))) {
+      // cPanel's error documents (/403.shtml …) fetched through the proxy
+      // must stay errors, not turn into the home page with status 200.
+      if (req.method === 'GET' && !machine.some((p) => req.url.startsWith(p)) && !/\.shtml(?:\?|$)/.test(req.url)) {
         return reply.type('text/html').header('Cache-Control', 'no-cache').sendFile('index.html');
       }
       return reply.code(404).send({ error: 'not found' });

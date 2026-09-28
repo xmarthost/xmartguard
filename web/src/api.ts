@@ -8,10 +8,16 @@ export class ApiError extends Error {
 }
 
 export async function api<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+  // PUT/PATCH/DELETE travel as POST: firewalls in front of the portal often
+  // refuse other methods (the portal restores the method from the header).
+  const override = ['PUT', 'PATCH', 'DELETE'].includes(method);
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  if (override) headers['x-http-method-override'] = method;
   const res = await fetch(path, {
-    method,
+    method: override ? 'POST' : method,
     credentials: 'same-origin',
-    headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
