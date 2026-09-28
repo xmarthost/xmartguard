@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
@@ -379,5 +380,54 @@ func TestRealtimeCatchesExtractedAndMovedTrees(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("realtime found %d of %d files", got, want)
+	}
+}
+
+// A zip the AI cleared must not be detected again (it used to be quarantined
+// and restored in a loop), until its content changes.
+func TestClearedArchiveStaysClean(t *testing.T) {
+	s := newScanner(t)
+	p := filepath.Join(t.TempDir(), "theme-core.zip")
+	write := func(body string) {
+		f, _ := os.Create(p)
+		w := zip.NewWriter(f)
+		x, _ := w.Create("core/x.php")
+		x.Write([]byte(body))
+		w.Close()
+		f.Close()
+	}
+	write("<?php @eval($_POST['a']); ?>")
+	cfg := s.Settings.Get().Scanner
+	info, _ := os.Lstat(p)
+	if d, _ := s.CheckFile(p, info, cfg); d == nil {
+		t.Fatal("zip not detected")
+	}
+	cleared := sha256File(p)
+	s.Cleared = func(sha string) bool { return sha == cleared }
+	if d, err := s.CheckFile(p, info, cfg); d != nil || err != ErrTrusted {
+		t.Fatalf("cleared zip detected again: %+v %v", d, err)
+	}
+	write("<?php @eval($_POST['b']); ?>")
+	info, _ = os.Lstat(p)
+	if d, _ := s.CheckFile(p, info, cfg); d == nil {
+		t.Fatal("changed zip not detected")
+	}
+}
+
+// Whatever the file type or source, content the AI cleared is not recorded.
+func TestRecordSkipsClearedContent(t *testing.T) {
+	s := newScanner(t)
+	p := filepath.Join(t.TempDir(), "shell.php")
+	os.WriteFile(p, []byte("<?php @eval($_POST['a']); ?>"), 0o644)
+	info, _ := os.Lstat(p)
+	cleared := sha256File(p)
+	s.Cleared = func(sha string) bool { return sha == cleared }
+	for _, src := range []string{"realtime", "manual"} {
+		if f, err := s.Record(0, src, p, info, Detection{CatVirus, "Test.Sig"}); err != errExists || f.ID != 0 {
+			t.Fatalf("%s: cleared file recorded: %+v %v", src, f, err)
+		}
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatal("cleared file was moved")
 	}
 }

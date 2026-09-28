@@ -375,6 +375,9 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			return sha256File(path), md5File(path)
 		})
 		if label != "" {
+			if content == nil && s.clearedFile(path) {
+				return nil, ErrTrusted
+			}
 			return &Detection{CatVirus, label}, nil
 		}
 	}
@@ -399,7 +402,11 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		return nil, nil // larger than the size limit
 	}
 	if ext == ".zip" {
-		return scanZip(path, info.Size()), nil
+		d := scanZip(path, info.Size())
+		if d != nil && s.clearedFile(path) {
+			return nil, ErrTrusted
+		}
+		return d, nil
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -409,9 +416,25 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	n, _ := io.ReadFull(f, head)
 	f.Close()
 	if IsELF(head[:n]) {
-		return binaryCheck(path)
+		d, err := binaryCheck(path)
+		if d != nil && s.clearedFile(path) {
+			return nil, ErrTrusted
+		}
+		return d, err
 	}
 	return nil, nil
+}
+
+// clearedFile reports whether the AI scanner or an administrator cleared
+// this exact file content. Files whose content is not read for scanning
+// (archives, binaries, large files) are hashed only once something matched,
+// so a clean verdict holds for them too until the file changes.
+func (s *Scanner) clearedFile(path string) bool {
+	if s.Cleared == nil {
+		return false
+	}
+	sum := sha256File(path)
+	return sum != "" && s.Cleared(sum)
 }
 
 // binaryCheck flags executables inside web-accessible directories.
@@ -456,6 +479,12 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 	sum := ""
 	if d.Category != CatSymlink {
 		sum = sha256File(path)
+	}
+	// The AI scanner's (or an administrator's) clean verdict is final for this
+	// exact content, whatever the file type and however it was found: it is
+	// not recorded or quarantined again until the file changes.
+	if sum != "" && s.Cleared != nil && s.Cleared(sum) {
+		return Finding{}, errExists
 	}
 	f := Finding{ScanID: scanID, Source: source, Path: path, Category: d.Category, Signature: d.Signature,
 		SHA256: sum, Size: info.Size(), Status: "detected", CreatedAt: now, UpdatedAt: now}
