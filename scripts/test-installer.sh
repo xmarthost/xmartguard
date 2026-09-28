@@ -7,7 +7,7 @@
 #
 #   PORTAL=http://localhost:8080 ADMIN_EMAIL=... ADMIN_PASSWORD=... scripts/test-installer.sh
 #
-# DESTRUCTIVE: installs into /opt/xmartguard, /etc/xmartguard and /usr/local/bin.
+# DESTRUCTIVE: installs into /opt/xpguard, /opt/xmartguard, /etc/xmartguard and /usr/local/bin.
 set -euo pipefail
 
 PORTAL="${PORTAL:-http://localhost:8080}"
@@ -26,21 +26,29 @@ else
 
 cat >"$STUB/systemctl" <<'EOF'
 #!/usr/bin/env bash
-# Minimal systemctl stand-in for xmartguard-agent.service only.
-PIDF=/run/xg-stub.pid
-UNIT=/etc/systemd/system/xmartguard-agent.service
-running() { [ -f $PIDF ] && kill -0 "$(cat $PIDF)" 2>/dev/null; }
+# Minimal systemctl stand-in: one background process per unit name.
+name=""
+for a in "$@"; do
+  case "$a" in
+    -*|enable|disable|start|stop|is-active|list-unit-files|cat|daemon-reload|reset-failed) ;;
+    *) name=${a%.service}; break ;;
+  esac
+done
+UNIT=/etc/systemd/system/$name.service
+PIDF=/run/xg-stub-$name.pid
+running() { [ -n "$name" ] && [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; }
 start() {
   running && return 0
-  exec_start=$(sed -n 's/^ExecStart=//p' $UNIT)
-  log=$(sed -n 's/^StandardOutput=append://p' $UNIT)
+  [ -f "$UNIT" ] || return 1
+  exec_start=$(sed -n 's/^ExecStart=//p' "$UNIT")
+  log=$(sed -n 's/^StandardOutput=append://p' "$UNIT")
   mkdir -p "$(dirname "$log")"
   nohup $exec_start >>"$log" 2>&1 &
-  echo $! >$PIDF
+  echo $! >"$PIDF"
 }
-stop() { running && kill "$(cat $PIDF)" && sleep 1; rm -f $PIDF; }
-args=("$@"); now=0
-for a in "${args[@]}"; do [ "$a" = "--now" ] && now=1; done
+stop() { running && kill "$(cat "$PIDF")" && sleep 1; rm -f "$PIDF"; }
+now=0
+for a in "$@"; do [ "$a" = "--now" ] && now=1; done
 case "$1" in
   daemon-reload|reset-failed) exit 0 ;;
   enable)  [ $now = 1 ] && start; exit 0 ;;
@@ -48,7 +56,7 @@ case "$1" in
   start)   start ;;
   stop)    stop ;;
   is-active) running ;;
-  list-unit-files|cat) [ -f $UNIT ] ;;
+  list-unit-files|cat) [ -f "$UNIT" ] ;;
   *) exit 0 ;;
 esac
 EOF
@@ -74,48 +82,50 @@ echo "== install =="
 before=$(server_count)
 TOKEN=$(new_token)
 curl -fsSL "$PORTAL/install.sh" | bash -s -- --token "$TOKEN" | tee "$WORK/install.out"
-check "binary installed in /opt"  '[ -x /opt/xmartguard/bin/xmartguard-agent ] && [ ! -L /opt/xmartguard/bin/xmartguard-agent ]'
-check "binary linked into PATH"   '[ "$(readlink /usr/local/bin/xmartguard-agent)" = /opt/xmartguard/bin/xmartguard-agent ]'
+check "binary installed in /opt"  '[ -x /opt/xpguard/bin/xpguard-agent ] && [ ! -L /opt/xpguard/bin/xpguard-agent ]'
+check "binary linked into PATH"   '[ "$(readlink /usr/local/bin/xpguard-agent)" = /opt/xpguard/bin/xpguard-agent ]'
+check "old program path kept"     '[ "$(readlink /opt/xmartguard/bin/xmartguard-agent)" = /opt/xpguard/bin/xpguard-agent ]'
 check "config is 0600"            '[ "$(stat -c %a /etc/xmartguard/agent.json)" = 600 ]'
 check "identity key is 0600"      '[ "$(stat -c %a /etc/xmartguard/identity.key)" = 600 ]'
 check "config dir is 0700"        '[ "$(stat -c %a /etc/xmartguard)" = 700 ]'
-check "manifest written"          'grep -q "^file /opt/xmartguard/bin/xmartguard-agent$" /opt/xmartguard/manifest'
-check "unit written"              'grep -q "ExecStart=/opt/xmartguard/bin/xmartguard-agent run" /etc/systemd/system/xmartguard-agent.service'
-check "agent running"             'systemctl is-active xmartguard-agent'
+check "manifest written"          'grep -q "^file /opt/xpguard/bin/xpguard-agent$" /opt/xmartguard/manifest'
+check "unit written"              'grep -q "ExecStart=/opt/xpguard/bin/xpguard-agent run" /etc/systemd/system/xpguard-agent.service'
+check "agent running"             'systemctl is-active --quiet xpguard-agent'
+check "process shows xpguard"     'pgrep -f "/opt/xpguard/bin/xpguard-agent run" >/dev/null && ! pgrep -f "xmartguard-agent run" >/dev/null'
 check "local uninstaller saved"   '[ -x /opt/xmartguard/uninstall.sh ]'
 sleep 3
 check "server appears in portal"  '[ "$(server_count)" -eq $((before+1)) ]'
 check "agent log shows connection" 'grep -q "connected to portal" /opt/xmartguard/logs/agent.log'
 check "data dir created"          '[ -f /opt/xmartguard/data/agent.db ] && [ "$(stat -c %a /opt/xmartguard/data)" = 700 ]'
-check "local control socket"      'xmartguard-agent call overview | grep -q "\"version\""'
+check "local control socket"      'xpguard-agent call overview | grep -q "\"version\""'
 
 echo "== second install is refused without --force =="
 check "reinstall refused" '! curl -fsSL "$PORTAL/install.sh" | bash -s -- --token "$(new_token)" >/dev/null 2>&1'
 
 echo "== used token is rejected =="
-check "used token rejected" '! /usr/local/bin/xmartguard-agent enroll --force --server "$PORTAL" --token "$TOKEN" >/dev/null 2>&1'
+check "used token rejected" '! /usr/local/bin/xpguard-agent enroll --force --server "$PORTAL" --token "$TOKEN" >/dev/null 2>&1'
 
 echo "== uninstall dry run changes nothing =="
 bash /opt/xmartguard/uninstall.sh --dry-run >/dev/null
-check "dry run kept files" '[ -x /usr/local/bin/xmartguard-agent ] && systemctl is-active xmartguard-agent'
+check "dry run kept files" '[ -x /usr/local/bin/xpguard-agent ] && systemctl is-active --quiet xpguard-agent'
 
 echo "== uninstall =="
 curl -fsSL "$PORTAL/uninstall.sh" | bash | tee "$WORK/uninstall.out"
 check "uninstaller reports clean"  'grep -q "removed completely" "$WORK/uninstall.out"'
-check "binary removed"             '[ ! -L /usr/local/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard ]'
+check "binary removed"             '[ ! -L /usr/local/bin/xpguard-agent ] && [ ! -e /opt/xpguard ] && [ ! -L /usr/local/bin/xmartguard-agent ]'
 check "config removed"             '[ ! -e /etc/xmartguard ]'
 check "state and logs removed"     '[ ! -e /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
 check "socket removed"             '[ ! -e /run/xmartguard ]'
-check "unit removed"               '[ ! -e /etc/systemd/system/xmartguard-agent.service ]'
-check "agent stopped"              '! pgrep -f "/opt/xmartguard/bin/xmartguard-agent run" >/dev/null'
+check "unit removed"               '[ ! -e /etc/systemd/system/xpguard-agent.service ] && [ ! -e /etc/systemd/system/xmartguard-agent.service ]'
+check "agent stopped"              '! pgrep -f "xpguard-agent run" >/dev/null'
 check "server removed from portal" '[ "$(server_count)" -eq "$before" ]'
 
 echo "== bad token fails cleanly and leaves no service =="
 out=$(curl -fsSL "$PORTAL/install.sh" | bash -s -- --token XG-AAAA-BBBB-CCCC-DDDD-EEEE 2>&1 || true)
 check "bad token message"   'grep -q "enrollment failed" <<<"$out"'
-check "no service after failure" '! systemctl is-active xmartguard-agent'
+check "no service after failure" '! systemctl is-active --quiet xpguard-agent'
 bash <(curl -fsSL "$PORTAL/uninstall.sh") --no-unenroll >/dev/null 2>&1 || true
-check "cleanup after failed install" '[ ! -e /etc/xmartguard ] && [ ! -e /opt/xmartguard ] && [ ! -L /usr/local/bin/xmartguard-agent ]'
+check "cleanup after failed install" '[ ! -e /etc/xmartguard ] && [ ! -e /opt/xmartguard ] && [ ! -e /opt/xpguard ] && [ ! -L /usr/local/bin/xpguard-agent ]'
 
 echo ""
 echo "installer tests: $pass passed, $fail failed"

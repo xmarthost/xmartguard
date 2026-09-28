@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -33,7 +34,7 @@ var uiHTML string
 //go:embed xpguard-icon.png
 var Icon string
 
-// mark is the wide XP mark shown in the plugin page header.
+// mark is the xPGuard shield shown in the plugin page header.
 //
 //go:embed xpguard-mark.png
 var mark string
@@ -46,7 +47,7 @@ const PluginID = "xpguard"
 const legacyID = "xmartguard"
 
 // BinPath is the agent binary the plugin pages execute.
-const BinPath = "/opt/xmartguard/bin/xmartguard-agent"
+const BinPath = "/opt/xpguard/bin/xpguard-agent"
 
 // root lets tests install into a scratch tree.
 func root() string {
@@ -136,6 +137,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         ob_end_clean();
     }
     ini_set('display_errors', '0');
+    // Some requests (reports, large logs) take longer than PHP's default
+    // 30 seconds; a killed script would answer with an HTML error.
+    @set_time_limit(0);
+    ignore_user_abort(true);
     header('Content-Type: application/json');
     header('Cache-Control: no-store');
     if (stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== 0) {
@@ -152,10 +157,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     fwrite($pipes[0], $req);
     fclose($pipes[0]);
     $out = stream_get_contents($pipes[1]);
+    $err = stream_get_contents($pipes[2]);
     fclose($pipes[1]);
     fclose($pipes[2]);
     proc_close($proc);
-    echo $out !== '' ? trim($out) : '{"ok":false,"error":"no response from xPGuard"}';
+    if (trim($out) === '') {
+        $msg = trim((string) $err) !== '' ? trim((string) $err) : 'no response from the security service';
+        echo json_encode(['ok' => false, 'error' => 'xPGuard: ' . substr($msg, 0, 300), 'retry' => true]);
+    } else {
+        echo trim($out);
+    }
     flush();
     exit(0);
 }
@@ -273,11 +284,13 @@ func Install() ([]string, error) {
 			return done, err
 		}
 		marker := p("var/cpanel/apps/" + PluginID + ".cpanel." + theme)
-		if _, err := os.Stat(marker); err != nil || changed {
-			tgz, err := pluginTarball()
-			if err != nil {
-				return done, err
-			}
+		tgz, err := pluginTarball()
+		if err != nil {
+			return done, err
+		}
+		// The marker holds the package's hash: a new icon or name reinstalls it.
+		sum := fmt.Sprintf("%x", sha256.Sum256(tgz))
+		if cur, err := os.ReadFile(marker); err != nil || changed || !strings.Contains(string(cur), sum) {
 			tmp := p("var/cpanel/apps/" + PluginID + "-plugin.tar.gz")
 			if err := os.WriteFile(tmp, tgz, 0o600); err != nil {
 				return done, err
@@ -285,7 +298,7 @@ func Install() ([]string, error) {
 			if err := runTool("usr/local/cpanel/scripts/install_plugin", tmp, "--theme", theme); err != nil {
 				errs = append(errs, err.Error())
 			} else {
-				_ = os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+				_ = os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+" "+sum+"\n"), 0o600)
 			}
 			os.Remove(tmp)
 		}

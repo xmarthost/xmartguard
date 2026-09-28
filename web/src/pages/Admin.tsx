@@ -207,8 +207,8 @@ export function SupportPage() {
         Need help with xPGuard? Email <a className="text-navy-700 underline" href="mailto:support@xmarthost.com">support@xmarthost.com</a> with your server hostname and a description of the problem.
       </p>
       <p className="text-sm text-slate-500">
-        Useful commands on the server: <code className="rounded bg-slate-100 px-1">systemctl status xmartguard-agent</code>,{' '}
-        <code className="rounded bg-slate-100 px-1">tail -n 100 /var/log/xmartguard/agent.log</code>
+        Useful commands on the server: <code className="rounded bg-slate-100 px-1">systemctl status xpguard-agent</code>,{' '}
+        <code className="rounded bg-slate-100 px-1">tail -n 100 /opt/xmartguard/logs/agent.log</code>
       </p>
     </div>
   );

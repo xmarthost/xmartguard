@@ -3,7 +3,7 @@
   font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#0f172a;max-width:1200px;margin:0 auto;padding:16px}
 #xg *{box-sizing:border-box}
 #xg .top{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(90deg,var(--navy),var(--navy2));color:#fff;border-radius:12px;padding:14px 20px;margin-bottom:16px}
-#xg .brand{display:flex;align-items:center;gap:10px;font-size:21px;font-weight:800;letter-spacing:-.01em}#xg .brand img{height:30px;width:auto}
+#xg .brand{display:flex;align-items:center;gap:10px;font-size:21px;font-weight:800;letter-spacing:-.01em}#xg .brand img{height:36px;width:36px}
 #xg .brand b{background:linear-gradient(90deg,#fbbf24,#f97316,#ef4444);-webkit-background-clip:text;background-clip:text;color:transparent}
 #xg .sub{opacity:.75;font-size:12px}
 #xg .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:16px}
@@ -97,15 +97,33 @@
     throw new Error('Unexpected response from the server: ' + text.slice(0, 200));
   }
 
-  function call(action, params) {
+  // transient reports errors worth one more try: the service restarting
+  // (updates), a dropped connection or a page the server answered instead.
+  function transient(e) {
+    return e && (e.retry || /not available right now|no response|Unexpected response|Failed to fetch|NetworkError|Load failed/i.test(e.message || ''));
+  }
+
+  function callOnce(action, params) {
     return fetch(ENDPOINT, {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: action, params: params || {} })
     }).then(function (r) { return r.text(); }).then(parseResp).then(function (r) {
-      if (!r.ok) throw new Error(r.error || 'request failed');
+      if (!r.ok) { var e = new Error(r.error || 'request failed'); e.retry = !!r.retry; throw e; }
       return r.data;
     });
+  }
+
+  // call retries twice (after 1.5 s and 4 s) when the failure is transient.
+  function call(action, params) {
+    var waits = [1500, 4000];
+    function attempt(i) {
+      return callOnce(action, params).catch(function (e) {
+        if (i >= waits.length || !transient(e)) throw e;
+        return new Promise(function (ok) { setTimeout(ok, waits[i]); }).then(function () { return attempt(i + 1); });
+      });
+    }
+    return attempt(0);
   }
 
   var TABS = MODE === 'whm'

@@ -3,7 +3,7 @@
 Server security platform for hosting servers: a cloud portal (`app.xpguard.org`) plus a lightweight agent installed on each server with one command.
 
 ```
-Portal (React UI + Node.js API + PostgreSQL)  <== outbound WebSocket (TLS, Ed25519-signed auth) ==  xmartguard-agent (Go, systemd)
+Portal (React UI + Node.js API + PostgreSQL)  <== outbound WebSocket (TLS, Ed25519-signed auth) ==  xpguard-agent (Go, systemd)
 ```
 
 The agent connects **out** to the portal, so managed servers don't need any inbound port or IP whitelist.
@@ -42,12 +42,12 @@ Files on a managed server (same `/etc` + `/opt` layout as other hosting security
 | `/etc/xmartguard/agent.json` (0600) | portal URL and server ID |
 | `/etc/xmartguard/identity.key` (0600) | Ed25519 private key; never leaves the server |
 | `/etc/xmartguard/settings.json` (0600) | security policy (scanner, firewall, IPDB, notifications) |
-| `/opt/xmartguard/bin/xmartguard-agent` | agent binary (linked as `/usr/local/bin/xmartguard-agent` and `xmartguard`) |
+| `/opt/xpguard/bin/xpguard-agent` | agent program (process name `xpguard-agent`; linked as `/usr/local/bin/xpguard-agent`, `xgcli` and, for older scripts, `/opt/xmartguard/bin/xmartguard-agent`) |
 | `/opt/xmartguard/data/` (0700) | local database, signature updates, IPDB list, `quarantine/` |
 | `/opt/xmartguard/logs/` | `agent.log`, `install.log` |
 | `/opt/xmartguard/manifest`, `uninstall.sh` | install manifest and local uninstaller |
-| `/run/xmartguard/agent.sock` | local control socket (plugins, `xmartguard call`) |
-| `/etc/systemd/system/xmartguard-agent.service` | systemd unit |
+| `/run/xmartguard/agent.sock` | local control socket (plugins, `xpguard-agent call`) |
+| `/etc/systemd/system/xpguard-agent.service` | systemd unit |
 
 Servers installed with 0.2.x (`/var/lib/xmartguard`) are migrated automatically when the agent updates.
 
@@ -58,7 +58,7 @@ On cPanel servers the agent installs two plugins (and refreshes them on every up
 - **WHM » Plugins » xPGuard** (root): overview, virus scans (quick/full/path), detected files with quarantine/restore/disable/delete/ignore, firewall block/allow/check, IPDB status.
 - **cPanel » Security » xPGuard** (every account, like cPGuard's): Home dashboard (threats stopped, attacks blocked, CMS issues, charts), full/quick/path scans with the manual scans list, background scanner logs, detected files (quarantine/restore/delete), CMS threats, WAF logs and bot attacks — only for the account's own files and websites.
 
-The plugins have no logic of their own: they talk to the agent's local socket, which identifies the caller by its Unix uid (kernel `SO_PEERCRED`). A cPanel account can only see and act on files inside its own home directory. To disable the plugins: `touch /etc/xmartguard/no-panel-plugin && xmartguard-agent panel uninstall`.
+The plugins have no logic of their own: they talk to the agent's local socket, which identifies the caller by its Unix uid (kernel `SO_PEERCRED`). A cPanel account can only see and act on files inside its own home directory. To disable the plugins: `touch /etc/xmartguard/no-panel-plugin && xpguard-agent panel uninstall`.
 
 ### Command line: `xgcli`
 
@@ -82,7 +82,7 @@ xgcli waf --disable webshell | --whitelist --add 7700012
 xgcli config --export settings.json            # and --import FILE|URL on another server
 ```
 
-Also: `scanner`, `dailyscan`, `weeklyscan`, `watch`, `blacklist`, `file-action`, `cleanup`, `lfd`, `bot-check`, `account-suspend`, `rootkit`, `process-monitor`, `cron-monitor`, `osm`, `ip-reputation`, `dbscan`, `notification`, `cms`, `upload-scanner`, `cloud`. Low level: `xmartguard-agent call ACTION '{json}'`, `xmartguard-agent check PATH` (offline scan).
+Also: `scanner`, `dailyscan`, `weeklyscan`, `watch`, `blacklist`, `file-action`, `cleanup`, `lfd`, `bot-check`, `account-suspend`, `rootkit`, `process-monitor`, `cron-monitor`, `osm`, `ip-reputation`, `dbscan`, `notification`, `cms`, `upload-scanner`, `cloud`. Low level: `xpguard-agent call ACTION '{json}'`, `xpguard-agent check PATH` (offline scan).
 
 ## What it protects (0.9.0)
 

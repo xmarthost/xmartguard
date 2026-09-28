@@ -48,7 +48,7 @@ func postJSON(ctx context.Context, hc *http.Client, u string, body, out any) err
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "xmartguard-agent/"+version.Version)
+	req.Header.Set("User-Agent", "xpguard-agent/"+version.Version)
 	res, err := hc.Do(req)
 	if err != nil {
 		return err
@@ -184,7 +184,7 @@ func (s *Session) runOnce(ctx context.Context) error {
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	conn, res, err := websocket.Dial(dctx, u, &websocket.DialOptions{
 		HTTPClient: HTTPClient(s.Cfg.InsecureTLS),
-		HTTPHeader: http.Header{"User-Agent": {"xmartguard-agent/" + version.Version}},
+		HTTPHeader: http.Header{"User-Agent": {"xpguard-agent/" + version.Version}},
 	})
 	cancel()
 	if err != nil {

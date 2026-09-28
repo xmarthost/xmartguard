@@ -182,6 +182,15 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 // Start launches the background workers.
 func (a *Agent) Start(ctx context.Context) {
 	a.started = time.Now()
+	// Installs from before the xPGuard name move to the new program path and
+	// service name once the agent has settled.
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(90 * time.Second):
+			a.maybeMoveUnit(selfPath())
+		}
+	}()
 	go a.Realtime.Run(ctx)
 	go a.Firewall.Run(ctx)
 	go a.Firewall.RunBruteForce(ctx)
@@ -241,7 +250,7 @@ func selfPath() string {
 		}
 		return p
 	}
-	return "/opt/xmartguard/bin/xmartguard-agent"
+	return NewBinPath
 }
 
 // protectedIPs are never blocked: this server's addresses, loopback and the portal.

@@ -129,7 +129,7 @@ func TestServeCGI(t *testing.T) {
 	env["CONTENT_LENGTH"] = "20"
 	out.Reset()
 	ServeCGI("whm", false, false, get, strings.NewReader(`{"action":"x"}      `), &out)
-	if !strings.Contains(out.String(), "not running") {
+	if !strings.Contains(out.String(), "not available right now") {
 		t.Fatalf("relay error: %s", out.String())
 	}
 	out.Reset()

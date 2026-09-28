@@ -24,12 +24,14 @@ INSECURE=0
 FORCE=0
 
 HOME_DIR=/opt/xmartguard
-BIN=$HOME_DIR/bin/xmartguard-agent
+BIN=/opt/xpguard/bin/xpguard-agent
+OLD_BIN=$HOME_DIR/bin/xmartguard-agent
 CONF_DIR=/etc/xmartguard
 STATE_DIR=$HOME_DIR
 LOG_DIR=$HOME_DIR/logs
 LEGACY_MANIFEST=/var/lib/xmartguard/manifest
-UNIT=/etc/systemd/system/xmartguard-agent.service
+UNIT=/etc/systemd/system/xpguard-agent.service
+OLD_UNIT=/etc/systemd/system/xmartguard-agent.service
 MANIFEST=$STATE_DIR/manifest
 INSTALL_LOG=$LOG_DIR/install.log
 
@@ -133,28 +135,34 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 record() { grep -qxF "$1 $2" "$MANIFEST" 2>/dev/null || echo "$1 $2" >>"$MANIFEST"; }
 
-# Stop an existing agent when re-installing.
-if systemctl is-active --quiet xmartguard-agent 2>/dev/null; then
-  systemctl stop xmartguard-agent || true
-fi
+# Stop an existing agent when re-installing (current and older service name).
+for u in xpguard-agent xmartguard-agent; do
+  if systemctl is-active --quiet "$u" 2>/dev/null; then systemctl stop "$u" || true; fi
+done
 
 # ---------------------------------------------------------------- install files
 [ -d "$CONF_DIR" ] || { mkdir -p "$CONF_DIR"; }
 chmod 0700 "$CONF_DIR"
 record dir "$CONF_DIR"
 
+mkdir -p "$(dirname "$BIN")" "$HOME_DIR/bin"
 install -m 0755 "$TMP/$FILE" "$BIN"
 record file "$BIN"
+record dir "$(dirname "$BIN")"
 record dir "$HOME_DIR/bin"
 record dir "$HOME_DIR/data"
-# A pre-0.3.0 install kept a real binary here; replace it with a link.
-rm -f /usr/local/bin/xmartguard-agent
-ln -sfn "$BIN" /usr/local/bin/xmartguard-agent
-ln -sfn "$BIN" /usr/local/bin/xmartguard
+# Older versions ran the program from $OLD_BIN: keep that path working.
+rm -f "$OLD_BIN"
+ln -sfn "$BIN" "$OLD_BIN"
+record file "$OLD_BIN"
+ln -sfn "$BIN" /usr/local/bin/xpguard-agent
 ln -sfn "$BIN" /usr/local/bin/xgcli
-record file /usr/local/bin/xmartguard-agent
-record file /usr/local/bin/xmartguard
+record file /usr/local/bin/xpguard-agent
 record file /usr/local/bin/xgcli
+# Links of older versions follow the new program.
+for l in /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard; do
+  if [ -e "$l" ] || [ -L "$l" ]; then rm -f "$l"; ln -sfn "$BIN" "$l"; record file "$l"; fi
+done
 ok "Installed $BIN"
 
 # ---------------------------------------------------------------- enroll
@@ -212,11 +220,16 @@ EOF
 chmod 0644 "$UNIT"
 record unit "$UNIT"
 record file "$LOG_DIR/agent.log"
+# The service of older versions is replaced by xpguard-agent.
+if [ -f "$OLD_UNIT" ]; then
+  systemctl disable xmartguard-agent >/dev/null 2>&1 || true
+  rm -f "$OLD_UNIT"
+fi
 systemctl daemon-reload
-systemctl enable --now xmartguard-agent >/dev/null 2>&1
+systemctl enable --now xpguard-agent >/dev/null 2>&1
 sleep 3
-systemctl is-active --quiet xmartguard-agent || die "the agent service did not start (journalctl -u xmartguard-agent)"
-ok "Service xmartguard-agent is running"
+systemctl is-active --quiet xpguard-agent || die "the agent service did not start (journalctl -u xpguard-agent)"
+ok "Service xpguard-agent is running"
 
 # ---------------------------------------------------------------- panel plugins
 if [ -f /usr/local/cpanel/version ]; then

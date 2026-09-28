@@ -219,18 +219,32 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 	if _, err := os.Stat(php); err != nil {
 		php = "php"
 	}
-	line := fmt.Sprintf("0 */%d * * * cd %s && %s -q wp-cron.php >/dev/null 2>&1 # xmartguard-wp-cron", max(1, min(hours, 24)), site, php)
-	cur, _ := exec.Command("crontab", "-u", owner, "-l").Output()
-	if strings.Contains(string(cur), "cd "+site+" && ") && strings.Contains(string(cur), "xmartguard-wp-cron") {
-		return changed, nil
+	line := fmt.Sprintf("0 */%d * * * cd %s && %s -q wp-cron.php >/dev/null 2>&1 # xpguard-wp-cron", max(1, min(hours, 24)), site, php)
+	out, _ := exec.Command("crontab", "-u", owner, "-l").Output()
+	cur := string(out)
+	// Jobs added before the xPGuard name carry the old marker: rename it.
+	renamed := strings.Contains(cur, "# xmartguard-wp-cron")
+	cur = strings.ReplaceAll(cur, "# xmartguard-wp-cron", "# xpguard-wp-cron")
+	if strings.Contains(cur, "cd "+site+" && ") && strings.Contains(cur, "xpguard-wp-cron") {
+		if !renamed {
+			return changed, nil
+		}
+		return true, installCrontab(owner, cur)
 	}
-	next := strings.TrimRight(string(cur), "\n") + "\n" + line + "\n"
-	cmd := exec.Command("crontab", "-u", owner, "-")
-	cmd.Stdin = strings.NewReader(strings.TrimLeft(next, "\n"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return changed, fmt.Errorf("crontab: %s", strings.TrimSpace(string(out)))
+	next := strings.TrimRight(cur, "\n") + "\n" + line + "\n"
+	if err := installCrontab(owner, next); err != nil {
+		return changed, err
 	}
 	return true, nil
+}
+
+func installCrontab(owner, text string) error {
+	cmd := exec.Command("crontab", "-u", owner, "-")
+	cmd.Stdin = strings.NewReader(strings.TrimLeft(text, "\n"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("crontab: %s", strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // autoActions applies the automatic CMS policies to one scanned site and

@@ -18,7 +18,7 @@ The model improves with more real quarantine data. To retrain:
 3. Train:
 
    ```sh
-   xmartguard-agent ai-train -v \
+   xpguard-agent ai-train -v \
      --malicious /path/to/quarantine \
      --clean /path/to/wordpress --clean /path/to/woocommerce --clean /path/to/joomla \
      --out /etc/xmartguard/ai-model.bin
@@ -29,9 +29,9 @@ The model improves with more real quarantine data. To retrain:
    to clean code, or named like a clean library file that the signature
    engine does not flag, are dropped as probable false positives of the tool
    that quarantined them.
-4. Restart the agent (`systemctl restart xmartguard-agent`) to use
+4. Restart the agent (`systemctl restart xpguard-agent`) to use
    `/etc/xmartguard/ai-model.bin`; without it the model shipped in the agent
-   is used. `xmartguard-agent ai-score FILE…` shows a file's score and the
+   is used. `xpguard-agent ai-score FILE…` shows a file's score and the
    strongest indicators.
 
 To ship a retrained model to every server, write it to
@@ -91,7 +91,7 @@ For the model itself, published work on PHP web shells points to:
   much as malware. Quarantine data from your servers (malicious) plus the
   AI's "clean" verdicts on detections (hard negatives) are the most useful
   training material; send quarantine archives to retrain the shipped model
-  with `xmartguard-agent ai-train`.
+  with `xpguard-agent ai-train`.
 
 ## How verdicts feed back into detection
 
@@ -120,7 +120,7 @@ confidence and the file's features; the reason is not parsed.
    detections (fleet reputation).
 4. **Retrain on reasons** — group AI reasons by family (loader, uploader,
    SEO spam…) and turn frequent families into behaviour rules with tests.
-5. **Measure** — `xmartguard-agent check --misses --no-hash` on the malware
+5. **Measure** — `xpguard-agent check --misses --no-hash` on the malware
    corpus (target >95% rules-only) and on clean corpora (target 0 virus
    hits) before every release.
 6. **AI review over MCP** — an assistant connected through the AI Connector

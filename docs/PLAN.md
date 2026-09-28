@@ -6,7 +6,7 @@ Clean-room security platform for hosting servers, inspired by the capability set
 
 - **Portal** (`app.xpguard.org`): React UI, Node.js API, PostgreSQL. Stores tenants, users, server inventory, metric rollups, job state and audit history.
 - **Agent auto-update**: the portal bundles the agent release (`VERSION`); older agents are updated automatically when they connect.
-- **Agent** (`xmartguard-agent`): single static Go binary managed by systemd. Connects out to the portal over TLS WebSocket; authenticates with a per-server Ed25519 key. Detailed security logs stay on the server (local SQLite from M3) and are fetched on demand.
+- **Agent** (`xpguard-agent`): single static Go binary managed by systemd. Connects out to the portal over TLS WebSocket; authenticates with a per-server Ed25519 key. Detailed security logs stay on the server (local SQLite from M3) and are fetched on demand.
 - **Privilege split** (from M3): unprivileged agent + small root helper with an allow-list of typed operations (quarantine move, firewall change, panel hooks). No arbitrary shell execution from the portal.
 - **Installer/uninstaller**: one-line, manifest-driven, idempotent, residue report, `--dry-run`.
 

@@ -165,7 +165,7 @@ func isGateRule(id int) bool { return id >= 7700900 && id <= 7700909 }
 func Render(c settings.WAF, o Options) string {
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
-	w("# xPGuard WAF rules. Managed by xmartguard-agent: changes here are overwritten.")
+	w("# xPGuard WAF rules. Managed by the xPGuard agent: changes here are overwritten.")
 	w("# Configure them in the xPGuard portal (Settings » WAF & Bruteforce).")
 	w("")
 	if len(c.WhitelistIPs) > 0 {

@@ -230,10 +230,16 @@ func cmdRun() error {
 			log.Warn("local control socket unavailable", "err", err)
 		}
 	}()
+	// The program's own path (/opt/xpguard/bin/xpguard-agent), used by the
+	// panel plugins, the csfpost.sh hook and cron jobs.
+	binErr := panel.EnsureBin()
+	if binErr != nil {
+		log.Warn("cannot link the agent program path", "err", binErr)
+	}
 	// Install the WHM/cPanel plugins (or refresh them for this version).
 	if _, optOut := os.Stat(panel.OptOutPath); panel.Detected() && optOut != nil {
-		if err := panel.EnsureBin(); err != nil {
-			log.Warn("cannot link agent binary for the panel plugins", "err", err)
+		if binErr != nil {
+			log.Warn("panel plugins not installed: the agent program path is missing")
 		} else if _, err := panel.Install(); err != nil {
 			log.Warn("panel plugin install failed", "err", err)
 		}

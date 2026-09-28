@@ -46,15 +46,15 @@ echo "--- manifest"; grep -v '^#' /opt/xmartguard/manifest 2>/dev/null
 echo "--- status"; /usr/local/bin/xmartguard-agent status 2>&1
 
 section "service"
-check "unit enabled"                    'systemctl is-enabled xmartguard-agent'
-check "unit active"                     'systemctl is-active xmartguard-agent'
-systemctl status xmartguard-agent --no-pager -l 2>&1 | head -15
+check "unit enabled"                    'systemctl is-enabled xpguard-agent'
+check "unit active"                     'systemctl is-active xpguard-agent'
+systemctl status xpguard-agent --no-pager -l 2>&1 | head -15
 echo "--- restart test"
-systemctl restart xmartguard-agent; sleep 5
-check "active after restart"            'systemctl is-active xmartguard-agent'
+systemctl restart xpguard-agent; sleep 5
+check "active after restart"            'systemctl is-active xpguard-agent'
 check "reconnected after restart"       'tail -n 20 /opt/xmartguard/logs/agent.log | grep -q "connected to portal"'
 echo "--- memory/cpu of agent"
-ps -o pid,rss,pcpu,etime,cmd -p "$(pgrep -d, -f 'xmartguard-agent run')" 2>/dev/null
+ps -o pid,rss,pcpu,etime,cmd -p "$(pgrep -d, -f 'xpguard-agent run')" 2>/dev/null
 echo "--- listening sockets of agent (should be none)"
 ss -ltnp 2>/dev/null | grep xmartguard || echo "(none)"
 check "agent opens no listening port"   '! ss -ltnp | grep -q xmartguard'
@@ -103,9 +103,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
   check "config removed"          '[ ! -e /etc/xmartguard ]'
   check "state removed"           '[ ! -e /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
   check "plugins removed"         '[ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xpguard ] && [ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ]'
-  check "unit removed"            '[ ! -e /etc/systemd/system/xmartguard-agent.service ]'
-  check "unit unknown to systemd" '! systemctl cat xmartguard-agent'
-  check "no agent process"        '! pgrep -f "xmartguard-agent run"'
+  check "unit removed"            '[ ! -e /etc/systemd/system/xpguard-agent.service ] && [ ! -e /etc/systemd/system/xmartguard-agent.service ]'
+  check "unit unknown to systemd" '! systemctl cat xpguard-agent'
+  check "no agent process"        '! pgrep -f "xpguard-agent run" && ! pgrep -f "xmartguard-agent run"'
   check "no iptables chain"       '! iptables -w -S XMARTGUARD'
   check "no ipsets"               '! ipset list -n 2>/dev/null | grep -q "^xg_"'
   check "no nftables table"       '! nft list tables 2>/dev/null | grep -q "inet xmartguard"'

@@ -188,7 +188,8 @@ func CallRaw(ctx context.Context, body []byte) (json.RawMessage, error) {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := hc.Do(req)
 	if err != nil {
-		return nil, errors.New("the xPGuard agent is not running (systemctl start xmartguard-agent)")
+		// Usually a restart (update) in progress; the panel page retries.
+		return nil, errors.New("the xPGuard service is not available right now (it may be restarting); please try again in a moment")
 	}
 	defer res.Body.Close()
 	var resp Response

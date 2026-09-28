@@ -28,9 +28,11 @@ LOG_DIR=$HOME_DIR/logs
 LEGACY_DIRS=(/var/lib/xmartguard /var/log/xmartguard)
 MANIFEST=$STATE_DIR/manifest
 [ -f "$MANIFEST" ] || MANIFEST=/var/lib/xmartguard/manifest
-BIN=$HOME_DIR/bin/xmartguard-agent
+BIN=/opt/xpguard/bin/xpguard-agent
+[ -x "$BIN" ] || BIN=$HOME_DIR/bin/xmartguard-agent
 [ -x "$BIN" ] || BIN=/usr/local/bin/xmartguard-agent
-UNIT_NAME=xmartguard-agent.service
+UNIT_NAME=xpguard-agent.service
+OLD_UNIT_NAME=xmartguard-agent.service
 
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_ylw=$'\033[33m'; c_bld=$'\033[1m'; c_off=$'\033[0m'
 [ -t 1 ] || { c_red=""; c_grn=""; c_ylw=""; c_bld=""; c_off=""; }
@@ -55,7 +57,9 @@ safe_path() {
     /var/lib/xmartguard|/var/lib/xmartguard/*) return 0 ;;
     /var/log/xmartguard|/var/log/xmartguard/*) return 0 ;;
     /usr/local/bin/xmartguard|/usr/local/bin/xmartguard-agent|/usr/local/bin/xgcli) return 0 ;;
-    /etc/systemd/system/xmartguard-agent.service) return 0 ;;
+    /etc/systemd/system/xmartguard-agent.service|/etc/systemd/system/xpguard-agent.service) return 0 ;;
+    /opt/xpguard|/opt/xpguard/*) return 0 ;;
+    /usr/local/bin/xpguard-agent) return 0 ;;
     /etc/sysctl.d/xmartguard.conf) return 0 ;;
   esac
   return 1
@@ -73,12 +77,16 @@ if [ -f "$MANIFEST" ]; then
   done < <(grep -v '^#' "$MANIFEST")
   # Created by the agent itself on upgrades from before 0.6.
   [ -L /usr/local/bin/xgcli ] && FILES+=(/usr/local/bin/xgcli)
+  # Created by the agent when it moved to the xpguard-agent service name.
+  for f in /opt/xpguard/bin/xpguard-agent /usr/local/bin/xpguard-agent; do { [ -e "$f" ] || [ -L "$f" ]; } && FILES+=("$f"); done
+  [ -d /opt/xpguard ] && DIRS+=(/opt/xpguard/bin /opt/xpguard)
+  UNITS+=("/etc/systemd/system/$UNIT_NAME" "/etc/systemd/system/$OLD_UNIT_NAME")
   ok "Loaded install manifest (${#FILES[@]} files, ${#DIRS[@]} directories)"
 else
   warn "No install manifest found; removing the default locations."
-  FILES=("$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli)
-  DIRS=(/etc/xmartguard "$HOME_DIR" "${LEGACY_DIRS[@]}")
-  UNITS=("/etc/systemd/system/$UNIT_NAME")
+  FILES=("$BIN" /opt/xpguard/bin/xpguard-agent /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli)
+  DIRS=(/etc/xmartguard "$HOME_DIR" /opt/xpguard "${LEGACY_DIRS[@]}")
+  UNITS=("/etc/systemd/system/$UNIT_NAME" "/etc/systemd/system/$OLD_UNIT_NAME")
 fi
 
 # 1. Tell the portal (best effort) before the identity key is deleted.
@@ -93,10 +101,12 @@ if [ "$UNENROLL" -eq 1 ] && [ -x "$BIN" ]; then
 fi
 
 # 2. Stop and disable the service, then remove its firewall rules.
-if systemctl list-unit-files "$UNIT_NAME" >/dev/null 2>&1 && systemctl cat "$UNIT_NAME" >/dev/null 2>&1; then
-  run systemctl disable --now "$UNIT_NAME" >/dev/null 2>&1 || true
-  ok "Service stopped and disabled"
-fi
+for un in "$UNIT_NAME" "$OLD_UNIT_NAME"; do
+  if systemctl list-unit-files "$un" >/dev/null 2>&1 && systemctl cat "$un" >/dev/null 2>&1; then
+    run systemctl disable --now "$un" >/dev/null 2>&1 || true
+    ok "Service $un stopped and disabled"
+  fi
+done
 if [ -x "$BIN" ]; then
   if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN cleanup"; else "$BIN" cleanup >/dev/null 2>&1 && ok "Firewall rules and WAF rules removed"; fi
 fi
@@ -111,7 +121,7 @@ for u in "${UNITS[@]}"; do
   [ -e "$u" ] && run rm -f "$u"
 done
 run systemctl daemon-reload || true
-run systemctl reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true
+run systemctl reset-failed "$UNIT_NAME" "$OLD_UNIT_NAME" >/dev/null 2>&1 || true
 
 # Lines appended to other software's files (CSF process ignore list).
 for l in "${LINES[@]}"; do
@@ -160,7 +170,7 @@ ok "Removed configuration and state directories"
 LEFT=()
 KEEP_HOME=()
 [ "$KEEP_LOGS" -eq 0 ] && [ ! -d "$HOME_DIR/.git" ] && KEEP_HOME=("$HOME_DIR")
-for p in "$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
+for p in "$BIN" /opt/xpguard /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xpguard /usr/local/cpanel/base/frontend/jupiter/xpguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard /usr/local/cpanel/base/frontend/jupiter/xmartguard \
          "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME; do

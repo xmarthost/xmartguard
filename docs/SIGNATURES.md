@@ -53,8 +53,8 @@ suspicious (confirmed by the AI) instead of quarantined.
 ### Measuring detection
 
 ```bash
-xmartguard-agent check /path --misses              # files NOT detected
-xmartguard-agent check /path --misses --no-hash    # the rules alone, without the hash list
+xpguard-agent check /path --misses              # files NOT detected
+xpguard-agent check /path --misses --no-hash    # the rules alone, without the hash list
 ```
 
 On a real quarantine of 2,162 files (2,100 genuinely malicious): the rules

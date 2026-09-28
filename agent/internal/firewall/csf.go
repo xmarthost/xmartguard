@@ -37,7 +37,7 @@ const (
 )
 
 // AgentBinary is the command csfpost.sh calls.
-var AgentBinary = "/opt/xmartguard/bin/xmartguard-agent"
+var AgentBinary = "/opt/xpguard/bin/xpguard-agent"
 
 func csfPath(p string) string { return filepath.Join(csfRoot, p) }
 
@@ -135,9 +135,11 @@ func EnsureCSFHook() error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if strings.Contains(string(b), csfHookTag) {
+	if strings.Contains(string(b), hookLine()) {
 		return nil
 	}
+	// Replace our line of another version (older program path or name).
+	b = []byte(dropLines(string(b), csfHookTag))
 	// Replace the hook line of an older version.
 	s := dropLines(string(b), legacyHookTag)
 	if s == "" {

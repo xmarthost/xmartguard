@@ -44,7 +44,7 @@ context. Read it top to bottom once; later use the tables as a map.
                           ^                                   findings mirror, IPDB,
                           | outbound WebSocket (TLS),         AI keys, WAF rule sets…)
                           | Ed25519-signed session
-                    xmartguard-agent (Go, systemd, root)  — one per hosting server
+                    xpguard-agent (Go, systemd, root)  — one per hosting server
                           |  local Unix socket /run/xmartguard/agent.sock
                           +── WHM plugin (root)  +── cPanel plugin (each account)
 ```
@@ -139,13 +139,13 @@ Automatic Suspension, Additional, Outgoing Spam, Notifications, About), `AIScann
 
 | Path | Purpose |
 |---|---|
-| `/opt/xmartguard/bin/xmartguard-agent` | agent binary (links `/usr/local/bin/xmartguard-agent`, `xmartguard`, `xgcli`) |
+| `/opt/xpguard/bin/xpguard-agent` | agent program under `xpguard-agent.service` (links `/usr/local/bin/xpguard-agent`, `xgcli`, and `/opt/xmartguard/bin/xmartguard-agent` for older scripts). Installs from before 0.10.1 are switched over by the agent itself (transient systemd job, rolls back to the old unit if the new one is not active after 20 s). |
 | `/etc/xmartguard/agent.json`, `identity.key`, `settings.json` | config, private key, security policy |
 | `/etc/xmartguard/waf/` | generated ModSecurity rules and lists (`rules.conf`, bot lists, `trusted-ips.txt`, `blocked-ips.txt`, `proxy-ranges.txt`, CRS) |
 | `/opt/xmartguard/data/` | SQLite DB, quarantine, signature caches, `clamav/` subscriptions, `trusted-services.json`, `host-trust.json` |
-| `/run/xmartguard/agent.sock` | local control socket (plugins, `xmartguard-agent call ACTION '{json}'`) |
-| `/etc/systemd/system/xmartguard-agent.service` | service |
-| Hooks written | `modsec2.user.conf` Include (cPanel), `/etc/sysctl.d/xmartguard.conf` (inotify), `csf.pignore`, `csfpost.sh` line, `/var/cpanel/rbl_info/*.yaml` (+ `exim.conf.localopts`), host firewall entries; all removed by `uninstall.sh` → `xmartguard-agent cleanup` |
+| `/run/xmartguard/agent.sock` | local control socket (plugins, `xpguard-agent call ACTION '{json}'`) |
+| `/etc/systemd/system/xpguard-agent.service` | service |
+| Hooks written | `modsec2.user.conf` Include (cPanel), `/etc/sysctl.d/xmartguard.conf` (inotify), `csf.pignore`, `csfpost.sh` line, `/var/cpanel/rbl_info/*.yaml` (+ `exim.conf.localopts`), host firewall entries; all removed by `uninstall.sh` → `xpguard-agent cleanup` |
 
 ## 5. Features (A to Z)
 
@@ -315,7 +315,7 @@ The product is branded **xPGuard** and the portal runs at
    removed.
 
 Internal names were kept on purpose so installed servers keep working:
-the service and binary `xmartguard-agent`, `/opt/xmartguard`,
+the service and binary `xpguard-agent`, `/opt/xmartguard`,
 `/etc/xmartguard`, `/var/log/xmartguard`, the firewall table, the database
 name and the `xmartguard` JSON keys between portal and agent. Everything a
 customer, cPanel user or site visitor sees says xPGuard (cPanel/WHM plugin

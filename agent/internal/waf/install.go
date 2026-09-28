@@ -218,8 +218,8 @@ func InspectScript(dir, agentBin string) string {
 
 // dvhosts is the marker span the agent owns inside a shared include file.
 const (
-	markBegin = "# >>> xmartguard-waf >>>"
-	markEnd   = "# <<< xmartguard-waf <<<"
+	markBegin = "# >>> xpguard-waf >>>"
+	markEnd   = "# <<< xpguard-waf <<<"
 )
 
 func writeIfChanged(path, content string, mode os.FileMode) error {
@@ -259,7 +259,7 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 		engine = "SecRuleEngine On\nSecRequestBodyAccess On\n"
 	}
 	rulesFile := filepath.Join(dir, "rules.conf")
-	include := fmt.Sprintf("%s\n# Managed by xmartguard-agent. Configure in the xPGuard portal.\n<IfModule security2_module>\n%sIncludeOptional %s\n</IfModule>\n%s\n", markBegin, engine, rulesFile, markEnd)
+	include := fmt.Sprintf("%s\n# Managed by the xPGuard agent. Configure in the xPGuard portal.\n<IfModule security2_module>\n%sIncludeOptional %s\n</IfModule>\n%s\n", markBegin, engine, rulesFile, markEnd)
 	if t.Plain {
 		// LiteSpeed WAF rule set: the file is plain ModSecurity rules.
 		include = rules
