@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, Moon, Palette, Save, Sun } from 'lucide-react';
 import { api } from '../api';
 import { can, useAuth } from '../auth';
@@ -54,8 +54,12 @@ export default function AppearancePage() {
     });
   }, []);
   // Preview live; leaving the page without saving restores the saved theme.
+  // (Only on leaving: restoring whenever "saved" changed put the old theme
+  // back right after a save.)
+  const savedRef = useRef<Appearance | null>(null);
+  savedRef.current = saved;
   useEffect(() => applyAppearance(cur), [cur]);
-  useEffect(() => () => void (saved && applyAppearance(saved)), [saved]);
+  useEffect(() => () => void (savedRef.current && applyAppearance(savedRef.current)), []);
 
   const pick = (t: ThemePreset) => setCur({ theme: t.id, mode: t.mode });
   const custom = cur.theme === 'custom';

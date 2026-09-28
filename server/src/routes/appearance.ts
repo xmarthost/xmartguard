@@ -20,13 +20,13 @@ export type Appearance = z.infer<typeof Appearance>;
 export const DEFAULT_APPEARANCE: Appearance = { theme: 'navy', mode: 'light' };
 
 export function appearanceRoutes(app: FastifyInstance, pool: Pool): void {
-  // Public: the login page is themed too. The portal serves one account;
-  // the first one's choice applies before sign-in.
+  // Public: the login page is themed too. Before sign-in (or after the
+  // session expired) the most recently saved choice applies.
   app.get('/api/appearance', async (req) => {
     const acc = req.user?.accountId;
     const { rows } = acc
       ? await pool.query('SELECT appearance FROM account_appearance WHERE account_id = $1', [acc])
-      : await pool.query('SELECT a.appearance FROM account_appearance a JOIN accounts c ON c.id = a.account_id ORDER BY c.created_at LIMIT 1');
+      : await pool.query('SELECT appearance FROM account_appearance ORDER BY updated_at DESC LIMIT 1');
     const parsed = Appearance.safeParse(rows[0]?.appearance);
     return { appearance: parsed.success ? parsed.data : DEFAULT_APPEARANCE };
   });
