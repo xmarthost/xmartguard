@@ -48,6 +48,9 @@ const (
 	IDWebshellDir   = 7700602
 	IDExploitProbe  = 7700603
 	IDProxyBlocked  = 7700701
+	IDGatePass      = 7700901
+	IDGateHTTP      = 7700902
+	IDGateHTTPS     = 7700903
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -138,7 +141,23 @@ type Options struct {
 	// Trusted: trusted-ips.txt lists search engine crawlers, uptime monitors
 	// and other trusted services; bot rules never apply to them.
 	Trusted bool
+	// Gate sends visitors of the protected login URLs to the CAPTCHA page
+	// until they carry a valid pass cookie (nil = off).
+	Gate *Gate
 }
+
+// Gate is the login-page CAPTCHA: the cookie values accepted now and the
+// CAPTCHA server's ports.
+type Gate struct {
+	Tokens    []string
+	HTTPPort  int
+	HTTPSPort int
+}
+
+// GateCookie is the cookie a solved login-page CAPTCHA sets.
+const GateCookie = "xg_gate"
+
+var reGateToken = regexp.MustCompile(`^[a-f0-9]{16,64}$`)
 
 // Render builds the rules file for the given settings.
 func Render(c settings.WAF, o Options) string {
@@ -261,6 +280,30 @@ func Render(c settings.WAF, o Options) string {
 		if len(custom) > 0 && !off[IDLoginCustom] {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'XMartGuard - Login attempt: protected URL',tag:'xmartguard/login',chain"`, IDLoginCustom)
 			w(`  SecRule REQUEST_FILENAME "@rx (?:%s)$" "t:none,t:urlDecodeUni,t:lowercase"`, strings.Join(custom, "|"))
+		}
+	}
+	if g := o.Gate; g != nil && len(g.Tokens) > 0 && len(c.LoginURLs) > 0 {
+		var urls []string
+		for _, u := range c.LoginURLs {
+			urls = append(urls, regexp.QuoteMeta(strings.ToLower(u)))
+		}
+		var toks []string
+		for _, t := range g.Tokens {
+			if reGateToken.MatchString(t) {
+				toks = append(toks, t)
+			}
+		}
+		if len(toks) > 0 {
+			// A visitor sent to the CAPTCHA is not an attack: not logged.
+			w(`SecRule REQUEST_COOKIES:%s "@rx ^(?:%s)$" "id:%d,phase:1,t:none,pass,nolog,setvar:tx.xg_gate=1"`, GateCookie, strings.Join(toks, "|"), IDGatePass)
+			gate := func(id, port int, scheme, cond string) {
+				w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:%s://%%{REQUEST_HEADERS.Host}:%d/.xmartguard/gate?back=%%{REQUEST_URI},nolog,noauditlog,msg:'XMartGuard - CAPTCHA required for a login page',tag:'xmartguard/captcha',chain"`,
+					strings.Join(urls, "|"), id, scheme, port)
+				w(`  SecRule &TX:xg_gate "@eq 0" "chain"`)
+				w(`  SecRule SERVER_PORT "%s"`, cond)
+			}
+			gate(IDGateHTTP, g.HTTPPort, "http", "@eq 80")
+			gate(IDGateHTTPS, g.HTTPSPort, "https", "!@eq 80")
 		}
 	}
 	if c.Webshell {

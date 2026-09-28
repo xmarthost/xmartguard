@@ -38,6 +38,8 @@ type Manager struct {
 	BlockedIPs func() []string
 	// TrustedIPs returns trusted services' addresses (bot rules skip them).
 	TrustedIPs func() []string
+	// Gate is the login-page CAPTCHA for the rules (nil or returning nil = off).
+	Gate func() *Gate
 
 	mu       sync.Mutex
 	target   Target
@@ -249,6 +251,9 @@ func (m *Manager) Apply() error {
 		rules := ""
 		if cfg.Enabled {
 			opts := Options{Dir: m.RulesDir, UploadScan: true, Trusted: len(m.trustedList()) > 0}
+			if m.Gate != nil {
+				opts.Gate = m.Gate()
+			}
 			if cfg.UploadScan {
 				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
 			}

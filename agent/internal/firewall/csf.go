@@ -2,10 +2,14 @@ package firewall
 
 import (
 	"bufio"
+	"context"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // CSF (ConfigServer Security & Firewall) compatibility.
@@ -174,4 +178,63 @@ func (m *Manager) CSF() CSFInfo {
 		c.Exempt = len(CSFExempt())
 	}
 	return c
+}
+
+// csfGateComment marks the rules that open the CAPTCHA ports under CSF.
+const csfGateComment = "xmartguard-captcha"
+
+// syncCSFGatePorts opens the CAPTCHA server's ports in front of CSF's own
+// chains while the login-page CAPTCHA is on (CSF keeps the port filter, so
+// the ports would otherwise be closed), and removes the rules when it is off.
+// csfpost.sh runs fw.apply after `csf -r`, which calls this again.
+var syncCSFGatePorts = func(ports []int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, bin := range []string{"iptables", "ip6tables"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			continue
+		}
+		// Remove ours first (also any with old ports), then add the current ones.
+		out, _ := run(ctx, "", bin, "-w", "-S", "INPUT")
+		for _, l := range strings.Split(string(out), "\n") {
+			if !strings.Contains(l, csfGateComment) || !strings.HasPrefix(l, "-A INPUT ") {
+				continue
+			}
+			args := append([]string{"-w", "-D", "INPUT"}, splitRule(strings.TrimPrefix(l, "-A INPUT "))...)
+			_, _ = run(ctx, "", bin, args...)
+		}
+		if len(ports) == 0 {
+			continue
+		}
+		var ps []string
+		for _, p := range ports {
+			ps = append(ps, strconv.Itoa(p))
+		}
+		_, _ = run(ctx, "", bin, "-w", "-I", "INPUT", "1", "-p", "tcp", "-m", "multiport", "--dports", strings.Join(ps, ","),
+			"-m", "comment", "--comment", csfGateComment, "-j", "ACCEPT")
+	}
+}
+
+// splitRule splits an iptables -S rule, keeping quoted words together.
+func splitRule(s string) []string {
+	var out []string
+	var cur strings.Builder
+	quoted := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			quoted = !quoted
+		case r == ' ' && !quoted:
+			if cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
 }

@@ -170,3 +170,25 @@ F=$(ls /etc/apache2/conf.d/userdata/ssl/2_4/*/YOUR-PORTAL-DOMAIN/xmartguard.conf
 printf '<IfModule security2_module>\n  SecRuleEngine Off\n</IfModule>\n' >> "$F"
 /usr/local/cpanel/scripts/rebuildhttpdconf && /usr/local/cpanel/scripts/restartsrv_httpd
 ```
+
+## Login-page CAPTCHA (0.9.10)
+
+Settings » WAF » **Captcha Protected URLs** has a switch: while on, every
+visitor of those URLs (by default `/wp-login.php`, `/xmlrpc.php`,
+`/administrator/index.php`, `/admin/index.php`) is sent to the CAPTCHA
+before the page opens; the rest of the website never shows it.
+
+- Rules 7700901–7700903: a request for a protected URL without a valid
+  `xg_gate` cookie is redirected (302) to
+  `http(s)://<host>:<captcha port>/.xmartguard/gate?back=<uri>`. Not logged
+  as an attack.
+- Solving it sets `xg_gate` (HttpOnly, SameSite=Lax, valid for the CAPTCHA
+  allow time) and returns the visitor to the login page. The cookie value is
+  an HMAC of the UTC day with a per-server secret; today's and yesterday's
+  are accepted and the WAF is re-applied when the day changes.
+- It does not unban or allow the address in the firewall. Banned addresses
+  still get the CAPTCHA on the whole site and are unbanned when they solve
+  it (Firewall » CAPTCHA).
+- The CAPTCHA ports (default 7780/7743) are opened in XMart Guard's port
+  filter and, under CSF, with an `iptables -I INPUT … xmartguard-captcha`
+  rule that csfpost.sh restores after `csf -r`.

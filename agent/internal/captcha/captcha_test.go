@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 )
@@ -155,5 +156,64 @@ func TestSelfSignedFallback(t *testing.T) {
 	}
 	if again, _ := c.Get(&tls.ClientHelloInfo{ServerName: "../../etc"}); again != cert {
 		t.Fatal("path-like name not sent to the fallback")
+	}
+}
+
+func TestLoginGateFlow(t *testing.T) {
+	s, solved := newServer(t)
+	s.GateSecret = bytes.Repeat([]byte{7}, 32)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	// The WAF sends the visitor here with the login page (query unencoded).
+	res, err := http.Get(srv.URL + "/.xmartguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || !strings.Contains(string(body), "login page is protected") || !strings.Contains(string(body), `name="gate" value="1"`) {
+		t.Fatalf("gate page: %d %s", res.StatusCode, body)
+	}
+	id := strings.ReplaceAll(regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(string(body))[1], "&#43;", "+")
+	digits, _ := s.open("127.0.0.1", id)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err = client.PostForm(srv.URL+"/.xmartguard/verify", url.Values{"id": {id}, "answer": {digits}, "gate": {"1"},
+		"back": {"/wp-login.php?redirect_to=/wp-admin/&reauth=1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	loc := res.Header.Get("Location")
+	if res.StatusCode != http.StatusSeeOther || !strings.HasPrefix(loc, "http://127.0.0.1/wp-login.php?redirect_to=") {
+		t.Fatalf("redirect: %d %q", res.StatusCode, loc)
+	}
+	var cookie *http.Cookie
+	for _, c := range res.Cookies() {
+		if c.Name == GateCookie {
+			cookie = c
+		}
+	}
+	if cookie == nil || cookie.Value != GateTokens(s.GateSecret, time.Now())[0] {
+		t.Fatalf("cookie: %+v", res.Cookies())
+	}
+	// Passing the login page does not unban or allow the address in the firewall.
+	if len(*solved) != 0 {
+		t.Fatalf("firewall touched: %v", *solved)
+	}
+	// Off-site back is refused.
+	if got := safeBack("//evil.example/"); got != "/" {
+		t.Fatal(got)
+	}
+}
+
+func TestGateTokens(t *testing.T) {
+	k := bytes.Repeat([]byte{1}, 32)
+	now := time.Unix(1_800_000_000, 0)
+	a, b := GateTokens(k, now), GateTokens(k, now.Add(24*time.Hour))
+	if len(a) != 2 || a[0] == a[1] || b[1] != a[0] || len(a[0]) != 32 {
+		t.Fatalf("%v %v", a, b)
+	}
+	if GateTokens(nil, now) != nil {
+		t.Fatal("tokens without a key")
 	}
 }

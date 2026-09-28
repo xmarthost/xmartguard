@@ -199,11 +199,26 @@ func (m *Manager) Build() (Ruleset, error) {
 	if cfg.PortFilter && !csf.Enabled {
 		rs.Ports = m.portFilter(cfg)
 	}
+	// The login-page CAPTCHA is reached directly on the CAPTCHA ports.
+	if gate := gatePorts(all2); rs.Ports != nil && len(gate) > 0 {
+		for _, p := range gate {
+			rs.Ports.TCPIn = append(rs.Ports.TCPIn, strconv.Itoa(p))
+		}
+	}
 	if cfg.Captcha || (all2.IPDB.Enabled && all2.IPDB.Captcha) {
 		rs.Captcha = &CaptchaRedirect{HTTPPort: all2.Captcha.HTTPPort, HTTPSPort: all2.Captcha.HTTPSPort,
 			TempBan: cfg.Captcha, IPDB: all2.IPDB.Enabled && all2.IPDB.Captcha}
 	}
 	return rs, nil
+}
+
+// gatePorts are the CAPTCHA server ports visitors reach directly while the
+// login-page CAPTCHA is on.
+func gatePorts(st settings.Settings) []int {
+	if !st.Captcha.LoginGate || !st.WAF.Enabled || len(st.WAF.LoginURLs) == 0 {
+		return nil
+	}
+	return []int{st.Captcha.HTTPPort, st.Captcha.HTTPSPort}
 }
 
 // Apply rebuilds the kernel ruleset (or removes it when disabled).
@@ -229,6 +244,9 @@ func (m *Manager) Apply() error {
 				m.Log.Warn("could not add the csfpost.sh hook", "err", herr)
 			}
 		}
+	}
+	if DetectCSF().Enabled {
+		syncCSFGatePorts(gatePorts(m.Settings.Get()))
 	}
 	m.mu.Lock()
 	m.lastError = ""

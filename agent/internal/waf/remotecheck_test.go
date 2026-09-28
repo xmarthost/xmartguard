@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 )
 
 func TestRemoteFromLogs(t *testing.T) {
@@ -41,5 +43,28 @@ func TestRemoteFromLogs(t *testing.T) {
 	}
 	if states[3].Detail != "" {
 		t.Fatalf("custom touched: %+v", states[3])
+	}
+}
+
+func TestGateRules(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.LoginURLs = []string{"/wp-login.php", "/admin/index.php"}
+	off := Render(c, Options{Dir: "/x"})
+	if strings.Contains(off, "xg_gate") {
+		t.Fatal("gate rendered while off")
+	}
+	on := Render(c, Options{Dir: "/x", Gate: &Gate{Tokens: []string{"0123456789abcdef0123456789abcdef", "bad token\""}, HTTPPort: 7780, HTTPSPort: 7743}})
+	for _, want := range []string{
+		`SecRule REQUEST_COOKIES:xg_gate "@rx ^(?:0123456789abcdef0123456789abcdef)$" "id:7700901`,
+		`redirect:http://%{REQUEST_HEADERS.Host}:7780/.xmartguard/gate?back=%{REQUEST_URI}`,
+		`redirect:https://%{REQUEST_HEADERS.Host}:7743/.xmartguard/gate?back=%{REQUEST_URI}`,
+		`(?:/wp-login\.php|/admin/index\.php)$`,
+	} {
+		if !strings.Contains(on, want) {
+			t.Fatalf("missing %q in\n%s", want, on)
+		}
+	}
+	if strings.Contains(on, "bad token") {
+		t.Fatal("invalid token rendered")
 	}
 }

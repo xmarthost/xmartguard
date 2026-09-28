@@ -42,6 +42,8 @@ type Server struct {
 	Certs *CertStore
 	// VerifyURL overrides the provider verification endpoint (tests).
 	VerifyURL string
+	// GateSecret signs the login-page pass cookie (see GateTokens).
+	GateSecret []byte
 
 	key      []byte
 	mu       sync.Mutex
@@ -71,7 +73,28 @@ func (s *Server) Run(ctx context.Context) {
 
 // Wanted reports whether any CAPTCHA option is on.
 func Wanted(st settings.Settings) bool {
-	return st.Firewall.Enabled && (st.Firewall.Captcha || (st.IPDB.Enabled && st.IPDB.Captcha))
+	return st.Firewall.Enabled && (st.Firewall.Captcha || (st.IPDB.Enabled && st.IPDB.Captcha)) || GateWanted(st)
+}
+
+// GateWanted reports whether the login pages show the CAPTCHA.
+func GateWanted(st settings.Settings) bool {
+	return st.Captcha.LoginGate && st.WAF.Enabled && len(st.WAF.LoginURLs) > 0
+}
+
+// GateTokens are the pass-cookie values the WAF accepts: one per UTC day,
+// today's first, then yesterday's (so a pass does not end at midnight).
+func GateTokens(secret []byte, now time.Time) []string {
+	if len(secret) == 0 {
+		return nil
+	}
+	day := now.UTC().Unix() / 86400
+	var out []string
+	for _, d := range []int64{day, day - 1} {
+		m := hmac.New(sha256.New, secret)
+		fmt.Fprintf(m, "gate|%d", d)
+		out = append(out, hex.EncodeToString(m.Sum(nil))[:32])
+	}
+	return out
 }
 
 func (s *Server) sync() {
@@ -164,6 +187,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case r.Method == http.MethodPost && r.URL.Path == "/.xmartguard/verify":
 		s.verify(w, r, ip)
+		return
+	case r.URL.Path == "/.xmartguard/gate":
+		// The WAF sends visitors of a login page here: back is the rest of
+		// the query, unencoded (ModSecurity cannot encode it).
+		back := "/"
+		if i := strings.Index(r.URL.RawQuery, "back="); i >= 0 {
+			back = r.URL.RawQuery[i+5:]
+		}
+		s.gatePage(w, r, ip, back, "")
 		return
 	}
 	s.page(w, r, ip, "")
@@ -268,8 +300,17 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 		// Challenges expire after 5 minutes; the attempt limit bounds guessing.
 		ok = valid && want != "" && strings.TrimSpace(r.PostForm.Get("answer")) == want
 	}
+	gate := r.PostForm.Get("gate") == "1"
 	if !ok {
-		s.page(w, r, ip, "That was not right. Please try again.")
+		if gate {
+			s.gatePage(w, r, ip, r.PostForm.Get("back"), "That was not right. Please try again.")
+		} else {
+			s.page(w, r, ip, "That was not right. Please try again.")
+		}
+		return
+	}
+	if gate {
+		s.gatePassed(w, r, ip, cfg)
 		return
 	}
 	if s.Solved != nil {
@@ -288,6 +329,67 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = doneTmpl.Execute(w, map[string]any{"Back": back, "Minutes": cfg.AllowMinutes})
+}
+
+// gatePassed sets the pass cookie and sends the visitor back to the login
+// page on the website itself (not the CAPTCHA port).
+func (s *Server) gatePassed(w http.ResponseWriter, r *http.Request, ip string, cfg settings.Captcha) {
+	toks := GateTokens(s.GateSecret, time.Now())
+	if len(toks) == 0 {
+		s.gatePage(w, r, ip, r.PostForm.Get("back"), "The check is not available right now. Please try again later.")
+		return
+	}
+	minutes := cfg.AllowMinutes
+	if minutes <= 0 {
+		minutes = 60
+	}
+	secure := r.TLS != nil
+	http.SetCookie(w, &http.Cookie{Name: GateCookie, Value: toks[0], Path: "/", MaxAge: minutes * 60,
+		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
+	s.Log.Info("login page captcha solved", "ip", ip)
+	http.Redirect(w, r, siteURL(r, safeBack(r.PostForm.Get("back"))), http.StatusSeeOther)
+}
+
+// GateCookie is the login-page pass cookie (the WAF checks its value).
+const GateCookie = "xg_gate"
+
+func safeBack(back string) string {
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, "/.xmartguard/") ||
+		strings.ContainsAny(back, "\r\n\\") || len(back) > 2000 {
+		return "/"
+	}
+	return back
+}
+
+// siteURL is back on the website: same host, standard port.
+func siteURL(r *http.Request, back string) string {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + host + back
+}
+
+func (s *Server) gatePage(w http.ResponseWriter, r *http.Request, ip, back, msg string) {
+	cfg := s.Settings.Get().Captcha
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	data := map[string]any{"IP": ip, "Msg": msg, "Back": safeBack(back), "Provider": cfg.Provider, "SiteKey": cfg.SiteKey, "Host": host, "Gate": true}
+	if cfg.Provider != "turnstile" && cfg.Provider != "recaptcha" {
+		id, _ := s.newChallenge(ip)
+		data["ID"] = id
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = pageTmpl.Execute(w, data)
 }
 
 func (s *Server) verifyProvider(ctx context.Context, cfg settings.Captcha, ip string, form url.Values) bool {
@@ -355,10 +457,11 @@ button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:8px;backgr
 .e{background:#fef2f2;color:#991b1b;padding:8px 10px;border-radius:8px;font-size:13px}.f{margin-top:18px;font-size:12px;color:#94a3b8}
 </style></head><body><div class="c">
 <h1>Security check</h1>
-<p>Your address <b>{{.IP}}</b> was temporarily blocked because of suspicious activity. Prove you are a person to continue to {{.Host}}.</p>
+{{if .Gate}}<p>This login page is protected. Prove you are a person to continue to {{.Host}}{{.Back}}.</p>
+{{else}}<p>Your address <b>{{.IP}}</b> was temporarily blocked because of suspicious activity. Prove you are a person to continue to {{.Host}}.</p>{{end}}
 {{if .Msg}}<p class="e">{{.Msg}}</p>{{end}}
 <form method="post" action="/.xmartguard/verify">
-<input type="hidden" name="back" value="{{.Back}}">
+<input type="hidden" name="back" value="{{.Back}}">{{if .Gate}}<input type="hidden" name="gate" value="1">{{end}}
 {{if eq .Provider "turnstile"}}<div class="cf-turnstile" data-sitekey="{{.SiteKey}}"></div>
 {{else if eq .Provider "recaptcha"}}<div class="g-recaptcha" data-sitekey="{{.SiteKey}}"></div>
 {{else}}<input type="hidden" name="id" value="{{.ID}}">

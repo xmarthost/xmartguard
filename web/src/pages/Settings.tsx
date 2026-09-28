@@ -143,7 +143,7 @@ interface IPDBS {
 }
 interface AllSettings {
   firewall?: { captcha: boolean };
-  captcha?: { provider: string; site_key: string };
+  captcha?: { provider: string; site_key: string; login_gate?: boolean; allow_minutes?: number; http_port?: number; https_port?: number };
   scanner: ScannerS;
   ipdb: IPDBS;
   waf: WAFS;
@@ -817,7 +817,16 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
           Save
         </button>
       </div>
-      <ListEditor title="Captcha Protected URLs" desc="List of URLs that are protected by the WAF brute-force and CAPTCHA module" items={s.login_urls ?? []} disabled={dis} placeholder="Type here" validate={(v) => (v.startsWith('/') ? null : 'Enter a path starting with /')} onChange={(v) => onSave({ login_urls: v })} />
+      <ListEditor
+        title="Captcha Protected URLs"
+        desc={`Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF).`}
+        header={<Toggle on={Boolean(all.captcha?.login_gate)} disabled={dis || !s.enabled} onChange={(v) => saveAll({ captcha: { login_gate: v } } as any, v ? 'CAPTCHA on the login pages' : 'Login page CAPTCHA off')} />}
+        items={s.login_urls ?? []}
+        disabled={dis}
+        placeholder="Type here"
+        validate={(v) => (v.startsWith('/') ? null : 'Enter a path starting with /')}
+        onChange={(v) => onSave({ login_urls: v })}
+      />
       <ListEditor
         title="Bad Bot blocker"
         desc="Block web requests from the bad bots listed below with ModSecurity (the User-Agent contains the entry, any case)"
@@ -860,6 +869,13 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {info.data && (
         <div className="py-4">
           <div className="mb-1 font-medium text-navy-900">XMart Guard rules</div>
+          {meFeed && (
+            <p className="mb-2 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
+              This list shows XMart Guard's own rules only. The Malware.Expert rules on this server are downloaded by the web server straight from Malware.Expert
+              when it starts, so they are not stored here; whether they loaded shows under WAF Rule Sets » Rollout, and their blocks appear in WAF Logs with
+              Malware.Expert's rule ids.
+            </p>
+          )}
           <p className="mb-2 text-sm text-slate-500">Switch single rules on or off. Switching on a rule of a group that is off turns on only that rule.</p>
           <table className="w-full text-sm">
             <tbody className="divide-y divide-slate-100">

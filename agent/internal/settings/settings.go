@@ -128,6 +128,10 @@ type Captcha struct {
 	AllowMinutes int    `json:"allow_minutes"` // how long a solved CAPTCHA allows the address
 	HTTPPort     int    `json:"http_port"`
 	HTTPSPort    int    `json:"https_port"`
+	// LoginGate shows the CAPTCHA to every visitor of the protected login
+	// URLs (Settings » WAF » Captcha Protected URLs) before the login page;
+	// the rest of the website is not affected.
+	LoginGate bool `json:"login_gate"`
 }
 
 // AI gives files a second opinion ("AI scanner"). The default provider is

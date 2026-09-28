@@ -147,11 +147,19 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			}
 			return out
 		}}
-	a.Captcha = &captcha.Server{Settings: st, Log: log, Solved: func(ip string) error {
+	gateSecret := loadGateSecret(db)
+	a.Captcha = &captcha.Server{Settings: st, Log: log, GateSecret: gateSecret, Solved: func(ip string) error {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
-		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.trustedCIDRs}
+		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.trustedCIDRs,
+		Gate: func() *waf.Gate {
+			cur := a.Settings.Get()
+			if !captcha.GateWanted(cur) {
+				return nil
+			}
+			return &waf.Gate{Tokens: captcha.GateTokens(gateSecret, time.Now()), HTTPPort: cur.Captcha.HTTPPort, HTTPSPort: cur.Captcha.HTTPSPort}
+		}}
 	a.CMS = &cms.Manager{DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
 		Accounts: func() []cms.Account {
 			var out []cms.Account
@@ -197,6 +205,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.proxyListLoop(ctx)
 	go a.trustedLoop(ctx)
 	go a.clamLoop(ctx)
+	go a.gateLoop(ctx)
 }
 
 // portalPorts returns the TCP port the agent uses to reach the portal.
@@ -559,13 +568,15 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		if strings.Join(before.DDNS, ",") != strings.Join(next.Firewall.DDNS, ",") {
 			a.Firewall.RefreshDDNS(ctx)
 		}
-		if fwChanged(before, next.Firewall) || beforeIPDB != next.IPDB || beforeCaptcha != next.Captcha {
+		gateChanged := beforeCaptcha != next.Captcha || beforeWAF.Enabled != next.WAF.Enabled ||
+			strings.Join(beforeWAF.LoginURLs, ",") != strings.Join(next.WAF.LoginURLs, ",")
+		if fwChanged(before, next.Firewall) || beforeIPDB != next.IPDB || gateChanged {
 			if err := a.Firewall.Apply(); err != nil {
 				return nil, fmt.Errorf("settings saved, but the firewall could not be applied: %w", err)
 			}
 		}
 		// Trusted services changed: the WAF's trusted list follows.
-		if wafChanged(beforeWAF, next.WAF) || a.WAF.TrustedListChanged() {
+		if wafChanged(beforeWAF, next.WAF) || a.WAF.TrustedListChanged() || gateChanged {
 			if err := a.WAF.Apply(); err != nil {
 				return map[string]any{"settings": masked(next), "warning": err.Error()}, nil
 			}
