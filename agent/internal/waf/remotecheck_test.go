@@ -9,6 +9,7 @@ import (
 )
 
 func TestCheckRemote(t *testing.T) {
+	outgoingIP = func(context.Context) string { return "203.0.113.7" }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Header.Get("ModSec-key") {
 		case "GOOD.1":
@@ -26,7 +27,8 @@ func TestCheckRemote(t *testing.T) {
 	if _, err := checkRemote(context.Background(), "BAD.1", srv.URL); err == nil || !strings.Contains(err.Error(), "HTTP 403") || !strings.Contains(err.Error(), "IP") {
 		t.Fatalf("bad: %v", err)
 	}
-	if _, err := checkRemote(context.Background(), "EMPTY.1", srv.URL); err == nil || !strings.Contains(err.Error(), "no rules") {
+	if _, err := checkRemote(context.Background(), "EMPTY.1", srv.URL); err == nil || !strings.Contains(err.Error(), "no rules") ||
+		!strings.Contains(err.Error(), "not licensed") || !strings.Contains(err.Error(), "203.0.113.7") {
 		t.Fatalf("empty: %v", err)
 	}
 

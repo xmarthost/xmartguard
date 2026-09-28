@@ -92,7 +92,7 @@ var (
 		"netsparker", "dirbuster", "gobuster", "feroxbuster", "fuzz faster u fool", "whatweb", "jorgee", "zmeu",
 		"morfeus", "havij", "w3af", "openvas", "arachni", "skipfish", "commix", "wfuzz"}
 	SEOBots = settings.SEOCrawlers
-	AIBots = []string{"gptbot", "ccbot", "bytespider", "amazonbot", "perplexitybot", "claudebot", "anthropic-ai",
+	AIBots  = []string{"gptbot", "ccbot", "bytespider", "amazonbot", "perplexitybot", "claudebot", "anthropic-ai",
 		"imagesiftbot", "diffbot", "omgili", "cohere-ai", "meta-externalagent"}
 )
 

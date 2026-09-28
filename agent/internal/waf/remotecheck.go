@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -53,10 +54,16 @@ func checkRemote(ctx context.Context, key, url string) (int, error) {
 		}
 		return 0, fmt.Errorf("%s", msg)
 	}
-	n := 0
+	n, size := 0, 0
+	var head []byte
 	sc := bufio.NewScanner(io.LimitReader(res.Body, 64<<20))
 	sc.Buffer(make([]byte, 1<<20), 4<<20)
 	for sc.Scan() {
+		size += len(sc.Bytes()) + 1
+		if len(head) < 200 {
+			head = append(head, sc.Bytes()...)
+			head = append(head, ' ')
+		}
 		if reRuleLine.MatchString(sc.Text()) {
 			n++
 		}
@@ -65,13 +72,65 @@ func checkRemote(ctx context.Context, key, url string) (int, error) {
 		return n, fmt.Errorf("reading the feed: %v", err)
 	}
 	if n == 0 {
-		return 0, fmt.Errorf("the feed answered but contains no rules: check the license key and that this server's IP is on the license")
+		// Say what came back (the vendor's message, an HTML page, a binary
+		// file…) so the cause can be seen from the portal.
+		got := "an empty answer"
+		if size > 0 {
+			got = fmt.Sprintf("%d bytes (%s): %q", size, res.Header.Get("Content-Type"), preview(head, key))
+		}
+		return 0, fmt.Errorf("the feed answered but contains no rules, got %s: check the license key and that this server's outgoing IP (%s) is on the license", got, outgoingIP(ctx))
 	}
 	return n, nil
 }
 
+// preview is the start of an answer as printable text, without the key.
+func preview(b []byte, key string) string {
+	var sb strings.Builder
+	for _, r := range string(b) {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			sb.WriteByte(' ')
+		case r < 32 || r == 0xfffd:
+			sb.WriteByte('.')
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	t := strings.Join(strings.Fields(sb.String()), " ")
+	if key != "" {
+		t = strings.ReplaceAll(t, key, "<key>")
+	}
+	if len(t) > 120 {
+		t = t[:120] + "…"
+	}
+	return t
+}
+
+// outgoingIP is the address this server uses to reach the internet, which
+// is what a per-IP license sees (it can differ from the main IP).
+var outgoingIP = func(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	for _, u := range []string{"https://api.ipify.org", "https://ifconfig.me/ip"} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			continue
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			continue
+		}
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 64))
+		res.Body.Close()
+		if ip := strings.TrimSpace(string(b)); res.StatusCode == 200 && net.ParseIP(ip) != nil {
+			return ip
+		}
+	}
+	return "unknown"
+}
+
 // checkRemoteStates updates the state of each active remote feed with the
-// outcome of a download check (cached for an hour per key and URL).
+// outcome of a download check (cached for an hour per key and URL, five minutes after a failure).
 func (m *Manager) checkRemoteStates(states []RuleSetState) {
 	m.mu.Lock()
 	feeds := append([]RemoteRules(nil), m.ruleSets.Remote...)
@@ -88,7 +147,8 @@ func (m *Manager) checkRemoteStates(states []RuleSetState) {
 			remoteMu.Lock()
 			r, ok := remoteCache[ck]
 			remoteMu.Unlock()
-			if !ok || time.Since(r.at) > time.Hour {
+			// Failures are retried sooner, so a fixed key or license shows up quickly.
+			if !ok || time.Since(r.at) > time.Hour || (r.err != nil && time.Since(r.at) > 5*time.Minute) {
 				n, err := RemoteCheck(context.Background(), f.Key, f.URL)
 				r = remoteResult{rules: n, err: err, at: time.Now()}
 				remoteMu.Lock()
