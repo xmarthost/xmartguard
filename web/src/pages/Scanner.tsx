@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Download, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Sparkles, Square, Trash2 } from 'lucide-react';
+import { Database, Download, File, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Settings as Cog, Sparkles, Square, Timer, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { bytes } from '../format';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Badge, Modal, Pager, agentCall, fmtTime, useAction, useAgent, useToast } from '../components/controls';
 import { useApi } from '../hooks';
+import { compact } from '../components/AttackOverview';
 import type { Server } from '../api';
 
 interface Scan {
@@ -270,6 +271,86 @@ function toCSV(rows: Finding[]): string {
   return [head.join(','), ...rows.map((f) => [fmtTime(f.created_at), f.path, f.owner, f.category, f.signature, f.status, f.sha256, f.size].map(esc).join(','))].join('\n');
 }
 
+interface ScanReportData {
+  scan: Scan;
+  duration: number;
+  findings: number;
+  cms_threats: number;
+  outdated_cms: number;
+  cms_sites: number;
+  db_infected: number;
+  db_scanned: number;
+}
+
+/** "1 day 9 hours", "12 minutes", "40 seconds". */
+export function humanDuration(sec: number): string {
+  const parts: string[] = [];
+  const units: [number, string][] = [[86400, 'day'], [3600, 'hour'], [60, 'minute'], [1, 'second']];
+  for (const [n, name] of units) {
+    const v = Math.floor(sec / n);
+    if (v > 0) {
+      parts.push(`${v} ${name}${v === 1 ? '' : 's'}`);
+      sec -= v * n;
+    }
+    if (parts.length === 2) break;
+  }
+  return parts.join(' ') || '0 seconds';
+}
+
+/** One summary card of a scan report, with the big faded icon on the left edge. */
+function ReportCard({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="card relative overflow-hidden px-6 py-5">
+      <div className="pointer-events-none absolute top-1/2 -left-14 -translate-y-1/2 text-slate-200/60 [&>svg]:h-36 [&>svg]:w-36 [&>svg]:stroke-[1.25]">{icon}</div>
+      <div className="relative pl-14">{children}</div>
+    </div>
+  );
+}
+
+/** cPGuard-style report header for one scan. */
+function ScanReport({ serverId, scanId }: { serverId: string; scanId: number }) {
+  const r = useAgent<ScanReportData>(serverId, 'scan.report', { id: scanId }, 5000);
+  if (!r.data) return r.error ? <ErrorBox message={r.error} /> : <SectionLoader />;
+  const d = r.data;
+  const sc = d.scan;
+  const running = sc.status === 'running' || sc.status === 'queued';
+  const target = sc.kind === 'full' || !sc.target.startsWith('/') ? 'ALL' : sc.target;
+  const line = (v: number, label: string, red?: boolean) => (
+    <div className="flex items-baseline gap-2">
+      <span className={`text-2xl font-semibold ${red && v > 0 ? 'text-red-600' : 'text-navy-900'}`}>{compact(v)}</span>
+      <span className="text-slate-500">{label}</span>
+    </div>
+  );
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <ReportCard icon={<Cog />}>
+        {line(sc.infected, 'Infected files', true)}
+        {line(sc.files, 'Files scanned')}
+      </ReportCard>
+      <ReportCard icon={<File />}>
+        {line(d.cms_threats, 'CMS threats', true)}
+        {line(d.outdated_cms, 'Outdated CMS')}
+      </ReportCard>
+      <ReportCard icon={<Database />}>
+        {line(d.db_infected, 'Infected entries', true)}
+        {line(d.db_scanned, 'database scanned')}
+      </ReportCard>
+      <ReportCard icon={<Timer />}>
+        <div className="font-semibold text-navy-900">Target</div>
+        <div className="truncate font-mono text-xs uppercase text-slate-500" title={sc.target}>{target}</div>
+        <div className="mt-1 text-sm">
+          <span className="font-semibold text-navy-900">Duration :</span>{' '}
+          <span className="text-slate-600">{humanDuration(d.duration)}{running ? ' (running)' : ''}</span>
+        </div>
+        <div className="text-xs text-slate-400">
+          {fmtTime(sc.started_at)}
+          {sc.finished_at > 0 && ` → ${fmtTime(sc.finished_at)}`} · {sc.status}
+        </div>
+      </ReportCard>
+    </div>
+  );
+}
+
 export function ScannerLogs() {
   const { id } = useParams();
   const host = useServerName(id);
@@ -309,9 +390,17 @@ export function ScannerLogs() {
   const rows = list.data?.findings ?? [];
   return (
     <div className="space-y-5">
+      {scanId > 0 && (
+        <div>
+          <Breadcrumb items={[host, 'Manual Scans', `Report #${scanId}`]} />
+          <div className="mt-3">
+            <ScanReport serverId={id!} scanId={scanId} />
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <Breadcrumb items={[host, 'Scanner Logs']} />
+          {scanId === 0 && <Breadcrumb items={[host, 'Scanner Logs']} />}
           <h1 className="h-title">Virus Scanner Logs</h1>
           {scanId > 0 && (
             <div className="mt-1 text-sm text-slate-500">
@@ -378,7 +467,9 @@ export function ScannerLogs() {
         {list.loading && !list.data ? (
           <SectionLoader />
         ) : rows.length === 0 ? (
-          <Empty text="No detections — this server looks clean" />
+          list.error && !list.data ? null : (
+            <Empty text={scanId > 0 ? 'No new detections recorded by this scan (files already in quarantine or cleared by the AI are not listed again)' : 'No detections — this server looks clean'} />
+          )
         ) : (
           <>
             {/* Phones: one card per detection. */}
@@ -427,12 +518,12 @@ export function ScannerLogs() {
                       <input type="checkbox" checked={sel.length === rows.length} onChange={(e) => setSel(e.target.checked ? rows.map((r) => r.id) : [])} />
                     )}
                   </th>
-                  <th className="py-3 font-medium">Filename</th>
-                  <th className="py-3 font-medium">Category</th>
-                  <th className="py-3 font-medium">Signature</th>
-                  <th className="py-3 font-medium">AI</th>
-                  <th className="py-3 font-medium">User</th>
-                  <th className="py-3 font-medium">Action</th>
+                  <th className="py-3 pr-4 font-medium">Filename</th>
+                  <th className="py-3 pr-4 font-medium">Category</th>
+                  <th className="py-3 pr-4 font-medium">Signature</th>
+                  <th className="py-3 pr-4 font-medium">AI</th>
+                  <th className="py-3 pr-4 font-medium">User</th>
+                  <th className="py-3 pr-4 font-medium">Action</th>
                   <th className="py-3 font-medium">Time</th>
                 </tr>
               </thead>

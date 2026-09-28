@@ -456,6 +456,21 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return map[string]any{"ok": true}, a.Scanner.DeleteScan(in.ID)
 	}
+	// scan.report: the summary shown above a scan's detections (like a
+	// cPGuard report): files, detections, CMS and database state, duration.
+	h["scan.report"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID int64 `json:"id"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		sc, err := a.Scanner.GetScan(in.ID)
+		if err != nil {
+			return nil, fmt.Errorf("scan #%d not found", in.ID)
+		}
+		return a.scanReport(sc), nil
+	}
 	h["scan.list"] = func(context.Context, json.RawMessage) (any, error) {
 		scans, err := a.Scanner.ListScans(100)
 		return map[string]any{"scans": scans}, err

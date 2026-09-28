@@ -13,6 +13,7 @@ import { currentRelease } from '../agents/release.js';
 export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?: number }> = {
   'stats.get': { role: 'viewer', mutates: false },
   'scan.list': { role: 'viewer', mutates: false },
+  'scan.report': { role: 'viewer', mutates: false },
   'scanner.paths': { role: 'viewer', mutates: false },
   'findings.list': { role: 'viewer', mutates: false },
   'settings.get': { role: 'viewer', mutates: false },

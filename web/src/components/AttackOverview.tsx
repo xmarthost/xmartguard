@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
-  AlertTriangle, BookOpen, ChevronDown, Clock, Database, Globe, LineChart, Lock, Settings2, ShieldCheck, TrendingDown, TrendingUp,
+  AlertTriangle, BookOpen, ChevronDown, Clock, Database, Globe, LineChart, Lock, Settings, ShieldCheck, TrendingDown, TrendingUp,
 } from 'lucide-react';
 import { useAgent } from './controls';
 
@@ -80,8 +80,9 @@ function Metric({ icon, p, label }: { icon: React.ReactNode; p: Period; label: s
   const c = change(p.current, p.previous);
   return (
     <div className="card relative overflow-hidden px-6 py-5">
-      <div className="pointer-events-none absolute top-1/2 -left-5 -translate-y-1/2 text-slate-100 [&>svg]:h-28 [&>svg]:w-28 [&>svg]:stroke-[1.5]">{icon}</div>
-      <div className="relative flex items-center justify-between gap-3 pl-10">
+      {/* Big faded icon cut by the card's left edge, as on cPGuard. */}
+      <div className="pointer-events-none absolute top-1/2 -left-14 -translate-y-1/2 text-slate-200/60 [&>svg]:h-36 [&>svg]:w-36 [&>svg]:stroke-[1.25]">{icon}</div>
+      <div className="relative flex items-center justify-between gap-3 pl-14">
         <div>
           <div className="flex items-baseline gap-2">
             <span className="text-4xl font-semibold text-navy-900">{compact(p.current)}</span>
@@ -214,7 +215,7 @@ export default function AttackOverview({ serverId, online, days }: { serverId: s
     <div className="space-y-5">
       {data.services && data.services.length > 0 && <ServiceStrip services={data.services} />}
       <div className="grid gap-4 md:grid-cols-3">
-        <Metric icon={<Settings2 />} p={data.threats} label="Threats Stopped" />
+        <Metric icon={<Settings />} p={data.threats} label="Threats Stopped" />
         <Metric icon={<Lock />} p={data.web_attacks} label="Web Attacks Blocked" />
         <Metric icon={<Clock />} p={data.blocked_connections} label="Blocked Connections" />
       </div>

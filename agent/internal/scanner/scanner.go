@@ -837,6 +837,14 @@ func (s *Scanner) ScanFile(path string) {
 // ListScans returns recent scans, newest first.
 func (s *Scanner) ListScans(limit int) ([]Scan, error) { return s.ListScansUnder("", limit) }
 
+// GetScan returns one scan.
+func (s *Scanner) GetScan(id int64) (Scan, error) {
+	var sc Scan
+	err := s.DB.QueryRow(`SELECT id, kind, target, status, files, total, current, infected, initiator, started_at, finished_at, error FROM scans WHERE id = ?`, id).
+		Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error)
+	return sc, err
+}
+
 // ListScansUnder lists scans whose target is dir or below it ("" = all).
 func (s *Scanner) ListScansUnder(dir string, limit int) ([]Scan, error) {
 	q, args := `SELECT id, kind, target, status, files, total, current, infected, initiator, started_at, finished_at, error FROM scans`, []any{}
