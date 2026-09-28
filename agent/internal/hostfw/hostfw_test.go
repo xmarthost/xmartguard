@@ -64,7 +64,7 @@ func TestSyncCSF(t *testing.T) {
 	}
 	allow, _ := os.ReadFile(h.Root + "/etc/csf/csf.allow")
 	ignore, _ := os.ReadFile(h.Root + "/etc/csf/csf.ignore")
-	if !strings.Contains(string(allow), "162.55.6.159 # XMart Guard portal") || !strings.Contains(string(ignore), "162.55.6.159 # XMart Guard portal") {
+	if !strings.Contains(string(allow), "162.55.6.159 # xPGuard portal") || !strings.Contains(string(ignore), "162.55.6.159 # xPGuard portal") {
 		t.Fatalf("allow=%q ignore=%q", allow, ignore)
 	}
 	// Second sync: nothing to do.
@@ -100,5 +100,23 @@ func TestAdminEntryKept(t *testing.T) {
 	allow, _ := os.ReadFile(h.Root + "/etc/csf/csf.allow")
 	if !strings.Contains(string(allow), "# my portal") {
 		t.Fatalf("admin entry removed: %q", allow)
+	}
+}
+
+func TestLegacyCommentRenamed(t *testing.T) {
+	h, _ := fakeHost(t)
+	allow := h.Root + "/etc/csf/csf.allow"
+	_ = os.WriteFile(allow, []byte("1.2.3.4 # admin\n162.55.6.159 # XMart Guard portal\n"), 0o600)
+	h.renameLegacy("/etc/csf/csf.allow")
+	b, _ := os.ReadFile(allow)
+	if strings.Contains(string(b), "XMart") || !strings.Contains(string(b), "162.55.6.159 # xPGuard portal") || !strings.Contains(string(b), "1.2.3.4 # admin") {
+		t.Fatalf("%s", b)
+	}
+	if !h.hasOurLine("/etc/csf/csf.allow", "162.55.6.159") {
+		t.Fatal("renamed line not ours")
+	}
+	_ = os.WriteFile(allow, []byte("162.55.6.159 # XMart Guard portal\n"), 0o600)
+	if !h.hasOurLine("/etc/csf/csf.allow", "162.55.6.159") {
+		t.Fatal("legacy line not recognised")
 	}
 }

@@ -88,7 +88,7 @@ func (m *Manager) Status() Status {
 	warn := ""
 	switch t.Engine {
 	case "DetectionOnly":
-		warn = "ModSecurity is in detection-only mode on this server: XMart Guard rules log attacks but do not block them. Set SecRuleEngine On to enforce."
+		warn = "ModSecurity is in detection-only mode on this server: xPGuard rules log attacks but do not block them. Set SecRuleEngine On to enforce."
 	case "Off":
 		warn = "ModSecurity's rule engine is turned off on this server (SecRuleEngine Off): the WAF rules are inactive."
 	}
@@ -196,7 +196,7 @@ func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
 		}
 	}
 	if rule == nil {
-		return nil, fmt.Errorf("unknown XMart Guard rule %d", id)
+		return nil, fmt.Errorf("unknown xPGuard rule %d", id)
 	}
 	disabled := map[int]bool{}
 	for _, d := range c.DisabledRules {
@@ -228,10 +228,10 @@ func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
 	return patch, nil
 }
 
-// Apply detects the web server, renders and installs the rules: XMart
-// Guard's own (when enabled) plus the OWASP CRS and custom rules from the
+// Apply detects the web server, renders and installs the rules: xPGuard's
+// own (when enabled) plus the OWASP CRS and custom rules from the
 // portal's WAF Rule Sets. If the web server rejects the extra rule sets,
-// they are left out so XMart Guard's rules keep protecting the sites.
+// they are left out so xPGuard's rules keep protecting the sites.
 func (m *Manager) Apply() error {
 	t := Detect()
 	cfg := m.Settings.Get().WAF
@@ -260,7 +260,7 @@ func (m *Manager) Apply() error {
 			}
 			rules = Render(cfg, opts)
 		} else {
-			rules = "# XMart Guard's own rules are turned off; rule sets from the portal follow.\n"
+			rules = "# xPGuard's own rules are turned off; rule sets from the portal follow.\n"
 		}
 		rules = selfTestRule + "\n" + rules
 		bots := m.listFiles(cfg)

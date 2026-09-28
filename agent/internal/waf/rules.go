@@ -1,4 +1,4 @@
-// Package waf manages XMart Guard's ModSecurity rule set on Apache (and
+// Package waf manages xPGuard's ModSecurity rule set on Apache (and
 // LiteSpeed, which reads the same rules), reads ModSecurity events from the
 // web server error log, and bans IPs with repeated failed CMS logins.
 //
@@ -60,9 +60,9 @@ type RuleInfo struct {
 	Action   string `json:"action"`
 }
 
-// Catalog lists every rule XMart Guard can load.
+// Catalog lists every rule xPGuard can load.
 var Catalog = []RuleInfo{
-	{IDUploadMalware, "upload_scan", "Scan uploaded files with the XMart Guard malware engine", "block"},
+	{IDUploadMalware, "upload_scan", "Scan uploaded files with the xPGuard malware engine", "block"},
 	{IDUploadPHP, "block_php_upload", "Block uploads of PHP files through web forms", "block"},
 	{IDSensitive, "sensitive_files", "Block access to .env, .git, config backups, logs and SQL dumps", "block"},
 	{IDUploadsPHP, "wordpress", "Block running PHP files inside wp-content/uploads", "block"},
@@ -165,8 +165,8 @@ func isGateRule(id int) bool { return id >= 7700900 && id <= 7700909 }
 func Render(c settings.WAF, o Options) string {
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
-	w("# XMart Guard WAF rules. Managed by xmartguard-agent: changes here are overwritten.")
-	w("# Configure them in the XMart Guard portal (Settings » WAF & Bruteforce).")
+	w("# xPGuard WAF rules. Managed by xmartguard-agent: changes here are overwritten.")
+	w("# Configure them in the xPGuard portal (Settings » WAF & Bruteforce).")
 	w("")
 	if len(c.WhitelistIPs) > 0 {
 		ips := make([]string, len(c.WhitelistIPs))
@@ -211,65 +211,65 @@ func Render(c settings.WAF, o Options) string {
 	}
 	if c.UploadScan && o.UploadScan && o.InspectPath != "" {
 		w(`SecTmpSaveUploadedFiles On`)
-		w(`SecRule FILES_TMPNAMES "@inspectFile %s" "id:%d,phase:2,t:none,deny,status:403,log,msg:'XMartGuard - Malware upload blocked',tag:'xmartguard/upload'"`, o.InspectPath, IDUploadMalware)
+		w(`SecRule FILES_TMPNAMES "@inspectFile %s" "id:%d,phase:2,t:none,deny,status:403,log,msg:'xPGuard - Malware upload blocked',tag:'xpguard/upload'"`, o.InspectPath, IDUploadMalware)
 	}
 	if c.BlockPHPUpload {
-		rule(IDUploadPHP, `SecRule FILES "@rx \.(?:php[0-9]?|phtml|phar|pht|phps)$" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'XMartGuard - PHP file upload blocked',tag:'xmartguard/upload'"`, IDUploadPHP)
+		rule(IDUploadPHP, `SecRule FILES "@rx \.(?:php[0-9]?|phtml|phar|pht|phps)$" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP file upload blocked',tag:'xpguard/upload'"`, IDUploadPHP)
 	}
 	if c.SensitiveFiles {
-		rule(IDSensitive, `SecRule REQUEST_FILENAME "@rx /(?:\.env$|\.git/|\.svn/|\.hg/|\.htpasswd$|\.DS_Store$|\.env\.[a-z0-9_-]+$|[^/]+\.php[0-9]?(?:\.bak|\.old|\.orig|\.save|\.swp|\.txt|\.zip|~)$|debug\.log$|error_log$|[^/]+\.sql(?:\.gz|\.zip)?$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Access to sensitive file blocked',tag:'xmartguard/files'"`, IDSensitive)
+		rule(IDSensitive, `SecRule REQUEST_FILENAME "@rx /(?:\.env$|\.git/|\.svn/|\.hg/|\.htpasswd$|\.DS_Store$|\.env\.[a-z0-9_-]+$|[^/]+\.php[0-9]?(?:\.bak|\.old|\.orig|\.save|\.swp|\.txt|\.zip|~)$|debug\.log$|error_log$|[^/]+\.sql(?:\.gz|\.zip)?$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Access to sensitive file blocked',tag:'xpguard/files'"`, IDSensitive)
 	}
 	if c.WordPress {
-		rule(IDUploadsPHP, `SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - PHP execution in uploads blocked',tag:'xmartguard/wordpress'"`, IDUploadsPHP)
-		rule(IDPHPInAssets, `SecRule REQUEST_FILENAME "@rx /(?:wp-content|wp-includes)/(?:[^?]*/)?(?:images?|img|fonts?|css|js)/[^/]*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - PHP execution in an assets folder blocked',tag:'xmartguard/wordpress',chain"`, IDPHPInAssets)
+		rule(IDUploadsPHP, `SecRule REQUEST_FILENAME "@rx /wp-content/uploads/.*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP execution in uploads blocked',tag:'xpguard/wordpress'"`, IDUploadsPHP)
+		rule(IDPHPInAssets, `SecRule REQUEST_FILENAME "@rx /(?:wp-content|wp-includes)/(?:[^?]*/)?(?:images?|img|fonts?|css|js)/[^/]*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP execution in an assets folder blocked',tag:'xpguard/wordpress',chain"`, IDPHPInAssets)
 		if !off[IDPHPInAssets] {
 			// WordPress core's own TinyMCE loader lives in wp-includes/js.
 			w(`  SecRule REQUEST_FILENAME "!@endsWith /wp-includes/js/tinymce/wp-tinymce.php" "t:none,t:lowercase"`)
 		}
-		rule(IDHiddenPHP, `SecRule REQUEST_FILENAME "@rx /\.[^/]+\.(?:php[0-9]?|phtml|phar)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Hidden PHP file request blocked',tag:'xmartguard/wordpress'"`, IDHiddenPHP)
+		rule(IDHiddenPHP, `SecRule REQUEST_FILENAME "@rx /\.[^/]+\.(?:php[0-9]?|phtml|phar)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Hidden PHP file request blocked',tag:'xpguard/wordpress'"`, IDHiddenPHP)
 		if !off[IDXMLRPCGet] {
-			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'XMartGuard - XML-RPC accepts only POST',tag:'xmartguard/wordpress',chain"`, IDXMLRPCGet)
+			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC accepts only POST',tag:'xpguard/wordpress',chain"`, IDXMLRPCGet)
 			w(`  SecRule REQUEST_METHOD "!@streq POST" "t:none"`)
 		}
 		if !off[IDEmptyUAWP] {
-			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Request without User-Agent to a WordPress file blocked',tag:'xmartguard/wordpress',chain"`, IDEmptyUAWP)
+			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Request without User-Agent to a WordPress file blocked',tag:'xpguard/wordpress',chain"`, IDEmptyUAWP)
 			w(`  SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
-			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Request without User-Agent to a WordPress file blocked',tag:'xmartguard/wordpress',chain"`, IDEmptyUAWP+1000)
+			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Request without User-Agent to a WordPress file blocked',tag:'xpguard/wordpress',chain"`, IDEmptyUAWP+1000)
 			w(`  SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
 		}
 		if !off[IDXMLRPCMulti] {
-			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'XMartGuard - XML-RPC multicall blocked',tag:'xmartguard/wordpress',chain"`, IDXMLRPCMulti)
+			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC multicall blocked',tag:'xpguard/wordpress',chain"`, IDXMLRPCMulti)
 			w(`  SecRule REQUEST_BODY "@contains system.multicall" "t:none,t:lowercase"`)
 		}
 		// User enumeration: /?author=1 redirects to /author/<login>/ and the
 		// REST API lists users; attackers use both to find login names.
 		if !off[IDUserEnum] {
-			w(`SecRule ARGS_GET:author "@rx ^\s*\d" "id:%d,phase:1,t:none,t:urlDecodeUni,deny,status:403,log,msg:'XMartGuard - WordPress user enumeration blocked',tag:'xmartguard/wordpress',chain"`, IDUserEnum)
+			w(`SecRule ARGS_GET:author "@rx ^\s*\d" "id:%d,phase:1,t:none,t:urlDecodeUni,deny,status:403,log,msg:'xPGuard - WordPress user enumeration blocked',tag:'xpguard/wordpress',chain"`, IDUserEnum)
 			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
 		}
 		if !off[IDRestUsers] {
-			w(`SecRule REQUEST_URI "@rx (?:/wp-json/wp/v2/users|[?&]rest_route=/wp/v2/users)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - WordPress REST user list blocked',tag:'xmartguard/wordpress',chain"`, IDRestUsers)
+			w(`SecRule REQUEST_URI "@rx (?:/wp-json/wp/v2/users|[?&]rest_route=/wp/v2/users)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - WordPress REST user list blocked',tag:'xpguard/wordpress',chain"`, IDRestUsers)
 			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
 		}
 	}
 	if c.BruteForce {
 		// Successful WordPress logins redirect (302); a failed one shows the form again (200).
 		if !off[IDLoginWP] {
-			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:3,pass,log,msg:'XMartGuard - Failed login: WordPress',tag:'xmartguard/login',chain"`, IDLoginWP)
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:3,pass,log,msg:'xPGuard - Failed login: WordPress',tag:'xpguard/login',chain"`, IDLoginWP)
 			w(`  SecRule REQUEST_FILENAME "@endsWith /wp-login.php" "t:none,t:lowercase,chain"`)
 			w(`  SecRule RESPONSE_STATUS "@streq 200" "t:none"`)
 		}
 		if !off[IDLoginXMLRPC] {
-			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'XMartGuard - Login attempt: XML-RPC',tag:'xmartguard/login',chain"`, IDLoginXMLRPC)
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: XML-RPC',tag:'xpguard/login',chain"`, IDLoginXMLRPC)
 			w(`  SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "t:none,t:lowercase"`)
 		}
 		if !off[IDLoginJoomla] {
-			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'XMartGuard - Login attempt: Joomla',tag:'xmartguard/login',chain"`, IDLoginJoomla)
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: Joomla',tag:'xpguard/login',chain"`, IDLoginJoomla)
 			w(`  SecRule REQUEST_FILENAME "@endsWith /administrator/index.php" "t:none,t:lowercase,chain"`)
 			w(`  SecRule ARGS:task "@streq login" "t:none,t:lowercase"`)
 		}
 		if !off[IDLoginOpenCart] {
-			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'XMartGuard - Login attempt: OpenCart',tag:'xmartguard/login',chain"`, IDLoginOpenCart)
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: OpenCart',tag:'xpguard/login',chain"`, IDLoginOpenCart)
 			w(`  SecRule REQUEST_FILENAME "@endsWith /admin/index.php" "t:none,t:lowercase,chain"`)
 			w(`  SecRule ARGS:route "@rx ^common/login" "t:none,t:lowercase"`)
 		}
@@ -280,7 +280,7 @@ func Render(c settings.WAF, o Options) string {
 			}
 		}
 		if len(custom) > 0 && !off[IDLoginCustom] {
-			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'XMartGuard - Login attempt: protected URL',tag:'xmartguard/login',chain"`, IDLoginCustom)
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: protected URL',tag:'xpguard/login',chain"`, IDLoginCustom)
 			w(`  SecRule REQUEST_FILENAME "@rx (?:%s)$" "t:none,t:urlDecodeUni,t:lowercase"`, strings.Join(custom, "|"))
 		}
 	}
@@ -303,7 +303,7 @@ func Render(c settings.WAF, o Options) string {
 			// as attacks (see isGateRule).
 			pass := fmt.Sprintf(`(?:^|;)\s*%s=(?:%s)\s*(?:;|$)`, GateCookie, strings.Join(toks, "|"))
 			gate := func(id int, cond string) {
-				w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:https://%%{REQUEST_HEADERS.Host}:%d/.xmartguard/gate?back=%%{REQUEST_URI},log,msg:'XMartGuard - CAPTCHA required for a login page',tag:'xmartguard/captcha',chain"`,
+				w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:https://%%{REQUEST_HEADERS.Host}:%d/.xpguard/gate?back=%%{REQUEST_URI},log,msg:'xPGuard - CAPTCHA required for a login page',tag:'xpguard/captcha',chain"`,
 					strings.Join(urls, "|"), id, g.HTTPSPort)
 				w(`  %s`, cond)
 			}
@@ -312,15 +312,15 @@ func Render(c settings.WAF, o Options) string {
 		}
 	}
 	if c.Webshell {
-		rule(IDWebshell, `SecRule REQUEST_FILENAME "@rx /(?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Web shell request blocked',tag:'xmartguard/webshell'"`, strings.Join(quoteAll(WebshellNames), "|"), IDWebshell)
-		rule(IDWebshellDir, `SecRule REQUEST_FILENAME "@rx /(?:alfa_data|alfacgiapi|wso_data)/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Web shell folder request blocked',tag:'xmartguard/webshell'"`, IDWebshellDir)
+		rule(IDWebshell, `SecRule REQUEST_FILENAME "@rx /(?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell request blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(WebshellNames), "|"), IDWebshell)
+		rule(IDWebshellDir, `SecRule REQUEST_FILENAME "@rx /(?:alfa_data|alfacgiapi|wso_data)/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell folder request blocked',tag:'xpguard/webshell'"`, IDWebshellDir)
 		// Paths only exploit scanners request: PHPUnit's eval-stdin.php
 		// (CVE-2017-9841), Laravel Ignition (CVE-2021-3129), leaked credentials.
-		rule(IDExploitProbe, `SecRule REQUEST_FILENAME "@rx /(?:vendor/phpunit/phpunit/src/util/php/eval-stdin\.php|_ignition/execute-solution|\.aws/credentials|\.vscode/sftp\.json|sftp-config\.json|\.git-credentials)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'XMartGuard - Exploit probe blocked',tag:'xmartguard/webshell'"`, IDExploitProbe)
+		rule(IDExploitProbe, `SecRule REQUEST_FILENAME "@rx /(?:vendor/phpunit/phpunit/src/util/php/eval-stdin\.php|_ignition/execute-solution|\.aws/credentials|\.vscode/sftp\.json|sftp-config\.json|\.git-credentials)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Exploit probe blocked',tag:'xpguard/webshell'"`, IDExploitProbe)
 	}
 	bot := func(on bool, file string, id int, what string) {
 		if on && !off[id] {
-			w(`SecRule REQUEST_HEADERS:User-Agent "@pmFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'XMartGuard - %s blocked',tag:'xmartguard/bot'"`, o.Dir, file, id, what)
+			w(`SecRule REQUEST_HEADERS:User-Agent "@pmFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s blocked',tag:'xpguard/bot'"`, o.Dir, file, id, what)
 		}
 	}
 	bot(c.BadBots, FileBadBots, IDBadBots, "Bad bot")
@@ -330,7 +330,7 @@ func Render(c settings.WAF, o Options) string {
 	if c.ProxyIPCheck && !off[IDProxyBlocked] {
 		// Disruptive action and metadata sit on the chain's first rule
 		// (ModSecurity 2); the client address is the first one in the header.
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'XMartGuard - Blacklisted IP behind proxy',tag:'xmartguard/proxy',chain"`, o.Dir, FileProxyRanges, IDProxyBlocked)
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Blacklisted IP behind proxy',tag:'xpguard/proxy',chain"`, o.Dir, FileProxyRanges, IDProxyBlocked)
 		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
 		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
 	}

@@ -1,5 +1,5 @@
-// Package scanner implements XMart Guard's malware scanner: manual, scheduled
-// and realtime scans, detection with XMart Guard's own engine (behaviour
+// Package scanner implements xPGuard's malware scanner: manual, scheduled
+// and realtime scans, detection with xPGuard's own engine (behaviour
 // rules, heuristics, signatures, YARA), and a reversible quarantine.
 package scanner
 

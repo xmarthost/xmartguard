@@ -81,7 +81,7 @@ export default function IPDBPage() {
           <Globe2 className="h-6 w-6" /> IPDB — shared attacker blocklist
         </h1>
         <p className="text-sm text-slate-500">
-          Every XMart Guard server reports the attackers it bans. An address reported by several servers (or repeatedly)
+          Every xPGuard server reports the attackers it bans. An address reported by several servers (or repeatedly)
           joins the IPDB and is dropped at the firewall of every server, before it can attack the next one.
         </p>
       </div>

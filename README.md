@@ -1,6 +1,6 @@
-# XMart Guard
+# xPGuard
 
-Server security platform for hosting servers: a cloud portal (`xmartguard.com`) plus a lightweight agent installed on each server with one command.
+Server security platform for hosting servers: a cloud portal (`app.xpguard.org`) plus a lightweight agent installed on each server with one command.
 
 ```
 Portal (React UI + Node.js API + PostgreSQL)  <== outbound WebSocket (TLS, Ed25519-signed auth) ==  xmartguard-agent (Go, systemd)
@@ -25,13 +25,13 @@ The agent connects **out** to the portal, so managed servers don't need any inbo
 The portal's **Add Server** page generates a one-time token (valid 24 h, single use) and the command:
 
 ```bash
-curl -fsSL https://xmartguard.com/install.sh | bash -s -- --token XG-XXXX-XXXX-XXXX-XXXX-XXXX
+curl -fsSL https://app.xpguard.org/install.sh | bash -s -- --token XG-XXXX-XXXX-XXXX-XXXX-XXXX
 ```
 
 Uninstall (removes exactly what the installer recorded in `/opt/xmartguard/manifest`, including the cPanel/WHM plugins, and prints a residue report):
 
 ```bash
-curl -fsSL https://xmartguard.com/uninstall.sh | bash
+curl -fsSL https://app.xpguard.org/uninstall.sh | bash
 # or offline:  bash /opt/xmartguard/uninstall.sh [--dry-run] [--keep-logs]
 ```
 
@@ -55,8 +55,8 @@ Servers installed with 0.2.x (`/var/lib/xmartguard`) are migrated automatically 
 
 On cPanel servers the agent installs two plugins (and refreshes them on every update):
 
-- **WHM » Plugins » XMart Guard** (root): overview, virus scans (quick/full/path), detected files with quarantine/restore/disable/delete/ignore, firewall block/allow/check, IPDB status.
-- **cPanel » Security » XMart Guard** (every account, like cPGuard's): Home dashboard (threats stopped, attacks blocked, CMS issues, charts), full/quick/path scans with the manual scans list, background scanner logs, detected files (quarantine/restore/delete), CMS threats, WAF logs and bot attacks — only for the account's own files and websites.
+- **WHM » Plugins » xPGuard** (root): overview, virus scans (quick/full/path), detected files with quarantine/restore/disable/delete/ignore, firewall block/allow/check, IPDB status.
+- **cPanel » Security » xPGuard** (every account, like cPGuard's): Home dashboard (threats stopped, attacks blocked, CMS issues, charts), full/quick/path scans with the manual scans list, background scanner logs, detected files (quarantine/restore/delete), CMS threats, WAF logs and bot attacks — only for the account's own files and websites.
 
 The plugins have no logic of their own: they talk to the agent's local socket, which identifies the caller by its Unix uid (kernel `SO_PEERCRED`). A cPanel account can only see and act on files inside its own home directory. To disable the plugins: `touch /etc/xmartguard/no-panel-plugin && xmartguard-agent panel uninstall`.
 
@@ -91,7 +91,7 @@ Also: `scanner`, `dailyscan`, `weeklyscan`, `watch`, `blacklist`, `file-action`,
 | Malware scanner | Accounts on any partition (`/home`, `/home2`, `/home3`, …, from `/etc/passwd` and cPanel), addon-domain document roots, `/tmp`, `/var/tmp` and `/dev/shm`. Realtime (inotify on every account's home, extracted archives and moved folders caught instantly, worker pool with overflow catch-up; the AI check runs in the background), quick/full/path with **live progress** (files, %, ETA), daily and weekly scans; own heuristic analyzer with **behaviour families** (silent loaders, XOR/char decoders, function tables, admin-login backdoors, cloaking, `.user.ini` loaders, HTML disguised as images — 91% of real malware caught without any hash) + known-bad hash database + fleet-learned hashes + **Linux Malware Detect** signatures + **web shell YARA rules** (signature-base) + own YARA rules + **ClamAV-format databases matched inside the agent** (no clamd/clamscan process: an installed ClamAV's databases are used automatically, commercial subscriptions such as your own Malware.Expert license by URL); **official WordPress core files (every release and beta since 5.8) and WordPress.org plugin files are never flagged**; infected core files are **replaced with the official file** of the site's version; quarantine/restore/disable/delete/trim/false positive (a restored file is remembered and not flagged again until its content changes; a file the AI finds clean with ≥90% confidence, also from **Check with AI**, is put back at once and shows as **Restored by AI**); view detected files from the logs; insecure symlink detection. See [docs/SIGNATURES.md](docs/SIGNATURES.md) |
 | AI scanner | **Free AI APIs** (Gemini, Groq, OpenRouter, Cerebras, Mistral, GitHub Models, NVIDIA, Hugging Face, Cloudflare, any OpenAI-compatible) configured once in the portal for all servers, many keys per provider with automatic failover; batched, compact requests; **shared knowledge base** (a file judged on one server is known on all); **fleet training** of every server's built-in model; checks detections only or every new file; **Trim** removes only injected code and keeps the site live. Offline default: built-in model |
 | WAF | Own ModSecurity rules for Apache and **LiteSpeed** (cPanel+LiteSpeed automatic incl. restart and LiteSpeed log format; standalone LiteSpeed/Enhance/CyberPanel via one WebAdmin WAF rule set, see the portal's Knowledge Base; tested on ModSecurity 2.9): uploads scanned by the malware engine, web shell and exploit-probe blocking (PHPUnit eval-stdin, Laravel Ignition, leaked credentials), PHP-upload blocking, sensitive files, WordPress hardening incl. user enumeration, scanner/SEO/AI bots, **Bad Bot blocker** (editable User-Agent list), **Proxy IP check** (blacklisted visitors behind Cloudflare or a local proxy), captcha-protected login URLs, whitelisted rules and domains — laid out like cPGuard's WAF Integration; **on/off per rule**, config test with automatic rollback |
-| WAF Rule Sets | One ModSecurity configuration for all servers from the portal: XMart Guard rules, **OWASP Core Rule Set** (latest official release, downloaded by the portal), cPanel vendors such as **Malware.Expert** (paid) or Comodo added and auto-updated through WHM, remote feeds (SecRemoteRules) such as Malware.Expert with its **extra rules** (web shells, scanners, crawlers, RBL, proxy, **Captcha by Malware.Expert**), **each feed linked to all or only selected servers** (for per-IP licenses) with a download check that reports the rule count or the vendor's refusal, and custom rules; per-server rollout status. Hits are read from the error log and the ModSecurity audit log (as in WHM » ModSecurity Tools). See [docs/WAF-RULESETS.md](docs/WAF-RULESETS.md) |
+| WAF Rule Sets | One ModSecurity configuration for all servers from the portal: xPGuard rules, **OWASP Core Rule Set** (latest official release, downloaded by the portal), cPanel vendors such as **Malware.Expert** (paid) or Comodo added and auto-updated through WHM, remote feeds (SecRemoteRules) such as Malware.Expert with its **extra rules** (web shells, scanners, crawlers, RBL, proxy, **Captcha by Malware.Expert**), **each feed linked to all or only selected servers** (for per-IP licenses) with a download check that reports the rule count or the vendor's refusal, and custom rules; per-server rollout status. Hits are read from the error log and the ModSecurity audit log (as in WHM » ModSecurity Tools). See [docs/WAF-RULESETS.md](docs/WAF-RULESETS.md) |
 | Brute force | SSH, cPanel/WHM/Webmail, Dovecot, Postfix, Exim, FTP, Apache denials and CMS logins; per-rule exclusion; addresses the WAF keeps blocking are banned ("N WAF blocked") |
 | Firewall | iptables+ipset (default) or nftables: allow/deny/temp ban/temp allow/ignore lists, ignored/allowed/blocked countries, DDNS allowlist, port filter (TCP/UDP in/out), DoS, self-healing; **CSF compatible** (CSF keeps the port filter, csf.allow/csf.ignore respected, rules reloaded after `csf -r`); the portal's address is allowed in CSF, firewalld, UFW, APF, cPHulk and Imunify360; **trusted services** (Googlebot, Bingbot, Applebot, DuckDuckBot, UptimeRobot, Pingdom, StatusCake, Better Stack, Cloudflare, Stripe, PayPal, Jetpack, Softaculous, cPanel) are never blocked; **CAPTCHA page for banned visitors** (built-in image challenge, or Turnstile/reCAPTCHA); live log of blocked connections |
 | IPDB | Shared attacker blocklist across all servers with live monitor, hourly/live charts and world map; IPDB log switch and IPDB CAPTCHA |
@@ -115,7 +115,7 @@ On AlmaLinux/Rocky/RHEL/CloudLinux 9 (plain VPS or a cPanel server), with the do
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh
-bash /root/setup.sh --domain xmartguard.com --email you@example.com
+bash /root/setup.sh --domain app.xpguard.org --email you@example.com
 ```
 
 The script installs Docker, builds the portal, sets up HTTPS and prints the first admin password. Re-run the same two lines to update.
@@ -138,11 +138,11 @@ Nothing runs on the portal server: open **AI Scanner** in the portal and add fre
 - Add as many keys as you like (e.g. 5–7 Gemini keys, then Groq and OpenRouter). Lower priority numbers are tried first; keys with the same priority share the load. A key that hits its limit, fails or is rejected rests (as long as the provider's `Retry-After` says, an hour for daily quotas) and the next key answers.
 - **Fetch models** lists the models of a key (OpenRouter: only free ones by default).
 - Tokens stay low: files any server already had judged are answered from the shared knowledge base; up to 6 files share one request and one copy of the instructions; big files are reduced to their start, end and the lines around risky calls; long encoded strings are shortened; the fixed instructions come first so providers that cache prompts reuse them.
-- Per server (Settings » Virus Scanner » AI scanner): **XMart Guard AI** and which files go to the AI — detections only, or every new/changed code file (with an hourly cap) so the scanner learns from them.
+- Per server (Settings » Virus Scanner » AI scanner): **xPGuard AI** and which files go to the AI — detections only, or every new/changed code file (with an hourly cap) so the scanner learns from them.
 - **Learn from all servers**: files any server's AI found malicious (≥90%) become hash detections everywhere within 10 minutes, and the portal retrains a small update of the built-in model from the AI's verdicts that every agent applies. Correct a verdict under AI Scanner » Shared knowledge and all servers follow.
 - **Trim** (Settings » Virus Scanner): when the AI marks code injected into a legitimate file, only those lines are removed; the file must pass `php -l` and a rescan, and the original stays in quarantine (Restore puts it back).
 
-Upgrading from 0.5: re-running the setup script removes the local AI model (Ollama container, its downloaded models and a native Ollama installed by the old `setup-ai.sh`). Servers set to Ollama or Claude switch to XMart Guard AI automatically. On a separate AI server made with the old `setup-ai.sh`: `systemctl disable --now ollama && rm -rf /usr/local/bin/ollama /usr/local/lib/ollama /usr/share/ollama /etc/systemd/system/ollama.service*`.
+Upgrading from 0.5: re-running the setup script removes the local AI model (Ollama container, its downloaded models and a native Ollama installed by the old `setup-ai.sh`). Servers set to Ollama or Claude switch to xPGuard AI automatically. On a separate AI server made with the old `setup-ai.sh`: `systemctl disable --now ollama && rm -rf /usr/local/bin/ollama /usr/local/lib/ollama /usr/share/ollama /etc/systemd/system/ollama.service*`.
 
 ## Development
 

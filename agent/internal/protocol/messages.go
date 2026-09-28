@@ -1,5 +1,5 @@
 // Package protocol defines the JSON messages exchanged between the agent and
-// the XMart Guard portal over the agent WebSocket.
+// the xPGuard portal over the agent WebSocket.
 package protocol
 
 import "encoding/json"

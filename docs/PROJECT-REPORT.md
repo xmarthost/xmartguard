@@ -1,12 +1,12 @@
-# XMart Guard — complete project report (A to Z)
+# xPGuard — complete project report (A to Z)
 
 Status: version **0.9.3** (September 2026). This report is written so that a
 developer or another AI assistant can continue the work without any other
 context. Read it top to bottom once; later use the tables as a map.
 
-> **Khulasa (Roman Urdu):** XMart Guard aik server security tool hai, cPGuard jaisa,
+> **Khulasa (Roman Urdu):** xPGuard aik server security tool hai, cPGuard jaisa,
 > jo hosting servers (zyada tar cPanel) ko malware, hacking attacks, brute force aur
-> spam se bachata hai. Aik portal (xmartguard.com) hai jahan se sab servers manage
+> spam se bachata hai. Aik portal (app.xpguard.org) hai jahan se sab servers manage
 > hote hain, aur har server par aik chhota Go agent chalta hai. Neeche har hissa,
 > har file ki jagah, kaam karne ka tareeqa, test/release ka tareeqa aur baqi kaam
 > tafseel se likha hai.
@@ -20,7 +20,7 @@ context. Read it top to bottom once; later use the tables as a map.
   (ModSecurity), firewall and brute-force protection, shared IP blocklist,
   WordPress/CMS protection, outgoing-spam monitor, reputation checks,
   cPanel/WHM plugins, and a central web portal for many servers.
-- **Owner / users:** a hosting company (XMart Host). The owner communicates in
+- **Owner / users:** a hosting company. The owner communicates in
   **Roman Urdu**; replies to the owner are given in Roman Urdu, with progress
   shown as a task list, and each release ends with update instructions and
   screenshots.
@@ -33,7 +33,7 @@ context. Read it top to bottom once; later use the tables as a map.
     are **not** copied. Customers use **their own license** through the provided
     hooks (WHM vendor URL, `SecRemoteRules`, ClamAV-format subscription URL).
   - WAF rules stay defensive. Never print malware contents or write exploits.
-  - Everything here is XMart Guard's own code, written from public
+  - Everything here is xPGuard's own code, written from public
     documentation and observed behaviour.
 
 ## 2. Architecture
@@ -175,7 +175,7 @@ Automatic Suspension, Additional, Outgoing Spam, Notifications, About), `AIScann
   issues, charts), Virus Scanner (full/quick/path + manual scans), Background
   Scanner Logs, Detected Files, CMS Threats, WAF, Bot Attacks — scoped per account.
 - **CSF compatibility (0.9.0):** CSF keeps the port filter; csf.allow/csf.ignore
-  addresses never blocked by XMart Guard; `csfpost.sh` reloads our rules after `csf -r`.
+  addresses never blocked by xPGuard; `csfpost.sh` reloads our rules after `csf -r`.
 - **Dashboard:** cPGuard-style server cards and server dashboard (protection
   status, threats/web attacks/blocked connections with trend, alerts, charts).
 - **Exim RBLs (0.9.0):** barracuda, spameatingmonkey, abuseat, psbl, mailspike
@@ -242,7 +242,7 @@ cd server && ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=... PUBLIC_URL=http://
 - **Portal install/update (production):**
   ```bash
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh
-  bash /root/setup.sh --domain xmartguard.com --email you@example.com
+  bash /root/setup.sh --domain app.xpguard.org --email you@example.com
   ```
 - **Agents:** update automatically after a portal update, or per server
   **Update agent**; check with `xmartguard status`.
@@ -293,3 +293,31 @@ cd server && ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD=... PUBLIC_URL=http://
 - PostgreSQL may be stopped after a container restart: `service postgresql start`.
 - Never add model identifiers to commits or code. Commit trailers:
   `Co-Authored-By: …` and `Claude-Session: …` as in the history.
+
+## Moving the portal to a new domain (xPGuard, 0.10.0)
+
+The product is branded **xPGuard** and the portal runs at
+`https://app.xpguard.org`. To move a running portal to a new domain:
+
+1. Point the new domain's DNS at the portal server.
+2. Re-run `deploy/setup-almalinux.sh --domain <new domain> --email ...`. It
+   updates `DOMAIN` (and so `PUBLIC_URL`) in `deploy/.env`, attaches the new
+   domain to a cPanel account with AutoSSL, and keeps the old domain's proxy
+   so both names reach the same portal.
+3. Agents still connect through the old name. When an agent connects under a
+   host other than `PUBLIC_URL`'s, the portal sends it `portal.move`; the
+   agent checks that `<new URL>/api/health` answers `{"ok":true}`, saves the
+   address in its config and restarts on it. Servers therefore move by
+   themselves within a few minutes of connecting; nothing is lost if the new
+   address does not answer yet (the agent keeps the old one and is asked
+   again on its next connection).
+4. When every server shows online under the new name, the old domain can be
+   removed.
+
+Internal names were kept on purpose so installed servers keep working:
+the service and binary `xmartguard-agent`, `/opt/xmartguard`,
+`/etc/xmartguard`, `/var/log/xmartguard`, the firewall table, the database
+name and the `xmartguard` JSON keys between portal and agent. Everything a
+customer, cPanel user or site visitor sees says xPGuard (cPanel/WHM plugin
+id `xpguard`, CAPTCHA URLs `/.xpguard/…`, WAF rule messages and tags,
+e-mail sender `xpguard@<host>`).

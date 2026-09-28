@@ -93,7 +93,7 @@ body {
 
 /* Page loader: a light sweeps through the logo, left to right and back. */
 .xg-loader-word {
-  background: linear-gradient(100deg, var(--color-navy-900) 0%, var(--color-navy-900) 38%, #3b82f6 50%, var(--color-navy-900) 62%, var(--color-navy-900) 100%);
+  background: linear-gradient(100deg, var(--color-navy-900) 0%, var(--color-navy-900) 38%, #f97316 50%, var(--color-navy-900) 62%, var(--color-navy-900) 100%);
   background-size: 260% 100%;
   -webkit-background-clip: text;
   background-clip: text;
@@ -101,10 +101,10 @@ body {
   animation: xg-sweep 0.9s ease-in-out infinite alternate;
 }
 .xg-loader-sweep {
-  background: linear-gradient(100deg, transparent 0%, transparent 38%, rgba(96, 165, 250, 0.85) 50%, transparent 62%, transparent 100%);
+  background: linear-gradient(100deg, transparent 0%, transparent 38%, rgba(255, 237, 213, 0.9) 50%, transparent 62%, transparent 100%);
   background-size: 260% 100%;
-  -webkit-mask: url(/favicon.svg) center / contain no-repeat;
-  mask: url(/favicon.svg) center / contain no-repeat;
+  -webkit-mask: url(/xpguard-icon.png) center / contain no-repeat;
+  mask: url(/xpguard-icon.png) center / contain no-repeat;
   mix-blend-mode: screen;
   animation: xg-sweep 0.9s ease-in-out infinite alternate;
 }

@@ -87,7 +87,7 @@ func TestBuiltinFlow(t *testing.T) {
 	}
 	id := regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(string(body))[1]
 	id = strings.ReplaceAll(id, "&#43;", "+")
-	if img, _ := http.Get(srv.URL + "/.xmartguard/captcha.png?id=" + url.QueryEscape(id)); img.Header.Get("Content-Type") != "image/png" {
+	if img, _ := http.Get(srv.URL + "/.xpguard/captcha.png?id=" + url.QueryEscape(id)); img.Header.Get("Content-Type") != "image/png" {
 		t.Fatal("image not served")
 	}
 	digits, ok := s.open("127.0.0.1", id)
@@ -95,13 +95,13 @@ func TestBuiltinFlow(t *testing.T) {
 		t.Fatal("cannot open id")
 	}
 	// Wrong answer.
-	res, _ = http.PostForm(srv.URL+"/.xmartguard/verify", url.Values{"id": {id}, "answer": {"00000x"}, "back": {"/wp-login.php"}})
+	res, _ = http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"id": {id}, "answer": {"00000x"}, "back": {"/wp-login.php"}})
 	res.Body.Close()
 	if len(*solved) != 0 {
 		t.Fatal("wrong answer accepted")
 	}
 	// Right answer; an off-site "back" is not followed.
-	res, _ = http.PostForm(srv.URL+"/.xmartguard/verify", url.Values{"id": {id}, "answer": {digits}, "back": {"//evil.example/"}})
+	res, _ = http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"id": {id}, "answer": {digits}, "back": {"//evil.example/"}})
 	body, _ = io.ReadAll(res.Body)
 	res.Body.Close()
 	if len(*solved) != 1 || (*solved)[0] != "127.0.0.1" || !strings.Contains(string(body), `url=/"`) {
@@ -145,11 +145,11 @@ func TestProviderVerify(t *testing.T) {
 	if !strings.Contains(string(body), `data-sitekey="site"`) {
 		t.Fatal("turnstile widget missing")
 	}
-	http.PostForm(srv.URL+"/.xmartguard/verify", url.Values{"cf-turnstile-response": {"bad"}})
+	http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"cf-turnstile-response": {"bad"}})
 	if len(*solved) != 0 {
 		t.Fatal("bad token accepted")
 	}
-	http.PostForm(srv.URL+"/.xmartguard/verify", url.Values{"cf-turnstile-response": {"good"}})
+	http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"cf-turnstile-response": {"good"}})
 	if len(*solved) != 1 || gotSecret != "sec" {
 		t.Fatalf("good token: %v %q", *solved, gotSecret)
 	}
@@ -172,7 +172,7 @@ func TestLoginGateFlow(t *testing.T) {
 	srv := httptest.NewServer(s)
 	defer srv.Close()
 	// The WAF sends the visitor here with the login page (query unencoded).
-	res, err := http.Get(srv.URL + "/.xmartguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1")
+	res, err := http.Get(srv.URL + "/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestLoginGateFlow(t *testing.T) {
 	id := strings.ReplaceAll(regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(string(body))[1], "&#43;", "+")
 	digits, _ := s.open("127.0.0.1", id)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	res, err = client.PostForm(srv.URL+"/.xmartguard/verify", url.Values{"id": {id}, "answer": {digits}, "gate": {"1"},
+	res, err = client.PostForm(srv.URL+"/.xpguard/verify", url.Values{"id": {id}, "answer": {digits}, "gate": {"1"},
 		"back": {"/wp-login.php?redirect_to=/wp-admin/&reauth=1"}})
 	if err != nil {
 		t.Fatal(err)

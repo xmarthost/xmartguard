@@ -35,11 +35,11 @@ func TestInstallUninstall(t *testing.T) {
 	if !Installed() {
 		t.Fatal("not installed")
 	}
-	cgi, _ := os.Stat(filepath.Join(root, "usr/local/cpanel/whostmgr/docroot/cgi/xmartguard/index.cgi"))
+	cgi, _ := os.Stat(filepath.Join(root, "usr/local/cpanel/whostmgr/docroot/cgi/xpguard/index.cgi"))
 	if cgi.Mode().Perm() != 0o700 {
 		t.Fatalf("cgi mode %v", cgi.Mode())
 	}
-	php, _ := os.ReadFile(filepath.Join(root, "usr/local/cpanel/base/frontend/jupiter/xmartguard/index.live.php"))
+	php, _ := os.ReadFile(filepath.Join(root, "usr/local/cpanel/base/frontend/jupiter/xpguard/index.live.php"))
 	if !strings.Contains(string(php), "panel-api") {
 		t.Fatal("php relay missing")
 	}
@@ -59,13 +59,46 @@ func TestInstallUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls, _ = os.ReadFile(log)
-	if !strings.Contains(string(calls), "unregister_appconfig xmartguard") || !strings.Contains(string(calls), "uninstall_plugin") {
+	if !strings.Contains(string(calls), "unregister_appconfig xpguard") || !strings.Contains(string(calls), "uninstall_plugin") {
 		t.Fatalf("uninstall tools not run: %s", calls)
 	}
-	for _, rel := range []string{"usr/local/cpanel/whostmgr/docroot/cgi/xmartguard", "usr/local/cpanel/base/frontend/jupiter/xmartguard", "var/cpanel/apps/xmartguard.conf"} {
+	for _, rel := range []string{"usr/local/cpanel/whostmgr/docroot/cgi/xpguard", "usr/local/cpanel/base/frontend/jupiter/xpguard", "var/cpanel/apps/xpguard.conf"} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
 			t.Fatalf("%s left behind", rel)
 		}
+	}
+}
+
+func TestInstallReplacesLegacyPlugin(t *testing.T) {
+	root, log := fakeCPanel(t)
+	// A server that still has the plugin from before the xPGuard name.
+	for rel, body := range map[string]string{
+		"usr/local/cpanel/whostmgr/docroot/cgi/xmartguard/index.cgi":       "old",
+		"usr/local/cpanel/whostmgr/docroot/addon_plugins/xmartguard.svg":   "old",
+		"var/cpanel/apps/xmartguard.conf":                                  "old",
+		"var/cpanel/apps/xmartguard.cpanel.jupiter":                        "old",
+		"usr/local/cpanel/base/frontend/jupiter/xmartguard/index.live.php": "old",
+	} {
+		os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755)
+		os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644)
+	}
+	if _, err := Install(); err != nil {
+		t.Fatal(err)
+	}
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "unregister_appconfig xmartguard") || !strings.Contains(string(calls), "uninstall_plugin") {
+		t.Fatalf("legacy plugin not unregistered: %s", calls)
+	}
+	for _, rel := range []string{"usr/local/cpanel/whostmgr/docroot/cgi/xmartguard", "usr/local/cpanel/base/frontend/jupiter/xmartguard", "var/cpanel/apps/xmartguard.conf", "usr/local/cpanel/whostmgr/docroot/addon_plugins/xmartguard.svg"} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
+			t.Fatalf("%s left behind", rel)
+		}
+	}
+	if !Installed() {
+		t.Fatal("new plugin not installed")
+	}
+	if strings.Contains(Page("cpanel", true), "XMart") || !strings.Contains(Page("cpanel", true), "data:image/png;base64,") {
+		t.Fatal("plugin page not rebranded")
 	}
 }
 

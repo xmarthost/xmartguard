@@ -69,7 +69,7 @@ func (a *Agent) maybeSuspend(f scanner.Finding) {
 	if active > 0 {
 		return
 	}
-	a.suspendAccount(f.Owner, fmt.Sprintf("XMart Guard: %d malware detections in %d hours", n, cfg.WindowHours))
+	a.suspendAccount(f.Owner, fmt.Sprintf("xPGuard: %d malware detections in %d hours", n, cfg.WindowHours))
 }
 
 // suspendAccount suspends a cPanel account and notifies the admin and,
@@ -210,7 +210,7 @@ func (a *Agent) maybeSuspendDomain(domain, user, reasons string) {
 	if n > 0 {
 		return
 	}
-	a.suspendAccount(user, fmt.Sprintf("XMart Guard: domain %s is blacklisted (%s)", domain, reasons))
+	a.suspendAccount(user, fmt.Sprintf("xPGuard: domain %s is blacklisted (%s)", domain, reasons))
 }
 
 // onCMSAutoAction reports automatic plugin/theme updates and deactivations.
@@ -221,7 +221,7 @@ func (a *Agent) onCMSAutoAction(s cms.Site, actions []string) {
 	}
 	if a.Settings.Get().Notifications.UserPatches {
 		a.notifyUser(s.User, "security updates applied to your website",
-			"XMart Guard applied these security changes to your website:\n"+text)
+			"xPGuard applied these security changes to your website:\n"+text)
 	}
 }
 

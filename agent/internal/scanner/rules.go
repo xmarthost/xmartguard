@@ -14,7 +14,7 @@ const (
 	CatSymlink    = "symlink" // symbolic link to another account's files
 )
 
-// Rule is one content signature. Rules are XMart Guard's own, written from
+// Rule is one content signature. Rules are xPGuard's own, written from
 // publicly documented webshell/backdoor techniques.
 type Rule struct {
 	ID       string

@@ -20,7 +20,7 @@ import (
 // Channels are the extra destinations every admin alert also goes to.
 type Channels struct {
 	Extra         string // additional email address
-	From          string // From address ("" = xmartguard@hostname)
+	From          string // From address ("" = xpguard@hostname)
 	SlackWebhook  string
 	TelegramToken string
 	TelegramChat  string
@@ -90,7 +90,7 @@ func (m *Mailer) Flush() {
 		if len(lines) > 1 {
 			subj = fmt.Sprintf("%s (+%d more)", subj, len(lines)-1)
 		}
-		full := "[XMart Guard] " + m.Hostname + ": " + subj
+		full := "[xPGuard] " + m.Hostname + ": " + subj
 		body := strings.Join(lines, "\n")
 		m.deliver(to, full, body, ch.From)
 		if to == admin {
@@ -165,9 +165,9 @@ func SendFrom(to, subject, body, from string) error {
 	if a, err := mail.ParseAddress(from); err == nil && from != "" {
 		from = a.Address
 	} else {
-		from = "xmartguard@" + host
+		from = "xpguard@" + host
 	}
-	fmt.Fprintf(&msg, "To: %s\r\nFrom: XMart Guard <%s>\r\nSubject: %s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s\r\n\r\n-- \r\nXMart Guard on %s\r\n",
+	fmt.Fprintf(&msg, "To: %s\r\nFrom: xPGuard <%s>\r\nSubject: %s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s\r\n\r\n-- \r\nxPGuard on %s\r\n",
 		to, from, strings.ReplaceAll(subject, "\n", " "), body, host)
 	cmd := exec.Command(Sendmail, "-t", "-i")
 	cmd.Stdin = &msg

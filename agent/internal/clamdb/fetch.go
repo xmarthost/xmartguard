@@ -87,7 +87,7 @@ func fetchOne(ctx context.Context, client *http.Client, u, dir, base string, old
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "XMartGuard-Agent (signature update)")
+	req.Header.Set("User-Agent", "xPGuard-Agent (signature update)")
 	if len(old) == 1 {
 		if st, err := os.Stat(old[0]); err == nil {
 			req.Header.Set("If-Modified-Since", st.ModTime().UTC().Format(http.TimeFormat))

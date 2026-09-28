@@ -57,7 +57,7 @@ func TestGateRules(t *testing.T) {
 	for _, want := range []string{
 		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none"`,
 		`SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:0123456789abcdef0123456789abcdef)\s*(?:;|$)" "t:none"`,
-		`redirect:https://%{REQUEST_HEADERS.Host}:7743/.xmartguard/gate?back=%{REQUEST_URI}`,
+		`redirect:https://%{REQUEST_HEADERS.Host}:7743/.xpguard/gate?back=%{REQUEST_URI}`,
 		`(?:/wp-login\.php|/admin/index\.php)$`,
 	} {
 		if !strings.Contains(on, want) {
@@ -73,7 +73,7 @@ func TestFeedHitsAndVendorRBL(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "error_log")
 	_ = os.WriteFile(log, []byte(`[Mon Sep 28 16:14:32 2026] [error] [client 195.160.216.121] ModSecurity: Access denied with code -, [Rule: 'REMOTE_ADDR' '@rbl rbl.malware.expert'] [id "400010"] [msg "Malware.Expert - Malware host detected by rbl.malware.expert"] [tag "MEWAF"] [uri "/wp-login.php"]
-[Mon Sep 28 16:15:36 2026] [error] [client 91.200.239.38] ModSecurity: Access denied with code -, [id "7700503"] [msg "XMartGuard - AI crawler blocked"]
+[Mon Sep 28 16:15:36 2026] [error] [client 91.200.239.38] ModSecurity: Access denied with code -, [id "7700503"] [msg "xPGuard - AI crawler blocked"]
 `), 0o644)
 	link := filepath.Join(dir, "link_log")
 	_ = os.Symlink(log, link)

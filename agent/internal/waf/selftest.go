@@ -19,10 +19,10 @@ import (
 // before the whitelist rules can switch rules off.
 const IDSelfTest = 7700000
 
-const selfTestPath = "/xmartguard-waf-selftest"
-const crsTestPath = "/xmartguard-crs-selftest"
+const selfTestPath = "/xpguard-waf-selftest"
+const crsTestPath = "/xpguard-crs-selftest"
 
-var selfTestRule = fmt.Sprintf(`SecRule REQUEST_FILENAME "@beginsWith %s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'XMartGuard - WAF self-test'"`, selfTestPath, IDSelfTest)
+var selfTestRule = fmt.Sprintf(`SecRule REQUEST_FILENAME "@beginsWith %s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - WAF self-test'"`, selfTestPath, IDSelfTest)
 
 // SelfTest is the result of the last check.
 type SelfTest struct {
@@ -36,7 +36,9 @@ type SelfTest struct {
 
 // isSelfTest reports whether an event came from the agent's own check.
 func isSelfTest(e Event) bool {
-	return e.RuleID == IDSelfTest || strings.Contains(e.URI, selfTestPath) || strings.Contains(e.URI, crsTestPath)
+	return e.RuleID == IDSelfTest || strings.Contains(e.URI, selfTestPath) || strings.Contains(e.URI, crsTestPath) ||
+		// Names used before xPGuard (old log lines).
+		strings.Contains(e.URI, "/xmartguard-waf-selftest") || strings.Contains(e.URI, "/xmartguard-crs-selftest")
 }
 
 // SelfTestURLs are tried in order (variables for tests).
@@ -57,7 +59,7 @@ func probe(path string) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (XMartGuard WAF self-test)")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (xPGuard WAF self-test)")
 		res, err := c.Do(req)
 		if err != nil {
 			last = err

@@ -3,11 +3,11 @@
 Written from what a cPGuard installation exposes: its install script, file
 layout, cron, readable config/scripts and SQLite schemas. The application
 code itself is ionCube-encoded and was not read or decoded. No cPGuard
-code, signatures or rules are part of XMart Guard.
+code, signatures or rules are part of xPGuard.
 
 ## Architecture
 
-| | cPGuard | XMart Guard |
+| | cPGuard | xPGuard |
 |---|---|---|
 | Runtime | bundled nginx + PHP-FPM 8.1 + ClamAV libs under `/opt/cpguard`, PHP app (ionCube) | one Go binary (`/opt/xmartguard/bin/xmartguard-agent`), no web server on the host |
 | Scheduling | `/etc/cron.d/cpguard`: `crons/main.php` every minute runs a job table (27 jobs) | systemd service with internal schedulers |
@@ -18,7 +18,7 @@ code, signatures or rules are part of XMart Guard.
 
 ## Where things are hooked into the server
 
-| Integration | cPGuard | XMart Guard |
+| Integration | cPGuard | xPGuard |
 |---|---|---|
 | ModSecurity on cPanel | `Include /etc/cpguard/cpguard_modsec100.conf` appended to `/etc/apache2/conf.d/modsec/modsec2.user.conf` | same place since 0.7.9: `Include /etc/xmartguard/waf/xmartguard_modsec.conf` in `modsec2.user.conf` |
 | Commercial WAF rules | Malware.Expert through `SecRemoteRules` with cPGuard's license | your own Malware.Expert license: WHM vendor URL, or `SecRemoteRules` key + URL (WAF Rule Sets) |
@@ -27,17 +27,17 @@ code, signatures or rules are part of XMart Guard.
 | WAF self-test | test rule `cpg_test_rule` + hourly health check | self-test URL after every change, shown in Rollout |
 | WAF hits | read from `modsec_audit.log` every minute | error log + audit log, live |
 | inotify | `fs.inotify.max_user_watches = 10000000` in `/etc/sysctl.d/cpguard.conf` | persisted in `/etc/sysctl.d/xmartguard.conf` since 0.7.9 |
-| CSF | allows vendor IPs, `csf.pignore user:cpguard` | `csf.pignore exe:` for the agent; since 0.9.0 the portal's address in `csf.allow` + `csf.ignore`, CSF keeps the port filter, csf.allow/csf.ignore addresses are never blocked by XMart Guard, `csfpost.sh` reloads our rules after `csf -r` |
-| Other firewalls | UFW rule for port 9098 | since 0.9.0 the portal's address is allowed in firewalld (trusted zone), UFW, APF, cPHulk and Imunify360; only entries XMart Guard added are removed on uninstall |
+| CSF | allows vendor IPs, `csf.pignore user:cpguard` | `csf.pignore exe:` for the agent; since 0.9.0 the portal's address in `csf.allow` + `csf.ignore`, CSF keeps the port filter, csf.allow/csf.ignore addresses are never blocked by xPGuard, `csfpost.sh` reloads our rules after `csf -r` |
+| Other firewalls | UFW rule for port 9098 | since 0.9.0 the portal's address is allowed in firewalld (trusted zone), UFW, APF, cPHulk and Imunify360; only entries xPGuard added are removed on uninstall |
 | WHM / cPanel plugin | `register_appconfig`, `install_plugin` (jupiter) | same |
 | DirectAdmin / Webuzo plugin | yes | detection only (planned) |
 | Exim RBLs | adds abuseat, barracuda, spameatingmonkey RBL definitions (off) | since 0.9.0: barracuda, spameatingmonkey, abuseat, psbl, mailspike in `/var/cpanel/rbl_info` (off until enabled in WHM); existing definitions are left alone |
 | ClamAV | bundles libclamav (`cpg-clamav-libs`) inside its PHP-FPM process and loads Malware.Expert signatures | since 0.9.0 ClamAV-format databases (.cvd/.cld/.ndb/.hdb/.hsb/.ldb) are matched inside the agent (no clamd/clamscan process); installed ClamAV databases are used, subscriptions (e.g. your own Malware.Expert license) by URL |
 | Trusted services | — | since 0.9.0 search engine crawlers, uptime monitors, Cloudflare, payment callbacks and vendor servers are never blocked (official lists, refreshed daily) |
 
-## Scheduled jobs (cPGuard → XMart Guard)
+## Scheduled jobs (cPGuard → xPGuard)
 
-| cPGuard job | Schedule | XMart Guard |
+| cPGuard job | Schedule | xPGuard |
 |---|---|---|
 | Scanner::dailyScan / weeklyScan / scheduleScan | 01:01 daily, Sunday | daily and weekly scans (settings) |
 | DbScan::run | 03:03 daily | DB scanner (daily) |
@@ -55,7 +55,7 @@ code, signatures or rules are part of XMart Guard.
 
 ## Records kept per module
 
-| Module | cPGuard columns | XMart Guard |
+| Module | cPGuard columns | xPGuard |
 |---|---|---|
 | Scanner | identifier, path, reason, definition, user, permission, size, ctime, file/cleanup status | same plus SHA-256, AI verdict, trim |
 | WAF | ip, hostname, user, uri, status, method, HTTP version, reason, justification, action, handler, raw log | ip, host, uri, method, rule, reason, justification, action (0.7.8) |
@@ -95,7 +95,7 @@ What the reports show:
 - Some detections are folders (`Fox-C`, `Fox-C404`) that were disabled
   rather than quarantined.
 
-What XMart Guard does with this (0.8.0):
+What xPGuard does with this (0.8.0):
 
 - Scans `.dat`, `.class`, `.css`, `.flv`, `.haxor` and `.tmp` files. A
   malicious PHP program under such a name is a virus (`Disguised.PHPFile`).
@@ -113,7 +113,7 @@ What XMart Guard does with this (0.8.0):
 cPGuard runs its own nginx + PHP-FPM on port 9098 so the vendor's servers can
 call into it, and a cron job every minute that works through a job table.
 
-XMart Guard keeps one outbound connection to the portal instead:
+xPGuard keeps one outbound connection to the portal instead:
 
 - no open port: nothing on the server listens for the Internet, so there is
   nothing to scan, brute-force or exploit, and no firewall rule is needed;

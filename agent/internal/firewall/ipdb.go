@@ -124,7 +124,7 @@ func (l *IPDB) Replace(version string, items []string) (int, error) {
 	entries := make([]string, 0, len(items))
 	country := map[string]string{}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# XMart Guard IPDB list (managed by the portal; do not edit)\n# version %s\n", version)
+	fmt.Fprintf(&b, "# xPGuard IPDB list (managed by the portal; do not edit)\n# version %s\n", version)
 	for _, it := range items {
 		f := strings.Fields(it)
 		if len(f) == 0 {

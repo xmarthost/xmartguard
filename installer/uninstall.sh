@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# XMart Guard agent uninstaller.
+# xPGuard agent uninstaller.
 #
 #   curl -fsSL __XG_PORTAL_URL__/uninstall.sh | bash
 #   bash /opt/xmartguard/uninstall.sh [--dry-run] [--keep-logs] [--no-unenroll]
@@ -41,7 +41,7 @@ run()  { if [ "$DRY" -eq 1 ]; then printf '  [dry-run] %s\n' "$*"; else "$@"; fi
 [ "$(id -u)" -eq 0 ] || { echo "please run as root" >&2; exit 1; }
 
 echo ""
-echo "${c_bld}XMart Guard uninstaller${c_off}$([ "$DRY" -eq 1 ] && echo ' (dry run)')"
+echo "${c_bld}xPGuard uninstaller${c_off}$([ "$DRY" -eq 1 ] && echo ' (dry run)')"
 echo ""
 
 # Paths we may remove. Only /etc/xmartguard, /opt/xmartguard, the pre-0.3.0
@@ -101,7 +101,7 @@ if [ -x "$BIN" ]; then
   if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN cleanup"; else "$BIN" cleanup >/dev/null 2>&1 && ok "Firewall rules and WAF rules removed"; fi
 fi
 # cPanel/WHM plugins (before the binary that removes them is deleted).
-if [ -x "$BIN" ] && { [ -d /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ] || [ -f /var/cpanel/apps/xmartguard.conf ]; }; then
+if [ -x "$BIN" ] && { [ -d /usr/local/cpanel/whostmgr/docroot/cgi/xpguard ] || [ -f /var/cpanel/apps/xpguard.conf ] || [ -d /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ] || [ -f /var/cpanel/apps/xmartguard.conf ]; }; then
   if [ "$DRY" -eq 1 ]; then echo "  [dry-run] $BIN panel uninstall"
   elif "$BIN" panel uninstall >/dev/null 2>&1; then ok "cPanel/WHM plugins removed"
   else warn "cPanel/WHM plugins could not be fully removed"; fi
@@ -161,6 +161,7 @@ LEFT=()
 KEEP_HOME=()
 [ "$KEEP_LOGS" -eq 0 ] && [ ! -d "$HOME_DIR/.git" ] && KEEP_HOME=("$HOME_DIR")
 for p in "$BIN" /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli /etc/xmartguard "${KEEP_HOME[@]}" /run/xmartguard \
+         /usr/local/cpanel/whostmgr/docroot/cgi/xpguard /usr/local/cpanel/base/frontend/jupiter/xpguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard /usr/local/cpanel/base/frontend/jupiter/xmartguard \
          "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME; do
   { [ -e "$p" ] || [ -L "$p" ]; } && LEFT+=("$p")
@@ -176,7 +177,7 @@ if command -v nft >/dev/null 2>&1 && nft list tables 2>/dev/null | grep -q 'inet
 
 echo ""
 if [ ${#LEFT[@]} -eq 0 ]; then
-  echo "${c_grn}${c_bld}XMart Guard was removed completely. Nothing was left behind.${c_off}"
+  echo "${c_grn}${c_bld}xPGuard was removed completely. Nothing was left behind.${c_off}"
 else
   echo "${c_red}${c_bld}Uninstall finished, but these items remain:${c_off}"
   printf '   - %s\n' "${LEFT[@]}"

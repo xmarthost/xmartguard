@@ -21,7 +21,7 @@ type Target struct {
 
 	// Engine is the SecRuleEngine the server configures itself: On,
 	// DetectionOnly, Off, or "" when nothing sets it (ModSecurity then
-	// defaults to Off, so XMart Guard turns it on for its own include).
+	// defaults to Off, so xPGuard turns it on for its own include).
 	Engine string `json:"engine"`
 	// LiteSpeed is set when LiteSpeed Web Server serves the sites.
 	LiteSpeed bool `json:"litespeed"`
@@ -139,7 +139,7 @@ func Detect() Target {
 			IncludeFile: "/usr/local/lsws/conf/xmartguard-waf.conf",
 			Hooked:      strings.Contains(string(conf), "xmartguard-waf.conf"),
 			Hint: "In LiteSpeed WebAdmin (https://SERVER_IP:7080) » Configuration » Server » Security: Enable WAF: Yes, Scan Request Body: Yes. " +
-				"Then add a WAF Rule Set: Name: XMartGuard, Action: deny,log,status:403, Enabled: Yes, Rules Definition: Include $SERVER_ROOT/conf/xmartguard-waf.conf — and restart LiteSpeed.",
+				"Then add a WAF Rule Set: Name: xPGuard, Action: deny,log,status:403, Enabled: Yes, Rules Definition: Include $SERVER_ROOT/conf/xmartguard-waf.conf — and restart LiteSpeed.",
 			WebServer: "LiteSpeed", ErrorLogs: []string{"/usr/local/lsws/logs/error.log"}, Engine: "On",
 			reload: []string{"/usr/local/lsws/bin/lswsctrl", "restart"}}
 	case exists("/etc/httpd/conf.d") && hasModule(firstBin("/usr/sbin/httpd", "httpd")):
@@ -209,7 +209,7 @@ func withoutHook(content, include string) string {
 // It returns "" when it cannot be created; the caller then omits the upload rule.
 func InspectScript(dir, agentBin string) string {
 	path := filepath.Join(dir, "upload-scan")
-	script := "#!/bin/sh\n# XMart Guard ModSecurity upload approver: prints 1/0 (Apache) and exits 1/0 (LiteSpeed); 0 rejects the file.\nexec " + agentBin + " scan-upload \"$1\"\n"
+	script := "#!/bin/sh\n# xPGuard ModSecurity upload approver: prints 1/0 (Apache) and exits 1/0 (LiteSpeed); 0 rejects the file.\nexec " + agentBin + " scan-upload \"$1\"\n"
 	if writeIfChanged(path, script, 0o755) != nil {
 		return ""
 	}
@@ -259,7 +259,7 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 		engine = "SecRuleEngine On\nSecRequestBodyAccess On\n"
 	}
 	rulesFile := filepath.Join(dir, "rules.conf")
-	include := fmt.Sprintf("%s\n# Managed by xmartguard-agent. Configure in the XMart Guard portal.\n<IfModule security2_module>\n%sIncludeOptional %s\n</IfModule>\n%s\n", markBegin, engine, rulesFile, markEnd)
+	include := fmt.Sprintf("%s\n# Managed by xmartguard-agent. Configure in the xPGuard portal.\n<IfModule security2_module>\n%sIncludeOptional %s\n</IfModule>\n%s\n", markBegin, engine, rulesFile, markEnd)
 	if t.Plain {
 		// LiteSpeed WAF rule set: the file is plain ModSecurity rules.
 		include = rules

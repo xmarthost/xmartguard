@@ -1,6 +1,6 @@
 # Signatures, known-good files and false positives
 
-XMart Guard combines several engines. Order of checks for a script file:
+xPGuard combines several engines. Order of checks for a script file:
 
 1. **Known-good content (never flagged)**
    - *WordPress core*: the MD5 of every PHP/JS/HTML/text/image file of every
@@ -14,9 +14,9 @@ XMart Guard combines several engines. Order of checks for a script file:
      checksums and are scanned normally.
    - *Cleared content*: files the AI (≥90% clean, on any server) or an
      administrator found to be false positives.
-2. **Known-bad hashes**: XMart Guard's own list, fleet-learned AI verdicts
+2. **Known-bad hashes**: xPGuard's own list, fleet-learned AI verdicts
    (`XG.AI.Learned`), Linux Malware Detect MD5 signatures.
-3. **XMart Guard heuristics and rules** (own code; comments are ignored so
+3. **xPGuard heuristics and rules** (own code; comments are ignored so
    documentation never triggers a rule).
 4. **Linux Malware Detect hex patterns** (suspicious → confirmed by the AI).
 5. **YARA**: the administrator's rules in `/etc/xmartguard/yara/*.yar`

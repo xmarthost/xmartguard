@@ -1,6 +1,6 @@
 # Training the built-in AI scanner
 
-The AI scanner's default provider is XMart Guard's own model: a logistic
+The AI scanner's default provider is xPGuard's own model: a logistic
 regression over code features (function calls, request variables, code at
 the top/bottom of a file, obfuscation measurements). It is free, runs inside
 the agent and sends nothing anywhere. It only judges files the signature
@@ -72,8 +72,7 @@ files.
 
 What reduces false positives most is not a smarter model but knowing which
 files are genuine: official checksums for WordPress core (every release and
-beta) and WordPress.org plugins, the same approach Wordfence uses. XMart
-Guard now trusts those files outright and repairs modified core files from
+beta) and WordPress.org plugins, the same approach Wordfence uses. xPGuard now trusts those files outright and repairs modified core files from
 the official release.
 
 For the model itself, published work on PHP web shells points to:

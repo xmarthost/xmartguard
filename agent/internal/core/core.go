@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -869,7 +871,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		evs, total, err := a.WAF.Events(f)
 		return map[string]any{"events": evs, "total": total}, err
 	}
-	// waf.rule switches one XMart Guard WAF rule on or off.
+	// waf.rule switches one xPGuard WAF rule on or off.
 	h["waf.rule"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
 			ID      int  `json:"id"`
@@ -1081,7 +1083,63 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return map[string]any{"version": v}, nil
 	}
+	// ---- portal address change (e.g. a new domain for the portal)
+	h["portal.move"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			URL string `json:"url"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		next, err := checkPortalURL(ctx, client.HTTPClient(a.Cfg.InsecureTLS), in.URL)
+		if err != nil {
+			return nil, err
+		}
+		if next == a.Cfg.ServerURL {
+			return map[string]any{"url": next, "changed": false}, nil
+		}
+		prev := a.Cfg.ServerURL
+		a.Cfg.ServerURL = next
+		if err := a.Cfg.Save(); err != nil {
+			a.Cfg.ServerURL = prev
+			return nil, err
+		}
+		a.Log.Info("portal address changed; restarting", "from", prev, "to", next)
+		if a.ExitForUpdate != nil {
+			go func() { time.Sleep(2 * time.Second); a.ExitForUpdate() }()
+		}
+		return map[string]any{"url": next, "changed": true}, nil
+	}
 	return h
+}
+
+// checkPortalURL accepts a new portal address only when it answers as a
+// portal (GET /api/health returns {"ok":true}), so a wrong address can never
+// cut the server off.
+func checkPortalURL(ctx context.Context, hc *http.Client, raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" {
+		return "", fmt.Errorf("invalid portal address %q", raw)
+	}
+	next := strings.TrimRight(u.Scheme+"://"+u.Host+u.Path, "/")
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodGet, next+"/api/health", nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := hc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("the new portal address does not answer: %w", err)
+	}
+	defer res.Body.Close()
+	var body struct {
+		OK bool `json:"ok"`
+	}
+	if res.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&body) != nil || !body.OK {
+		return "", fmt.Errorf("%s does not answer as an xPGuard portal (HTTP %d)", next, res.StatusCode)
+	}
+	return next, nil
 }
 
 const secretMask = "********"

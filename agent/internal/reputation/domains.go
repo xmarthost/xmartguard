@@ -116,7 +116,7 @@ func safeBrowsing(ctx context.Context, key string, domains []string) (map[string
 			entries = append(entries, map[string]string{"url": "http://" + d + "/"}, map[string]string{"url": "https://" + d + "/"})
 		}
 		body, _ := json.Marshal(map[string]any{
-			"client": map[string]string{"clientId": "xmartguard", "clientVersion": "1"},
+			"client": map[string]string{"clientId": "xpguard", "clientVersion": "1"},
 			"threatInfo": map[string]any{
 				"threatTypes":      []string{"MALWARE", "SOCIAL_ENGINEERING", "UNWANTED_SOFTWARE", "POTENTIALLY_HARMFUL_APPLICATION"},
 				"platformTypes":    []string{"ANY_PLATFORM"},

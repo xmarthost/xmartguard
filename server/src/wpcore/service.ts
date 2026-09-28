@@ -74,7 +74,7 @@ export class WPCoreService {
   }
 
   private async fetch(url: string, timeoutMs = 60_000): Promise<Response> {
-    const res = await fetch(url, { headers: { 'user-agent': 'XMartGuard' }, signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetch(url, { headers: { 'user-agent': 'xPGuard' }, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     return res;
   }
@@ -232,7 +232,7 @@ export class WPCoreService {
       // not cached
     }
     const res = await fetch(`${this.cfg.wpDownloads}/plugin-checksums/${slug}/${version}.json`, {
-      headers: { 'user-agent': 'XMartGuard' },
+      headers: { 'user-agent': 'xPGuard' },
       signal: AbortSignal.timeout(30_000),
     });
     fs.mkdirSync(path.dirname(file), { recursive: true });

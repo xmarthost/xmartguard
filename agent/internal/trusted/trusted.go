@@ -232,7 +232,7 @@ func parseLines(b []byte) []string {
 func (s *Store) fetch(ctx context.Context, svc Service) ([]string, string, error) {
 	if svc.URL != "" {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, svc.URL, nil)
-		req.Header.Set("User-Agent", "XMartGuard-Agent (trusted services list)")
+		req.Header.Set("User-Agent", "xPGuard-Agent (trusted services list)")
 		resp, err := s.Client.Do(req)
 		if err != nil {
 			return nil, "", err

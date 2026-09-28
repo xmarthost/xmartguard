@@ -33,7 +33,7 @@ export default function Login() {
         }}
       >
         <div className="mb-6 flex justify-center">
-          <Logo />
+          <Logo full />
         </div>
         <h1 className="mb-6 text-center text-lg font-medium text-navy-900">Sign in to your account</h1>
         {error && (

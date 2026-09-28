@@ -182,13 +182,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	ip := clientIP(r)
 	switch {
-	case r.URL.Path == "/.xmartguard/captcha.png":
+	case r.URL.Path == pathPrefix+"captcha.png" || r.URL.Path == legacyPrefix+"captcha.png":
 		s.image(w, r)
 		return
-	case r.Method == http.MethodPost && r.URL.Path == "/.xmartguard/verify":
+	case r.Method == http.MethodPost && (r.URL.Path == pathPrefix+"verify" || r.URL.Path == legacyPrefix+"verify"):
 		s.verify(w, r, ip)
 		return
-	case r.URL.Path == "/.xmartguard/gate":
+	case r.URL.Path == pathPrefix+"gate" || r.URL.Path == legacyPrefix+"gate":
 		// The WAF sends visitors of a login page here: back is the rest of
 		// the query, unencoded (ModSecurity cannot encode it).
 		back := "/"
@@ -350,11 +350,18 @@ func (s *Server) gatePassed(w http.ResponseWriter, r *http.Request, ip string, c
 	http.Redirect(w, r, siteURL(r, safeBack(r.PostForm.Get("back"))), http.StatusSeeOther)
 }
 
+// pathPrefix holds the CAPTCHA server's own URLs; legacyPrefix is the one of
+// versions before the xPGuard name (pages still open in a browser).
+const (
+	pathPrefix   = "/.xpguard/"
+	legacyPrefix = "/.xmartguard/"
+)
+
 // GateCookie is the login-page pass cookie (the WAF checks its value).
 const GateCookie = "xg_gate"
 
 func safeBack(back string) string {
-	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, "/.xmartguard/") ||
+	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, pathPrefix) || strings.HasPrefix(back, legacyPrefix) ||
 		strings.ContainsAny(back, "\r\n\\") || len(back) > 2000 {
 		return "/"
 	}
@@ -429,7 +436,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, ip, msg string) {
 	if r.Method == http.MethodPost {
 		back = r.PostForm.Get("back")
 	}
-	if len(back) > 500 || strings.HasPrefix(back, "/.xmartguard/") {
+	if len(back) > 500 || strings.HasPrefix(back, pathPrefix) || strings.HasPrefix(back, legacyPrefix) {
 		back = "/"
 	}
 	data := map[string]any{"IP": ip, "Msg": msg, "Back": back, "Provider": cfg.Provider, "SiteKey": cfg.SiteKey, "Host": r.Host}
@@ -460,16 +467,16 @@ button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:8px;backgr
 {{if .Gate}}<p>This login page is protected. Prove you are a person to continue to {{.Host}}{{.Back}}.</p>
 {{else}}<p>Your address <b>{{.IP}}</b> was temporarily blocked because of suspicious activity. Prove you are a person to continue to {{.Host}}.</p>{{end}}
 {{if .Msg}}<p class="e">{{.Msg}}</p>{{end}}
-<form method="post" action="/.xmartguard/verify">
+<form method="post" action="/.xpguard/verify">
 <input type="hidden" name="back" value="{{.Back}}">{{if .Gate}}<input type="hidden" name="gate" value="1">{{end}}
 {{if eq .Provider "turnstile"}}<div class="cf-turnstile" data-sitekey="{{.SiteKey}}"></div>
 {{else if eq .Provider "recaptcha"}}<div class="g-recaptcha" data-sitekey="{{.SiteKey}}"></div>
 {{else}}<input type="hidden" name="id" value="{{.ID}}">
-<img src="/.xmartguard/captcha.png?id={{.ID}}" alt="Type the digits shown" width="260" height="90">
+<img src="/.xpguard/captcha.png?id={{.ID}}" alt="Type the digits shown" width="260" height="90">
 <input type="text" name="answer" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="Digits in the image" required autofocus>{{end}}
 <button type="submit">Continue</button>
 </form>
-<p class="f">Protected by XMart Guard</p>
+<p class="f">Protected by xPGuard</p>
 </div></body></html>`))
 
 var doneTmpl = template.Must(template.New("d").Parse(`<!doctype html>

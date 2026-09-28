@@ -60,7 +60,7 @@ describe('mcp endpoint', () => {
   it('initializes and accepts a bearer header', async () => {
     const r = await rpc(readUrl, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 't', version: '1' } });
     expect(r.body.result.protocolVersion).toBe('2025-03-26');
-    expect(r.body.result.serverInfo.name).toBe('xmartguard');
+    expect(r.body.result.serverInfo.name).toBe('xpguard');
     expect(r.body.result.capabilities.tools).toBeTruthy();
     const token = readUrl.split('/').pop()!;
     expect((await rpc(`${h.url}/mcp`, 'ping', undefined, { authorization: `Bearer ${token}` })).body.result).toEqual({});

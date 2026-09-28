@@ -64,7 +64,7 @@ xmartguard-agent check /home/user/public_html/folder --misses --no-hash   # rule
     body: (
       <>
         <p>
-          <b>WAF Rule Sets</b> (sidebar) holds one ModSecurity configuration for every server: XMart Guard's own rules, the free OWASP Core Rule Set
+          <b>WAF Rule Sets</b> (sidebar) holds one ModSecurity configuration for every server: xPGuard's own rules, the free OWASP Core Rule Set
           (the portal downloads the latest official release from GitHub), cPanel ModSecurity vendors such as <b>Malware.Expert</b> (paid; paste the
           vendor URL from your subscription page) or Comodo, and your own custom rules. Saving rolls it out to all online servers at once.
         </p>
@@ -113,7 +113,7 @@ xmartguard-agent check /home/user/public_html/folder --misses --no-hash   # rule
         <Steps
           items={[
             <><b>Configuration » Server » Security</b>: Enable WAF = Yes, Scan Request Body = Yes.</>,
-            <>Add a <b>WAF Rule Set</b>: Name <code>XMartGuard</code>, Action <code>deny,log,status:403</code>, Enabled Yes, Rules Definition:</>,
+            <>Add a <b>WAF Rule Set</b>: Name <code>xPGuard</code>, Action <code>deny,log,status:403</code>, Enabled Yes, Rules Definition:</>,
           ]}
         />
         <Code>{`Include /usr/local/lsws/conf/xmartguard-waf.conf`}</Code>
@@ -240,7 +240,7 @@ export default function KnowledgeBase() {
 
       <div className="card p-6" id="attributions">
         <h2 className="mb-1 text-lg font-semibold text-navy-900">Third-party data and software</h2>
-        <p className="mb-4 text-sm text-slate-500">XMart Guard uses the following projects. Their licenses and terms apply to their parts.</p>
+        <p className="mb-4 text-sm text-slate-500">xPGuard uses the following projects. Their licenses and terms apply to their parts.</p>
         <div className="divide-y divide-slate-100">
           {credits.map((c) => (
             <div key={c.name} className="grid gap-1 py-3 text-sm sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.6fr)_150px]">

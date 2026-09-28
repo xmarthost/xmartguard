@@ -134,14 +134,14 @@ export default function AIConnector() {
             In Claude open <b>Settings » Connectors » Add custom connector</b>.
           </li>
           <li>
-            Name it <b>XMart Guard</b>, paste the URL and click <b>Continue</b>. Under <b>Authentication</b> choose <b>No sign-in</b> (the token is already in the URL), then <b>Add</b> and <b>Connect</b>.
+            Name it <b>xPGuard</b>, paste the URL and click <b>Continue</b>. Under <b>Authentication</b> choose <b>No sign-in</b> (the token is already in the URL), then <b>Add</b> and <b>Connect</b>.
           </li>
-          <li>In a chat, enable the XMart Guard connector from the tools menu and ask, for example: “Review the quarantined files on all servers and list likely false positives.”</li>
+          <li>In a chat, enable the xPGuard connector from the tools menu and ask, for example: “Review the quarantined files on all servers and list likely false positives.”</li>
         </ol>
         <p className="mt-3 text-sm text-slate-500">
           The portal must be reachable over HTTPS from the internet for Claude's servers to connect. Other MCP clients (Claude Code, Cursor, …) use the same URL:
         </p>
-        <pre className="mt-2 overflow-x-auto rounded-lg bg-navy-900 p-3 text-xs text-slate-100">{`claude mcp add --transport http xmartguard ${data?.endpoint ?? ''}/<token>`}</pre>
+        <pre className="mt-2 overflow-x-auto rounded-lg bg-navy-900 p-3 text-xs text-slate-100">{`claude mcp add --transport http xpguard ${data?.endpoint ?? ''}/<token>`}</pre>
         <div className="mt-4 grid gap-4 text-sm sm:grid-cols-2">
           <div>
             <div className="mb-1 font-medium text-navy-900">Read tools</div>

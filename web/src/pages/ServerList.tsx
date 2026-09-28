@@ -135,7 +135,7 @@ function ServerCard({ s, onChange }: { s: Server; onChange: () => void }) {
             <button
               className="mt-1 inline-flex items-center gap-1 text-red-500 hover:text-red-700"
               onClick={async () => {
-                if (!confirm(`Remove ${s.hostname} from XMart Guard? The agent on the server will stop.`)) return;
+                if (!confirm(`Remove ${s.hostname} from xPGuard? The agent on the server will stop.`)) return;
                 await api('DELETE', `/api/servers/${s.id}`);
                 onChange();
               }}

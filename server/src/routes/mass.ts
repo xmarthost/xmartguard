@@ -33,12 +33,12 @@ const OPS: Record<string, { label: string; action: string; params: (p: Record<st
   waf_off: { label: 'Disable WAF', action: 'settings.set', params: () => ({ waf: { enabled: false } }) },
   ipdb_on: { label: 'Enable IPDB protection', action: 'settings.set', params: () => ({ ipdb: { enabled: true } }) },
   ai_portal: {
-    label: 'AI scanner: use XMart Guard AI (free AI APIs), detections only',
+    label: 'AI scanner: use xPGuard AI (free AI APIs), detections only',
     action: 'settings.set',
     params: () => ({ ai: { enabled: true, provider: 'portal', scope: 'suspicious', learn: true } }),
   },
   ai_all: {
-    label: 'AI scanner: XMart Guard AI checks every new file (self-training)',
+    label: 'AI scanner: xPGuard AI checks every new file (self-training)',
     action: 'settings.set',
     params: () => ({ ai: { enabled: true, provider: 'portal', scope: 'all', learn: true } }),
   },

@@ -151,8 +151,8 @@ function authHeaders(p: ProviderRow): Record<string, string> {
   const h: Record<string, string> = { 'content-type': 'application/json' };
   if (p.api_key) h.authorization = `Bearer ${p.api_key}`;
   if (p.kind === 'openrouter') {
-    h['http-referer'] = 'https://xmartguard.com';
-    h['x-title'] = 'XMart Guard';
+    h['http-referer'] = 'https://app.xpguard.org';
+    h['x-title'] = 'xPGuard';
   }
   return h;
 }

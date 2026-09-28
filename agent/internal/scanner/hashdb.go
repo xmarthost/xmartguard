@@ -12,7 +12,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
-// baselineHashes is XMart Guard's own SHA-256 blocklist of known-malicious
+// baselineHashes is xPGuard's own SHA-256 blocklist of known-malicious
 // files, shipped with the agent. It is our own data, keyed by file size so a
 // scan only hashes a file whose size matches a known-bad entry.
 //
@@ -83,7 +83,7 @@ func (db *HashDB) merge(text string) {
 		if err != nil {
 			continue
 		}
-		label := "XMartGuard.KnownMalware"
+		label := "xPGuard.KnownMalware"
 		if len(f) >= 3 {
 			label = f[2]
 		}

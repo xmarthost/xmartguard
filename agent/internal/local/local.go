@@ -141,7 +141,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if table == nil {
-		reply(403, Response{Error: "this account cannot use XMart Guard"})
+		reply(403, Response{Error: "this account cannot use xPGuard"})
 		return
 	}
 	h, ok := table[req.Action]
@@ -188,7 +188,7 @@ func CallRaw(ctx context.Context, body []byte) (json.RawMessage, error) {
 	req.Header.Set("Content-Type", "application/json")
 	res, err := hc.Do(req)
 	if err != nil {
-		return nil, errors.New("the XMart Guard agent is not running (systemctl start xmartguard-agent)")
+		return nil, errors.New("the xPGuard agent is not running (systemctl start xmartguard-agent)")
 	}
 	defer res.Body.Close()
 	var resp Response

@@ -34,7 +34,8 @@ var eximRoot = ""
 const (
 	rblDir       = "/var/cpanel/rbl_info"
 	eximLocalOpt = "/etc/exim.conf.localopts"
-	rblMarker    = "# Added by XMart Guard"
+	rblMarker    = "# Added by xPGuard"
+	legacyMarker = "# Added by XMart Guard" // versions before the xPGuard name
 )
 
 func eximPath(p string) string { return filepath.Join(eximRoot, p) }
@@ -63,7 +64,11 @@ func EnsureEximRBLs() ([]string, error) {
 	var added, newOpts []string
 	for _, r := range EximRBLs {
 		p := eximPath(filepath.Join(rblDir, r.Name+".yaml"))
-		if _, err := os.Stat(p); err == nil {
+		if b, err := os.ReadFile(p); err == nil {
+			// A definition from before the xPGuard name gets the new marker.
+			if strings.HasPrefix(string(b), legacyMarker) {
+				_ = os.WriteFile(p, []byte(rblYAML(r)), 0o644)
+			}
 			continue
 		}
 		if err := os.WriteFile(p, []byte(rblYAML(r)), 0o644); err != nil {
@@ -101,7 +106,7 @@ func hasOptLine(opts, key string) bool {
 	return false
 }
 
-// RemoveEximRBLs deletes the definitions XMart Guard added (uninstall).
+// RemoveEximRBLs deletes the definitions xPGuard added (uninstall).
 // An RBL the administrator switched on is removed from exim's options too,
 // so Exim never queries a list whose definition is gone.
 func RemoveEximRBLs() []string {
@@ -109,7 +114,7 @@ func RemoveEximRBLs() []string {
 	for _, r := range EximRBLs {
 		p := eximPath(filepath.Join(rblDir, r.Name+".yaml"))
 		b, err := os.ReadFile(p)
-		if err != nil || !strings.HasPrefix(string(b), rblMarker) {
+		if err != nil || !ownRBLFile(b) {
 			continue
 		}
 		if os.Remove(p) == nil {
@@ -157,4 +162,9 @@ func EximRBLStatus() []EximRBLState {
 		out = append(out, EximRBLState{Name: r.Name, Zone: r.Zone, Defined: err == nil, Enabled: hasOptLine(string(opts), "acl_"+r.Name+"_rbl=1")})
 	}
 	return out
+}
+
+// ownRBLFile reports a definition written by this package (either name).
+func ownRBLFile(b []byte) bool {
+	return strings.HasPrefix(string(b), rblMarker) || strings.HasPrefix(string(b), legacyMarker)
 }

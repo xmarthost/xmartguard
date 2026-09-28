@@ -8,7 +8,7 @@ You need two servers:
 
 | Server | Purpose | Suggested spec |
 |---|---|---|
-| **Portal VPS** | runs `xmartguard.com` (portal) | AlmaLinux 9, 2 GB RAM, DNS A record → this VPS |
+| **Portal VPS** | runs `app.xpguard.org` (portal) | AlmaLinux 9, 2 GB RAM, DNS A record → this VPS |
 | **Test server** | a hosting server to protect | AlmaLinux/CloudLinux 8/9 with cPanel (trial is fine) |
 
 ---

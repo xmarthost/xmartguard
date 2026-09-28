@@ -237,7 +237,7 @@ export default function WafRuleSets() {
         )}
       </div>
 
-      <Card title="XMart Guard rules" desc="Built in, free. Web shells and exploit probes, sensitive files, WordPress hardening, bad bots, upload scanning with the malware engine, login brute force.">
+      <Card title="xPGuard rules" desc="Built in, free. Web shells and exploit probes, sensitive files, WordPress hardening, bad bots, upload scanning with the malware engine, login brute force.">
         <div className="mt-3 flex items-center justify-between gap-3">
           <span className="text-sm text-slate-600">Individual rules can still be switched per server in Settings » WAF.</span>
           <Toggle on={cfg.xmartguard.enabled} disabled={!isAdmin} onChange={(v) => set({ ...cfg, xmartguard: { enabled: v } })} />

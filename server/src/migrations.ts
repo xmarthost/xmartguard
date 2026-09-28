@@ -281,7 +281,7 @@ CREATE INDEX mcp_tokens_account_idx ON mcp_tokens (account_id, created_at DESC);
     version: '006_waf_rulesets',
     sql: `
 -- WAF Rule Sets: one ModSecurity configuration per account, rolled out to
--- every server (XMart Guard rules, OWASP CRS, cPanel vendors, custom rules).
+-- every server (xPGuard rules, OWASP CRS, cPanel vendors, custom rules).
 CREATE TABLE waf_rulesets (
   account_id  uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
   config      jsonb NOT NULL DEFAULT '{}'::jsonb,

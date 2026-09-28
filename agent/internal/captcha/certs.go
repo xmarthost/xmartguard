@@ -181,7 +181,7 @@ func (c *CertStore) selfSigned() (*tls.Certificate, error) {
 	}
 	serial, _ := rand.Int(rand.Reader, big.NewInt(1<<62))
 	tpl := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: "XMart Guard security check"},
+		SerialNumber: serial, Subject: pkix.Name{CommonName: "xPGuard security check"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().AddDate(5, 0, 0),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

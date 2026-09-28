@@ -12,7 +12,7 @@ import (
 )
 
 // WAF Rule Sets: the portal holds one ModSecurity configuration for all
-// servers (XMart Guard rules, OWASP CRS, cPanel vendors, custom rules).
+// servers (xPGuard rules, OWASP CRS, cPanel vendors, custom rules).
 // The agent pulls it every 15 minutes and at once when the portal sends
 // "waf.sync" after a change, applies it and reports how each rule set did.
 
@@ -76,11 +76,11 @@ func (a *Agent) syncWAF(ctx context.Context, force bool) (WAFSyncResult, error) 
 			a.Log.Warn("OWASP CRS install failed", "err", err)
 		}
 	}
-	// XMart Guard's own rules follow the portal switch when it is set.
-	if next.XMartGuard != nil && a.Settings.Get().WAF.Enabled != next.XMartGuard.Enabled {
-		patch, _ := json.Marshal(map[string]any{"waf": map[string]any{"enabled": next.XMartGuard.Enabled}})
+	// xPGuard's own rules follow the portal switch when it is set.
+	if next.OwnRules != nil && a.Settings.Get().WAF.Enabled != next.OwnRules.Enabled {
+		patch, _ := json.Marshal(map[string]any{"waf": map[string]any{"enabled": next.OwnRules.Enabled}})
 		if _, err := a.Settings.Patch(patch); err != nil {
-			a.Log.Warn("could not switch XMart Guard WAF rules", "err", err)
+			a.Log.Warn("could not switch xPGuard WAF rules", "err", err)
 		}
 	}
 	a.WAF.SetRuleSets(next)
@@ -105,7 +105,7 @@ func (a *Agent) wafResult(ctx context.Context, rs waf.RuleSets) WAFSyncResult {
 
 	st := a.WAF.Status()
 	res := WAFSyncResult{Version: rs.Version, Status: st, At: time.Now().Unix()}
-	xg := waf.RuleSetState{ID: "xmartguard", Name: "XMart Guard rules", State: "off"}
+	xg := waf.RuleSetState{ID: "xmartguard", Name: "xPGuard rules", State: "off"}
 	if a.Settings.Get().WAF.Enabled {
 		xg.State, xg.Detail = "active", ""
 		if !st.Available {

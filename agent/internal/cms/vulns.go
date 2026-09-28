@@ -208,7 +208,7 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 			return false, fmt.Errorf("unexpected wp-config.php")
 		}
 		i += len("<?php")
-		text = text[:i] + "\ndefine( 'DISABLE_WP_CRON', true ); // added by XMart Guard (real cron job)\n" + text[i:]
+		text = text[:i] + "\ndefine( 'DISABLE_WP_CRON', true ); // added by xPGuard (real cron job)\n" + text[i:]
 		st, _ := os.Stat(cfgPath)
 		if err := os.WriteFile(cfgPath, []byte(text), st.Mode().Perm()); err != nil {
 			return false, err

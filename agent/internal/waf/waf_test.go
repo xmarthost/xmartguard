@@ -13,11 +13,11 @@ var realLines = []struct {
 	ip, host, uri, cat, action string
 	id                         int
 }{
-	{`[Sat Sep 26 01:45:54.714760 2026] [security2:error] [pid 4587:tid 1] [client 127.0.0.1:35700] [client 127.0.0.1] ModSecurity: Access denied with code 403 (phase 1). Pattern match "/(?:\\.env$)" at REQUEST_FILENAME. [file "/x/rules.conf"] [line "5"] [id "7700201"] [msg "XMartGuard - Access to sensitive file blocked"] [tag "xmartguard/files"] [hostname "shop.example"] [uri "/.env"] [unique_id "a"]`,
+	{`[Sat Sep 26 01:45:54.714760 2026] [security2:error] [pid 4587:tid 1] [client 127.0.0.1:35700] [client 127.0.0.1] ModSecurity: Access denied with code 403 (phase 1). Pattern match "/(?:\\.env$)" at REQUEST_FILENAME. [file "/x/rules.conf"] [line "5"] [id "7700201"] [msg "xPGuard - Access to sensitive file blocked"] [tag "xmartguard/files"] [hostname "shop.example"] [uri "/.env"] [unique_id "a"]`,
 		"127.0.0.1", "shop.example", "/.env", "waf", "Access denied with code 403", IDSensitive},
-	{`[Sat Sep 26 01:45:54.727971 2026] [security2:error] [pid 4587:tid 1] [client 203.0.113.9:35720] [client 203.0.113.9] ModSecurity: Access denied with code 403 (phase 1). Matched phrase "sqlmap" at REQUEST_HEADERS:User-Agent. [file "/x/rules.conf"] [line "20"] [id "7700501"] [msg "XMartGuard - Bad bot blocked"] [tag "xmartguard/bot"] [hostname "shop.example"] [uri "/index.html"] [unique_id "b"]`,
+	{`[Sat Sep 26 01:45:54.727971 2026] [security2:error] [pid 4587:tid 1] [client 203.0.113.9:35720] [client 203.0.113.9] ModSecurity: Access denied with code 403 (phase 1). Matched phrase "sqlmap" at REQUEST_HEADERS:User-Agent. [file "/x/rules.conf"] [line "20"] [id "7700501"] [msg "xPGuard - Bad bot blocked"] [tag "xmartguard/bot"] [hostname "shop.example"] [uri "/index.html"] [unique_id "b"]`,
 		"203.0.113.9", "shop.example", "/index.html", "bot", "Access denied with code 403", IDBadBots},
-	{`[Sat Sep 26 01:46:10.471444 2026] [security2:error] [pid 4703:tid 1] [client 198.51.100.4:45142] [client 198.51.100.4] ModSecurity: Warning. String match "200" at RESPONSE_STATUS. [file "/x/rules.conf"] [line "9"] [id "7700401"] [msg "XMartGuard - Failed login: WordPress"] [tag "xmartguard/login"] [hostname "blog.example"] [uri "/wp-login.php"] [unique_id "c"]`,
+	{`[Sat Sep 26 01:46:10.471444 2026] [security2:error] [pid 4703:tid 1] [client 198.51.100.4:45142] [client 198.51.100.4] ModSecurity: Warning. String match "200" at RESPONSE_STATUS. [file "/x/rules.conf"] [line "9"] [id "7700401"] [msg "xPGuard - Failed login: WordPress"] [tag "xmartguard/login"] [hostname "blog.example"] [uri "/wp-login.php"] [unique_id "c"]`,
 		"198.51.100.4", "blog.example", "/wp-login.php", "login", "Logged", IDLoginWP},
 }
 

@@ -15,11 +15,11 @@ import (
 )
 
 // RuleSets is the fleet-wide ModSecurity configuration made in the portal
-// (WAF Rule Sets): XMart Guard's own rules, the OWASP Core Rule Set, cPanel
+// (WAF Rule Sets): xPGuard's own rules, the OWASP Core Rule Set, cPanel
 // ModSecurity vendors (Malware.Expert, Comodo, …) and custom rules.
 type RuleSets struct {
-	Version    int64 `json:"version"`
-	XMartGuard *struct {
+	Version  int64 `json:"version"`
+	OwnRules *struct {
 		Enabled bool `json:"enabled"`
 	} `json:"xmartguard,omitempty"`
 	CRS struct {
@@ -71,8 +71,8 @@ func vendorHasRBL(url, rbl string) bool {
 
 // VendorLoginCaptcha names the rule feed that brings its own login-page
 // CAPTCHA to this server ("" = none): Malware.Expert's "recaptcha" extra
-// sends bots on WordPress/Joomla logins to recaptcha.cloud, and XMart
-// Guard's login-page CAPTCHA would stop every visitor before it.
+// sends bots on WordPress/Joomla logins to recaptcha.cloud, and xPGuard's
+// login-page CAPTCHA would stop every visitor before it.
 func (m *Manager) VendorLoginCaptcha() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -251,7 +251,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		if strings.HasPrefix(rs.CRS.Version, "3.") {
 			plVar = "paranoia_level"
 		}
-		files[setup] = fmt.Sprintf("# OWASP CRS %s set up by XMart Guard (WAF Rule Sets in the portal).\nInclude %s\n"+
+		files[setup] = fmt.Sprintf("# OWASP CRS %s set up by xPGuard (WAF Rule Sets in the portal).\nInclude %s\n"+
 			"SecAction \"id:900000,phase:1,pass,t:none,nolog,setvar:tx.%s=%d\"\n"+
 			"SecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=%d,setvar:tx.outbound_anomaly_score_threshold=%d\"\n",
 			rs.CRS.Version, filepath.Join(dir, "crs-setup.conf.example"), plVar, pl, in, out)
@@ -277,7 +277,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			fmt.Fprintf(&inc, "SecRemoteRules \"%s\" \"%s\"\n", r.Key, r.URL)
 			st.State, st.Detail = "active", "loaded by ModSecurity from "+r.URL
 			if strings.Contains(r.URL, "malware.expert/") && urlExtra(r.URL, "recaptcha") {
-				st.Detail += "; login CAPTCHA by Malware.Expert (recaptcha.cloud) replaces XMart Guard's"
+				st.Detail += "; login CAPTCHA by Malware.Expert (recaptcha.cloud) replaces xPGuard's"
 			}
 			rbl := strings.ToLower(strings.TrimSpace(r.RBL))
 			if rbl != "" && vendorHasRBL(r.URL, rbl) {
@@ -286,7 +286,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 				rbl = ""
 			}
 			if rbl != "" && reRemoteRBL.MatchString(rbl) && rblID < IDRemoteRBL+10 {
-				fmt.Fprintf(&inc, "SecRule REQUEST_METHOD \"@streq POST\" \"id:%d,phase:2,drop,log,msg:'POST from an address listed on %s',tag:'xmartguard/rbl',chain\"\n  SecRule REMOTE_ADDR \"@rbl %s\"\n", rblID, rbl, rbl)
+				fmt.Fprintf(&inc, "SecRule REQUEST_METHOD \"@streq POST\" \"id:%d,phase:2,drop,log,msg:'POST from an address listed on %s',tag:'xpguard/rbl',chain\"\n  SecRule REMOTE_ADDR \"@rbl %s\"\n", rblID, rbl, rbl)
 				rblID++
 				st.Detail += "; POST blocklist " + rbl
 			}
@@ -304,7 +304,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			break
 		}
 		p := filepath.Join(m.RulesDir, "custom.conf")
-		files[p] = "# Custom rules from the XMart Guard portal (WAF Rule Sets).\n" + rs.Custom.Rules + "\n"
+		files[p] = "# Custom rules from the xPGuard portal (WAF Rule Sets).\n" + rs.Custom.Rules + "\n"
 		fmt.Fprintf(&inc, "\n# Custom rules\nInclude %s\n", p)
 		custom.State = "active"
 	}
@@ -369,7 +369,7 @@ func ValidateCustomRules(text string) error {
 		}
 		if id := regexp.MustCompile(`\bid\s*:\s*'?(\d+)`).FindStringSubmatch(t); id != nil {
 			if n := atoi(id[1]); n >= 7700000 && n <= 7709999 {
-				return fmt.Errorf("rule %d: ids 7700000-7709999 are reserved for XMart Guard", i+1)
+				return fmt.Errorf("rule %d: ids 7700000-7709999 are reserved for xPGuard", i+1)
 			}
 		}
 	}

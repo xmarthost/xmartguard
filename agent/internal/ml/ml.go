@@ -1,4 +1,4 @@
-// Package ml is XMart Guard's built-in AI scanner: a logistic-regression
+// Package ml is xPGuard's built-in AI scanner: a logistic-regression
 // model over code features that scores how likely a PHP/JS file is
 // malicious. It runs inside the agent with no network access and no API
 // costs, and it is retrained from real quarantine data (see Train and the

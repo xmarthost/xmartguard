@@ -246,7 +246,7 @@ func (d *Direct) get(ctx context.Context, u string, limit int64) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "XMartGuard")
+	req.Header.Set("User-Agent", "xPGuard")
 	res, err := d.Client.Do(req)
 	if err != nil {
 		return nil, err

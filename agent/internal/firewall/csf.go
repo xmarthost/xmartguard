@@ -16,8 +16,8 @@ import (
 //
 // When CSF is active the two firewalls share the work:
 //   - CSF keeps the port filter (TCP_IN/TCP_OUT...); ours is not loaded so a
-//     port open in CSF is never closed by XMart Guard.
-//   - Addresses in csf.allow and csf.ignore are exempt from XMart Guard's
+//     port open in CSF is never closed by xPGuard.
+//   - Addresses in csf.allow and csf.ignore are exempt from xPGuard's
 //     blocks (IPDB, bans, country blocks), as they are in CSF.
 //   - csfpost.sh reloads our rules right after `csf -r` flushes iptables.
 //   - LFD ignores the agent process (csf.pignore, set by the installer).
@@ -31,7 +31,9 @@ const (
 	csfAllow   = "/etc/csf/csf.allow"
 	csfIgnore  = "/etc/csf/csf.ignore"
 	csfPost    = "/usr/local/csf/bin/csfpost.sh"
-	csfHookTag = "# XMart Guard: reload rules after csf -r"
+	csfHookTag = "# xPGuard: reload rules after csf -r"
+	// legacyHookTag is the hook line of versions before the xPGuard name.
+	legacyHookTag = "# XMart Guard: reload rules after csf -r"
 )
 
 // AgentBinary is the command csfpost.sh calls.
@@ -47,7 +49,7 @@ type CSFInfo struct {
 	// Exempt is the number of csf.allow/csf.ignore addresses our blocks skip.
 	Exempt int  `json:"exempt"`
 	Hook   bool `json:"hook"` // csfpost.sh reloads our rules
-	// PortFilter reports that CSF, not XMart Guard, filters ports.
+	// PortFilter reports that CSF, not xPGuard, filters ports.
 	PortFilter bool `json:"port_filter"`
 }
 
@@ -68,7 +70,7 @@ func DetectCSF() CSFInfo {
 		}
 	}
 	if hb, err := os.ReadFile(csfPath(csfPost)); err == nil {
-		c.Hook = strings.Contains(string(hb), csfHookTag)
+		c.Hook = strings.Contains(string(hb), csfHookTag) || strings.Contains(string(hb), legacyHookTag)
 	}
 	c.PortFilter = c.Enabled
 	return c
@@ -125,7 +127,7 @@ func hookLine() string {
 	return "(sleep 3; " + AgentBinary + " call fw.apply) >/dev/null 2>&1 & " + csfHookTag
 }
 
-// EnsureCSFHook makes csfpost.sh reload XMart Guard's rules after CSF
+// EnsureCSFHook makes csfpost.sh reload xPGuard's rules after CSF
 // restarts. An existing csfpost.sh is kept; one line is added.
 func EnsureCSFHook() error {
 	p := csfPath(csfPost)
@@ -136,7 +138,8 @@ func EnsureCSFHook() error {
 	if strings.Contains(string(b), csfHookTag) {
 		return nil
 	}
-	s := string(b)
+	// Replace the hook line of an older version.
+	s := dropLines(string(b), legacyHookTag)
 	if s == "" {
 		s = "#!/bin/sh\n"
 	} else if !strings.HasSuffix(s, "\n") {
@@ -154,16 +157,10 @@ func EnsureCSFHook() error {
 func RemoveCSFHook() {
 	p := csfPath(csfPost)
 	b, err := os.ReadFile(p)
-	if err != nil || !strings.Contains(string(b), csfHookTag) {
+	if err != nil || (!strings.Contains(string(b), csfHookTag) && !strings.Contains(string(b), legacyHookTag)) {
 		return
 	}
-	var keep []string
-	for _, l := range strings.Split(string(b), "\n") {
-		if !strings.Contains(l, csfHookTag) {
-			keep = append(keep, l)
-		}
-	}
-	rest := strings.TrimSpace(strings.Join(keep, "\n"))
+	rest := strings.TrimSpace(dropLines(dropLines(string(b), csfHookTag), legacyHookTag))
 	if rest == "" || rest == "#!/bin/sh" || rest == "#!/bin/bash" {
 		_ = os.Remove(p)
 		return
@@ -181,7 +178,10 @@ func (m *Manager) CSF() CSFInfo {
 }
 
 // csfGateComment marks the rules that open the CAPTCHA ports under CSF.
-const csfGateComment = "xmartguard-captcha"
+const csfGateComment = "xpguard-captcha"
+
+// legacyGateComment marked the same rules before the xPGuard name.
+const legacyGateComment = "xmartguard-captcha"
 
 // syncCSFGatePorts opens the CAPTCHA server's ports in front of CSF's own
 // chains while the login-page CAPTCHA is on (CSF keeps the port filter, so
@@ -197,7 +197,7 @@ var syncCSFGatePorts = func(ports []int) {
 		// Remove ours first (also any with old ports), then add the current ones.
 		out, _ := run(ctx, "", bin, "-w", "-S", "INPUT")
 		for _, l := range strings.Split(string(out), "\n") {
-			if !strings.Contains(l, csfGateComment) || !strings.HasPrefix(l, "-A INPUT ") {
+			if !(strings.Contains(l, csfGateComment) || strings.Contains(l, legacyGateComment)) || !strings.HasPrefix(l, "-A INPUT ") {
 				continue
 			}
 			args := append([]string{"-w", "-D", "INPUT"}, splitRule(strings.TrimPrefix(l, "-A INPUT "))...)
@@ -237,4 +237,18 @@ func splitRule(s string) []string {
 		out = append(out, cur.String())
 	}
 	return out
+}
+
+// dropLines removes the lines containing tag.
+func dropLines(s, tag string) string {
+	if !strings.Contains(s, tag) {
+		return s
+	}
+	var keep []string
+	for _, l := range strings.Split(s, "\n") {
+		if !strings.Contains(l, tag) {
+			keep = append(keep, l)
+		}
+	}
+	return strings.Join(keep, "\n")
 }

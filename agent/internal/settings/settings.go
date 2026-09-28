@@ -135,7 +135,7 @@ type Captcha struct {
 }
 
 // AI gives files a second opinion ("AI scanner"). The default provider is
-// XMart Guard's built-in model: free, local, no network. "portal" sends files
+// xPGuard's built-in model: free, local, no network. "portal" sends files
 // to the portal, which asks the free AI APIs configured there (Gemini, Groq,
 // OpenRouter, ...) with automatic failover between keys, and shares every
 // verdict with all linked servers.
@@ -189,7 +189,7 @@ type Reputation struct {
 	IntervalHours int      `json:"interval_hours"`
 }
 
-// WAF is XMart Guard's ModSecurity rule set for Apache/LiteSpeed.
+// WAF is xPGuard's ModSecurity rule set for Apache/LiteSpeed.
 type WAF struct {
 	Enabled        bool     `json:"enabled"`
 	UploadScan     bool     `json:"upload_scan"`     // scan uploaded files with the malware engine

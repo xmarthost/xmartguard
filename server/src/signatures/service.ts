@@ -122,7 +122,7 @@ export class SignatureService {
   }
 
   private async get(url: string): Promise<Buffer> {
-    const res = await fetch(url, { headers: { 'user-agent': 'XMartGuard' }, signal: AbortSignal.timeout(120_000) });
+    const res = await fetch(url, { headers: { 'user-agent': 'xPGuard' }, signal: AbortSignal.timeout(120_000) });
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   }

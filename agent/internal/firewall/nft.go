@@ -1,7 +1,7 @@
-// Package firewall manages XMart Guard's own nftables table ("inet
+// Package firewall manages xPGuard's own nftables table ("inet
 // xmartguard"). It never edits other tables, so it coexists with firewalld,
 // CSF and cPanel's rules: our drops always apply, our accepts only exempt
-// traffic from XMart Guard's own blocks.
+// traffic from xPGuard's own blocks.
 package firewall
 
 import (

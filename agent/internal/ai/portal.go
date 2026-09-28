@@ -291,7 +291,7 @@ func (a *Analyzer) WriteLearned() error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(p+".tmp", []byte("# XMart Guard: files the fleet's AI found malicious\n"+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(p+".tmp", []byte("# xPGuard: files the fleet's AI found malicious\n"+strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(p+".tmp", p); err != nil {

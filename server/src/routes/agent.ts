@@ -125,6 +125,28 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
     },
   );
 
+  /**
+   * An agent that reached the portal under another name (the old domain
+   * after a move to a new one) is told the portal's own address; it checks
+   * that the address answers, saves it and reconnects there.
+   */
+  function maybeMove(serverId: string, hostHeader: string | string[] | undefined): void {
+    const host = String(Array.isArray(hostHeader) ? hostHeader[0] : (hostHeader ?? '')).split(',')[0].trim().toLowerCase();
+    let want: URL;
+    try {
+      want = new URL(cfg.publicUrl);
+    } catch {
+      return;
+    }
+    if (!host || host === want.host.toLowerCase()) return;
+    setTimeout(() => {
+      hub
+        .command(serverId, 'portal.move', { url: cfg.publicUrl }, 60_000)
+        .then((r) => app.log.info({ serverId, from: host, to: cfg.publicUrl, result: r }, 'agent moved to the portal address'))
+        .catch((err) => app.log.warn({ serverId, from: host, err: (err as Error).message }, 'agent could not move to the portal address'));
+    }, 5_000).unref();
+  }
+
   // Unknown/revoked servers get a plain HTTP 404 before the upgrade so the
   // agent can tell "removed" apart from a network error.
   app.get(
@@ -179,6 +201,7 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
             socket.send(JSON.stringify({ type: 'welcome', config: { metrics_interval: cfg.metricsIntervalSeconds } }));
             log.info({ version: s(msg.version) }, 'agent connected');
             maybeAutoUpdate(serverId, s(msg.version));
+            maybeMove(serverId, req.headers['x-forwarded-host'] ?? req.headers.host);
             ipdb?.onConnect(serverId, s(msg.version));
             return;
           }

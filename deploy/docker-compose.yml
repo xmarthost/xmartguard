@@ -1,4 +1,4 @@
-# XMart Guard portal stack: PostgreSQL + portal (+ Caddy for automatic HTTPS
+# xPGuard portal stack: PostgreSQL + portal (+ Caddy for automatic HTTPS
 # on servers without a web server).
 #   Plain VPS:      docker compose --profile caddy up -d --build
 #   cPanel server:  docker compose up -d --build   (Apache proxies to 127.0.0.1:18080)

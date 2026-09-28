@@ -106,7 +106,7 @@ func TestInstallIntoRealApache(t *testing.T) {
 }
 
 func TestLiteSpeedLogLine(t *testing.T) {
-	line := `2026-09-26 12:00:01.123456 [NOTICE] [4321] [T0] [203.0.113.7:51234-3#APVH_www.example.com:443] [Module:mod_security] ModSecurity: Access denied with code 403 (phase 1). [id "7700201"] [msg "XMartGuard - Access to sensitive file blocked"] [uri "/.env"]`
+	line := `2026-09-26 12:00:01.123456 [NOTICE] [4321] [T0] [203.0.113.7:51234-3#APVH_www.example.com:443] [Module:mod_security] ModSecurity: Access denied with code 403 (phase 1). [id "7700201"] [msg "xPGuard - Access to sensitive file blocked"] [uri "/.env"]`
 	e, ok := ParseLine(line)
 	if !ok || e.IP != "203.0.113.7" || e.Host != "example.com" || e.RuleID != 7700201 || e.URI != "/.env" {
 		t.Fatalf("%+v %v", e, ok)

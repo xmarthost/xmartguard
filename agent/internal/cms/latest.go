@@ -56,7 +56,7 @@ func (v *Versions) store(kind, slug, ver string) {
 
 func (v *Versions) getJSON(ctx context.Context, u string, out any) error {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	req.Header.Set("User-Agent", "XMartGuard-Agent")
+	req.Header.Set("User-Agent", "xPGuard-Agent")
 	res, err := v.Client.Do(req)
 	if err != nil {
 		return err

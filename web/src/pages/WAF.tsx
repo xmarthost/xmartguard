@@ -83,7 +83,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
     }
   };
   const deleteSelected = async () => {
-    if (!confirm(`Remove ${sel.length} entr${sel.length === 1 ? 'y' : 'ies'} from the XMart Guard logs?`)) return;
+    if (!confirm(`Remove ${sel.length} entr${sel.length === 1 ? 'y' : 'ies'} from the xPGuard logs?`)) return;
     const r = await run(() => agentCall<{ deleted: number }>(id!, 'waf.event_delete', { ids: sel }), (x) => `${x.deleted} removed`);
     if (r) {
       setSel([]);
@@ -143,7 +143,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
           <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" />
           <div>
             <b>ModSecurity is not available on this server</b> ({st.web_server}). On cPanel install it in WHM » EasyApache 4 (package{' '}
-            <code>ea-apache24-mod_security2</code>); XMart Guard loads its rules automatically afterwards.
+            <code>ea-apache24-mod_security2</code>); xPGuard loads its rules automatically afterwards.
           </div>
         </div>
       )}
@@ -172,7 +172,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
                 Deselect All
               </button>
             </div>
-            <div className="mt-3 rounded-md bg-sky-50 px-3 py-2 text-xs text-slate-600">*The selected rows will be removed from the XMart Guard logs</div>
+            <div className="mt-3 rounded-md bg-sky-50 px-3 py-2 text-xs text-slate-600">*The selected rows will be removed from the xPGuard logs</div>
           </div>
         )}
         <div className="card overflow-hidden p-0">

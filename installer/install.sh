@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# XMart Guard agent installer.
+# xPGuard agent installer.
 #
 #   curl -fsSL __XG_PORTAL_URL__/install.sh | bash -s -- --token XG-XXXX-XXXX-...
 #
@@ -57,7 +57,7 @@ done
 PORTAL_URL="${PORTAL_URL%/}"
 
 say ""
-say "${c_bld}XMart Guard installer${c_off}"
+say "${c_bld}xPGuard installer${c_off}"
 say ""
 
 # ---------------------------------------------------------------- preflight
@@ -78,11 +78,11 @@ OS_NAME="unknown"
 if [ -r /etc/os-release ]; then . /etc/os-release; OS_NAME="${PRETTY_NAME:-$ID}"; fi
 
 if [ -d "$HOME_DIR/.git" ]; then
-  die "$HOME_DIR holds the XMart Guard portal code from an older portal setup. Re-run deploy/setup-almalinux.sh on this server first (it moves the portal to /opt/xmartguard-portal)."
+  die "$HOME_DIR holds the xPGuard portal code from an older portal setup. Re-run deploy/setup-almalinux.sh on this server first (it moves the portal to /opt/xmartguard-portal)."
 fi
 
 if { [ -f "$MANIFEST" ] || [ -f "$LEGACY_MANIFEST" ]; } && [ "$FORCE" -ne 1 ]; then
-  die "XMart Guard is already installed. Uninstall first, or pass --force to re-install."
+  die "xPGuard is already installed. Uninstall first, or pass --force to re-install."
 fi
 
 # /opt/xmartguard must be traversable: cPanel accounts run the plugin binary.
@@ -183,7 +183,7 @@ if [ -f /etc/csf/csf.pignore ] && ! grep -qxF "exe:$BIN" /etc/csf/csf.pignore; t
   echo "exe:$BIN" >>/etc/csf/csf.pignore
   record line "/etc/csf/csf.pignore exe:$BIN"
   command -v lfd >/dev/null 2>&1 && (service lfd restart >/dev/null 2>&1 || true)
-  ok "CSF/LFD ignores the XMart Guard agent process"
+  ok "CSF/LFD ignores the xPGuard agent process"
 fi
 
 # ---------------------------------------------------------------- systemd
@@ -191,7 +191,7 @@ fi
 # updates itself, so it runs as root without filesystem sandboxing.
 cat >"$UNIT" <<EOF
 [Unit]
-Description=XMart Guard security agent
+Description=xPGuard security agent
 Documentation=$PORTAL_URL
 After=network-online.target
 Wants=network-online.target
@@ -221,7 +221,7 @@ ok "Service xmartguard-agent is running"
 # ---------------------------------------------------------------- panel plugins
 if [ -f /usr/local/cpanel/version ]; then
   if OUT=$("$BIN" panel install 2>&1); then
-    ok "cPanel/WHM plugins installed (WHM » Plugins » XMart Guard, cPanel » Security » XMart Guard)"
+    ok "cPanel/WHM plugins installed (WHM » Plugins » xPGuard, cPanel » Security » xPGuard)"
   else
     warn "cPanel plugin could not be registered: $OUT"
   fi
@@ -232,7 +232,7 @@ fi
 "${CURL[@]}" -o "$STATE_DIR/uninstall.sh" "$PORTAL_URL/uninstall.sh" 2>/dev/null && chmod 0700 "$STATE_DIR/uninstall.sh" || true
 
 say ""
-say "${c_grn}${c_bld}XMart Guard installed successfully.${c_off}"
+say "${c_grn}${c_bld}xPGuard installed successfully.${c_off}"
 say "This server will appear in your portal within a minute: $PORTAL_URL"
 say "Uninstall: bash $STATE_DIR/uninstall.sh   (or: curl -fsSL $PORTAL_URL/uninstall.sh | bash)"
 say ""

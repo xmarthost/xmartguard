@@ -1,7 +1,7 @@
 // Package ai gives files a second opinion ("AI scanner").
 //
 // Providers:
-//   - builtin (default): XMart Guard's own model (package ml), free, runs
+//   - builtin (default): xPGuard's own model (package ml), free, runs
 //     locally, nothing leaves the server;
 //   - portal: the portal asks the free AI APIs configured there (Google
 //     Gemini, Groq, OpenRouter, ...), fails over between keys and providers

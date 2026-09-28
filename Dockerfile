@@ -1,4 +1,4 @@
-# XMart Guard portal: API + web UI + agent downloads in one image.
+# xPGuard portal: API + web UI + agent downloads in one image.
 
 FROM golang:1.24-bookworm AS agent
 WORKDIR /src

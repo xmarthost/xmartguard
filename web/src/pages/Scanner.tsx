@@ -443,7 +443,7 @@ export function ScannerLogs() {
               const url = URL.createObjectURL(new Blob([toCSV(rows)], { type: 'text/csv' }));
               const a = document.createElement('a');
               a.href = url;
-              a.download = `xmartguard-detections-${host}.csv`;
+              a.download = `xpguard-detections-${host}.csv`;
               a.click();
               URL.revokeObjectURL(url);
             }}

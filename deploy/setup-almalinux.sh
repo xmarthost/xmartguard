@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# One-shot XMart Guard PORTAL setup for AlmaLinux / Rocky / RHEL / CloudLinux 9.
+# One-shot xPGuard PORTAL setup for AlmaLinux / Rocky / RHEL / CloudLinux 9.
 #
-#   bash setup-almalinux.sh --domain xmartguard.com --email you@example.com [--branch BRANCH] [--token GITHUB_TOKEN]
+#   bash setup-almalinux.sh --domain app.xpguard.org --email you@example.com [--branch BRANCH] [--token GITHUB_TOKEN]
 #
 # The AI scanner uses free AI APIs (Google Gemini, Groq, OpenRouter, ...)
 # whose keys are added in the portal under "AI Scanner"; no model runs on
@@ -41,7 +41,7 @@ die()  { printf '\n\033[31mERROR: %s\033[0m\n' "$*"; exit 1; }
 trap 'die "setup failed at line $LINENO"' ERR
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
-[ -n "$DOMAIN" ] && [ -n "$EMAIL" ] || die "usage: bash setup-almalinux.sh --domain xmartguard.com --email you@example.com"
+[ -n "$DOMAIN" ] && [ -n "$EMAIL" ] || die "usage: bash setup-almalinux.sh --domain app.xpguard.org --email you@example.com"
 . /etc/os-release
 case "${ID}${ID_LIKE:-}" in *rhel*|*almalinux*|*rocky*|*centos*|*cloudlinux*) ;; *) die "this script is for AlmaLinux/Rocky/RHEL/CloudLinux";; esac
 
@@ -240,7 +240,7 @@ if [ "$MODE" = cpanel ]; then
   SSL_CONF="$UD/ssl/2_4/$CPUSER/$DOMAIN/xmartguard.conf"
   # HTTP: keep /.well-known for AutoSSL validation, redirect everything else to HTTPS.
   cat >"$STD_CONF" <<'EOF'
-# Managed by XMart Guard setup-almalinux.sh
+# Managed by xPGuard setup-almalinux.sh
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteCond %{REQUEST_URI} !^/\.well-known/
@@ -249,7 +249,7 @@ if [ "$MODE" = cpanel ]; then
 EOF
   # HTTPS: reverse proxy to the portal container, including the agent WebSocket.
   cat >"$SSL_CONF" <<EOF
-# Managed by XMart Guard setup-almalinux.sh
+# Managed by xPGuard setup-almalinux.sh
 ProxyRequests Off
 ProxyPreserveHost On
 <IfModule mod_headers.c>
@@ -306,7 +306,7 @@ fi
 ADMIN_PASSWORD=$(sed -n 's/^ADMIN_PASSWORD=//p' "$ENV")
 echo ""
 echo "============================================================"
-echo " XMart Guard portal:  https://$DOMAIN"
+echo " xPGuard portal:  https://$DOMAIN"
 echo " Login email:         $(sed -n 's/^ADMIN_EMAIL=//p' "$ENV")"
 echo " First password:      $ADMIN_PASSWORD"
 echo "   (change it under Account after logging in)"

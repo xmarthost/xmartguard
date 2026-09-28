@@ -289,7 +289,7 @@ func (m *Manager) Add(kind, addr, comment string, ttl time.Duration) (Rule, erro
 	case KindAllow, KindIgnore:
 	case KindDeny, KindTempBan:
 		if m.isProtected(c) {
-			return Rule{}, fmt.Errorf("%s belongs to this server or the XMart Guard portal and cannot be blocked", c)
+			return Rule{}, fmt.Errorf("%s belongs to this server or the xPGuard portal and cannot be blocked", c)
 		}
 		if svc := m.trustedService(c); svc != "" {
 			return Rule{}, fmt.Errorf("%s belongs to %s, a trusted service that is never blocked (turn it off under Firewall » Trusted services to block it)", c, svc)

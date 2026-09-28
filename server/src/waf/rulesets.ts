@@ -162,7 +162,7 @@ export function validateCustomRules(text: string): string | null {
     const bad = t.match(FORBIDDEN);
     if (bad) return `rule ${i + 1}: "${bad[0]}" is not allowed in custom rules`;
     const id = t.match(/\bid\s*:\s*'?(\d+)/);
-    if (id && +id[1] >= 7700000 && +id[1] <= 7709999) return `rule ${i + 1}: ids 7700000-7709999 are reserved for XMart Guard`;
+    if (id && +id[1] >= 7700000 && +id[1] <= 7709999) return `rule ${i + 1}: ids 7700000-7709999 are reserved for xPGuard`;
   }
   return null;
 }
@@ -209,7 +209,7 @@ export class CRSService {
 
   private async get(url: string, json = false): Promise<any> {
     const res = await fetch(url, {
-      headers: { 'user-agent': 'XMartGuard', accept: json ? 'application/vnd.github+json' : '*/*' },
+      headers: { 'user-agent': 'xPGuard', accept: json ? 'application/vnd.github+json' : '*/*' },
       signal: AbortSignal.timeout(120_000),
     });
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);

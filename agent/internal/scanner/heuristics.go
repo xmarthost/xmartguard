@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// This file implements XMart Guard's own heuristic PHP/JS analyzer. It scores
+// This file implements xPGuard's own heuristic PHP/JS analyzer. It scores
 // several independent signals (obfuscation, decoders, dangerous sinks, input
 // flow) and flags a file only when the combination is characteristic of
 // malware, keeping false positives on legitimate code low. All patterns are

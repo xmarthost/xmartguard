@@ -1,4 +1,4 @@
-// Package hostfw keeps the XMart Guard portal reachable through the other
+// Package hostfw keeps the xPGuard portal reachable through the other
 // firewalls a server may run (CSF/LFD, firewalld, UFW, APF, cPHulk,
 // Imunify360). The agent only talks to the portal outbound, but a deny list
 // or an automatic ban of the portal's address would still cut the link, so
@@ -23,8 +23,16 @@ import (
 	"time"
 )
 
-// Comment marks every entry XMart Guard adds.
-const Comment = "XMart Guard portal"
+// Comment marks every entry xPGuard adds.
+const Comment = "xPGuard portal"
+
+// legacyComment marked the entries of versions before the xPGuard name;
+// they are still recognised as ours (and replaced or removed).
+const legacyComment = "XMart Guard portal"
+
+func ownComment(line string) bool {
+	return strings.Contains(line, Comment) || strings.Contains(line, legacyComment)
+}
 
 // Runner runs a command (replaced in tests).
 type Runner func(ctx context.Context, name string, args ...string) (string, error)
@@ -121,11 +129,21 @@ func (h *Host) hasOurLine(file, ip string) bool {
 	}
 	for _, l := range strings.Split(string(b), "\n") {
 		t := strings.TrimSpace(l)
-		if strings.HasPrefix(t, ip+" ") && strings.Contains(t, Comment) {
+		if strings.HasPrefix(t, ip+" ") && ownComment(t) {
 			return true
 		}
 	}
 	return false
+}
+
+// renameLegacy rewrites "# XMart Guard portal" comments to the current one.
+func (h *Host) renameLegacy(file string) {
+	p := h.path(file)
+	b, err := os.ReadFile(p)
+	if err != nil || !strings.Contains(string(b), legacyComment) {
+		return
+	}
+	_ = os.WriteFile(p, []byte(strings.ReplaceAll(string(b), "# "+legacyComment, "# "+Comment)), 0o600)
 }
 
 // removeLine deletes the lines this package wrote for ip.
@@ -141,7 +159,7 @@ func (h *Host) removeLine(file, ip string) error {
 	var out []string
 	for _, l := range strings.SplitAfter(string(b), "\n") {
 		t := strings.TrimSpace(l)
-		if strings.HasPrefix(t, ip+" ") && strings.Contains(t, Comment) {
+		if strings.HasPrefix(t, ip+" ") && ownComment(t) {
 			continue
 		}
 		out = append(out, l)
@@ -332,6 +350,10 @@ func (h *Host) Sync(ips []string) []Result {
 		if p := net.ParseIP(ip); p != nil && !p.IsLoopback() && !p.IsUnspecified() {
 			want[p.String()] = true
 		}
+	}
+	// Lines written under the old product name get the current comment.
+	for _, f := range []string{"/etc/csf/csf.allow", "/etc/csf/csf.ignore"} {
+		h.renameLegacy(f)
 	}
 	state := h.load()
 	mine := map[string]bool{}

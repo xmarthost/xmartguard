@@ -7,7 +7,7 @@ reports back what it applied, shown under **Rollout**.
 
 | Rule set | Source | Price | How it reaches the server | Updates |
 |---|---|---|---|---|
-| XMart Guard rules | built in | free | agent renders them (`/etc/xmartguard/waf/rules.conf`) | with agent releases |
+| xPGuard rules | built in | free | agent renders them (`/etc/xmartguard/waf/rules.conf`) | with agent releases |
 | OWASP Core Rule Set | [github.com/coreruleset/coreruleset](https://github.com/coreruleset/coreruleset) (Apache 2.0) | free | portal downloads the official release, agents install it next to our rules | portal checks GitHub every 12 h; "latest" follows new releases, or pin a version |
 | Malware.Expert | [malware.expert](https://malware.expert/modsecurity-rules/) | paid (single server / 50 / unlimited) | cPanel vendor: agent runs `whmapi1 modsec_add_vendor url=…` with the vendor URL from your subscription, then enables it with automatic updates | by WHM from the vendor |
 | Comodo WAF (CWAF) | [waf.comodo.com](https://waf.comodo.com/) | free (registration) | cPanel vendor (`meta_comodo_apache.yaml`; LiteSpeed servers get `meta_comodo_litespeed.yaml`) | by WHM; the service has been unreliable, servers report download errors |
@@ -26,7 +26,7 @@ Not included:
 
 ## Defaults
 
-OWASP CRS is **on by default** (paranoia level 1). XMart Guard's own rules
+OWASP CRS is **on by default** (paranoia level 1). xPGuard's own rules
 stay on next to it for what CRS does not cover: WordPress hardening (PHP
 running in uploads, images, fonts, css and js folders; hidden `.php` files;
 GET on `xmlrpc.php`; requests without a User-Agent to WordPress files; user
@@ -35,7 +35,7 @@ malware engine, bad bots and login brute force.
 
 ## How blocking works
 
-- XMart Guard rules deny directly (403).
+- xPGuard rules deny directly (403).
 - OWASP CRS scores each request; a request is blocked (403, rule 949110)
   when its score reaches the threshold (5 = one critical match). Paranoia
   level 1 is the right choice for shared hosting; levels 2–4 add rules and
@@ -48,7 +48,7 @@ the portal's CRS copy is skipped, because loading CRS twice fails on
 duplicate rule ids. Blocks by CRS are named after the attack that scored
 (for example "SQL Injection Attack Detected via libinjection (Total Score: 5)"). Before anything is loaded the web server
 configuration is tested; if it fails, the extra rule sets are left out
-(and reported), and XMart Guard's rules stay active.
+(and reported), and xPGuard's rules stay active.
 
 ## Self-test
 
@@ -84,7 +84,7 @@ Every WHM vendor and remote feed (SecRemoteRules) has **Linked servers**:
 "All servers" (default) or "Only selected servers". The portal sends a feed
 only to the servers it is linked to (`/api/agent/waf/config` filters by the
 calling server), so a feed licensed for one IP is never loaded elsewhere.
-Unlinked servers drop it on the next sync (WHM vendors that XMart Guard
+Unlinked servers drop it on the next sync (WHM vendors that xPGuard
 added are disabled).
 
 "Add a remote feed… » Malware.Expert" fills in:
@@ -93,7 +93,7 @@ added are disabled).
   **extra rules** (`&extra=webshell,scanner,crawler,rbl,proxy,recaptcha`);
   each module can be switched off with its checkbox.
 - **Captcha by Malware.Expert** (`recaptcha`): Malware.Expert's reCaptcha for
-  bots on WordPress/Joomla logins, on the linked servers only. XMart Guard's
+  bots on WordPress/Joomla logins, on the linked servers only. xPGuard's
   own CAPTCHA keeps working for firewall bans; Settings » WAF shows which
   one a server uses.
 - An optional POST blocklist: `POST` requests from addresses listed on
@@ -141,7 +141,7 @@ Only ModSecurity rule directives are accepted: `SecRule`, `SecAction`,
 directives, `exec:`, `setenv:`, `@inspectFile` and `@…FromFile` operators
 are rejected (by the portal and again by the agent), so the portal cannot be
 used to run commands on servers. Ids 7700000–7709999 are reserved for
-XMart Guard; use 1000000–1999999.
+xPGuard; use 1000000–1999999.
 
 Example (the Gravity SMTP data exposure seen in the Malware.Expert log):
 
@@ -190,18 +190,18 @@ before the page opens; the rest of the website never shows it.
 - It does not unban or allow the address in the firewall. Banned addresses
   still get the CAPTCHA on the whole site and are unbanned when they solve
   it (Firewall » CAPTCHA).
-- The CAPTCHA ports (default 7780/7743) are opened in XMart Guard's port
+- The CAPTCHA ports (default 7780/7743) are opened in xPGuard's port
   filter and, under CSF, with an `iptables -I INPUT … xmartguard-captcha`
   rule that csfpost.sh restores after `csf -r`.
 
 Malware.Expert on LiteSpeed: LiteSpeed does not log "Loaded N rules", so a
 feed is shown as working once its own blocks (`[tag "MEWAF"]`) appear in the
 error log. With the `rbl` extra, Malware.Expert's rule 400010 already drops
-POSTs from rbl.malware.expert and XMart Guard's 7700801 is left out.
+POSTs from rbl.malware.expert and xPGuard's 7700801 is left out.
 
 When the Malware.Expert feed linked to a server has the `recaptcha` extra,
 its CAPTCHA protects the login pages there (rule 1000050: addresses on
-blacklist.recaptcha.cloud are sent to recaptcha.cloud) and XMart Guard's
+blacklist.recaptcha.cloud are sent to recaptcha.cloud) and xPGuard's
 login-page CAPTCHA is not rendered on that server, since it would stop every
 visitor before Malware.Expert's rule. Settings » WAF shows "Captcha by
 Malware.Expert" instead of the switch.

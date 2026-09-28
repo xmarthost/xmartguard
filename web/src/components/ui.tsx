@@ -1,16 +1,19 @@
 import { useState, type ReactNode } from 'react';
 import { Check, Copy, Inbox, Loader2 } from 'lucide-react';
 
-/** XMart Guard mark (shield with an interlocked X) and wordmark. */
-export function Logo({ light = false }: { light?: boolean }) {
+/** xPGuard wordmark: the XP icon with "xPGuard" set in text, so it stays
+ *  readable on the dark header (light) and on white pages. `full` shows the
+ *  complete logo artwork with its tagline (login page). */
+export function Logo({ light = false, full = false }: { light?: boolean; full?: boolean }) {
+  if (full) return <img src="/xpguard-logo.png" alt="xPGuard — Proactive Server Security" className="h-28 w-auto" />;
   return (
     <div className="flex items-center gap-2.5">
-      <img src={light ? '/logo-white.svg' : '/favicon.svg'} alt="" className="h-9 w-9" />
+      <img src="/xpguard-mark.png" alt="" className="h-8 w-auto" />
       <span className="flex flex-col leading-none">
-        <span className={`text-[19px] font-extrabold tracking-tight ${light ? 'text-white' : 'text-navy-900'}`}>
-          XMart<span className={light ? 'text-white' : 'text-navy-700'}> Guard</span>
+        <span className={`text-[21px] font-extrabold tracking-tight ${light ? 'text-white' : 'text-navy-900'}`}>
+          <span className="bg-gradient-to-r from-amber-400 via-orange-500 to-red-500 bg-clip-text text-transparent">xP</span>Guard
         </span>
-        <span className={`mt-1 text-[9px] font-semibold tracking-[0.28em] uppercase ${light ? 'text-white/70' : 'text-slate-400'}`}>Server Security</span>
+        <span className={`mt-1 text-[8.5px] font-semibold tracking-[0.24em] uppercase ${light ? 'text-white/70' : 'text-slate-400'}`}>Proactive Server Security</span>
       </span>
     </div>
   );
@@ -21,7 +24,7 @@ export function Spinner({ className = '' }: { className?: string }) {
 }
 
 /**
- * Full-page loader: the XMart Guard logo with a light sweeping through it,
+ * Full-page loader: the xPGuard logo with a light sweeping through it,
  * shown only while a page loads its data.
  */
 export function PageLoader() {
@@ -29,10 +32,10 @@ export function PageLoader() {
     <div className="flex min-h-[60vh] items-center justify-center" role="status" aria-label="Loading">
       <div className="xg-loader flex items-center gap-3">
         <span className="xg-loader-mark relative h-14 w-14">
-          <img src="/favicon.svg" alt="" className="h-14 w-14" />
+          <img src="/xpguard-icon.png" alt="" className="h-14 w-14 object-contain" />
           <span className="xg-loader-sweep absolute inset-0" />
         </span>
-        <span className="xg-loader-word text-[34px] leading-none font-extrabold tracking-tight">XMart Guard</span>
+        <span className="xg-loader-word text-[34px] leading-none font-extrabold tracking-tight">xPGuard</span>
       </div>
     </div>
   );

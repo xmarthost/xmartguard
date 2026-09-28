@@ -1,4 +1,4 @@
-// Command xmartguard-agent is the XMart Guard server agent.
+// Command xmartguard-agent is the xPGuard server agent.
 //
 //	xmartguard-agent enroll --server URL --token TOKEN [--insecure]
 //	xmartguard-agent run
@@ -131,7 +131,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `XMart Guard agent `+version.Version+`
+	fmt.Fprint(os.Stderr, `xPGuard agent `+version.Version+`
 
 Usage:
   xmartguard-agent enroll --server URL --token TOKEN [--insecure]
@@ -139,7 +139,7 @@ Usage:
   xmartguard-agent status       show enrollment status
   xmartguard-agent unenroll     remove this server from the portal
   xmartguard-agent info         print detected host inventory
-  xmartguard-agent cleanup      remove all XMart Guard firewall rules
+  xmartguard-agent cleanup      remove all xPGuard firewall rules
   xmartguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses, --no-hash)
   xmartguard-agent panel install|uninstall|status   manage the WHM/cPanel plugins
   xmartguard-agent call ACTION ['{"json":"params"}']  call the running agent (root)
@@ -156,7 +156,7 @@ func printJSON(v any) error {
 
 func cmdEnroll(args []string) error {
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
-	server := fs.String("server", "", "portal URL, e.g. https://xmartguard.com")
+	server := fs.String("server", "", "portal URL, e.g. https://app.xpguard.org")
 	token := fs.String("token", "", "one-time enrollment token")
 	insecure := fs.Bool("insecure", false, "skip TLS verification (testing only)")
 	force := fs.Bool("force", false, "re-enroll even if already enrolled")
@@ -308,7 +308,7 @@ func cmdUnenroll() error {
 // "0" = reject); LiteSpeed uses the exit code (1 = pass, 0 = reject). Both
 // get the same answer.
 func cmdScanUpload(args []string) int {
-	pass := func() int { fmt.Println("1 XMartGuard: clean"); return 1 }
+	pass := func() int { fmt.Println("1 xPGuard: clean"); return 1 }
 	if len(args) != 1 {
 		return pass()
 	}
@@ -318,7 +318,7 @@ func cmdScanUpload(args []string) int {
 	}
 	det, _ := scanner.NewOffline().CheckFile(args[0], info, settings.Scanner{MaxFileSizeMB: 32})
 	if det != nil && det.Category == scanner.CatVirus {
-		fmt.Printf("0 XMartGuard blocked malware upload: %s\n", det.Signature)
+		fmt.Printf("0 xPGuard blocked malware upload: %s\n", det.Signature)
 		return 0
 	}
 	return pass()

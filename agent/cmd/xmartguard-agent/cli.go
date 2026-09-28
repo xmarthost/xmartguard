@@ -1,6 +1,6 @@
 package main
 
-// xgcli: XMart Guard's command line (like cpgcli). It talks to the running
+// xgcli: xPGuard's command line (like cpgcli). It talks to the running
 // agent over its root-only local socket, so every change goes through the
 // same validation as the portal and takes effect at once.
 
@@ -50,7 +50,7 @@ func cmdCLI(args []string) error {
 		return nil
 	}
 	if args[0] == "-v" || args[0] == "--version" || args[0] == "version" {
-		fmt.Println("XMart Guard", version.Version)
+		fmt.Println("xPGuard", version.Version)
 		return nil
 	}
 	c := &cli{call: localCaller, out: os.Stdout, cmd: args[0], args: args[1:]}
@@ -414,7 +414,7 @@ func cliStatus(c *cli) error {
 	}
 	ai, _ := c.section("ai")
 	tw := tabwriter.NewWriter(c.out, 0, 2, 2, ' ', 0)
-	fmt.Fprintf(tw, "XMart Guard\t%s\n", o.Version)
+	fmt.Fprintf(tw, "xPGuard\t%s\n", o.Version)
 	fmt.Fprintf(tw, "Portal\t%s\n", o.Portal)
 	fmt.Fprintf(tw, "Virus scanner\t%s (realtime %s)\n", enabled(o.Scanner), enabled(o.Realtime))
 	fmt.Fprintf(tw, "Firewall\t%s, %s%s\n", enabled(o.Firewall.Enabled), o.Firewall.Provider, map[bool]string{true: "", false: " (not healthy: " + o.Firewall.Error + ")"}[o.Firewall.Healthy || !o.Firewall.Enabled])
@@ -512,7 +512,7 @@ func cliWatch(c *cli) error {
 		return err
 	}
 	if c.has("--add") || c.has("--remove") {
-		return errors.New("XMart Guard watches every hosting account's home directory automatically; use `xgcli whitelist --file` to exclude paths")
+		return errors.New("xPGuard watches every hosting account's home directory automatically; use `xgcli whitelist --file` to exclude paths")
 	}
 	for _, u := range r.Users {
 		fmt.Fprintf(c.out, "%-16s %s\n", u.Name, u.Home)
@@ -1732,7 +1732,7 @@ func cliConfig(c *cli) error {
 }
 
 func cliUpdate(c *cli) error {
-	fmt.Fprintln(c.out, "XMart Guard", version.Version)
+	fmt.Fprintln(c.out, "xPGuard", version.Version)
 	fmt.Fprintln(c.out, "Agents are updated from the portal (server » Update agent, or automatically when the portal is updated).")
 	return nil
 }
@@ -1745,7 +1745,7 @@ func cliUsage(w io.Writer) {
   /  \| |  | | (_| | |  | |_  | |_| | |_| | (_| | | | (_| |
  /_/\_\_|  |_|\__,_|_|   \__|  \____|\__,_|\__,_|_|  \__,_|
 
-XMart Guard `+version.Version+`
+xPGuard `+version.Version+`
 
 Usage:  xgcli COMMAND [--options]      (run as root)
 

@@ -270,8 +270,8 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
           <h2 className="text-lg font-semibold text-navy-900">Virus Scanner</h2>
           <div className="mt-1 flex items-center gap-2 text-sm text-slate-500">
             <CheckCircle2 className={`h-4 w-4 ${s.enabled ? 'text-green-600' : 'text-slate-300'}`} />
-            {s.enabled ? 'XMart Guard scanner engine is running.' : 'The scanner is disabled.'}
-            {' XMart Guard\'s own engine: behaviour rules, heuristics, signatures and YARA.'}
+            {s.enabled ? 'xPGuard scanner engine is running.' : 'The scanner is disabled.'}
+            {' xPGuard\'s own engine: behaviour rules, heuristics, signatures and YARA.'}
           </div>
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
@@ -329,7 +329,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         </SettingRow>
         <SettingRow
           title="Trim injected code"
-          desc="When the AI finds hacker code added to a legitimate file (e.g. a backdoor at the top of a plugin file), remove only that code and keep the site running instead of quarantining the whole file. The change is kept only if the file still passes a PHP syntax check and a rescan; the original stays in quarantine and can be restored. Needs the XMart Guard AI (portal) provider."
+          desc="When the AI finds hacker code added to a legitimate file (e.g. a backdoor at the top of a plugin file), remove only that code and keep the site running instead of quarantining the whole file. The change is kept only if the file still passes a PHP syntax check and a rescan; the original stays in quarantine and can be restored. Needs the xPGuard AI (portal) provider."
           recommended
         >
           <div className="flex items-center gap-3">
@@ -432,11 +432,11 @@ const AI_PROVIDERS = [
   {
     v: 'builtin',
     l: 'Built-in AI model (free, offline)',
-    d: 'XMart Guard’s own model runs on this server. Free, private, nothing is sent anywhere. It still learns from the fleet when "Learn from all servers" is on.',
+    d: 'xPGuard’s own model runs on this server. Free, private, nothing is sent anywhere. It still learns from the fleet when "Learn from all servers" is on.',
   },
   {
     v: 'portal',
-    l: 'XMart Guard AI (free AI APIs)',
+    l: 'xPGuard AI (free AI APIs)',
     d: 'Files go to your portal, which asks the free AI APIs you added under AI Scanner (Gemini, Groq, OpenRouter, …) and switches to the next key when one reaches its limit. Needed for Trim and for "all new files".',
   },
 ] as const;
@@ -568,7 +568,7 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         </SettingRow>
         <ListEditor title="Whitelist Users" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />
       </div>
-      <SettingRow title="Keep logs for" desc="How long to keep XMart Guard logs and quarantined files on the server">
+      <SettingRow title="Keep logs for" desc="How long to keep xPGuard logs and quarantined files on the server">
         <select className="input w-40" value={st.scanner.keep_days} disabled={dis} onChange={(e) => save({ scanner: { keep_days: Number(e.target.value) } })}>
           {[[7, '1 Week'], [30, '1 Month'], [60, '2 Months'], [90, '3 Months'], [180, '6 Months'], [365, '1 Year']].map(([d, l]) => (
             <option key={d} value={d}>{l}</option>
@@ -591,7 +591,7 @@ function ClamAVSection({ serverId, s, admin, busy, onSave }: { serverId: string;
     <div className="mt-6 border-t border-slate-200 pt-4">
       <SettingRow
         title="ClamAV-format signatures"
-        desc="Match ClamAV signature databases inside the XMart Guard agent: no clamscan or clamd process is started, scans stay one XMart Guard process. The databases of an installed ClamAV (cPanel's ClamAV plugin, kept current by freshclam) are used automatically, filtered to web and script signatures."
+        desc="Match ClamAV signature databases inside the xPGuard agent: no clamscan or clamd process is started, scans stay one xPGuard process. The databases of an installed ClamAV (cPanel's ClamAV plugin, kept current by freshclam) are used automatically, filtered to web and script signatures."
         recommended
       >
         <Toggle on={s.clamav !== false} disabled={dis} onChange={(v) => onSave({ clamav: v })} />
@@ -743,7 +743,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       return [];
     }
   })();
-  // XMart Guard rows that a Malware.Expert extra module also covers.
+  // xPGuard rows that a Malware.Expert extra module also covers.
   const meCovers: Partial<Record<keyof WAFS, string>> = { bad_bots: 'scanner', webshell: 'webshell', ai_bots: 'crawler', proxy_ip_check: 'proxy' };
   const row = (key: keyof WAFS, title: string, desc: string, rec?: boolean) => (
     <SettingRow title={title} desc={desc} recommended={rec}>
@@ -766,7 +766,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
             </p>
           ) : (
             <p className="text-sm text-slate-500">
-              XMart Guard ModSecurity rules for {st?.web_server ?? 'the web server'}.{' '}
+              xPGuard ModSecurity rules for {st?.web_server ?? 'the web server'}.{' '}
               {st && !st.available && <span className="text-amber-600">ModSecurity is not installed (cPanel: EasyApache 4 » ea-apache24-mod_security2).</span>}
             </p>
           )}
@@ -788,7 +788,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         <SettingRow
           title="Malware.Expert on this server"
           desc={`This server uses your Malware.Expert key (WAF Rule Sets). Extra rules: ${meExtras.length ? meExtras.join(', ') : 'none'}.${
-            meExtras.includes('recaptcha') ? ' Captcha by Malware.Expert: bots on WordPress and Joomla logins get the Malware.Expert reCaptcha; XMart Guard\'s CAPTCHA above keeps working for firewall bans.' : ''
+            meExtras.includes('recaptcha') ? ' Captcha by Malware.Expert: bots on WordPress and Joomla logins get the Malware.Expert reCaptcha; xPGuard\'s CAPTCHA above keeps working for firewall bans.' : ''
           } The OWASP Core Rule Set is off on this server.`}
         >
           <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${meExtras.includes('recaptcha') ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
@@ -820,11 +820,11 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       <ListEditor
         title="Captcha Protected URLs"
         desc={meExtras.includes('recaptcha')
-          ? 'Login pages protected by the WAF brute-force module. On this server Malware.Expert protects them with its own CAPTCHA: visitors whose address is on its blacklist (blacklist.recaptcha.cloud) are sent to recaptcha.cloud; other visitors log in normally. XMart Guard\'s login-page CAPTCHA is off here. Banned addresses still get XMart Guard\'s CAPTCHA on the whole site (Firewall » CAPTCHA).'
+          ? 'Login pages protected by the WAF brute-force module. On this server Malware.Expert protects them with its own CAPTCHA: visitors whose address is on its blacklist (blacklist.recaptcha.cloud) are sent to recaptcha.cloud; other visitors log in normally. xPGuard\'s login-page CAPTCHA is off here. Banned addresses still get xPGuard\'s CAPTCHA on the whole site (Firewall » CAPTCHA).'
           : `Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF).`}
         header={
           meExtras.includes('recaptcha') ? (
-            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700" title="Malware.Expert's recaptcha extra is linked to this server, so its CAPTCHA replaces XMart Guard's on the login pages.">
+            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700" title="Malware.Expert's recaptcha extra is linked to this server, so its CAPTCHA replaces xPGuard's on the login pages.">
               Captcha by Malware.Expert
             </span>
           ) : (
@@ -869,19 +869,19 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         onChange={(v) => onSave({ whitelist_domains: v.map((x) => x.toLowerCase()) })}
       />
 
-      <h3 className="mt-6 text-base font-semibold text-navy-900">More XMart Guard protections</h3>
-      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the XMart Guard engine before it is saved; malware is refused.', true)}
+      <h3 className="mt-6 text-base font-semibold text-navy-900">More xPGuard protections</h3>
+      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the xPGuard engine before it is saved; malware is refused.', true)}
       {row('sensitive_files', 'Protect sensitive files', 'Block web access to .env, .git, config backups, logs and SQL dumps', true)}
       {row('wordpress', 'WordPress hardening', 'Block running PHP inside wp-content/uploads and XML-RPC multicall', true)}
       {s.seo_bots && row('seo_bots', 'Block SEO crawlers (older option)', 'Now part of the Bad Bot blocker list above: turn the Bad Bot blocker on and this switch is merged into it.')}
       {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
-      <ListEditor title="WAF whitelist" desc="These IPs are never inspected by XMart Guard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
+      <ListEditor title="WAF whitelist" desc="These IPs are never inspected by xPGuard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
       {info.data && (
         <div className="py-4">
-          <div className="mb-1 font-medium text-navy-900">XMart Guard rules</div>
+          <div className="mb-1 font-medium text-navy-900">xPGuard rules</div>
           {meFeed && (
             <p className="mb-2 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
-              This list shows XMart Guard's own rules only. The Malware.Expert rules on this server are downloaded by the web server straight from Malware.Expert
+              This list shows xPGuard's own rules only. The Malware.Expert rules on this server are downloaded by the web server straight from Malware.Expert
               when it starts, so they are not stored here; whether they loaded shows under WAF Rule Sets » Rollout, and their blocks appear in WAF Logs with
               Malware.Expert's rule ids.
             </p>
@@ -1143,7 +1143,7 @@ function NotificationsSection({ s, meta, admin, busy, onSave }: { s: Notificatio
   return (
     <div>
       <h2 className="text-lg font-semibold text-navy-900">Notifications</h2>
-      <p className="mb-4 text-sm text-slate-500">Settings to manage all notifications from XMart Guard. Email goes through the server's own mail system; bursts are combined every 2 minutes.</p>
+      <p className="mb-4 text-sm text-slate-500">Settings to manage all notifications from xPGuard. Email goes through the server's own mail system; bursts are combined every 2 minutes.</p>
       <Tabs value={tab} onChange={setTab} tabs={[{ v: 'email', l: 'Email' }, { v: 'slack', l: 'Slack' }, { v: 'telegram', l: 'Telegram' }]} />
       <div className="mt-4 border-b border-slate-100 pb-4">
         {tab === 'email' && (
@@ -1158,7 +1158,7 @@ function NotificationsSection({ s, meta, admin, busy, onSave }: { s: Notificatio
             </label>
             <label className="text-sm">
               <div className="label">From address</div>
-              <input className="input" type="email" placeholder="xmartguard@hostname (default)" value={f.from ?? ''} disabled={dis} onChange={(e) => setF({ ...f, from: e.target.value })} />
+              <input className="input" type="email" placeholder="xpguard@hostname (default)" value={f.from ?? ''} disabled={dis} onChange={(e) => setF({ ...f, from: e.target.value })} />
             </label>
             <div className="flex items-end justify-end">
               <button className="btn-primary" disabled={dis || !changed(emailKeys)} onClick={() => onSave(pick(emailKeys))}>Save</button>
@@ -1230,7 +1230,7 @@ function About({ serverId }: { serverId: string }) {
   const outdated = latest && cur !== latest;
   return (
     <div>
-      <h2 className="mb-4 text-lg font-semibold text-navy-900">About XMart Guard</h2>
+      <h2 className="mb-4 text-lg font-semibold text-navy-900">About xPGuard</h2>
       <div className="rounded-xl bg-slate-50 p-5 text-sm">
         <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-2 gap-y-2 sm:grid-cols-[160px_1fr]">
           <span className="text-slate-500">Agent version</span>
@@ -1252,7 +1252,7 @@ function About({ serverId }: { serverId: string }) {
         {!outdated && <div className="mt-4 text-green-700">The agent is up to date. New versions are installed automatically.</div>}
       </div>
       <p className="mt-6 text-xs text-slate-400">
-        XMart Guard is developed by XMartHost. Third-party data and software:{' '}
+        Third-party data and software:{' '}
         <Link to="/kb#attributions" className="text-blue-700 hover:underline">licenses and attributions</Link>.
       </p>
     </div>

@@ -16,7 +16,7 @@ func TestCSFCompat(t *testing.T) {
 	}
 	os.MkdirAll(filepath.Join(root, "etc/csf"), 0o755)
 	os.WriteFile(filepath.Join(root, csfConf), []byte("TESTING = \"1\"\nTCP_IN = \"22,80,443\"\n"), 0o600)
-	os.WriteFile(filepath.Join(root, csfAllow), []byte("# comment\n162.55.6.159 # XMart Guard portal\n10.0.0.0/8\ntcp|in|d=22|s=198.51.100.7\nInclude /etc/csf/extra.allow\n"), 0o600)
+	os.WriteFile(filepath.Join(root, csfAllow), []byte("# comment\n162.55.6.159 # xPGuard portal\n10.0.0.0/8\ntcp|in|d=22|s=198.51.100.7\nInclude /etc/csf/extra.allow\n"), 0o600)
 	os.WriteFile(filepath.Join(root, "etc/csf/extra.allow"), []byte("203.0.113.5\n"), 0o600)
 	os.WriteFile(filepath.Join(root, csfIgnore), []byte("192.0.2.1\n162.55.6.159\n"), 0o600)
 	c := DetectCSF()

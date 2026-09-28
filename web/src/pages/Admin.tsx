@@ -204,7 +204,7 @@ export function SupportPage() {
     <div className="card mx-auto mt-6 max-w-2xl space-y-3 p-8">
       <h1 className="h-title">Support</h1>
       <p className="text-slate-600">
-        Need help with XMart Guard? Email <a className="text-navy-700 underline" href="mailto:support@xmarthost.com">support@xmarthost.com</a> with your server hostname and a description of the problem.
+        Need help with xPGuard? Email <a className="text-navy-700 underline" href="mailto:support@xmarthost.com">support@xmarthost.com</a> with your server hostname and a description of the problem.
       </p>
       <p className="text-sm text-slate-500">
         Useful commands on the server: <code className="rounded bg-slate-100 px-1">systemctl status xmartguard-agent</code>,{' '}

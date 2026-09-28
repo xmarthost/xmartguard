@@ -1,5 +1,5 @@
 // Package client implements enrollment and the persistent WebSocket session
-// between the agent and the XMart Guard portal.
+// between the agent and the xPGuard portal.
 package client
 
 import (

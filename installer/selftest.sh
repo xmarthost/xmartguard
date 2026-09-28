@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# XMart Guard real-server self test. Run as root on the TEST server after
+# xPGuard real-server self test. Run as root on the TEST server after
 # installing the agent with the command from the portal:
 #
 #   curl -fsSL __XG_PORTAL_URL__/selftest.sh -o selftest.sh
@@ -62,9 +62,9 @@ check "agent opens no listening port"   '! ss -ltnp | grep -q xmartguard'
 section "local control socket and panel plugins"
 check "control socket answers"          '/usr/local/bin/xmartguard-agent call overview >/dev/null'
 if [ -f /usr/local/cpanel/version ]; then
-  check "WHM plugin installed"          '[ -x /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard/index.cgi ]'
-  check "WHM plugin registered"         '[ -f /var/cpanel/apps/xmartguard.conf ]'
-  check "cPanel plugin installed"       '[ -f /usr/local/cpanel/base/frontend/jupiter/xmartguard/index.live.php ]'
+  check "WHM plugin installed"          '[ -x /usr/local/cpanel/whostmgr/docroot/cgi/xpguard/index.cgi ]'
+  check "WHM plugin registered"         '[ -f /var/cpanel/apps/xpguard.conf ]'
+  check "cPanel plugin installed"       '[ -f /usr/local/cpanel/base/frontend/jupiter/xpguard/index.live.php ]'
 fi
 echo "--- IPDB"; /usr/local/bin/xmartguard-agent call ipdb.status 2>&1 | head -12
 
@@ -102,7 +102,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
   check "binary removed"          '[ ! -e /opt/xmartguard/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard-agent ] && [ ! -L /usr/local/bin/xmartguard ]'
   check "config removed"          '[ ! -e /etc/xmartguard ]'
   check "state removed"           '[ ! -e /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
-  check "plugins removed"         '[ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ]'
+  check "plugins removed"         '[ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xpguard ] && [ ! -e /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard ]'
   check "unit removed"            '[ ! -e /etc/systemd/system/xmartguard-agent.service ]'
   check "unit unknown to systemd" '! systemctl cat xmartguard-agent'
   check "no agent process"        '! pgrep -f "xmartguard-agent run"'

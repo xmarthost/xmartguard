@@ -3,7 +3,8 @@
   font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#0f172a;max-width:1200px;margin:0 auto;padding:16px}
 #xg *{box-sizing:border-box}
 #xg .top{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(90deg,var(--navy),var(--navy2));color:#fff;border-radius:12px;padding:14px 20px;margin-bottom:16px}
-#xg .brand{font-size:20px;font-weight:700}#xg .brand b{color:#4ade80}
+#xg .brand{display:flex;align-items:center;gap:10px;font-size:21px;font-weight:800;letter-spacing:-.01em}#xg .brand img{height:30px;width:auto}
+#xg .brand b{background:linear-gradient(90deg,#fbbf24,#f97316,#ef4444);-webkit-background-clip:text;background-clip:text;color:transparent}
 #xg .sub{opacity:.75;font-size:12px}
 #xg .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:16px}
 #xg .tab{border:0;background:none;padding:10px 14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;font-size:14px}
@@ -43,7 +44,7 @@
 </style>
 <div id="xg">
   <div class="top">
-    <div><div class="brand">XMart<b>Guard</b></div><div class="sub" id="xg-sub">Server security</div></div>
+    <div><div class="brand"><img src="__ICON__" alt=""><span><b>xP</b>Guard</span></div><div class="sub" id="xg-sub">Proactive server security</div></div>
     <div class="sub" id="xg-ver"></div>
   </div>
   <div id="xg-msg" class="msg"></div>
@@ -89,7 +90,7 @@
     if (start >= 0 && end > start) {
       try {
         var v = JSON.parse(text.slice(start, end));
-        if (window.console) console.warn('XMart Guard: ignored extra output around the response:', text.slice(0, start).slice(0, 300), text.slice(end, end + 300));
+        if (window.console) console.warn('xPGuard: ignored extra output around the response:', text.slice(0, start).slice(0, 300), text.slice(end, end + 300));
         return v;
       } catch (e) {}
     }

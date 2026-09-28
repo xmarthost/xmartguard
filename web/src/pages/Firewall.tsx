@@ -364,7 +364,7 @@ export function FirewallPage() {
         </Row>
       </Section>
 
-      <Section title="Whitelist" desc="Addresses that XMart Guard will never block">
+      <Section title="Whitelist" desc="Addresses that xPGuard will never block">
         <AddRemove serverId={id!} kind="allow" label="Allow IP" removeLabel="Allow remove" withComment />
         <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'allow', title: 'Whitelist' })}>View whitelist</button></div>
       </Section>
@@ -586,16 +586,16 @@ export function FirewallPage() {
         </div>
       </Section>
 
-      <Section title="Server firewalls" desc="Other firewalls found on this server. The portal's address is allowed in each of them so the agent's connection is never cut; XMart Guard only removes the entries it added.">
+      <Section title="Server firewalls" desc="Other firewalls found on this server. The portal's address is allowed in each of them so the agent's connection is never cut; xPGuard only removes the entries it added.">
         {!meta.data ? (
           <SectionLoader />
         ) : (
           <div className="space-y-3">
             {meta.data.csf?.enabled && (
               <div className="rounded-lg bg-sky-50 p-3 text-sm text-sky-900">
-                <b>CSF is active.</b> CSF keeps the port filter (its TCP_IN/TCP_OUT settings); XMart Guard adds its own blocks (IPDB, bans, country
+                <b>CSF is active.</b> CSF keeps the port filter (its TCP_IN/TCP_OUT settings); xPGuard adds its own blocks (IPDB, bans, country
                 blocks) next to it. {meta.data.csf.exempt} address{meta.data.csf.exempt === 1 ? '' : 'es'} from csf.allow / csf.ignore {meta.data.csf.exempt === 1 ? 'is' : 'are'} never
-                blocked by XMart Guard. {meta.data.csf.hook ? 'Rules are reloaded automatically after csf -r (csfpost.sh).' : 'The csfpost.sh hook is added on the next apply.'}
+                blocked by xPGuard. {meta.data.csf.hook ? 'Rules are reloaded automatically after csf -r (csfpost.sh).' : 'The csfpost.sh hook is added on the next apply.'}
                 {meta.data.csf.testing && <div className="mt-1 text-amber-700">CSF is in TESTING mode: it flushes its rules every few minutes. Set TESTING = "0" in csf.conf when you are done testing.</div>}
               </div>
             )}
@@ -635,7 +635,7 @@ export function FirewallPage() {
 
       <Section title="Port filter configuration" desc="Set allowed TCP/UDP ports for in/out traffic">
         {meta.data?.csf?.enabled && (
-          <div className="mb-2 rounded-lg bg-sky-50 p-3 text-sm text-sky-900">CSF is active and filters ports on this server, so XMart Guard's port filter is not loaded. Change open ports in CSF (WHM » ConfigServer Security &amp; Firewall).</div>
+          <div className="mb-2 rounded-lg bg-sky-50 p-3 text-sm text-sky-900">CSF is active and filters ports on this server, so xPGuard's port filter is not loaded. Change open ports in CSF (WHM » ConfigServer Security &amp; Firewall).</div>
         )}
         <SettingRow title="Port filter" desc="Enable or disable firewall port filtering">
           <Toggle on={fw.port_filter} disabled={!isAdmin || busy} onChange={(v) => {
