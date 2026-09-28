@@ -43,6 +43,9 @@ var ScriptExts = map[string]bool{
 	".pl": true, ".cgi": true, ".py": true, ".sh": true, ".asp": true, ".aspx": true, ".jsp": true,
 	".ico": true, ".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".bmp": true, ".tif": true, ".tiff": true, ".webp": true,
 	".txt": true, ".htaccess": true, ".ini": true, ".suspected": true, "": true,
+	// Web shells stored under harmless-looking names (seen in real cPanel scans:
+	// crontrol-82.dat in hidden cache folders, newsLib.class, main.css, *.flv).
+	".dat": true, ".class": true, ".css": true, ".flv": true, ".haxor": true, ".tmp": true,
 }
 
 // CodeExts are code files the AI scanner's "all files" mode checks.
@@ -162,8 +165,19 @@ func extOf(name string) string {
 	if base == ".htaccess" {
 		return ".htaccess"
 	}
-	if i := strings.LastIndexByte(base, '.'); i > 0 {
-		return base[i:]
+	i := strings.LastIndexByte(base, '.')
+	if i <= 0 {
+		return ""
 	}
-	return ""
+	ext := base[i:]
+	// A PHP file renamed for backup (fix.php.backup.20260318120936,
+	// wp-config.php.bak) still runs if it is ever included: scan it as PHP.
+	if ext != ".suspected" && !ScriptExts[ext] || backupExts[ext] {
+		if strings.Contains(base[:i+1], ".php.") {
+			return ".php"
+		}
+	}
+	return ext
 }
+
+var backupExts = map[string]bool{".bak": true, ".backup": true, ".old": true, ".orig": true, ".save": true, ".tmp": true, ".txt": true}

@@ -15,7 +15,7 @@ func analyze(ext string, content []byte) *Detection {
 	}
 	if d := markupInImage(ext, content); d != nil {
 		if v := analyzePHP(content); v != nil {
-			return codeInNonScript(ext, v)
+			return codeInNonScript(ext, v, content)
 		}
 		return d
 	}
@@ -23,6 +23,9 @@ func analyze(ext string, content []byte) *Detection {
 	// (stats caches such as tmp/analog/cache hold logged attack URLs as text).
 	if ext == "" && !startsLikeScript(content) {
 		return nil
+	}
+	if d := phishingKit(ext, content); d != nil {
+		return d
 	}
 	switch {
 	case ext == ".js":
@@ -37,7 +40,7 @@ func analyze(ext string, content []byte) *Detection {
 	default:
 		// Images/text/other extensions that smuggle PHP code.
 		if v := analyzePHP(content); v != nil {
-			return codeInNonScript(ext, v)
+			return codeInNonScript(ext, v, content)
 		}
 		if d := scriptInImage(ext, content); d != nil {
 			return d
@@ -50,12 +53,20 @@ func analyze(ext string, content []byte) *Detection {
 // analyzer calls malicious (eval of input, shell commands, droppers) is a
 // backdoor waiting to be included, so it is a virus; anything else stays
 // suspicious (image polyglots, CTF samples).
-func codeInNonScript(ext string, v *verdict) *Detection {
+func codeInNonScript(ext string, v *verdict, content []byte) *Detection {
 	if imageExts[ext] && v.category == CatVirus {
 		return &Detection{CatVirus, "Disguised.PHPInImage"}
 	}
+	// A whole PHP program under a data/style/media name: the analyzer's
+	// malicious verdict stands (hidden loaders like crontrol-82.dat).
+	if v.category == CatVirus && disguiseExts[ext] && bytes.HasPrefix(bytes.TrimLeft(content[:min(len(content), 256)], " \t\r\n\ufeff"), []byte("<?php")) {
+		return &Detection{CatVirus, "Disguised.PHPFile"}
+	}
 	return &Detection{CatSuspicious, "PHP.Suspicious.CodeInNonScript"}
 }
+
+// disguiseExts are names a PHP program has no reason to carry.
+var disguiseExts = map[string]bool{".dat": true, ".class": true, ".css": true, ".flv": true, ".haxor": true, ".tmp": true, ".txt": true, ".ico": true}
 
 var reImgScript = regexp.MustCompile(`(?is)<script[^>]*>[^<]{0,1000}?(?:window\.location|document\.location|location\.(?:href|replace)|eval\s*\(|atob\s*\(|fromCharCode|document\.write)`)
 

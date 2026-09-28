@@ -2,7 +2,7 @@
 package version
 
 // Version is overridden with -ldflags "-X .../version.Version=x.y.z".
-var Version = "0.7.9-dev"
+var Version = "0.8.0-dev"
 
 // ProtocolVersion is the agent<->portal wire protocol version.
 const ProtocolVersion = 1

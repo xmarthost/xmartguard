@@ -65,3 +65,42 @@ code, signatures or rules are part of XMart Guard.
 - `{CPG}*.UNOFFICIAL` — cPGuard's own signatures (e.g. perl/python/shell bad scripts).
 - `SuspiciousBeta.AI-Malicious` — their AI model (beta).
 - `WP.ChecksumFail.*` — WordPress core file that differs from the official checksum (we do the same with official checksums and core repair).
+
+## Full-scan reports from three servers (September 2026)
+
+cPGuard full scans of three production servers (Business600, Business500,
+Server1), 4,276 detections from 13–14 September 2026. Only paths, signature
+names and statuses were read. No file contents were copied.
+
+| Server | Rows | Quarantined | No action (AI beta) | Main finding |
+|---|---:|---:|---:|---|
+| Business600 | 216 | 173 | 42 | phishing kits, PHP loaders, SEO spam pages |
+| Business500 | 97 | 29 | 65 | mostly AI-beta "suspicious", not acted on |
+| Server1 | 3,963 | 3,920 | 42 | one JS downloader injected into 3,832 plugin/theme `.js` files (2 accounts) |
+
+What the reports show:
+
+- 94% of all detections come from Malware.Expert signatures, and 90% are one
+  signature: `js.downloader` appended to every `.js` file of two accounts.
+- cPGuard's own `{CPG}` signatures are mostly bank phishing kits (Chase, Wells
+  Fargo, Bank of America, Navy Federal, Citizens), plus a hidden PHP loader
+  copied as `crontrol-82.dat` into ten hidden folders of one site.
+- The AI beta flagged 150 files but none was quarantined: it only reports.
+- Malware hides under names that are not scripts: `.dat`, `.class`, `.css`,
+  `.flv`, `.haxor`, files without an extension in `.well-known/`, and PHP
+  backups (`fix.php.backup.20260318120936`).
+- Some detections are folders (`Fox-C`, `Fox-C404`) that were disabled
+  rather than quarantined.
+
+What XMart Guard does with this (0.8.0):
+
+- Scans `.dat`, `.class`, `.css`, `.flv`, `.haxor` and `.tmp` files. A
+  malicious PHP program under such a name is a virus (`Disguised.PHPFile`).
+- Scans PHP backups (`*.php.bak`, `*.php.backup.<date>`, `*.php.old`) as PHP.
+- Own phishing checks: a collector script that mails or sends to Telegram
+  three or more secrets (password, card, CVV, SSN, OTP…) together with the
+  visitor's IP is a virus (`Phishing.Collector`). A cloned bank or payment
+  login page that posts to a PHP file is suspicious
+  (`Phishing.CloneLoginPage`).
+- Mass JS injection: to write our own rule, we need two or three of the
+  quarantined `.js` files. Their names alone are not enough.
