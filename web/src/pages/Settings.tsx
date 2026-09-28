@@ -68,6 +68,12 @@ interface NotificationsS {
   on_blacklist: boolean;
   extra_email: string;
   from: string;
+  mail_method?: 'local' | 'smtp';
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_security?: 'ssl' | 'starttls' | 'none';
+  smtp_user?: string;
+  smtp_password?: string;
   slack_webhook: string;
   telegram_token: string;
   telegram_chat: string;
@@ -1143,16 +1149,19 @@ function NotificationsSection({ serverId, s, meta, admin, busy, onSave }: { serv
   const dis = !admin || busy;
   const changed = (keys: (keyof NotificationsS)[]) => keys.some((k) => f[k] !== s[k]);
   const pick = (keys: (keyof NotificationsS)[]) => Object.fromEntries(keys.map((k) => [k, f[k]])) as Partial<NotificationsS>;
-  const emailKeys: (keyof NotificationsS)[] = ['email', 'extra_email', 'from'];
+  const emailKeys: (keyof NotificationsS)[] = ['email', 'extra_email', 'from', 'mail_method', 'smtp_host', 'smtp_port', 'smtp_security', 'smtp_user', 'smtp_password'];
+  const method = f.mail_method ?? 'local';
+  const sec = f.smtp_security ?? 'starttls';
+  const defPort = sec === 'ssl' ? 465 : sec === 'none' ? 25 : 587;
   const test = useAction();
   const [results, setResults] = useState<Record<string, string> | null>(null);
   const sendTest = () =>
     test.run(() => agentCall<Record<string, string>>(serverId, 'notify.test')).then((r) => r && setResults(r));
-  const unsaved = changed(['email', 'extra_email', 'from', 'slack_webhook', 'telegram_token', 'telegram_chat']);
+  const unsaved = changed([...emailKeys, 'slack_webhook', 'telegram_token', 'telegram_chat']);
   return (
     <div>
       <h2 className="text-lg font-semibold text-navy-900">Notifications</h2>
-      <p className="mb-4 text-sm text-slate-500">Settings to manage all notifications from xPGuard. Email goes through the server's own mail system; bursts are combined every 2 minutes.</p>
+      <p className="mb-4 text-sm text-slate-500">Settings to manage all notifications from xPGuard. Email is sent through the server's local mail relay or your SMTP server; bursts are combined every 2 minutes.</p>
       <Tabs value={tab} onChange={setTab} tabs={[{ v: 'email', l: 'Email' }, { v: 'slack', l: 'Slack' }, { v: 'telegram', l: 'Telegram' }]} />
       <div className="mt-4 border-b border-slate-100 pb-4">
         {tab === 'email' && (
@@ -1167,10 +1176,58 @@ function NotificationsSection({ serverId, s, meta, admin, busy, onSave }: { serv
             </label>
             <label className="text-sm">
               <div className="label">From address</div>
-              <input className="input" type="email" placeholder="xpguard@hostname (default)" value={f.from ?? ''} disabled={dis} onChange={(e) => setF({ ...f, from: e.target.value })} />
+              <input className="input" type="email" placeholder={method === 'smtp' && f.smtp_user?.includes('@') ? `${f.smtp_user} (default)` : 'xpguard@hostname (default)'} value={f.from ?? ''} disabled={dis} onChange={(e) => setF({ ...f, from: e.target.value })} />
             </label>
-            <div className="flex items-end justify-end">
-              <button className="btn-primary" disabled={dis || !changed(emailKeys)} onClick={() => onSave(pick(emailKeys))}>Save</button>
+            <div className="sm:col-span-2">
+              <div className="label mb-1">Send email through</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {([
+                  ['local', 'Local mail relay', "The server's own mail system (Exim / Postfix via sendmail). No setup needed."],
+                  ['smtp', 'SMTP server', 'Gmail, Microsoft 365, Amazon SES, Mailgun, your mail server… Better delivery to the inbox.'],
+                ] as const).map(([v, l, d]) => (
+                  <label key={v} className={`flex cursor-pointer gap-3 rounded-xl border p-3 text-sm ${method === v ? 'border-navy-600 bg-navy-50/60 ring-1 ring-navy-600' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <input type="radio" name="mail_method" className="mt-1" checked={method === v} disabled={dis} onChange={() => setF({ ...f, mail_method: v })} />
+                    <span>
+                      <span className="block font-medium text-navy-900">{l}</span>
+                      <span className="block text-xs text-slate-500">{d}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {method === 'smtp' && (
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3 sm:col-span-2 sm:grid-cols-6">
+                <label className="text-sm sm:col-span-3">
+                  <div className="label">SMTP server</div>
+                  <input className="input" placeholder="smtp.gmail.com" value={f.smtp_host ?? ''} disabled={dis} onChange={(e) => setF({ ...f, smtp_host: e.target.value })} />
+                </label>
+                <label className="text-sm sm:col-span-2">
+                  <div className="label">Encryption</div>
+                  <select className="input" value={sec} disabled={dis} onChange={(e) => setF({ ...f, smtp_security: e.target.value as NotificationsS['smtp_security'], smtp_port: 0 })}>
+                    <option value="starttls">STARTTLS (587)</option>
+                    <option value="ssl">SSL/TLS (465)</option>
+                    <option value="none">None (25)</option>
+                  </select>
+                </label>
+                <label className="text-sm sm:col-span-1">
+                  <div className="label">Port</div>
+                  <input className="input" type="number" min={1} max={65535} placeholder={String(defPort)} value={f.smtp_port || ''} disabled={dis} onChange={(e) => setF({ ...f, smtp_port: Number(e.target.value) || 0 })} />
+                </label>
+                <label className="text-sm sm:col-span-3">
+                  <div className="label">Username</div>
+                  <input className="input" placeholder="alerts@example.com (empty: no login)" value={f.smtp_user ?? ''} disabled={dis} onChange={(e) => setF({ ...f, smtp_user: e.target.value })} />
+                </label>
+                <label className="text-sm sm:col-span-3">
+                  <div className="label">Password</div>
+                  <input className="input" type="password" placeholder="password or app password" value={f.smtp_password ?? ''} disabled={dis} onChange={(e) => setF({ ...f, smtp_password: e.target.value })} />
+                </label>
+                <p className="text-xs text-slate-500 sm:col-span-6">
+                  Gmail / Google Workspace: <code>smtp.gmail.com</code>, STARTTLS 587, and an App Password. Microsoft 365: <code>smtp.office365.com</code>, STARTTLS 587. The password is stored on the server only and never shown again. Leave "From address" empty to send as the SMTP username.
+                </p>
+              </div>
+            )}
+            <div className="flex items-end justify-end sm:col-span-2">
+              <button className="btn-primary" disabled={dis || !changed(emailKeys) || (method === 'smtp' && !f.smtp_host?.trim())} onClick={() => onSave(pick(emailKeys))}>Save</button>
             </div>
           </div>
         )}

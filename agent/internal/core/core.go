@@ -1180,6 +1180,7 @@ var secretFields = [][2]string{
 	{"captcha", "secret_key"},
 	{"notifications", "telegram_token"},
 	{"notifications", "slack_webhook"},
+	{"notifications", "smtp_password"},
 	{"scanner", "clamav_urls"},
 }
 
@@ -1199,6 +1200,7 @@ func masked(s settings.Settings) settings.Settings {
 	s.Captcha.SecretKey = maskValue(s.Captcha.SecretKey)
 	s.Notifications.TelegramToken = maskValue(s.Notifications.TelegramToken)
 	s.Notifications.SlackWebhook = maskValue(s.Notifications.SlackWebhook)
+	s.Notifications.SMTPPassword = maskValue(s.Notifications.SMTPPassword)
 	s.Scanner.ClamAVURLs = maskValue(s.Scanner.ClamAVURLs)
 	return s
 }

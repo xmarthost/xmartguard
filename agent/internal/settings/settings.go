@@ -324,8 +324,15 @@ type Notifications struct {
 	OnBan        bool   `json:"on_ban"`
 	OnBlacklist  bool   `json:"on_blacklist"`
 	// Additional recipients and channels.
-	ExtraEmail    string `json:"extra_email"`
-	From          string `json:"from"`
+	ExtraEmail string `json:"extra_email"`
+	From       string `json:"from"`
+	// MailMethod: "local" (the server's own MTA, e.g. Exim) or "smtp".
+	MailMethod    string `json:"mail_method"`
+	SMTPHost      string `json:"smtp_host"`
+	SMTPPort      int    `json:"smtp_port"`
+	SMTPSecurity  string `json:"smtp_security"` // ssl | starttls | none
+	SMTPUser      string `json:"smtp_user"`
+	SMTPPassword  string `json:"smtp_password"`
 	SlackWebhook  string `json:"slack_webhook"`
 	TelegramToken string `json:"telegram_token"`
 	TelegramChat  string `json:"telegram_chat"`
@@ -567,6 +574,17 @@ func normalize(s *Settings) {
 	s.Processes.WhitelistUsers = clean(s.Processes.WhitelistUsers, false)
 	s.Processes.WhitelistStrings = clean(s.Processes.WhitelistStrings, false)
 	s.Cron.WhitelistUsers = clean(s.Cron.WhitelistUsers, false)
+	if s.Notifications.MailMethod != "smtp" {
+		s.Notifications.MailMethod = "local"
+	}
+	switch s.Notifications.SMTPSecurity {
+	case "ssl", "starttls", "none":
+	default:
+		s.Notifications.SMTPSecurity = "starttls"
+	}
+	if s.Notifications.SMTPPort < 0 || s.Notifications.SMTPPort > 65535 {
+		s.Notifications.SMTPPort = 0
+	}
 	s.Notifications.ExcludeUsers = clean(s.Notifications.ExcludeUsers, false)
 	if s.Notifications.UserOutdated == "" {
 		s.Notifications.UserOutdated = "never"

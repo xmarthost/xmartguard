@@ -17,7 +17,18 @@ import (
 // channels feeds the notifier the extra destinations from settings.
 func (a *Agent) channels() notify.Channels {
 	n := a.Settings.Get().Notifications
-	return notify.Channels{Extra: n.ExtraEmail, From: n.From, SlackWebhook: n.SlackWebhook, TelegramToken: n.TelegramToken, TelegramChat: n.TelegramChat}
+	return notify.Channels{Extra: n.ExtraEmail, Mail: a.mailConfig(), SlackWebhook: n.SlackWebhook, TelegramToken: n.TelegramToken, TelegramChat: n.TelegramChat}
+}
+
+// mailConfig is how alert emails are sent (local MTA or SMTP).
+func (a *Agent) mailConfig() notify.MailConfig {
+	n := a.Settings.Get().Notifications
+	mc := notify.MailConfig{Method: "local", From: n.From, PortalURL: a.Cfg.ServerURL}
+	if n.MailMethod == "smtp" {
+		mc.Method, mc.Host, mc.Port, mc.Security = "smtp", strings.TrimSpace(n.SMTPHost), n.SMTPPort, n.SMTPSecurity
+		mc.User, mc.Password = strings.TrimSpace(n.SMTPUser), n.SMTPPassword
+	}
+	return mc
 }
 
 // alertAdmin queues an alert for the administrator: the admin email (if
@@ -37,14 +48,19 @@ func (a *Agent) testNotifications() map[string]string {
 	n := a.Settings.Get().Notifications
 	ch := a.channels()
 	subject := "[xPGuard] " + a.Mailer.Hostname + ": test notification"
-	body := "This is a test message from xPGuard. Alerts from this server will arrive here."
+	body := "This is a test message from xPGuard. Alerts from this server will arrive here.\n  server: " + a.Mailer.Hostname +
+		"\n  email sent via: " + ch.Mail.Via() + "\n  portal: " + a.Cfg.ServerURL
+	msg := notify.Email{Subject: subject, Host: a.Mailer.Hostname, ForAdmin: true,
+		Alerts: []notify.Alert{{Subject: "test notification", Text: body}}}
 	out := map[string]string{}
 	for name, to := range map[string]string{"email": n.Email, "extra_email": n.ExtraEmail} {
 		if to == "" {
 			continue
 		}
-		if err := notify.SendFrom(to, subject, body, n.From); err != nil {
+		if err := notify.Send(ch.Mail, to, msg); err != nil {
 			out[name] = err.Error()
+		} else if ch.Mail.Method == "smtp" {
+			out[name] = "sent to " + to + " (accepted by " + ch.Mail.Via() + ")"
 		} else {
 			out[name] = "sent to " + to + " (handed to the local mail server)"
 		}

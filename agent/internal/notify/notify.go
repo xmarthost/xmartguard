@@ -1,6 +1,6 @@
-// Package notify sends alerts by email through the server's local MTA
-// (sendmail/Exim) and to Slack and Telegram, batching bursts into one
-// message.
+// Package notify sends alerts by email (through the server's local MTA or
+// an SMTP server, as a branded HTML message with a plain-text part) and to
+// Slack and Telegram, batching bursts into one message.
 package notify
 
 import (
@@ -12,20 +12,25 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Channels are the extra destinations every admin alert also goes to.
+// Channels are the extra destinations every admin alert also goes to, and
+// how email is sent.
 type Channels struct {
 	Extra         string // additional email address
-	From          string // From address ("" = xpguard@hostname)
+	Mail          MailConfig
 	SlackWebhook  string
 	TelegramToken string
 	TelegramChat  string
+}
+
+// Alert is one queued notification.
+type Alert struct {
+	Subject string
+	Text    string
 }
 
 // Mailer batches messages per recipient and flushes every Interval.
@@ -40,13 +45,9 @@ type Mailer struct {
 	Admin func() string
 
 	mu      sync.Mutex
-	pending map[string][]string // to -> lines
-	subject map[string]string
+	pending map[string][]Alert // to -> alerts
 	timer   *time.Timer
 }
-
-// Sendmail is the MTA binary (overridable in tests).
-var Sendmail = "/usr/sbin/sendmail"
 
 // adminKey queues the administrator's alerts: they go to the admin email
 // (when set), the extra address, Slack and Telegram, so chat alerts work
@@ -72,13 +73,10 @@ func (m *Mailer) enqueue(to, subject, line string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.pending == nil {
-		m.pending, m.subject = map[string][]string{}, map[string]string{}
+		m.pending = map[string][]Alert{}
 	}
 	if len(m.pending[to]) < 500 {
-		m.pending[to] = append(m.pending[to], line)
-	}
-	if m.subject[to] == "" {
-		m.subject[to] = subject
+		m.pending[to] = append(m.pending[to], Alert{Subject: subject, Text: line})
 	}
 	if m.timer == nil {
 		d := m.Interval
@@ -92,8 +90,8 @@ func (m *Mailer) enqueue(to, subject, line string) {
 // Flush sends everything queued.
 func (m *Mailer) Flush() {
 	m.mu.Lock()
-	pending, subjects := m.pending, m.subject
-	m.pending, m.subject, m.timer = nil, nil, nil
+	pending := m.pending
+	m.pending, m.timer = nil, nil
 	m.mu.Unlock()
 	var ch Channels
 	if m.Channels != nil {
@@ -103,22 +101,27 @@ func (m *Mailer) Flush() {
 	if m.Admin != nil {
 		admin = m.Admin()
 	}
-	for to, lines := range pending {
-		subj := subjects[to]
-		if len(lines) > 1 {
-			subj = fmt.Sprintf("%s (+%d more)", subj, len(lines)-1)
+	for to, alerts := range pending {
+		subj := alerts[0].Subject
+		if len(alerts) > 1 {
+			subj = fmt.Sprintf("%s (+%d more)", subj, len(alerts)-1)
 		}
 		full := "[xPGuard] " + m.Hostname + ": " + subj
-		body := strings.Join(lines, "\n")
+		texts := make([]string, len(alerts))
+		for i, a := range alerts {
+			texts[i] = a.Text
+		}
+		body := strings.Join(texts, "\n")
+		msg := Email{Subject: full, Host: m.Hostname, Alerts: alerts, ForAdmin: to == adminKey}
 		if to != adminKey {
-			m.deliver(to, full, body, ch.From)
+			m.deliver(ch.Mail, to, msg)
 			continue
 		}
 		if _, err := mail.ParseAddress(admin); err == nil {
-			m.deliver(admin, full, body, ch.From)
+			m.deliver(ch.Mail, admin, msg)
 		}
 		if ch.Extra != "" && ch.Extra != admin {
-			m.deliver(ch.Extra, full, body, ch.From)
+			m.deliver(ch.Mail, ch.Extra, msg)
 		}
 		if err := Chat(ch, full, body); err != nil && m.Log != nil {
 			m.Log.Warn("chat alert failed", "err", err)
@@ -126,14 +129,11 @@ func (m *Mailer) Flush() {
 	}
 }
 
-func (m *Mailer) deliver(to, subject, body, from string) {
-	if err := SendFrom(to, subject, body, from); err != nil && m.Log != nil {
-		m.Log.Warn("alert email failed", "to", to, "err", err)
+func (m *Mailer) deliver(mc MailConfig, to string, msg Email) {
+	if err := Send(mc, to, msg); err != nil && m.Log != nil {
+		m.Log.Warn("alert email failed", "to", to, "via", mc.Via(), "err", err)
 	}
 }
-
-// Send delivers one plain-text email via sendmail -t.
-func Send(to, subject, body string) error { return SendFrom(to, subject, body, "") }
 
 // SlackURL / TelegramURL are the chat endpoints (tests override them).
 var (
@@ -207,29 +207,6 @@ func Chat(ch Channels, subject, body string) error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("%s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-// SendFrom is Send with a custom From address.
-func SendFrom(to, subject, body, from string) error {
-	if _, err := os.Stat(Sendmail); err != nil {
-		return fmt.Errorf("no local MTA (%s)", Sendmail)
-	}
-	host, _ := os.Hostname()
-	var msg bytes.Buffer
-	if a, err := mail.ParseAddress(from); err == nil && from != "" {
-		from = a.Address
-	} else {
-		from = "xpguard@" + host
-	}
-	fmt.Fprintf(&msg, "To: %s\r\nFrom: xPGuard <%s>\r\nSubject: %s\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n%s\r\n\r\n-- \r\nxPGuard on %s\r\n",
-		to, from, strings.ReplaceAll(subject, "\n", " "), body, host)
-	cmd := exec.Command(Sendmail, "-t", "-i")
-	cmd.Stdin = &msg
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
