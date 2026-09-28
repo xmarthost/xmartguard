@@ -7,6 +7,7 @@ import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
 import { Card, Modal, agentCall, useAction } from '../components/controls';
 import { WorldMap, countryName, flag } from '../components/WorldMap';
 import { useServerName } from './Scanner';
+import { zoned } from '../timezone';
 
 interface ConnEvent {
   id: number;
@@ -44,8 +45,8 @@ interface Status {
 
 const two = (n: number) => String(n).padStart(2, '0');
 const fmtClock = (ts: number) => {
-  const d = new Date(ts * 1000);
-  return `${two(d.getDate())}-${two(d.getMonth() + 1)}-${d.getFullYear()} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+  const d = zoned(ts * 1000);
+  return `${two(d.day)}-${two(d.month)}-${d.year} ${two(d.hour)}:${two(d.minute)}:${two(d.second)}`;
 };
 
 /** Per-server IPDB blocklist stats with a live log of blocked connections. */
@@ -99,8 +100,8 @@ export default function ServerIPDB() {
         let v = l.events.length && !first ? l.events.length : 0;
         if (l.packets !== undefined && prev.current) v = Math.max(0, l.packets - prev.current.packets);
         if (l.packets !== undefined) prev.current = { packets: l.packets, at: now };
-        const d = new Date(now);
-        const label = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+        const d = zoned(now);
+        const label = `${two(d.hour)}:${two(d.minute)}:${two(d.second)}`;
         setSeries((cur) => {
           const base = cur.length ? cur : Array.from({ length: LIVE_POINTS - 1 }, (_, i) => ({ k: now - (LIVE_POINTS - i) * 1500, t: '', v: 0 }));
           return [...base, { k: now, t: label, v }].slice(-LIVE_POINTS);
@@ -124,8 +125,8 @@ export default function ServerIPDB() {
   if (!live && error) return <ErrorBox message={error} />;
   if (!live || !status) return <PageLoader />;
 
-  const minutes = live.minutes.map((p) => ({ t: new Date(p.at * 1000).getMinutes(), v: p.packets }));
-  const hourly = live.hourly.map((p) => ({ t: two(new Date(p.at * 1000).getHours()), v: p.packets }));
+  const minutes = live.minutes.map((p) => ({ t: zoned(p.at * 1000).minute, v: p.packets }));
+  const hourly = live.hourly.map((p) => ({ t: two(zoned(p.at * 1000).hour), v: p.packets }));
   const countries = Object.entries(live.countries)
     .filter(([cc]) => cc)
     .sort((a, b) => b[1] - a[1]);

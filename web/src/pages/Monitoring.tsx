@@ -6,6 +6,7 @@ import { api, type MetricPoint, type Server } from '../api';
 import { useApi } from '../hooks';
 import { bytes, duration, loadLevel, pct } from '../format';
 import { Bar, Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
+import { zoned } from '../timezone';
 
 const RANGES = [
   { v: '1h', l: 'Last hour' },
@@ -24,10 +25,10 @@ function Chart({ title, data, dataKey, color, unit = '', domain }: {
   domain?: [number, number | 'auto'];
 }) {
   const fmt = (t: number) => {
-    const d = new Date(t * 1000);
+    const d = zoned(t * 1000);
     return data.length && data[data.length - 1].t - data[0].t > 86400
-      ? `${d.getDate()}/${d.getMonth() + 1}`
-      : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      ? `${d.day}/${d.month}`
+      : `${String(d.hour).padStart(2, '0')}:${String(d.minute).padStart(2, '0')}`;
   };
   return (
     <div className="card p-5">
