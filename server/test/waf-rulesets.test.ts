@@ -171,3 +171,32 @@ describe('remote rule feeds', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe('linking feeds to servers', () => {
+  it('sends a licensed feed only to the servers it is linked to', async () => {
+    const other = '00000000-0000-4000-8000-000000000001';
+    const remote = [
+      { id: 'me', name: 'Malware.Expert', key: 'SERIAL.12345', url: 'https://rules.example/generic', enabled: true, servers: [serverId], rbl: 'RBL.Example.net' },
+      { id: 'all', name: 'Everyone', key: 'KEY-ALL', url: 'https://rules.example/all', enabled: true },
+    ];
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote }))).status).toBe(200);
+    const a = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
+    expect(a.body.config.remote.map((r: { id: string }) => r.id)).toEqual(['me', 'all']);
+    expect(a.body.config.remote[0].rbl).toBe('rbl.example.net');
+    expect(a.body.config.remote[0].servers).toBeUndefined();
+
+    // Servers of another account (or unknown ids) are refused.
+    const bad = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...remote[0], servers: [other] }] }));
+    expect(bad.status).toBe(400);
+    const g = await admin.req('GET', '/api/waf/rulesets');
+    expect(g.body.remote_presets[0].url).toContain('malware.expert');
+    const cfg = g.body.config;
+    cfg.remote[0].servers = [];
+    cfg.remote = [cfg.remote[1], { ...cfg.remote[0], id: 'me2', key: 'KEY-TWO', servers: [serverId] }];
+    expect((await admin.req('PUT', '/api/waf/rulesets', cfg)).status).toBe(200);
+    const b = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
+    expect(b.body.config.remote.map((r: { id: string }) => r.id)).toEqual(['all', 'me2']);
+    const badRbl = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...remote[1], rbl: 'x" exec' }] }));
+    expect(badRbl.status).toBe(400);
+  });
+});

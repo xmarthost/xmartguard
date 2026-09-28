@@ -4,7 +4,7 @@ import type { Pool } from '../db.js';
 import type { AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
-import { CRSService, DEFAULT_CONFIG, PRESET_VENDORS, RuleSetsConfig, loadConfig, validateCustomRules } from '../waf/rulesets.js';
+import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, linkedTo, loadConfig, validateCustomRules } from '../waf/rulesets.js';
 
 /**
  * WAF Rule Sets: one ModSecurity configuration for all servers. Saving it
@@ -41,6 +41,7 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
     return {
       ...cur,
       presets: PRESET_VENDORS,
+      remote_presets: PRESET_REMOTE,
       crs: { ...(await crs.status()), resolved: cur.config.crs.enabled ? await crs.resolve(cur.config.crs.version) : null },
       servers: servers.rows.map((r) => ({ ...r, version: r.version == null ? null : Number(r.version), online: hub.isOnline(r.id) })),
     };
@@ -59,6 +60,17 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
     if (c.custom.enabled) {
       const err = validateCustomRules(c.custom.rules);
       if (err) return reply.code(400).send({ error: err });
+    }
+    // Feeds can only be linked to this account's servers.
+    const own = await pool.query('SELECT id FROM servers WHERE account_id = $1', [req.user!.accountId]);
+    const ownIds = new Set(own.rows.map((r) => String(r.id)));
+    for (const x of [...c.vendors, ...c.remote]) {
+      if (x.servers.some((id) => !ownIds.has(id))) return reply.code(400).send({ error: `${x.name}: linked to an unknown server` });
+    }
+    const rids = new Set<string>();
+    for (const r of c.remote) {
+      if (rids.has(r.id)) return reply.code(400).send({ error: `feed id ${r.id} is used twice` });
+      rids.add(r.id);
     }
     const ids = new Set<string>();
     for (const v of c.vendors) {
@@ -96,8 +108,8 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
         version: Number(rows[0].version),
         xmartguard: c.xmartguard.enabled,
         crs: c.crs.enabled ? `${c.crs.version} PL${c.crs.paranoia}` : 'off',
-        vendors: c.vendors.map((v) => `${v.id}:${v.enabled ? 'on' : 'off'}`),
-        remote: c.remote.map((r) => `${r.id}:${r.enabled ? 'on' : 'off'}`),
+        vendors: c.vendors.map((v) => `${v.id}:${v.enabled ? 'on' : 'off'}${v.servers.length ? `@${v.servers.length} server(s)` : ''}`),
+        remote: c.remote.map((r) => `${r.id}:${r.enabled ? 'on' : 'off'}${r.servers.length ? `@${r.servers.length} server(s)` : ''}`),
         custom: c.custom.enabled,
       },
       ip: req.ip,
@@ -131,8 +143,9 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
       // WAF switches are left alone.
       xmartguard: cur.version ? c.xmartguard : undefined,
       crs: { ...c.crs, version: crsVersion ?? '' },
-      vendors: c.vendors,
-      remote: c.remote,
+      // Licensed feeds go only to the servers they are linked to.
+      vendors: c.vendors.filter((v) => linkedTo(v, r.serverId)).map(({ servers: _s, ...v }) => v),
+      remote: c.remote.filter((x) => linkedTo(x, r.serverId)).map(({ servers: _s, ...x }) => x),
       custom: c.custom,
     };
     const out: Record<string, unknown> = { config };

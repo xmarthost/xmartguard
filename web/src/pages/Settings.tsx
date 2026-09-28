@@ -733,6 +733,16 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
   const dis = !admin || busy;
   const st = info.data?.status;
   const captchaOn = Boolean(all.firewall?.captcha);
+  // Malware.Expert feed from WAF Rule Sets linked to this server, if any.
+  const rs = useApi<{ config: { remote: { url: string; enabled: boolean; servers?: string[] }[] } }>('/api/waf/rulesets');
+  const meFeed = rs.data?.config.remote.find((r) => r.enabled && /^https:\/\/rules\.malware\.expert\//.test(r.url) && (!r.servers?.length || r.servers.includes(serverId)));
+  const meExtras = (() => {
+    try {
+      return meFeed ? (new URL(meFeed.url).searchParams.get('extra') ?? '').split(',').filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  })();
   const v2 = (all.captcha?.provider ?? 'builtin') !== 'builtin';
   const row = (key: keyof WAFS, title: string, desc: string, rec?: boolean) => (
     <SettingRow title={title} desc={desc} recommended={rec}>
@@ -776,6 +786,26 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
           }}
         />
       </SettingRow>
+      <SettingRow
+        title="Captcha by Malware.Expert"
+        desc={
+          meExtras.includes('recaptcha')
+            ? 'This server uses your Malware.Expert key: bots on WordPress and Joomla logins get the Malware.Expert reCaptcha, served by Malware.Expert. XMart Guard\'s own CAPTCHA above keeps working for firewall bans.'
+            : 'Servers that use your Malware.Expert key can also get the Malware.Expert reCaptcha on WordPress and Joomla logins. Turn it on in WAF Rule Sets » Malware.Expert » Extra rules.'
+        }
+      >
+        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${meExtras.includes('recaptcha') ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+          {meExtras.includes('recaptcha') ? 'Active (by Malware.Expert)' : meFeed ? 'Not enabled' : 'Not linked to this server'}
+        </span>
+        <Link to="/waf-rulesets" className="text-sm text-blue-700 hover:underline">
+          WAF Rule Sets
+        </Link>
+      </SettingRow>
+      {meExtras.length > 0 && (
+        <div className="border-b border-slate-100 py-3 text-sm text-slate-600">
+          Extra rules by Malware.Expert on this server: <b className="text-navy-900">{meExtras.join(', ')}</b>
+        </div>
+      )}
       {row('webshell', 'WEBSHELL protection', 'Web shell attack protection: block requests to well-known web shell files, their folders and exploit probes', true)}
       {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
       {row('proxy_ip_check', 'Proxy IP check', 'Enables IP blacklist checks using the real client IP behind Cloudflare or a local proxy (blocked, banned and IPDB addresses)')}

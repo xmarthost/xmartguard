@@ -55,9 +55,16 @@ type RemoteRules struct {
 	Key     string `json:"key"`
 	URL     string `json:"url"`
 	Enabled bool   `json:"enabled"`
+	// RBL is an optional DNS blocklist from the same vendor (for example
+	// rbl.malware.expert): POST requests from listed addresses are dropped.
+	RBL string `json:"rbl,omitempty"`
 }
 
+// IDRemoteRBL is the first rule id for remote feed blocklists.
+const IDRemoteRBL = 7700801
+
 var (
+	reRemoteRBL = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	reRemoteKey = regexp.MustCompile(`^[A-Za-z0-9_.:-]{4,200}$`)
 	reRemoteURL = regexp.MustCompile(`^https://[^\s"'<>\\]+$`)
 )
@@ -209,6 +216,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 	states = append(states, crs)
 
 	first := true
+	rblID := IDRemoteRBL
 	for _, r := range rs.Remote {
 		st := RuleSetState{ID: "remote:" + r.ID, Name: r.Name}
 		switch {
@@ -223,6 +231,11 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			}
 			fmt.Fprintf(&inc, "SecRemoteRules \"%s\" \"%s\"\n", r.Key, r.URL)
 			st.State, st.Detail = "active", "loaded by ModSecurity from "+r.URL
+			if rbl := strings.ToLower(strings.TrimSpace(r.RBL)); rbl != "" && reRemoteRBL.MatchString(rbl) && rblID < IDRemoteRBL+10 {
+				fmt.Fprintf(&inc, "SecRule REQUEST_METHOD \"@streq POST\" \"id:%d,phase:2,drop,log,msg:'POST from an address listed on %s',tag:'xmartguard/rbl',chain\"\n  SecRule REMOTE_ADDR \"@rbl %s\"\n", rblID, rbl, rbl)
+				rblID++
+				st.Detail += "; POST blocklist " + rbl
+			}
 		}
 		states = append(states, st)
 	}

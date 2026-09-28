@@ -78,6 +78,40 @@ Only blocked requests are counted as web attacks; OWASP CRS's per-rule
 warnings are not recorded. The logs being read are listed per server under
 Rollout ("Reads hits from").
 
+## Licensed feeds and linked servers (Malware.Expert)
+
+Every WHM vendor and remote feed (SecRemoteRules) has **Linked servers**:
+"All servers" (default) or "Only selected servers". The portal sends a feed
+only to the servers it is linked to (`/api/agent/waf/config` filters by the
+calling server), so a feed licensed for one IP is never loaded elsewhere.
+Unlinked servers drop it on the next sync (WHM vendors that XMart Guard
+added are disabled).
+
+"Add a remote feed… » Malware.Expert" fills in:
+
+- URL `https://rules.malware.expert/download.php?rules=generic` with all
+  **extra rules** (`&extra=webshell,scanner,crawler,rbl,proxy,recaptcha`);
+  each module can be switched off with its checkbox.
+- **Captcha by Malware.Expert** (`recaptcha`): Malware.Expert's reCaptcha for
+  bots on WordPress/Joomla logins, on the linked servers only. XMart Guard's
+  own CAPTCHA keeps working for firewall bans; Settings » WAF shows which
+  one a server uses.
+- An optional POST blocklist: `POST` requests from addresses listed on
+  `rbl.malware.expert` are dropped (rule 7700801, chained on
+  `REMOTE_ADDR @rbl`).
+- The first server as the only linked server.
+
+The license/serial key is entered in the portal only (never in this
+repository), is shown masked and is sent only to the linked servers.
+After applying, the agent downloads the feed once the way ModSecurity does
+(`ModSec-key` header, cached for an hour) and reports "N rules downloaded"
+or the vendor's refusal (for example HTTP 403 when the server's IP is not on
+the license) under Rollout, because ModSecurity itself only logs a warning
+(`SecRemoteRulesFailAction Warn`) and keeps serving.
+
+Use either the WHM vendor or the remote feed for the same rules on a
+server, not both.
+
 ## Custom rules
 
 Only ModSecurity rule directives are accepted: `SecRule`, `SecAction`,

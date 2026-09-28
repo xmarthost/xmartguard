@@ -296,12 +296,16 @@ func TestRemoteRules(t *testing.T) {
 	m := &Manager{RulesDir: t.TempDir()}
 	var rs RuleSets
 	rs.Remote = []RemoteRules{
-		{ID: "me", Name: "Malware.Expert", Key: "ABC-123", URL: "https://rules.example/modsec/rules.conf", Enabled: true},
+		{ID: "me", Name: "Malware.Expert", Key: "ABC-123", URL: "https://rules.example/modsec/rules.conf", Enabled: true, RBL: "rbl.example.net"},
+		{ID: "rblbad", Name: "RBL bad", Key: "ABCD", URL: "https://rules.example/b", Enabled: true, RBL: "x\" exec:/bin/sh"},
 		{ID: "bad", Name: "Bad", Key: "k\" exec", URL: "https://x/y", Enabled: true},
 	}
 	m.SetRuleSets(rs)
 	inc, _, states := m.extras(Target{Name: "rhel"})
 	if !strings.Contains(inc, `SecRemoteRules "ABC-123" "https://rules.example/modsec/rules.conf"`) || !strings.Contains(inc, "SecRemoteRulesFailAction Warn") || strings.Contains(inc, "exec") {
+		t.Fatal(inc)
+	}
+	if !strings.Contains(inc, `"id:7700801,phase:2,drop,`) || !strings.Contains(inc, `SecRule REMOTE_ADDR "@rbl rbl.example.net"`) || strings.Contains(inc, "7700802") {
 		t.Fatal(inc)
 	}
 	got := map[string]string{}

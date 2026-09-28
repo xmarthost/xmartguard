@@ -18,7 +18,7 @@ export const PRESET_VENDORS = [
     url_hint: 'Vendor configuration URL from your Malware.Expert subscription page',
     default_url: '',
     site: 'https://malware.expert/modsecurity-rules/',
-    note: 'Commercial rules for WordPress/Joomla/PHP exploits and web shells, updated often. The URL contains your license.',
+    note: 'Commercial rules for WordPress/Joomla/PHP exploits and web shells, updated often. The URL contains your license. The license is per server IP: link it only to the licensed server(s). Do not also add the same rules as a remote feed on that server.',
   },
   {
     id: 'comodo',
@@ -40,6 +40,31 @@ export const PRESET_VENDORS = [
   },
 ] as const;
 
+/** Servers a rule feed is linked to: empty = every server of the account. */
+const Servers = z.array(z.string().uuid()).max(500).default([]);
+
+/** Ready-made remote feeds (SecRemoteRules). */
+export const PRESET_REMOTE = [
+  {
+    id: 'malware_expert',
+    name: 'Malware.Expert',
+    url: 'https://rules.malware.expert/download.php?rules=generic&extra=webshell,scanner,crawler,rbl,proxy,recaptcha',
+    rbl: 'rbl.malware.expert',
+    // Optional modules, added to the URL as &extra=… (malware.expert/modsecurity-rules/extra-rules/).
+    extras: [
+      { id: 'webshell', name: 'Web shells', desc: 'Command execution blocked in Phoenix, FilesMan, c99shell, b374k, WSO, Ani-Shell' },
+      { id: 'scanner', name: 'Scanners', desc: 'Bad user agents and unwanted crawlers that cause high load' },
+      { id: 'crawler', name: 'Crawlers', desc: 'Heavy search engine and AI crawlers: MJ12bot, BLEXBot, ClaudeBot, Bytespider, GPTBot, ImagesiftBot, ChatGPT, Meta-ExternalAgent' },
+      { id: 'rbl', name: 'RBL', desc: 'Bots on the Malware.Expert blocklist (DDoS and high load)' },
+      { id: 'proxy', name: 'Proxy', desc: 'Bot traffic through proxies/CDNs, using X-Forwarded-For, X-Real-IP and CF-Connecting-IP to find the real client' },
+      { id: 'recaptcha', name: 'Captcha by Malware.Expert', desc: 'reCaptcha challenge for bots on WordPress and Joomla logins, served by Malware.Expert on the linked servers' },
+    ],
+    key_hint: 'Serial key from your Malware.Expert account',
+    site: 'https://malware.expert/modsecurity-rules/',
+    note: 'Licensed per server IP: link the feed only to the server(s) whose IP is on your license. Other servers would be refused by Malware.Expert.',
+  },
+] as const;
+
 const Vendor = z.object({
   id: z.string().regex(/^[a-z0-9_-]{2,40}$/),
   name: z.string().trim().min(1).max(80),
@@ -49,6 +74,7 @@ const Vendor = z.object({
     .max(500)
     .regex(/^https:\/\/[^\s"'<>]+\.ya?ml(?:\?[^\s"'<>]*)?$/i, 'vendor URL must be an https:// link to a .yaml file'),
   enabled: z.boolean(),
+  servers: Servers,
 });
 
 const Remote = z.object({
@@ -57,7 +83,20 @@ const Remote = z.object({
   key: z.string().trim().regex(/^[A-Za-z0-9_.:-]{4,200}$/, 'license key: letters, digits and . _ : - only'),
   url: z.string().trim().max(500).regex(/^https:\/\/[^\s"'<>\\]+$/, 'rules URL must be an https:// link'),
   enabled: z.boolean(),
+  servers: Servers,
+  // Optional DNS blocklist of the same vendor: POSTs from listed IPs are dropped.
+  rbl: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)?$/, 'RBL must be a DNS zone like rbl.example.com')
+    .default(''),
 });
+
+/** Whether a feed or vendor applies to a server. */
+export function linkedTo(item: { servers?: string[] }, serverId: string): boolean {
+  return !item.servers?.length || item.servers.includes(serverId);
+}
 
 export const RuleSetsConfig = z.object({
   xmartguard: z.object({ enabled: z.boolean() }),

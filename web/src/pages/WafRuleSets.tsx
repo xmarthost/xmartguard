@@ -12,12 +12,32 @@ interface Vendor {
   name: string;
   url: string;
   enabled: boolean;
+  servers?: string[];
+}
+interface Remote {
+  id: string;
+  name: string;
+  key: string;
+  url: string;
+  enabled: boolean;
+  servers?: string[];
+  rbl?: string;
+}
+interface RemotePreset {
+  id: string;
+  name: string;
+  url: string;
+  rbl: string;
+  key_hint: string;
+  site: string;
+  note: string;
+  extras?: { id: string; name: string; desc: string }[];
 }
 interface Config {
   xmartguard: { enabled: boolean };
   crs: { enabled: boolean; version: string; paranoia: number; inbound_threshold: number; outbound_threshold: number };
   vendors: Vendor[];
-  remote: { id: string; name: string; key: string; url: string; enabled: boolean }[];
+  remote: Remote[];
   custom: { enabled: boolean; rules: string };
 }
 interface Preset {
@@ -55,6 +75,7 @@ interface Data {
   version: number;
   updated_at: string | null;
   presets: Preset[];
+  remote_presets?: RemotePreset[];
   crs: { releases: { version: string; published: string; files: number }[]; last_check: string | null; error: string; resolved: string | null; repo: string };
   servers: ServerRow[];
 }
@@ -85,6 +106,58 @@ function Chip({ s }: { s: SetState }) {
   );
 }
 
+/** The feed URL without its &extra=… modules, and the modules it has. */
+function splitExtra(url: string): { base: string; extras: string[] } {
+  try {
+    const u = new URL(url);
+    const extras = (u.searchParams.get('extra') ?? '').split(',').filter(Boolean);
+    u.searchParams.delete('extra');
+    return { base: u.toString(), extras };
+  } catch {
+    return { base: url, extras: [] };
+  }
+}
+function joinExtra(base: string, extras: string[]): string {
+  return extras.length ? `${base}${base.includes('?') ? '&' : '?'}extra=${extras.join(',')}` : base;
+}
+
+/** Which servers a licensed feed goes to (empty list = all servers). */
+function ServerPicker({ servers, value, disabled, onChange }: { servers: ServerRow[]; value: string[]; disabled: boolean; onChange: (v: string[]) => void }) {
+  const [open, setOpen] = useState(value.length > 0);
+  const some = open || value.length > 0;
+  const names = servers.filter((s) => value.includes(s.id)).map((s) => s.hostname);
+  return (
+    <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="label mb-0">Linked servers</span>
+        <label className="inline-flex items-center gap-1.5">
+          <input type="radio" disabled={disabled} checked={!some} onChange={() => (setOpen(false), onChange([]))} /> All servers
+        </label>
+        <label className="inline-flex items-center gap-1.5">
+          <input type="radio" disabled={disabled} checked={some} onChange={() => setOpen(true)} /> Only selected servers
+        </label>
+        {some && <span className="text-xs text-slate-500">{names.length ? names.join(', ') : 'none selected yet: the feed goes to no server'}</span>}
+      </div>
+      {some && (
+        <div className="mt-2 grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+          {servers.map((s) => (
+            <label key={s.id} className="inline-flex items-center gap-2 truncate rounded-md border border-slate-200 bg-white px-2 py-1.5">
+              <input
+                type="checkbox"
+                disabled={disabled}
+                checked={value.includes(s.id)}
+                onChange={(e) => onChange(e.target.checked ? [...value, s.id] : value.filter((x) => x !== s.id))}
+              />
+              <StatusDot online={s.online} />
+              <span className="truncate">{s.hostname}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WafRuleSets() {
   const { user } = useAuth();
   const isAdmin = can(user, 'admin');
@@ -92,6 +165,7 @@ export default function WafRuleSets() {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [dirty, setDirty] = useState(false);
   const [adding, setAdding] = useState('');
+  const [addingFeed, setAddingFeed] = useState('');
   const { run, busy } = useAction();
 
   useEffect(() => {
@@ -118,6 +192,23 @@ export default function WafRuleSets() {
     set({ ...cfg, vendors: [...cfg.vendors, { id, name: p.id === 'custom' ? 'Vendor' : p.name, url: p.default_url, enabled: true }] });
     setAdding('');
   };
+  const addFeed = (id: string) => {
+    const p = data.remote_presets?.find((x) => x.id === id);
+    const feeds = cfg.remote ?? [];
+    let fid = p ? p.id : `feed${feeds.length + 1}`;
+    for (let n = 2; feeds.some((f) => f.id === fid); n++) fid = `${p ? p.id : 'feed'}${n}`;
+    // Licensed per server IP: start linked to one server, never to all.
+    const first = data.servers[0]?.id;
+    set({
+      ...cfg,
+      remote: [...feeds, { id: fid, name: p?.name ?? 'Remote feed', key: '', url: p?.url ?? '', enabled: true, rbl: p?.rbl ?? '', servers: p && first ? [first] : [] }],
+    });
+    setAddingFeed('');
+  };
+  const linked = (s: ServerRow) => [
+    ...cfg.vendors.filter((v) => v.enabled && (!v.servers?.length || v.servers.includes(s.id))).map((v) => v.name),
+    ...(cfg.remote ?? []).filter((r) => r.enabled && (!r.servers?.length || r.servers.includes(s.id))).map((r) => r.name),
+  ];
   const current = (s: ServerRow) => s.version != null && s.version === data.version;
   const latest = data.crs.releases[0];
 
@@ -248,6 +339,12 @@ export default function WafRuleSets() {
                   disabled={!isAdmin}
                   onChange={(e) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, url: e.target.value.trim() } : x)) })}
                 />
+                <ServerPicker
+                  servers={data.servers}
+                  value={v.servers ?? []}
+                  disabled={!isAdmin}
+                  onChange={(sv) => set({ ...cfg, vendors: cfg.vendors.map((x, j) => (j === i ? { ...x, servers: sv } : x)) })}
+                />
                 {p && (
                   <p className="mt-1.5 text-xs text-slate-500">
                     {p.note}{' '}
@@ -287,11 +384,14 @@ export default function WafRuleSets() {
         <div className="mt-3 space-y-3">
           {(cfg.remote ?? []).length === 0 && <div className="text-sm text-slate-400">No remote feeds.</div>}
           {(cfg.remote ?? []).map((r, i) => {
-            const upd = (x: Partial<Config['remote'][number]>) => set({ ...cfg, remote: cfg.remote.map((y, j) => (j === i ? { ...y, ...x } : y)) });
+            const upd = (x: Partial<Remote>) => set({ ...cfg, remote: cfg.remote.map((y, j) => (j === i ? { ...y, ...x } : y)) });
+            const cur = splitExtra(r.url);
+            const p = data.remote_presets?.find((x) => splitExtra(x.url).base === cur.base);
             return (
               <div key={r.id} className="rounded-xl border border-slate-200 p-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <input className="input w-full font-medium sm:w-64" value={r.name} disabled={!isAdmin} onChange={(e) => upd({ name: e.target.value })} />
+                  {p && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">licensed per server IP</span>}
                   <div className="ml-auto flex items-center gap-2">
                     <Toggle on={r.enabled} disabled={!isAdmin} onChange={(on) => upd({ enabled: on })} />
                     {isAdmin && (
@@ -302,21 +402,94 @@ export default function WafRuleSets() {
                   </div>
                 </div>
                 <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-                  <input className="input font-mono text-xs" placeholder="License key" value={r.key} disabled={!isAdmin} onChange={(e) => upd({ key: e.target.value.trim() })} />
-                  <input className="input font-mono text-xs" placeholder="https://…/rules URL" value={r.url} disabled={!isAdmin} onChange={(e) => upd({ url: e.target.value.trim() })} />
+                  <label className="text-sm">
+                    <span className="label">License / serial key</span>
+                    <input className="input font-mono text-xs" placeholder={p?.key_hint ?? 'License key'} value={r.key} disabled={!isAdmin} onChange={(e) => upd({ key: e.target.value.trim() })} />
+                  </label>
+                  <label className="text-sm">
+                    <span className="label">Rules URL</span>
+                    <input className="input font-mono text-xs" placeholder="https://…/rules URL" value={r.url} disabled={!isAdmin} onChange={(e) => upd({ url: e.target.value.trim() })} />
+                  </label>
                 </div>
+                <label className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                  <input type="checkbox" disabled={!isAdmin} checked={!!r.rbl} onChange={(e) => upd({ rbl: e.target.checked ? p?.rbl || 'rbl.example.com' : '' })} />
+                  Drop POST requests (logins, comments, uploads) from IPs listed on
+                  <input className="input h-8 w-56 font-mono text-xs" placeholder="rbl.example.com" disabled={!isAdmin || !r.rbl} value={r.rbl ?? ''} onChange={(e) => upd({ rbl: e.target.value.trim().toLowerCase() })} />
+                </label>
+                {!!p?.extras?.length && (
+                  <div className="mt-2 rounded-lg border border-slate-200 px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="label mb-0">Extra rules by {p.name}</span>
+                      {isAdmin && (
+                        <span className="flex gap-3 text-xs">
+                          <button className="text-blue-700 hover:underline" onClick={() => upd({ url: joinExtra(cur.base, p.extras!.map((e) => e.id)) })}>
+                            All
+                          </button>
+                          <button className="text-blue-700 hover:underline" onClick={() => upd({ url: cur.base })}>
+                            None
+                          </button>
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 grid gap-x-4 sm:grid-cols-2">
+                      {p.extras.map((e) => (
+                        <label key={e.id} className="flex items-start gap-2 py-1 text-sm">
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            disabled={!isAdmin}
+                            checked={cur.extras.includes(e.id)}
+                            onChange={(ev) => {
+                              const next = p.extras!.map((x) => x.id).filter((id) => (id === e.id ? ev.target.checked : cur.extras.includes(id)));
+                              upd({ url: joinExtra(cur.base, next) });
+                            }}
+                          />
+                          <span>
+                            <span className="font-medium text-navy-900">{e.name}</span>
+                            <span className="block text-xs text-slate-500">{e.desc}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Extra rules give more protection but can block some legitimate traffic (false positives); whitelist affected paths or report them to the vendor.
+                    </p>
+                  </div>
+                )}
+                <ServerPicker servers={data.servers} value={r.servers ?? []} disabled={!isAdmin} onChange={(sv) => upd({ servers: sv })} />
+                {p && !r.servers?.length && data.servers.length > 1 && (
+                  <p className="mt-1.5 text-xs text-amber-700">This feed now goes to all {data.servers.length} servers. Servers whose IP is not on your license will be refused by the vendor.</p>
+                )}
+                {p && (
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    {p.note}{' '}
+                    <a href={p.site} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-blue-700 hover:underline">
+                      website <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </p>
+                )}
               </div>
             );
           })}
           {isAdmin && (
-            <button
-              className="btn-outline"
-              onClick={() => set({ ...cfg, remote: [...(cfg.remote ?? []), { id: `feed${(cfg.remote ?? []).length + 1}`, name: 'Malware.Expert', key: '', url: '', enabled: true }] })}
-            >
-              <Plus className="h-4 w-4" /> Add remote feed
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <select className="input w-full sm:w-72" value={addingFeed} onChange={(e) => setAddingFeed(e.target.value)}>
+                <option value="">Add a remote feed…</option>
+                {data.remote_presets?.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} (SecRemoteRules)
+                  </option>
+                ))}
+                <option value="other">Other feed (key + URL)</option>
+              </select>
+              <button className="btn-outline" disabled={!addingFeed} onClick={() => addFeed(addingFeed)}>
+                <Plus className="h-4 w-4" /> Add
+              </button>
+            </div>
           )}
-          <p className="text-xs text-slate-500">The license key is shown masked here and sent only to your servers. Only the account owner can add a feed.</p>
+          <p className="text-xs text-slate-500">
+            The license key is shown masked here and sent only to the linked servers. Only the account owner can add a feed. Use either the WHM vendor or the remote feed for the same rules on a server, not both.
+          </p>
         </div>
       </Card>
 
@@ -348,6 +521,7 @@ export default function WafRuleSets() {
                 </span>
                 {s.updated_at && <span className="text-xs text-slate-400">{ago(s.updated_at)}</span>}
               </div>
+              <div className="mt-1 text-xs text-slate-500">Linked rule feeds: {linked(s).join(', ') || 'none'}</div>
               {!!s.status?.rule_sets?.length && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {s.status.rule_sets.map((r) => (

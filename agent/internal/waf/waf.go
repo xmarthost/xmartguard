@@ -306,6 +306,11 @@ func (m *Manager) Apply() error {
 			m.Log.Warn("WAF self-test failed", "detail", r.Detail)
 		}
 	}
+	// Remote feeds: ModSecurity only warns when the vendor refuses the
+	// download, so check it here and report the real outcome.
+	if err == nil && !m.NoSelfTest && extra != "" {
+		m.checkRemoteStates(states)
+	}
 	m.mu.Lock()
 	m.target = t
 	m.states = states
