@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Ban, FileText, Globe, RefreshCw, Search, ShieldCheck, Trash2, Unlock } from 'lucide-react';
 import { can, useAuth } from '../auth';
-import { Breadcrumb, Empty, ErrorBox, PageLoader, StatCard } from '../components/ui';
+import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader, StatCard } from '../components/ui';
 import { Modal, Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
 import { useServerName } from './Scanner';
 
@@ -77,7 +77,7 @@ export function OutgoingSpam() {
       </div>
       <div className="card overflow-x-auto p-0">
         {!list.data ? (
-          list.error ? <ErrorBox message={list.error} /> : <PageLoader />
+          list.error ? <ErrorBox message={list.error} /> : <SectionLoader />
         ) : list.data.events.length === 0 ? (
           <Empty text="No outgoing spam detected" />
         ) : (
@@ -150,7 +150,7 @@ function TransactionModal({ serverId, ev, onClose }: { serverId: string; ev: OSM
       {r.error ? (
         <ErrorBox message={r.error} />
       ) : !r.data ? (
-        <PageLoader />
+        <SectionLoader />
       ) : r.data.lines.length === 0 ? (
         <Empty text="The message is no longer in the current Exim log" />
       ) : (

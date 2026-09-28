@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 )
 
@@ -14,7 +15,7 @@ func analyze(ext string, content []byte) *Detection {
 	}
 	if d := markupInImage(ext, content); d != nil {
 		if v := analyzePHP(content); v != nil {
-			return &Detection{CatSuspicious, "PHP.Suspicious.CodeInNonScript"}
+			return codeInNonScript(ext, v)
 		}
 		return d
 	}
@@ -36,8 +37,36 @@ func analyze(ext string, content []byte) *Detection {
 	default:
 		// Images/text/other extensions that smuggle PHP code.
 		if v := analyzePHP(content); v != nil {
-			return &Detection{CatSuspicious, "PHP.Suspicious.CodeInNonScript"}
+			return codeInNonScript(ext, v)
 		}
+		if d := scriptInImage(ext, content); d != nil {
+			return d
+		}
+	}
+	return nil
+}
+
+// codeInNonScript: PHP inside a non-script file. In an image, code the
+// analyzer calls malicious (eval of input, shell commands, droppers) is a
+// backdoor waiting to be included, so it is a virus; anything else stays
+// suspicious (image polyglots, CTF samples).
+func codeInNonScript(ext string, v *verdict) *Detection {
+	if imageExts[ext] && v.category == CatVirus {
+		return &Detection{CatVirus, "Disguised.PHPInImage"}
+	}
+	return &Detection{CatSuspicious, "PHP.Suspicious.CodeInNonScript"}
+}
+
+var reImgScript = regexp.MustCompile(`(?is)<script[^>]*>[^<]{0,1000}?(?:window\.location|document\.location|location\.(?:href|replace)|eval\s*\(|atob\s*\(|fromCharCode|document\.write)`)
+
+// scriptInImage flags a real image that carries a script with a redirect
+// or decoder (SEO spam and drive-by redirects appended to images).
+func scriptInImage(ext string, content []byte) *Detection {
+	if !imageExts[ext] || !bytes.Contains(bytes.ToLower(content), []byte("<script")) {
+		return nil
+	}
+	if reImgScript.Match(content) {
+		return &Detection{CatSuspicious, "Disguised.ScriptInImage"}
 	}
 	return nil
 }

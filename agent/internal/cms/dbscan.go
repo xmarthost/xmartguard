@@ -104,6 +104,55 @@ type DBFinding struct {
 	Table     string `json:"table"`
 	Row       string `json:"row"`
 	Signature string `json:"signature"`
+	// Column holds the value that matched, Category the kind of
+	// injection (script, iframe, php, siteurl) and Snippet the matching part.
+	Column   string `json:"column"`
+	Category string `json:"category"`
+	Snippet  string `json:"snippet"`
+}
+
+// Hidden iframes these services use legitimately (Google Tag Manager's
+// <noscript> iframe, reCAPTCHA, video embeds kept hidden until opened).
+var benignIframeHosts = []string{"googletagmanager.com", "google.com", "gstatic.com", "youtube.com", "youtube-nocookie.com",
+	"player.vimeo.com", "facebook.com", "doubleclick.net", "hotjar.com", "calendly.com", "hubspot.com"}
+
+var reIframeTag = regexp.MustCompile(`(?is)<iframe\b[^>]*>`)
+var reIframeSrc = regexp.MustCompile(`(?i)\bsrc\s*=\s*["']?(?:https?:)?//([^/"'\s>?#]+)`)
+
+// Detail is what ScanValueDetail found.
+type Detail struct {
+	Signature, Category, Snippet string
+}
+
+func snippetAround(v string, loc []int) string {
+	if loc == nil {
+		return ""
+	}
+	start, end := loc[0]-60, loc[1]+60
+	if start < 0 {
+		start = 0
+	}
+	if end > len(v) {
+		end = len(v)
+	}
+	if end-start > 400 {
+		end = start + 400
+	}
+	return strings.TrimSpace(strings.ToValidUTF8(v[start:end], ""))
+}
+
+func benignIframe(tag string) bool {
+	m := reIframeSrc.FindStringSubmatch(tag)
+	if m == nil {
+		return true // no remote source: nothing is loaded
+	}
+	host := strings.ToLower(m[1])
+	for _, b := range benignIframeHosts {
+		if host == b || strings.HasSuffix(host, "."+b) {
+			return true
+		}
+	}
+	return false
 }
 
 var (
@@ -114,24 +163,30 @@ var (
 )
 
 // ScanValue checks one stored value for injected malware.
-func ScanValue(v string) string {
+func ScanValue(v string) string { return ScanValueDetail(v).Signature }
+
+// ScanValueDetail checks one stored value and says what matched.
+func ScanValueDetail(v string) Detail {
 	if v == "" {
-		return ""
+		return Detail{}
 	}
-	for _, m := range reScript.FindAllStringSubmatch(v, 20) {
-		if d := scanner.AnalyzeScript("js", []byte(m[1])); d != nil {
-			return "DB." + d.Signature
+	for _, loc := range reScript.FindAllStringSubmatchIndex(v, 20) {
+		if d := scanner.AnalyzeScript("js", []byte(v[loc[2]:loc[3]])); d != nil {
+			return Detail{"DB." + d.Signature, "script", snippetAround(v, loc[:2])}
 		}
 	}
-	if reHiddenIframe.MatchString(v) {
-		return "DB.Injected.HiddenIframe"
+	for _, loc := range reIframeTag.FindAllStringIndex(v, 20) {
+		tag := v[loc[0]:loc[1]]
+		if reHiddenIframe.MatchString(tag) && !benignIframe(tag) {
+			return Detail{"DB.Injected.HiddenIframe", "iframe", snippetAround(v, loc)}
+		}
 	}
-	if rePHPOpen.MatchString(v) {
+	if loc := rePHPOpen.FindStringIndex(v); loc != nil {
 		if d := scanner.AnalyzeScript("php", []byte(v)); d != nil {
-			return "DB." + d.Signature
+			return Detail{"DB." + d.Signature, "php", snippetAround(v, loc)}
 		}
 	}
-	return ""
+	return Detail{}
 }
 
 // ScanDatabase scans a WordPress database for injected code in options,
@@ -153,7 +208,8 @@ func ScanDatabase(ctx context.Context, c DBConfig) ([]DBFinding, error) {
 		for rows.Next() {
 			var name, val string
 			if rows.Scan(&name, &val) == nil && strings.ContainsAny(val, "<>\"'") {
-				out = append(out, DBFinding{p + "options", "option_name=" + name, "DB.Injected.SiteURL"})
+				out = append(out, DBFinding{Table: p + "options", Row: "option_name=" + name, Signature: "DB.Injected.SiteURL",
+					Column: "option_value", Category: "siteurl", Snippet: snippetAround(val, []int{0, min(len(val), 200)})})
 			}
 		}
 		rows.Close()
@@ -178,8 +234,9 @@ func ScanDatabase(ctx context.Context, c DBConfig) ([]DBFinding, error) {
 			if rows.Scan(&key, &val) != nil {
 				continue
 			}
-			if sig := ScanValue(val.String); sig != "" {
-				out = append(out, DBFinding{t.table, t.key + "=" + key, sig})
+			if d := ScanValueDetail(val.String); d.Signature != "" {
+				out = append(out, DBFinding{Table: t.table, Row: t.key + "=" + key, Signature: d.Signature,
+					Column: t.col, Category: d.Category, Snippet: d.Snippet})
 			}
 		}
 		rows.Close()

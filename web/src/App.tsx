@@ -22,6 +22,7 @@ import MassOperations from './pages/MassOperations';
 import KnowledgeBase from './pages/KnowledgeBase';
 import AIConnector from './pages/AIConnector';
 import WafRuleSets from './pages/WafRuleSets';
+import AppearancePage from './pages/AppearancePage';
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
@@ -62,6 +63,7 @@ export default function App() {
         <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
         <Route path="/ai" element={<Protected><AIScanner /></Protected>} />
         <Route path="/waf-rulesets" element={<Protected><WafRuleSets /></Protected>} />
+        <Route path="/appearance" element={<Protected><AppearancePage /></Protected>} />
         <Route path="/ai-connector" element={<Protected role="admin"><AIConnector /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />

@@ -20,10 +20,29 @@ export function Spinner({ className = '' }: { className?: string }) {
   return <Loader2 className={`h-5 w-5 animate-spin text-navy-600 ${className}`} />;
 }
 
+/**
+ * Full-page loader: the XMart Guard logo with a light sweeping through it,
+ * shown only while a page loads its data.
+ */
 export function PageLoader() {
   return (
-    <div className="flex h-64 items-center justify-center">
-      <Spinner className="h-8 w-8" />
+    <div className="flex min-h-[60vh] items-center justify-center" role="status" aria-label="Loading">
+      <div className="xg-loader flex items-center gap-3">
+        <span className="xg-loader-mark relative h-14 w-14">
+          <img src="/favicon.svg" alt="" className="h-14 w-14" />
+          <span className="xg-loader-sweep absolute inset-0" />
+        </span>
+        <span className="xg-loader-word text-[34px] leading-none font-extrabold tracking-tight">XMart Guard</span>
+      </div>
+    </div>
+  );
+}
+
+/** Small loader for a section inside a page (cards, tables). */
+export function SectionLoader() {
+  return (
+    <div className="flex h-40 items-center justify-center">
+      <Spinner className="h-7 w-7" />
     </div>
   );
 }

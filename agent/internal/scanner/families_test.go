@@ -1,6 +1,11 @@
 package scanner
 
-import "testing"
+import (
+	"archive/zip"
+	"os"
+	"strings"
+	"testing"
+)
 
 // Minimal, inert samples of each behaviour (they only need the shape the
 // rules look for; none of them does anything when run).
@@ -92,5 +97,42 @@ func TestCapHeuristicInTestsAndPhar(t *testing.T) {
 	}
 	if d := capHeuristic("/home/u/public_html/x.php", ".php", v); d.Category != CatVirus {
 		t.Errorf("normal file capped: %+v", d)
+	}
+}
+
+func TestImagesAndArchives(t *testing.T) {
+	if d := analyze(".jpg", []byte("\xff\xd8\xff\xe0JFIF<?php @eval($_POST['x']); ?>")); d == nil || d.Signature != "Disguised.PHPInImage" || d.Category != CatVirus {
+		t.Fatalf("php backdoor in jpg: %+v", d)
+	}
+	if d := analyze(".gif", []byte("GIF89a<?php echo 1; ?>")); d != nil && d.Category == CatVirus {
+		t.Fatalf("harmless polyglot as virus: %+v", d)
+	}
+	if d := analyze(".jpg", []byte("\xff\xd8\xff\xe0JFIF....<script>window.location='https://spam.example'</script>")); d == nil || d.Signature != "Disguised.ScriptInImage" {
+		t.Fatalf("script in jpg: %+v", d)
+	}
+	if d := analyze(".png", []byte("\x89PNG\r\n\x1a\n...tEXtComment <script> is a word")); d != nil {
+		t.Fatalf("harmless png flagged: %+v", d)
+	}
+
+	dir := t.TempDir()
+	mk := func(name string, files map[string]string) string {
+		p := dir + "/" + name
+		f, _ := os.Create(p)
+		w := zip.NewWriter(f)
+		for n, c := range files {
+			x, _ := w.Create(n)
+			x.Write([]byte(c))
+		}
+		w.Close()
+		f.Close()
+		return p
+	}
+	bad := mk("plugin.zip", map[string]string{"plugin/readme.txt": "hi", "plugin/x.php": "<?php @eval($_POST['a']); ?>"})
+	if d := scanZip(bad, 1000); d == nil || !strings.HasPrefix(d.Signature, "Archive.") {
+		t.Fatalf("zip with shell: %+v", d)
+	}
+	good := mk("backup.zip", map[string]string{"site/index.php": "<?php require 'wp-blog-header.php';", "site/tests/eval.php": "<?php @eval($_POST['a']);"})
+	if d := scanZip(good, 1000); d != nil {
+		t.Fatalf("clean zip flagged: %+v", d)
 	}
 }

@@ -17,6 +17,7 @@ interface Config {
   xmartguard: { enabled: boolean };
   crs: { enabled: boolean; version: string; paranoia: number; inbound_threshold: number; outbound_threshold: number };
   vendors: Vendor[];
+  remote: { id: string; name: string; key: string; url: string; enabled: boolean }[];
   custom: { enabled: boolean; rules: string };
 }
 interface Preset {
@@ -276,6 +277,46 @@ export default function WafRuleSets() {
             </div>
           )}
           <p className="text-xs text-slate-500">Vendors are a cPanel/WHM feature; other servers report them as not supported. Only the account owner can add a vendor that is not in the list.</p>
+        </div>
+      </Card>
+
+      <Card
+        title="Remote rule feeds (SecRemoteRules)"
+        desc="For servers without WHM vendors (LiteSpeed, plain Apache): ModSecurity downloads the rules itself with your license key. Malware.Expert gives the key and URL with your subscription."
+      >
+        <div className="mt-3 space-y-3">
+          {(cfg.remote ?? []).length === 0 && <div className="text-sm text-slate-400">No remote feeds.</div>}
+          {(cfg.remote ?? []).map((r, i) => {
+            const upd = (x: Partial<Config['remote'][number]>) => set({ ...cfg, remote: cfg.remote.map((y, j) => (j === i ? { ...y, ...x } : y)) });
+            return (
+              <div key={r.id} className="rounded-xl border border-slate-200 p-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <input className="input w-full font-medium sm:w-64" value={r.name} disabled={!isAdmin} onChange={(e) => upd({ name: e.target.value })} />
+                  <div className="ml-auto flex items-center gap-2">
+                    <Toggle on={r.enabled} disabled={!isAdmin} onChange={(on) => upd({ enabled: on })} />
+                    {isAdmin && (
+                      <button className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-red-600 hover:bg-red-50" title="Remove" onClick={() => set({ ...cfg, remote: cfg.remote.filter((_, j) => j !== i) })}>
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                  <input className="input font-mono text-xs" placeholder="License key" value={r.key} disabled={!isAdmin} onChange={(e) => upd({ key: e.target.value.trim() })} />
+                  <input className="input font-mono text-xs" placeholder="https://…/rules URL" value={r.url} disabled={!isAdmin} onChange={(e) => upd({ url: e.target.value.trim() })} />
+                </div>
+              </div>
+            );
+          })}
+          {isAdmin && (
+            <button
+              className="btn-outline"
+              onClick={() => set({ ...cfg, remote: [...(cfg.remote ?? []), { id: `feed${(cfg.remote ?? []).length + 1}`, name: 'Malware.Expert', key: '', url: '', enabled: true }] })}
+            >
+              <Plus className="h-4 w-4" /> Add remote feed
+            </button>
+          )}
+          <p className="text-xs text-slate-500">The license key is shown masked here and sent only to your servers. Only the account owner can add a feed.</p>
         </div>
       </Card>
 

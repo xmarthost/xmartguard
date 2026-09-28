@@ -313,6 +313,12 @@ var columnMigrations = []string{
 	`ALTER TABLE scans ADD COLUMN current TEXT NOT NULL DEFAULT ''`,
 	// WAF hits: what the rule matched ("justification"), HTTP version.
 	`ALTER TABLE waf_events ADD COLUMN detail TEXT NOT NULL DEFAULT ''`,
+	// DB scanner: which column matched, the kind of injection, the matching
+	// text and when the row was first seen infected.
+	`ALTER TABLE db_findings ADD COLUMN column_name TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE db_findings ADD COLUMN category TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE db_findings ADD COLUMN snippet TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE db_findings ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0`,
 }
 
 // Now is the clock used for timestamps (overridable in tests).

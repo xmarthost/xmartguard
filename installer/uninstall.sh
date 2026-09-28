@@ -56,17 +56,19 @@ safe_path() {
     /var/log/xmartguard|/var/log/xmartguard/*) return 0 ;;
     /usr/local/bin/xmartguard|/usr/local/bin/xmartguard-agent|/usr/local/bin/xgcli) return 0 ;;
     /etc/systemd/system/xmartguard-agent.service) return 0 ;;
+    /etc/sysctl.d/xmartguard.conf) return 0 ;;
   esac
   return 1
 }
 
-FILES=(); DIRS=(); UNITS=()
+FILES=(); DIRS=(); UNITS=(); LINES=()
 if [ -f "$MANIFEST" ]; then
   while read -r kind path; do
     case "$kind" in
       file) FILES+=("$path") ;;
       dir)  DIRS+=("$path") ;;
       unit) UNITS+=("$path") ;;
+      line) LINES+=("$path") ;;  # "<file> <line we appended>"
     esac
   done < <(grep -v '^#' "$MANIFEST")
   # Created by the agent itself on upgrades from before 0.6.
@@ -110,6 +112,15 @@ for u in "${UNITS[@]}"; do
 done
 run systemctl daemon-reload || true
 run systemctl reset-failed "$UNIT_NAME" >/dev/null 2>&1 || true
+
+# Lines appended to other software's files (CSF process ignore list).
+for l in "${LINES[@]}"; do
+  f=${l%% *}; text=${l#* }
+  case "$f" in /etc/csf/csf.pignore) ;; *) warn "skipping unexpected file $f"; continue ;; esac
+  if [ -f "$f" ] && grep -qxF "$text" "$f"; then
+    if [ "$DRY" -eq 1 ]; then echo "  [dry-run] remove '$text' from $f"; else grep -vxF "$text" "$f" >"$f.xg" && cat "$f.xg" >"$f" && rm -f "$f.xg"; fi
+  fi
+done
 
 # 3. Remove files, then directories (deepest first).
 for f in "${FILES[@]}"; do

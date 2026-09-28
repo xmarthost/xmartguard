@@ -309,4 +309,15 @@ CREATE TABLE waf_server_status (
 );
 `,
   },
+  {
+    version: '007_appearance',
+    sql: `
+-- Portal look chosen by an administrator, the same for every user.
+CREATE TABLE account_appearance (
+  account_id  uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  appearance  jsonb NOT NULL,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

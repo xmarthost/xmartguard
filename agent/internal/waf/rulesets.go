@@ -30,7 +30,10 @@ type RuleSets struct {
 		OutboundThreshold int    `json:"outbound_threshold"`
 	} `json:"crs"`
 	Vendors []Vendor `json:"vendors"`
-	Custom  struct {
+	// Remote rule feeds loaded with SecRemoteRules (e.g. Malware.Expert
+	// with your own license key), for servers without WHM vendors.
+	Remote []RemoteRules `json:"remote"`
+	Custom struct {
 		Enabled bool   `json:"enabled"`
 		Rules   string `json:"rules"`
 	} `json:"custom"`
@@ -44,6 +47,20 @@ type Vendor struct {
 	URL     string `json:"url"`
 	Enabled bool   `json:"enabled"`
 }
+
+// RemoteRules is a rule feed ModSecurity downloads itself.
+type RemoteRules struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Key     string `json:"key"`
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"`
+}
+
+var (
+	reRemoteKey = regexp.MustCompile(`^[A-Za-z0-9_.:-]{4,200}$`)
+	reRemoteURL = regexp.MustCompile(`^https://[^\s"'<>\\]+$`)
+)
 
 // RuleSetState is how one rule set is doing on this server.
 type RuleSetState struct {
@@ -190,6 +207,25 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		crs.State, crs.Detail = "active", fmt.Sprintf("paranoia level %d, anomaly threshold %d", pl, in)
 	}
 	states = append(states, crs)
+
+	first := true
+	for _, r := range rs.Remote {
+		st := RuleSetState{ID: "remote:" + r.ID, Name: r.Name}
+		switch {
+		case !r.Enabled:
+			st.State = "off"
+		case !reRemoteKey.MatchString(r.Key) || !reRemoteURL.MatchString(r.URL):
+			st.State, st.Detail = "error", "invalid license key or URL"
+		default:
+			if first {
+				inc.WriteString("\n# Remote rule feeds (downloaded by ModSecurity at start)\nSecRemoteRulesFailAction Warn\n")
+				first = false
+			}
+			fmt.Fprintf(&inc, "SecRemoteRules \"%s\" \"%s\"\n", r.Key, r.URL)
+			st.State, st.Detail = "active", "loaded by ModSecurity from "+r.URL
+		}
+		states = append(states, st)
+	}
 
 	custom := RuleSetState{ID: "custom", Name: "Custom rules"}
 	switch {

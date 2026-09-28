@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Download, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Sparkles, Square, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { bytes } from '../format';
-import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
+import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Badge, Modal, Pager, agentCall, fmtTime, useAction, useAgent, useToast } from '../components/controls';
 import { useApi } from '../hooks';
 import type { Server } from '../api';
@@ -183,7 +183,7 @@ export function ManualScans() {
       <div className="card overflow-x-auto p-5">
         {scans.error && <ErrorBox message={scans.error} />}
         {scans.loading && !scans.data ? (
-          <PageLoader />
+          <SectionLoader />
         ) : !scans.data?.scans.length ? (
           <Empty text="No scans yet" />
         ) : (
@@ -376,7 +376,7 @@ export function ScannerLogs() {
       <div className="card overflow-x-auto p-5">
         {list.error && <ErrorBox message={list.error} />}
         {list.loading && !list.data ? (
-          <PageLoader />
+          <SectionLoader />
         ) : rows.length === 0 ? (
           <Empty text="No detections — this server looks clean" />
         ) : (
@@ -598,7 +598,7 @@ function FileViewer({ serverId, finding, onClose }: { serverId: string; finding:
         </div>
       )}
       {err && <ErrorBox message={err} />}
-      {!data && !err && <PageLoader />}
+      {!data && !err && <SectionLoader />}
       {data?.binary && <Empty text="Binary file: it cannot be shown as text." />}
       {data && !data.binary && (
         <div className="max-h-[65vh] overflow-auto rounded-lg border border-slate-200 bg-slate-950 text-[12px] leading-5 text-slate-100">

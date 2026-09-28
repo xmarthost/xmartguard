@@ -275,10 +275,14 @@ func (m *Manager) scanDB(ctx context.Context, s Site) int {
 	for _, f := range found {
 		key := f.Table + "\x00" + f.Row + "\x00" + f.Signature
 		// Archived findings stay archived (the admin has seen them).
-		_, err := m.DB.Exec(`INSERT INTO db_findings (at, site_path, user, db_name, tbl, row_ref, signature, status) VALUES (?,?,?,?,?,?,?,'detected')
+		now := store.Now()
+		_, err := m.DB.Exec(`INSERT INTO db_findings (at, site_path, user, db_name, tbl, row_ref, signature, status, column_name, category, snippet, first_seen)
+			VALUES (?,?,?,?,?,?,?,'detected',?,?,?,?)
 			ON CONFLICT(site_path, tbl, row_ref, signature) DO UPDATE SET at = excluded.at,
+				column_name = excluded.column_name, category = excluded.category, snippet = excluded.snippet,
+				first_seen = CASE WHEN db_findings.first_seen = 0 THEN excluded.first_seen ELSE db_findings.first_seen END,
 				status = CASE WHEN db_findings.status = 'archived' THEN 'archived' ELSE 'detected' END`,
-			store.Now(), s.Path, s.User, c.Name, f.Table, f.Row, f.Signature)
+			now, s.Path, s.User, c.Name, f.Table, f.Row, f.Signature, f.Column, f.Category, f.Snippet, now)
 		if err == nil && m.OnFinding != nil && !known[key] {
 			m.OnFinding(s, f)
 		}
@@ -389,6 +393,10 @@ type DBRow struct {
 	Row       string `json:"row"`
 	Signature string `json:"signature"`
 	Status    string `json:"status"`
+	Column    string `json:"column"`
+	Category  string `json:"category"`
+	Snippet   string `json:"snippet"`
+	FirstSeen int64  `json:"first_seen"`
 }
 
 // DBFindings lists database infections.
@@ -398,9 +406,9 @@ func (m *Manager) DBFindings(status, q string, limit, offset int) ([]DBRow, int,
 		where, args = append(where, "status = ?"), append(args, status)
 	}
 	if q != "" {
-		where, args = append(where, "(db_name LIKE ? OR tbl LIKE ? OR signature LIKE ? OR user LIKE ?)"), append(args, "%"+q+"%", "%"+q+"%", "%"+q+"%", "%"+q+"%")
+		where, args = append(where, "(db_name LIKE ? OR tbl LIKE ? OR signature LIKE ? OR user LIKE ? OR snippet LIKE ?)"), append(args, "%"+q+"%", "%"+q+"%", "%"+q+"%", "%"+q+"%", "%"+q+"%")
 	}
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 || limit > 1000 {
 		limit = 25
 	}
 	cond := strings.Join(where, " AND ")
@@ -408,7 +416,7 @@ func (m *Manager) DBFindings(status, q string, limit, offset int) ([]DBRow, int,
 	if err := m.DB.QueryRow(`SELECT count(*) FROM db_findings WHERE `+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := m.DB.Query(`SELECT id, at, site_path, user, db_name, tbl, row_ref, signature, status FROM db_findings WHERE `+cond+
+	rows, err := m.DB.Query(`SELECT id, at, site_path, user, db_name, tbl, row_ref, signature, status, column_name, category, snippet, first_seen FROM db_findings WHERE `+cond+
 		` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -417,7 +425,7 @@ func (m *Manager) DBFindings(status, q string, limit, offset int) ([]DBRow, int,
 	out := []DBRow{}
 	for rows.Next() {
 		var r DBRow
-		if err := rows.Scan(&r.ID, &r.At, &r.SitePath, &r.User, &r.Database, &r.Table, &r.Row, &r.Signature, &r.Status); err != nil {
+		if err := rows.Scan(&r.ID, &r.At, &r.SitePath, &r.User, &r.Database, &r.Table, &r.Row, &r.Signature, &r.Status, &r.Column, &r.Category, &r.Snippet, &r.FirstSeen); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)

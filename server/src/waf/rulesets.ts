@@ -51,6 +51,14 @@ const Vendor = z.object({
   enabled: z.boolean(),
 });
 
+const Remote = z.object({
+  id: z.string().regex(/^[a-z0-9_-]{2,40}$/),
+  name: z.string().trim().min(1).max(80),
+  key: z.string().trim().regex(/^[A-Za-z0-9_.:-]{4,200}$/, 'license key: letters, digits and . _ : - only'),
+  url: z.string().trim().max(500).regex(/^https:\/\/[^\s"'<>\\]+$/, 'rules URL must be an https:// link'),
+  enabled: z.boolean(),
+});
+
 export const RuleSetsConfig = z.object({
   xmartguard: z.object({ enabled: z.boolean() }),
   crs: z.object({
@@ -61,6 +69,7 @@ export const RuleSetsConfig = z.object({
     outbound_threshold: z.number().int().min(2).max(1000),
   }),
   vendors: z.array(Vendor).max(10),
+  remote: z.array(Remote).max(10).default([]),
   custom: z.object({ enabled: z.boolean(), rules: z.string().max(200_000) }),
 });
 export type RuleSetsConfig = z.infer<typeof RuleSetsConfig>;
@@ -69,6 +78,7 @@ export const DEFAULT_CONFIG: RuleSetsConfig = {
   xmartguard: { enabled: true },
   crs: { enabled: true, version: 'latest', paranoia: 1, inbound_threshold: 5, outbound_threshold: 4 },
   vendors: [],
+  remote: [],
   custom: { enabled: false, rules: '' },
 };
 

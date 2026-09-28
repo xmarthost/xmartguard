@@ -30,6 +30,9 @@ type Target struct {
 	Plain  bool   `json:"plain"`
 	Hooked bool   `json:"hooked"`
 	Hint   string `json:"hint"`
+	// HookFile, when set, gets an "Include IncludeFile" line (cPanel's
+	// modsec2.user.conf, where cPGuard hooks its rules in too).
+	HookFile string `json:"hook_file,omitempty"`
 
 	configTest []string // command that validates the config
 	reload     []string // command that reloads the web server
@@ -104,9 +107,11 @@ func Detect() Target {
 		t := Target{
 			Name:   "cpanel",
 			ModSec: hasModule(httpd) || exists("/etc/apache2/conf.d/modsec/modsec2.conf") || exists("/etc/apache2/conf.d/modsec2.user.conf"),
-			// httpd.conf loads every conf.d/*.conf (LiteSpeed reads it too),
-			// but from conf.d/includes/ only cPanel's own named files.
+			// Hooked in through WHM's ModSecurity user rules file, which
+			// modsec2.conf includes inside its IfModule block (Apache and
+			// LiteSpeed read it).
 			IncludeFile: CPanelInclude,
+			HookFile:    CPanelHookFile,
 			WebServer:   "Apache (cPanel EA4)",
 			ErrorLogs:   []string{"/etc/apache2/logs/error_log", "/usr/local/apache/logs/error_log"},
 			configTest:  []string{firstBin("/scripts/restartsrv_httpd"), "--check"},
@@ -159,12 +164,46 @@ func Detect() Target {
 	return Target{Name: "", WebServer: "unknown"}
 }
 
-// CPanelInclude is where the rules are hooked in on cPanel; the name sorts
-// after modsec2.conf, which loads the module.
-const CPanelInclude = "/etc/apache2/conf.d/zz-xmartguard-waf.conf"
+// On cPanel the agent's ModSecurity file is included from WHM's user rules
+// file, like other security products do.
+const (
+	CPanelInclude  = "/etc/xmartguard/waf/xmartguard_modsec.conf"
+	CPanelHookFile = "/etc/apache2/conf.d/modsec/modsec2.user.conf"
+)
 
-// oldCPanelInclude was used before 0.7.7 (never loaded by httpd.conf).
-const oldCPanelInclude = "/etc/apache2/conf.d/includes/xmartguard-waf.conf"
+// Earlier hook files: conf.d/includes/ (before 0.7.7, never loaded) and
+// conf.d/zz-xmartguard-waf.conf (0.7.7-0.7.8).
+var oldCPanelIncludes = []string{"/etc/apache2/conf.d/includes/xmartguard-waf.conf", "/etc/apache2/conf.d/zz-xmartguard-waf.conf"}
+
+func hookLine(include string) string { return `Include "` + include + `"` }
+
+// withHook returns content with exactly one Include line for include.
+func withHook(content, include string) string {
+	var out []string
+	for _, l := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		if strings.Contains(l, include) || strings.Contains(l, "xmartguard-waf.conf") {
+			continue
+		}
+		out = append(out, l)
+	}
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
+	}
+	out = append(out, hookLine(include))
+	return strings.TrimLeft(strings.Join(out, "\n"), "\n") + "\n"
+}
+
+// withoutHook removes the agent's Include line.
+func withoutHook(content, include string) string {
+	var out []string
+	for _, l := range strings.Split(content, "\n") {
+		if strings.Contains(l, include) {
+			continue
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
+}
 
 // InspectScript writes the small PHP approver ModSecurity calls for uploads.
 // It returns "" when it cannot be created; the caller then omits the upload rule.
@@ -209,7 +248,9 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 		return err
 	}
 	if t.Name == "cpanel" {
-		_ = os.Remove(oldCPanelInclude)
+		for _, o := range oldCPanelIncludes {
+			_ = os.Remove(o)
+		}
 	}
 	engine := ""
 	if t.Engine == "" {
@@ -227,6 +268,10 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 	// Every file the web server loads, with its previous content for a
 	// rollback. Nothing changed: no test, no reload.
 	files := map[string]string{rulesFile: rules, t.IncludeFile: include}
+	if t.HookFile != "" {
+		cur, _ := os.ReadFile(t.HookFile)
+		files[t.HookFile] = withHook(string(cur), t.IncludeFile)
+	}
 	for name, body := range botFiles {
 		files[filepath.Join(dir, name)] = body
 	}
@@ -293,7 +338,9 @@ func (m *Manager) uninstall(t Target) error {
 // /etc/xmartguard, so Apache never references a missing file.
 func RemoveInclude(t Target) {
 	if t.Name == "cpanel" {
-		_ = os.Remove(oldCPanelInclude)
+		for _, o := range oldCPanelIncludes {
+			_ = os.Remove(o)
+		}
 	}
 	if t.IncludeFile == "" || !exists(t.IncludeFile) {
 		return

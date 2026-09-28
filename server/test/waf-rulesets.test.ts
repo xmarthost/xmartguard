@@ -156,3 +156,18 @@ describe('WAF rule sets', () => {
     expect((await ops.req('PUT', '/api/waf/rulesets', custom)).status).toBe(200);
   });
 });
+
+describe('remote rule feeds', () => {
+  it('stores the license key, masks it in the portal and keeps it on save', async () => {
+    const remote = [{ id: 'malware_expert', name: 'Malware.Expert', key: 'LICENSE-KEY-9876', url: 'https://rules.example/modsec.conf', enabled: true }];
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote }))).status).toBe(200);
+    const g = await admin.req('GET', '/api/waf/rulesets');
+    expect(g.body.config.remote[0].key).toBe('********9876');
+    // Saving the masked value keeps the real key.
+    expect((await admin.req('PUT', '/api/waf/rulesets', { ...g.body.config })).status).toBe(200);
+    const a = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
+    expect(a.body.config.remote[0].key).toBe('LICENSE-KEY-9876');
+    const bad = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...remote[0], key: 'x" exec' }] }));
+    expect(bad.status).toBe(400);
+  });
+});

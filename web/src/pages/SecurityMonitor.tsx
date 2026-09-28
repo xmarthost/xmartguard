@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Activity, Clock, ShieldAlert } from 'lucide-react';
 import { can, useAuth } from '../auth';
-import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
+import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Pager, Tabs, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
 import { useServerName } from './Scanner';
 
@@ -54,7 +54,7 @@ export default function SecurityMonitor() {
         {ev.error && !ev.data ? (
           <div className="p-4"><ErrorBox message={ev.error} /></div>
         ) : !ev.data ? (
-          <PageLoader />
+          <SectionLoader />
         ) : ev.data.events.length === 0 ? (
           <Empty text="No alerts. Suspicious processes and cron jobs appear here." />
         ) : (

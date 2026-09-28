@@ -90,3 +90,81 @@ body {
     }
   }
 }
+
+/* Page loader: a light sweeps through the logo, left to right and back. */
+.xg-loader-word {
+  background: linear-gradient(100deg, var(--color-navy-900) 0%, var(--color-navy-900) 38%, #3b82f6 50%, var(--color-navy-900) 62%, var(--color-navy-900) 100%);
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: xg-sweep 0.9s ease-in-out infinite alternate;
+}
+.xg-loader-sweep {
+  background: linear-gradient(100deg, transparent 0%, transparent 38%, rgba(96, 165, 250, 0.85) 50%, transparent 62%, transparent 100%);
+  background-size: 260% 100%;
+  -webkit-mask: url(/favicon.svg) center / contain no-repeat;
+  mask: url(/favicon.svg) center / contain no-repeat;
+  mix-blend-mode: screen;
+  animation: xg-sweep 0.9s ease-in-out infinite alternate;
+}
+.xg-loader {
+  animation: xg-loader-in 0.25s ease-out both;
+}
+@keyframes xg-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+@keyframes xg-loader-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .xg-loader-word, .xg-loader-sweep { animation: none; }
+}
+
+/* ---- Dark themes (Appearance): cards, text and borders switch; the navy
+   scale and page colour come from the theme. */
+html[data-mode="dark"] {
+  --xg-card: #111827;
+  --xg-card-2: #1a2233;
+  --xg-line: #273145;
+  --xg-text: #d6dce8;
+  --xg-muted: #94a3b8;
+  --xg-head: #f1f5f9;
+}
+html[data-mode="dark"] body { color: var(--xg-text); }
+html[data-mode="dark"] .bg-white,
+html[data-mode="dark"] .card,
+html[data-mode="dark"] .input { background-color: var(--xg-card); }
+html[data-mode="dark"] .bg-slate-50,
+html[data-mode="dark"] .bg-slate-100,
+html[data-mode="dark"] .hover\:bg-slate-50:hover,
+html[data-mode="dark"] .bg-page { background-color: var(--xg-card-2); }
+html[data-mode="dark"] .bg-white\/95 { background-color: color-mix(in srgb, var(--xg-card) 95%, transparent); }
+html[data-mode="dark"] .text-navy-900,
+html[data-mode="dark"] .text-navy-800,
+html[data-mode="dark"] .text-navy-700,
+html[data-mode="dark"] .text-slate-900,
+html[data-mode="dark"] .text-slate-800,
+html[data-mode="dark"] .h-title,
+html[data-mode="dark"] .label,
+html[data-mode="dark"] h1,
+html[data-mode="dark"] h2,
+html[data-mode="dark"] h3 { color: var(--xg-head); }
+html[data-mode="dark"] .text-slate-700,
+html[data-mode="dark"] .text-slate-600 { color: var(--xg-text); }
+html[data-mode="dark"] .text-slate-500,
+html[data-mode="dark"] .text-slate-400 { color: var(--xg-muted); }
+html[data-mode="dark"] .border-slate-100,
+html[data-mode="dark"] .border-slate-200,
+html[data-mode="dark"] .border-slate-300,
+html[data-mode="dark"] .divide-slate-100 > * + *,
+html[data-mode="dark"] .border-b,
+html[data-mode="dark"] .input { border-color: var(--xg-line); }
+html[data-mode="dark"] .btn-outline { color: var(--xg-head); border-color: var(--xg-line); }
+html[data-mode="dark"] .btn-outline:hover { background-color: var(--xg-card-2); }
+html[data-mode="dark"] .shadow-\[0_1px_0_\#e2e8f0\] { box-shadow: 0 1px 0 var(--xg-line); }
+html[data-mode="dark"] .xg-loader-word {
+  background-image: linear-gradient(100deg, var(--xg-head) 0%, var(--xg-head) 38%, #60a5fa 50%, var(--xg-head) 62%, var(--xg-head) 100%);
+}

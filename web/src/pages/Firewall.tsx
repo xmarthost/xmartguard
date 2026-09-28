@@ -4,7 +4,7 @@ import { CheckCircle2, Download, Globe, RefreshCw, Search, Settings as Gear, Shi
 import { downloadCSV, useCountries } from '../components/geo';
 import { flag } from '../components/WorldMap';
 import { can, useAuth } from '../auth';
-import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
+import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
 import { useServerName } from './Scanner';
 
@@ -111,7 +111,7 @@ function ListModal({ serverId, kind, title, onClose }: { serverId: string; kind:
   return (
     <Modal title={title} onClose={onClose}>
       {list.loading && !list.data ? (
-        <PageLoader />
+        <SectionLoader />
       ) : !list.data?.rules.length ? (
         <Empty text="The list is empty" />
       ) : (
@@ -676,7 +676,7 @@ export function FirewallLogs() {
       <div className="card overflow-x-auto p-0">
         {list.error && <div className="p-4"><ErrorBox message={list.error} /></div>}
         {list.loading && !list.data ? (
-          <PageLoader />
+          <SectionLoader />
         ) : !list.data?.events.length ? (
           <Empty text="No blocked addresses yet" />
         ) : (

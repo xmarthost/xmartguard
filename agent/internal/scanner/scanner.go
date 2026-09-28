@@ -398,6 +398,9 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	if ScriptExts[ext] {
 		return nil, nil // larger than the size limit
 	}
+	if ext == ".zip" {
+		return scanZip(path, info.Size()), nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

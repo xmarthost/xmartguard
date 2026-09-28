@@ -2,8 +2,8 @@ import { Fragment, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Archive, ChevronDown, ChevronRight, Database, Download, RefreshCw, Search } from 'lucide-react';
 import { can, useAuth } from '../auth';
-import { Breadcrumb, Empty, ErrorBox, PageLoader, StatCard } from '../components/ui';
-import { Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
+import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader, StatCard } from '../components/ui';
+import { Modal, Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
 import { useServerName } from './Scanner';
 
 interface Component {
@@ -126,7 +126,7 @@ export function CMSThreats() {
 
       <div className="card overflow-x-auto p-0">
         {!list.data ? (
-          <PageLoader />
+          <SectionLoader />
         ) : list.data.sites.length === 0 ? (
           <Empty text={running ? 'Scanning…' : 'No CMS installations found yet. Run a scan.'} />
         ) : (
@@ -305,6 +305,30 @@ interface DBRow {
   row: string;
   signature: string;
   status: string;
+  column?: string;
+  category?: string;
+  snippet?: string;
+  first_seen?: number;
+}
+
+const DB_CATEGORY: Record<string, string> = {
+  script: 'Injected script',
+  iframe: 'Hidden iframe',
+  php: 'PHP code in the database',
+  siteurl: 'Site URL changed',
+};
+
+function dbCSV(rows: DBRow[]): string {
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const head = ['database', 'table', 'key', 'column', 'category', 'signature', 'snippet', 'user', 'site', 'status', 'first_seen', 'last_seen'];
+  return [
+    head.join(','),
+    ...rows.map((r) =>
+      [r.database, r.table, r.row, r.column, r.category, r.signature, r.snippet, r.user, r.site_path, r.status, r.first_seen ? new Date(r.first_seen * 1000).toISOString() : '', new Date(r.at * 1000).toISOString()]
+        .map(esc)
+        .join(','),
+    ),
+  ].join('\n');
 }
 
 export function DBScanner() {
@@ -315,18 +339,32 @@ export function DBScanner() {
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
   const [offset, setOffset] = useState(0);
+  const [limit, setLimit] = useState(25);
   const [sel, setSel] = useState<number[]>([]);
-  const limit = 25;
+  const [detail, setDetail] = useState<DBRow | null>(null);
+  const [exporting, setExporting] = useState(false);
   const list = useAgent<{ findings: DBRow[]; total: number }>(id, 'db.findings', { status, q: query, limit, offset });
   const { run, busy } = useAction();
+  const rows = list.data?.findings ?? [];
 
-  const csv = () => {
-    const rows = list.data?.findings ?? [];
-    const text = ['database,table,row,signature,user,site,date', ...rows.map((r) => [r.database, r.table, r.row, r.signature, r.user, r.site_path, new Date(r.at * 1000).toISOString()].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
-    a.download = 'db-scanner.csv';
-    a.click();
+  const exportAll = async () => {
+    setExporting(true);
+    try {
+      const all: DBRow[] = [];
+      for (let off = 0; off < (list.data?.total ?? 0); off += 1000) {
+        const r = await agentCall<{ findings: DBRow[] }>(id!, 'db.findings', { status, q: query, limit: 1000, offset: off });
+        all.push(...r.findings);
+        if (r.findings.length < 1000) break;
+      }
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([dbCSV(all)], { type: 'text/csv' }));
+      a.download = `db-scanner-${host}-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+    } catch (e: any) {
+      alert(e.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -335,10 +373,13 @@ export function DBScanner() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="h-title">DB Scanner Logs</h1>
-          <p className="text-sm text-slate-500">WordPress databases are scanned for injected scripts, hidden iframes and PHP code during CMS scans.</p>
+          <p className="text-sm text-slate-500">
+            WordPress databases (options, posts, post meta) are scanned daily for injected scripts, hidden iframes, PHP code and a changed site URL.
+            Click a row to see what was found.
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select className="input w-36" value={status} onChange={(e) => (setOffset(0), setStatus(e.target.value))}>
+          <select className="input w-36" value={status} onChange={(e) => (setOffset(0), setSel([]), setStatus(e.target.value))}>
             <option value="detected">Detected</option>
             <option value="cleaned">Cleaned</option>
             <option value="archived">Archived</option>
@@ -357,7 +398,7 @@ export function DBScanner() {
               <Search className="h-4 w-4" />
             </button>
           </form>
-          <button className="btn-outline" title="Download CSV" onClick={csv} disabled={!list.data?.findings.length}>
+          <button className="btn-outline" title="Export all matching entries (CSV)" onClick={exportAll} disabled={!list.data?.total || exporting}>
             <Download className="h-4 w-4" />
           </button>
           {can(user, 'operator') && (
@@ -376,54 +417,114 @@ export function DBScanner() {
           )}
         </div>
       </div>
-      <div className="card overflow-x-auto p-0">
+      <div className="card overflow-hidden p-0">
         {!list.data ? (
           list.error ? (
             <ErrorBox message={list.error} />
           ) : (
-            <PageLoader />
+            <SectionLoader />
           )
-        ) : list.data.findings.length === 0 ? (
+        ) : rows.length === 0 ? (
           <Empty text="No records to display" />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
-              <tr>
-                <th className="px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={sel.length === list.data.findings.length}
-                    onChange={(e) => setSel(e.target.checked ? list.data!.findings.map((f) => f.id) : [])}
-                  />
-                </th>
-                <th className="px-2">Database</th>
-                <th className="px-2">Table</th>
-                <th className="px-2">Signature Name</th>
-                <th className="px-2">User</th>
-                <th className="px-2">Date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {list.data.findings.map((f) => (
-                <tr key={f.id}>
-                  <td className="px-4 py-3">
-                    <input type="checkbox" checked={sel.includes(f.id)} onChange={(e) => setSel(e.target.checked ? [...sel, f.id] : sel.filter((x) => x !== f.id))} />
-                  </td>
-                  <td className="px-2 font-mono text-xs">{f.database}</td>
-                  <td className="px-2 font-mono text-xs">
-                    {f.table}
-                    <div className="text-slate-400">{f.row}</div>
-                  </td>
-                  <td className="px-2 text-red-700">{f.signature}</td>
-                  <td className="px-2">{f.user}</td>
-                  <td className="px-2 text-xs text-slate-500">{fmtTime(f.at)}</td>
+          <div className="max-h-[70vh] overflow-auto">
+            <table className="w-full min-w-[980px] text-sm">
+              <thead className="sticky top-0 z-10 bg-slate-50 text-left text-xs text-slate-500 uppercase shadow-[0_1px_0_#e2e8f0]">
+                <tr>
+                  <th className="w-12 px-4 py-3">
+                    <input type="checkbox" className="h-4 w-4" checked={rows.length > 0 && rows.every((r) => sel.includes(r.id))} onChange={(e) => setSel(e.target.checked ? rows.map((f) => f.id) : [])} />
+                  </th>
+                  <th className="px-2">Database / table</th>
+                  <th className="px-2">Found</th>
+                  <th className="px-2">What was found</th>
+                  <th className="px-2">Account</th>
+                  <th className="px-2">Seen</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map((f) => (
+                  <tr key={f.id} className={`cursor-pointer align-top hover:bg-slate-50 ${sel.includes(f.id) ? 'bg-sky-50/60' : ''}`} onClick={() => setDetail(f)}>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" className="h-4 w-4" checked={sel.includes(f.id)} onChange={(e) => setSel(e.target.checked ? [...sel, f.id] : sel.filter((x) => x !== f.id))} />
+                    </td>
+                    <td className="px-2 py-3 font-mono text-xs">
+                      {f.database}
+                      <div className="text-slate-500">
+                        {f.table}
+                        {f.column ? `.${f.column}` : ''}
+                      </div>
+                      <div className="text-slate-400">{f.row}</div>
+                    </td>
+                    <td className="px-2 py-3">
+                      <div className="text-red-700">{f.signature}</div>
+                      {f.category && <div className="text-xs text-slate-500">{DB_CATEGORY[f.category] ?? f.category}</div>}
+                    </td>
+                    <td className="max-w-md px-2 py-3">
+                      {f.snippet ? (
+                        <code className="line-clamp-2 block rounded bg-slate-50 px-2 py-1 text-xs break-all text-slate-700">{f.snippet}</code>
+                      ) : (
+                        <span className="text-xs text-slate-400">detected before 0.7.9 (rescan to see the code)</span>
+                      )}
+                    </td>
+                    <td className="px-2 py-3">
+                      {f.user}
+                      <div className="text-xs text-slate-400">{f.site_path}</div>
+                    </td>
+                    <td className="px-2 py-3 text-xs whitespace-nowrap text-slate-500">
+                      {f.first_seen ? <div>first {fmtTime(f.first_seen)}</div> : null}
+                      <div>last {fmtTime(f.at)}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
-      {list.data && <Pager total={list.data.total} limit={limit} offset={offset} onChange={setOffset} />}
+      {list.data && (
+        <div className="flex flex-wrap items-center justify-end gap-3 text-sm">
+          <label className="flex items-center gap-2 text-slate-500">
+            Items per page
+            <select className="input w-24" value={limit} onChange={(e) => (setOffset(0), setSel([]), setLimit(Number(e.target.value)))}>
+              {[25, 50, 100, 200].map((n) => (
+                <option key={n}>{n}</option>
+              ))}
+            </select>
+          </label>
+          <Pager total={list.data.total} limit={limit} offset={offset} onChange={(o) => (setSel([]), setOffset(o))} />
+        </div>
+      )}
+      {detail && (
+        <Modal title="Database finding" onClose={() => setDetail(null)} wide>
+          <dl className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm sm:grid-cols-[150px_minmax(0,1fr)]">
+            {(
+              [
+                ['Signature', detail.signature],
+                ['Kind', detail.category ? DB_CATEGORY[detail.category] ?? detail.category : '–'],
+                ['Database', detail.database],
+                ['Table / column', `${detail.table}${detail.column ? '.' + detail.column : ''}`],
+                ['Row', detail.row],
+                ['Account', `${detail.user} · ${detail.site_path}`],
+                ['Status', detail.status],
+                ['First seen', detail.first_seen ? fmtTime(detail.first_seen) : '–'],
+                ['Last seen', fmtTime(detail.at)],
+              ] as [string, string][]
+            ).map(([k, v]) => (
+              <Fragment key={k}>
+                <dt className="text-slate-500">{k}</dt>
+                <dd className="font-mono break-all text-navy-900">{v}</dd>
+              </Fragment>
+            ))}
+          </dl>
+          <div className="mt-4">
+            <div className="mb-1 text-sm font-medium text-navy-900">Matching content</div>
+            <pre className="max-h-72 overflow-auto rounded-lg bg-navy-950 p-3 text-xs break-all whitespace-pre-wrap text-slate-100">{detail.snippet || 'Not recorded (found before 0.7.9). It is recorded at the next DB scan.'}</pre>
+            <p className="mt-2 text-xs text-slate-500">
+              To clean it, edit the row in WordPress (or phpMyAdmin: {detail.database} » {detail.table}, {detail.row}) and remove the code above; the next scan marks it cleaned.
+            </p>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

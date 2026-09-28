@@ -30,6 +30,8 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
   app.get('/api/waf/rulesets', viewer, async (req) => {
     const acc = req.user!.accountId;
     const cur = await loadConfig(pool, acc);
+    // License keys are secrets: only the last 4 characters are shown.
+    cur.config = { ...cur.config, remote: cur.config.remote.map((r) => ({ ...r, key: '********' + r.key.slice(-4) })) };
     const servers = await pool.query(
       `SELECT s.id, s.hostname, s.control_panel, s.web_server, s.agent_version, w.version, w.status, w.updated_at
          FROM servers s LEFT JOIN waf_server_status w ON w.server_id = s.id
@@ -45,6 +47,12 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
   });
 
   app.put('/api/waf/rulesets', admin, async (req, reply) => {
+    const prev = await loadConfig(pool, req.user!.accountId);
+    // A masked key ("********1234") means "keep the stored key".
+    const body = req.body as { remote?: { id?: string; key?: string }[] } | undefined;
+    for (const r of body?.remote ?? []) {
+      if (typeof r?.key === 'string' && r.key.startsWith('********')) r.key = prev.config.remote.find((p) => p.id === r.id)?.key ?? '';
+    }
     const b = RuleSetsConfig.safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid configuration' });
     const c = b.data;
@@ -60,10 +68,14 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
     // A vendor that is not a known preset can load arbitrary rules on every
     // server: only the account owner may add one.
     const presetIds = new Set<string>(PRESET_VENDORS.filter((p) => p.id !== 'custom').map((p) => p.id));
-    const prev = await loadConfig(pool, req.user!.accountId);
     const prevUrls = new Set(prev.config.vendors.map((v) => v.url));
     if (req.user!.role !== 'owner' && c.vendors.some((v) => !presetIds.has(v.id) && !prevUrls.has(v.url))) {
       return reply.code(403).send({ error: 'only the account owner can add a custom ModSecurity vendor' });
+    }
+    // Remote rule feeds also run someone else's rules on every server.
+    const prevRemote = new Set(prev.config.remote.map((r) => r.url));
+    if (req.user!.role !== 'owner' && c.remote.some((r) => !prevRemote.has(r.url))) {
+      return reply.code(403).send({ error: 'only the account owner can add a remote rule feed' });
     }
     const { rows } = await pool.query(
       `INSERT INTO waf_rulesets (account_id, config, version, updated_by) VALUES ($1, $2, 1, $3)
@@ -85,6 +97,7 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
         xmartguard: c.xmartguard.enabled,
         crs: c.crs.enabled ? `${c.crs.version} PL${c.crs.paranoia}` : 'off',
         vendors: c.vendors.map((v) => `${v.id}:${v.enabled ? 'on' : 'off'}`),
+        remote: c.remote.map((r) => `${r.id}:${r.enabled ? 'on' : 'off'}`),
         custom: c.custom.enabled,
       },
       ip: req.ip,
@@ -119,6 +132,7 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
       xmartguard: cur.version ? c.xmartguard : undefined,
       crs: { ...c.crs, version: crsVersion ?? '' },
       vendors: c.vendors,
+      remote: c.remote,
       custom: c.custom,
     };
     const out: Record<string, unknown> = { config };

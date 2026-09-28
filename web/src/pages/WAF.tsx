@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Ban, Download, EyeOff, Search, ShieldAlert, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
-import { Breadcrumb, Empty, ErrorBox, PageLoader } from '../components/ui';
+import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
 import { useServerName } from './Scanner';
 
@@ -181,7 +181,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
               <ErrorBox message={ev.error} />
             </div>
           ) : !ev.data ? (
-            <PageLoader />
+            <SectionLoader />
           ) : rows.length === 0 ? (
             <Empty text={emptyText} />
           ) : (

@@ -169,6 +169,23 @@ record file "$CONF_DIR/agent.json"
 record file "$CONF_DIR/identity.key"
 ok "$OUT"
 
+# ---------------------------------------------------------------- kernel / CSF
+# The realtime scanner watches every account's home with inotify; keep the
+# limit across reboots.
+SYSCTL=/etc/sysctl.d/xmartguard.conf
+if [ ! -f "$SYSCTL" ]; then
+  echo "fs.inotify.max_user_watches = 10000000" >"$SYSCTL"
+  record file "$SYSCTL"
+fi
+sysctl -p "$SYSCTL" >/dev/null 2>&1 || true
+# CSF/LFD: do not alert on the agent's own process.
+if [ -f /etc/csf/csf.pignore ] && ! grep -qxF "exe:$BIN" /etc/csf/csf.pignore; then
+  echo "exe:$BIN" >>/etc/csf/csf.pignore
+  record line "/etc/csf/csf.pignore exe:$BIN"
+  command -v lfd >/dev/null 2>&1 && (service lfd restart >/dev/null 2>&1 || true)
+  ok "CSF/LFD ignores the XMart Guard agent process"
+fi
+
 # ---------------------------------------------------------------- systemd
 # The agent manages the firewall, quarantines files anywhere under /home and
 # updates itself, so it runs as root without filesystem sandboxing.

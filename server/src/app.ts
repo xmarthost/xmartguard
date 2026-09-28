@@ -26,6 +26,7 @@ import { SignatureService } from './signatures/service.js';
 import { wpcoreRoutes } from './routes/wpcore.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { wafRulesetRoutes } from './routes/waf-rulesets.js';
+import { appearanceRoutes } from './routes/appearance.js';
 import { CRSService } from './waf/rulesets.js';
 
 export interface App {
@@ -77,6 +78,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   wpcoreRoutes(app, pool, wp, sigs);
   mcpRoutes(app, pool, cfg, hub);
   wafRulesetRoutes(app, pool, hub, crs);
+  appearanceRoutes(app, pool);
 
   if (cfg.webDir && fs.existsSync(path.join(cfg.webDir, 'index.html'))) {
     await app.register(fastifyStatic, { root: cfg.webDir, wildcard: false });

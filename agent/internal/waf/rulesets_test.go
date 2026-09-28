@@ -275,3 +275,40 @@ func TestMatchDetailUnescapes(t *testing.T) {
 		t.Fatalf("%q", d)
 	}
 }
+
+func TestCPanelHookLine(t *testing.T) {
+	cur := "# user rules\nSecRule REQUEST_URI \"@contains x\" \"id:1,deny\"\nInclude /etc/cpguard/cpguard_modsec100.conf\n"
+	a := withHook(cur, CPanelInclude)
+	b := withHook(a, CPanelInclude)
+	if a != b || strings.Count(a, CPanelInclude) != 1 || !strings.Contains(a, "cpguard_modsec100.conf") || !strings.Contains(a, `id:1`) {
+		t.Fatalf("hook:\n%s", a)
+	}
+	if r := withoutHook(a, CPanelInclude); strings.Contains(r, "xmartguard") || !strings.Contains(r, "cpguard_modsec100.conf") {
+		t.Fatalf("unhook:\n%s", r)
+	}
+	// An older conf.d hook line is replaced.
+	if c := withHook("Include \"/etc/apache2/conf.d/zz-xmartguard-waf.conf\"\n", CPanelInclude); strings.Contains(c, "zz-xmartguard") {
+		t.Fatal(c)
+	}
+}
+
+func TestRemoteRules(t *testing.T) {
+	m := &Manager{RulesDir: t.TempDir()}
+	var rs RuleSets
+	rs.Remote = []RemoteRules{
+		{ID: "me", Name: "Malware.Expert", Key: "ABC-123", URL: "https://rules.example/modsec/rules.conf", Enabled: true},
+		{ID: "bad", Name: "Bad", Key: "k\" exec", URL: "https://x/y", Enabled: true},
+	}
+	m.SetRuleSets(rs)
+	inc, _, states := m.extras(Target{Name: "rhel"})
+	if !strings.Contains(inc, `SecRemoteRules "ABC-123" "https://rules.example/modsec/rules.conf"`) || !strings.Contains(inc, "SecRemoteRulesFailAction Warn") || strings.Contains(inc, "exec") {
+		t.Fatal(inc)
+	}
+	got := map[string]string{}
+	for _, s := range states {
+		got[s.ID] = s.State
+	}
+	if got["remote:me"] != "active" || got["remote:bad"] != "error" {
+		t.Fatalf("%+v", states)
+	}
+}

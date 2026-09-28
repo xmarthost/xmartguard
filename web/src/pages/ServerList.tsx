@@ -5,7 +5,7 @@ import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ago, panelName, pct } from '../format';
-import { Empty, ErrorBox, PageLoader, StatusDot } from '../components/ui';
+import { Empty, ErrorBox, PageLoader, SectionLoader, StatusDot } from '../components/ui';
 import { compact } from '../components/AttackOverview';
 
 function TagEditor({ server, onSaved }: { server: Server; onSaved: () => void }) {
@@ -161,7 +161,7 @@ export default function ServerList() {
       </div>
       {error && <ErrorBox message={error} />}
       {loading && !data ? (
-        <PageLoader />
+        <SectionLoader />
       ) : (
         <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           {data?.servers.map((s) => <ServerCard key={s.id} s={s} onChange={reload} />)}

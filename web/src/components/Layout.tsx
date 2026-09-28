@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
   BookOpen,
-  Activity, BrainCircuit, Cable, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
+  Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
@@ -60,9 +60,13 @@ function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }
   // passes over it on the way to something near the left edge (a checkbox).
   const [expanded, setExpanded] = useState(false);
   const timer = useRef<number | undefined>(undefined);
-  const enter = () => {
+  // Expand only after the pointer has rested 450 ms well inside the rail;
+  // every movement restarts the wait, and the right edge (next to page
+  // checkboxes) never expands it.
+  const enter = (e: React.MouseEvent) => {
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setExpanded(true), 350);
+    if (expanded || e.clientX > 64) return;
+    timer.current = window.setTimeout(() => setExpanded(true), 450);
   };
   const leave = () => {
     window.clearTimeout(timer.current);
@@ -123,6 +127,7 @@ function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }
         expanded ? 'w-60 shadow-2xl' : 'w-20'
       }`}
       onMouseEnter={enter}
+      onMouseMove={enter}
       onMouseLeave={leave}
     >
       <nav className="flex-1">{entries.map(item)}</nav>
@@ -275,6 +280,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         { label: 'AI Scanner', icon: <BrainCircuit />, to: '/ai' },
         { label: 'WAF Rule Sets', icon: <ShieldHalf />, to: '/waf-rulesets' },
         { label: 'AI Connector', icon: <Cable />, to: '/ai-connector' },
+        { label: 'Appearance', icon: <Palette />, to: '/appearance' },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
       ];
   const bottom: RailEntry[] = [

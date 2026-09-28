@@ -5,7 +5,7 @@ import {
 import { api } from '../api';
 import { useApi } from '../hooks';
 import { useAuth, can } from '../auth';
-import { Breadcrumb, Empty, ErrorBox, PageLoader, StatCard } from '../components/ui';
+import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader, StatCard } from '../components/ui';
 import { Card, Modal, Pager, Toggle, useAction } from '../components/controls';
 import { ago, bytes } from '../format';
 
@@ -523,7 +523,7 @@ function KnowledgeBase({ admin, onChange }: { admin: boolean; onChange: () => vo
       </div>
       {kb.error && <ErrorBox message={kb.error} />}
       {!kb.data ? (
-        <PageLoader />
+        <SectionLoader />
       ) : kb.data.entries.length === 0 ? (
         <Empty text="Nothing yet. Verdicts appear here as servers send files to the AI." />
       ) : (
@@ -622,7 +622,7 @@ function WPCoreCard({ admin }: { admin: boolean }) {
       }
     >
       {!d ? (
-        <PageLoader />
+        <SectionLoader />
       ) : (
         <div className="space-y-1 text-sm text-slate-600">
           <div>
@@ -667,7 +667,7 @@ function SignaturesCard({ admin }: { admin: boolean }) {
       }
     >
       {!sig.data ? (
-        <PageLoader />
+        <SectionLoader />
       ) : (
         <ul className="space-y-2 text-sm">
           {sig.data.feeds.map((f) => (
