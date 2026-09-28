@@ -144,3 +144,17 @@ func TestServeCGI(t *testing.T) {
 		t.Fatalf("fragment: %.200s", out.String())
 	}
 }
+
+// cPanel Jupiter merges plugin icons into one SVG sprite (<symbol>/<use>),
+// where gradients, clip paths and other id references break and the shape
+// turns black: the icon must be flat fills only.
+func TestIconIsSpriteSafe(t *testing.T) {
+	for _, bad := range []string{"url(", "id=", "<defs", "Gradient", "clip-path", "mask", "<style", "<image"} {
+		if strings.Contains(Icon, bad) {
+			t.Fatalf("icon contains %q", bad)
+		}
+	}
+	if !strings.Contains(Icon, `viewBox="0 0 48 48"`) {
+		t.Fatal("icon must be 48x48")
+	}
+}

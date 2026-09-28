@@ -29,9 +29,11 @@ import (
 //go:embed ui.html
 var uiHTML string
 
-// Icon is the plugin icon (both panels): the xPGuard shield as a vector
-// image. cPanel's Jupiter theme shows its generic tile for PNG icons that
-// are not exactly the size it expects; SVG is shown as drawn at any size.
+// Icon is the plugin icon (both panels): the xPGuard shield as a 48x48
+// vector image. cPanel's Jupiter theme shows its generic tile for PNG icons
+// that are not the size it expects, and merges SVG icons into one sprite
+// where gradients and clip paths (id references) break and render black, so
+// the shield is drawn with flat fills only.
 //
 //go:embed xpguard-icon.svg
 var Icon string
