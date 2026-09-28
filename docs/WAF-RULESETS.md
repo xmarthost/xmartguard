@@ -178,10 +178,11 @@ visitor of those URLs (by default `/wp-login.php`, `/xmlrpc.php`,
 `/administrator/index.php`, `/admin/index.php`) is sent to the CAPTCHA
 before the page opens; the rest of the website never shows it.
 
-- Rules 7700901–7700903: a request for a protected URL without a valid
-  `xg_gate` cookie is redirected (302) to
-  `http(s)://<host>:<captcha port>/.xmartguard/gate?back=<uri>`. Not logged
-  as an attack.
+- Rules 7700902 (no Cookie header) and 7700903 (no valid `xg_gate` in it):
+  a request for a protected URL is redirected (302) to
+  `https://<host>:<captcha HTTPS port>/.xmartguard/gate?back=<uri>`. They use
+  no TX counters or SERVER_PORT, which LiteSpeed's own engine did not run.
+  Logged by the web server, but not recorded as attacks.
 - Solving it sets `xg_gate` (HttpOnly, SameSite=Lax, valid for the CAPTCHA
   allow time) and returns the visitor to the login page. The cookie value is
   an HMAC of the UTC day with a per-server secret; today's and yesterday's
@@ -192,3 +193,8 @@ before the page opens; the rest of the website never shows it.
 - The CAPTCHA ports (default 7780/7743) are opened in XMart Guard's port
   filter and, under CSF, with an `iptables -I INPUT … xmartguard-captcha`
   rule that csfpost.sh restores after `csf -r`.
+
+Malware.Expert on LiteSpeed: LiteSpeed does not log "Loaded N rules", so a
+feed is shown as working once its own blocks (`[tag "MEWAF"]`) appear in the
+error log. With the `rbl` extra, Malware.Expert's rule 400010 already drops
+POSTs from rbl.malware.expert and XMart Guard's 7700801 is left out.

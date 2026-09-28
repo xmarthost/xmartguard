@@ -55,8 +55,8 @@ func TestGateRules(t *testing.T) {
 	}
 	on := Render(c, Options{Dir: "/x", Gate: &Gate{Tokens: []string{"0123456789abcdef0123456789abcdef", "bad token\""}, HTTPPort: 7780, HTTPSPort: 7743}})
 	for _, want := range []string{
-		`SecRule REQUEST_COOKIES:xg_gate "@rx ^(?:0123456789abcdef0123456789abcdef)$" "id:7700901`,
-		`redirect:http://%{REQUEST_HEADERS.Host}:7780/.xmartguard/gate?back=%{REQUEST_URI}`,
+		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none"`,
+		`SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:0123456789abcdef0123456789abcdef)\s*(?:;|$)" "t:none"`,
 		`redirect:https://%{REQUEST_HEADERS.Host}:7743/.xmartguard/gate?back=%{REQUEST_URI}`,
 		`(?:/wp-login\.php|/admin/index\.php)$`,
 	} {
@@ -66,5 +66,38 @@ func TestGateRules(t *testing.T) {
 	}
 	if strings.Contains(on, "bad token") {
 		t.Fatal("invalid token rendered")
+	}
+}
+
+func TestFeedHitsAndVendorRBL(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "error_log")
+	_ = os.WriteFile(log, []byte(`[Mon Sep 28 16:14:32 2026] [error] [client 195.160.216.121] ModSecurity: Access denied with code -, [Rule: 'REMOTE_ADDR' '@rbl rbl.malware.expert'] [id "400010"] [msg "Malware.Expert - Malware host detected by rbl.malware.expert"] [tag "MEWAF"] [uri "/wp-login.php"]
+[Mon Sep 28 16:15:36 2026] [error] [client 91.200.239.38] ModSecurity: Access denied with code -, [id "7700503"] [msg "XMartGuard - AI crawler blocked"]
+`), 0o644)
+	link := filepath.Join(dir, "link_log")
+	_ = os.Symlink(log, link)
+	url := "https://rules.malware.expert/download.php?rules=generic&extra=webshell,rbl"
+	if n := feedHits([]string{log, link}, url); n != 1 {
+		t.Fatalf("hits %d", n)
+	}
+	m := &Manager{}
+	m.ruleSets.Remote = []RemoteRules{{ID: "me", Key: "K.1", URL: url}}
+	st := []RuleSetState{{ID: "remote:me", State: "active"}}
+	m.checkRemoteStates(st, []string{log})
+	if !strings.HasPrefix(st[0].Detail, "working: 1 requests blocked") {
+		t.Fatalf("%+v", st[0])
+	}
+	if !vendorHasRBL(url, "rbl.malware.expert") || vendorHasRBL("https://rules.malware.expert/download.php?rules=generic", "rbl.malware.expert") {
+		t.Fatal("vendorHasRBL")
+	}
+	// Our POST blocklist is not rendered twice when the feed has its own.
+	mm := &Manager{RulesDir: t.TempDir()}
+	var rs RuleSets
+	rs.Remote = []RemoteRules{{ID: "me", Name: "Malware.Expert", Key: "ABCD.1", URL: url, Enabled: true, RBL: "rbl.malware.expert"}}
+	mm.SetRuleSets(rs)
+	inc, _, _ := mm.extras(Target{Name: "rhel"})
+	if strings.Contains(inc, "7700801") {
+		t.Fatal(inc)
 	}
 }

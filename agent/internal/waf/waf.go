@@ -525,7 +525,8 @@ func (m *Manager) tailLogs(ctx context.Context) {
 		if !strings.HasPrefix(ev.Action, "Access denied") && (ev.RuleID < 7700000 || ev.RuleID > 7709999) {
 			return
 		}
-		if isSelfTest(ev) || !dedupe.add(ev.UID) {
+		// Visitors sent to the login-page CAPTCHA are not attacks.
+		if isSelfTest(ev) || isGateRule(ev.RuleID) || !dedupe.add(ev.UID) {
 			return
 		}
 		// Summary lines without the request or reason duplicate a full entry.

@@ -48,9 +48,8 @@ const (
 	IDWebshellDir   = 7700602
 	IDExploitProbe  = 7700603
 	IDProxyBlocked  = 7700701
-	IDGatePass      = 7700901
-	IDGateHTTP      = 7700902
-	IDGateHTTPS     = 7700903
+	IDGateNoCookie  = 7700902
+	IDGateBadCookie = 7700903
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -158,6 +157,9 @@ type Gate struct {
 const GateCookie = "xg_gate"
 
 var reGateToken = regexp.MustCompile(`^[a-f0-9]{16,64}$`)
+
+// isGateRule reports the login-page CAPTCHA redirects, which are not attacks.
+func isGateRule(id int) bool { return id >= 7700900 && id <= 7700909 }
 
 // Render builds the rules file for the given settings.
 func Render(c settings.WAF, o Options) string {
@@ -294,16 +296,19 @@ func Render(c settings.WAF, o Options) string {
 			}
 		}
 		if len(toks) > 0 {
-			// A visitor sent to the CAPTCHA is not an attack: not logged.
-			w(`SecRule REQUEST_COOKIES:%s "@rx ^(?:%s)$" "id:%d,phase:1,t:none,pass,nolog,setvar:tx.xg_gate=1"`, GateCookie, strings.Join(toks, "|"), IDGatePass)
-			gate := func(id, port int, scheme, cond string) {
-				w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:%s://%%{REQUEST_HEADERS.Host}:%d/.xmartguard/gate?back=%%{REQUEST_URI},nolog,noauditlog,msg:'XMartGuard - CAPTCHA required for a login page',tag:'xmartguard/captcha',chain"`,
-					strings.Join(urls, "|"), id, scheme, port)
-				w(`  SecRule &TX:xg_gate "@eq 0" "chain"`)
-				w(`  SecRule SERVER_PORT "%s"`, cond)
+			// Written with what LiteSpeed's own ModSecurity engine also runs
+			// (no TX counters or SERVER_PORT): one rule for a missing cookie,
+			// one for a wrong or expired one. Always sent to the HTTPS port.
+			// Logged so it can be checked; the agent does not count these
+			// as attacks (see isGateRule).
+			pass := fmt.Sprintf(`(?:^|;)\s*%s=(?:%s)\s*(?:;|$)`, GateCookie, strings.Join(toks, "|"))
+			gate := func(id int, cond string) {
+				w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:https://%%{REQUEST_HEADERS.Host}:%d/.xmartguard/gate?back=%%{REQUEST_URI},log,msg:'XMartGuard - CAPTCHA required for a login page',tag:'xmartguard/captcha',chain"`,
+					strings.Join(urls, "|"), id, g.HTTPSPort)
+				w(`  %s`, cond)
 			}
-			gate(IDGateHTTP, g.HTTPPort, "http", "@eq 80")
-			gate(IDGateHTTPS, g.HTTPSPort, "https", "!@eq 80")
+			gate(IDGateNoCookie, `SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none"`)
+			gate(IDGateBadCookie, fmt.Sprintf(`SecRule REQUEST_HEADERS:Cookie "!@rx %s" "t:none"`, pass))
 		}
 	}
 	if c.Webshell {
