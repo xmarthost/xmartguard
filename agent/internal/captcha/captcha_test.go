@@ -2,14 +2,21 @@ package captcha
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"image/png"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -215,5 +222,29 @@ func TestGateTokens(t *testing.T) {
 	}
 	if GateTokens(nil, now) != nil {
 		t.Fatal("tokens without a key")
+	}
+}
+
+func TestCertIndexFindsAddonDomains(t *testing.T) {
+	dir := t.TempDir()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: "helloroos.com"},
+		DNSNames: []string{"helloroos.com", "www.helloroos.com", "*.shop.example"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour)}
+	der, _ := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	kb, _ := x509.MarshalECPrivateKey(key)
+	combined := append(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	// cPanel names the folder after the vhost, not the addon domain.
+	vh := filepath.Join(dir, "helloroos.com.clickcreek.com.au")
+	_ = os.MkdirAll(vh, 0o700)
+	_ = os.WriteFile(filepath.Join(vh, "combined"), combined, 0o600)
+	c := &CertStore{Dirs: []string{dir}}
+	for _, name := range []string{"helloroos.com", "www.helloroos.com", "a.shop.example"} {
+		cert, err := c.Get(&tls.ClientHelloInfo{ServerName: name})
+		if err != nil || cert == nil || len(cert.Certificate) == 0 || !bytes.Equal(cert.Certificate[0], der) {
+			t.Fatalf("%s: not the site certificate", name)
+		}
+	}
+	if cert, _ := c.Get(&tls.ClientHelloInfo{ServerName: "other.example"}); bytes.Equal(cert.Certificate[0], der) {
+		t.Fatal("unrelated name got the site certificate")
 	}
 }
