@@ -66,9 +66,26 @@ type RemoteRules struct {
 // vendorHasRBL reports a Malware.Expert feed with its "rbl" extra module,
 // whose rule 400010 already drops POSTs from rbl.malware.expert.
 func vendorHasRBL(url, rbl string) bool {
-	if rbl != "rbl.malware.expert" || !strings.Contains(url, "malware.expert/") {
-		return false
+	return rbl == "rbl.malware.expert" && strings.Contains(url, "malware.expert/") && urlExtra(url, "rbl")
+}
+
+// VendorLoginCaptcha names the rule feed that brings its own login-page
+// CAPTCHA to this server ("" = none): Malware.Expert's "recaptcha" extra
+// sends bots on WordPress/Joomla logins to recaptcha.cloud, and XMart
+// Guard's login-page CAPTCHA would stop every visitor before it.
+func (m *Manager) VendorLoginCaptcha() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, r := range m.ruleSets.Remote {
+		if r.Enabled && strings.Contains(r.URL, "malware.expert/") && urlExtra(r.URL, "recaptcha") {
+			return r.Name
+		}
 	}
+	return ""
+}
+
+// urlExtra reports a module in a Malware.Expert feed's extra= list.
+func urlExtra(url, module string) bool {
 	i := strings.Index(url, "extra=")
 	if i < 0 {
 		return false
@@ -78,7 +95,7 @@ func vendorHasRBL(url, rbl string) bool {
 		extra = extra[:j]
 	}
 	for _, e := range strings.Split(extra, ",") {
-		if e == "rbl" {
+		if e == module {
 			return true
 		}
 	}
@@ -259,6 +276,9 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			}
 			fmt.Fprintf(&inc, "SecRemoteRules \"%s\" \"%s\"\n", r.Key, r.URL)
 			st.State, st.Detail = "active", "loaded by ModSecurity from "+r.URL
+			if strings.Contains(r.URL, "malware.expert/") && urlExtra(r.URL, "recaptcha") {
+				st.Detail += "; login CAPTCHA by Malware.Expert (recaptcha.cloud) replaces XMart Guard's"
+			}
 			rbl := strings.ToLower(strings.TrimSpace(r.RBL))
 			if rbl != "" && vendorHasRBL(r.URL, rbl) {
 				// The feed's own "rbl" module already drops these POSTs.

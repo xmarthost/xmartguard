@@ -145,8 +145,10 @@ func uniqueFiles(paths []string) []string {
 	return out
 }
 
+// rblSuffix keeps the notes added after the first part of a feed's detail
+// (POST blocklist, vendor login CAPTCHA).
 func rblSuffix(detail string) string {
-	if i := strings.Index(detail, "; POST blocklist "); i >= 0 {
+	if i := strings.Index(detail, "; "); i >= 0 {
 		return detail[i:]
 	}
 	return ""

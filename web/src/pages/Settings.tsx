@@ -819,8 +819,18 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       </div>
       <ListEditor
         title="Captcha Protected URLs"
-        desc={`Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF).`}
-        header={<Toggle on={Boolean(all.captcha?.login_gate)} disabled={dis || !s.enabled} onChange={(v) => saveAll({ captcha: { login_gate: v } } as any, v ? 'CAPTCHA on the login pages' : 'Login page CAPTCHA off')} />}
+        desc={meExtras.includes('recaptcha')
+          ? 'Login pages protected by the WAF brute-force module. On this server Malware.Expert protects them with its own CAPTCHA: visitors whose address is on its blacklist (blacklist.recaptcha.cloud) are sent to recaptcha.cloud; other visitors log in normally. XMart Guard\'s login-page CAPTCHA is off here. Banned addresses still get XMart Guard\'s CAPTCHA on the whole site (Firewall » CAPTCHA).'
+          : `Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF).`}
+        header={
+          meExtras.includes('recaptcha') ? (
+            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700" title="Malware.Expert's recaptcha extra is linked to this server, so its CAPTCHA replaces XMart Guard's on the login pages.">
+              Captcha by Malware.Expert
+            </span>
+          ) : (
+            <Toggle on={Boolean(all.captcha?.login_gate)} disabled={dis || !s.enabled} onChange={(v) => saveAll({ captcha: { login_gate: v } } as any, v ? 'CAPTCHA on the login pages' : 'Login page CAPTCHA off')} />
+          )
+        }
         items={s.login_urls ?? []}
         disabled={dis}
         placeholder="Type here"

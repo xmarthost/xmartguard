@@ -251,7 +251,8 @@ func (m *Manager) Apply() error {
 		rules := ""
 		if cfg.Enabled {
 			opts := Options{Dir: m.RulesDir, UploadScan: true, Trusted: len(m.trustedList()) > 0}
-			if m.Gate != nil {
+			// A vendor's own login CAPTCHA (Malware.Expert recaptcha) wins.
+			if m.Gate != nil && m.VendorLoginCaptcha() == "" {
 				opts.Gate = m.Gate()
 			}
 			if cfg.UploadScan {

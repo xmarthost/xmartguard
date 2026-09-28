@@ -198,3 +198,10 @@ Malware.Expert on LiteSpeed: LiteSpeed does not log "Loaded N rules", so a
 feed is shown as working once its own blocks (`[tag "MEWAF"]`) appear in the
 error log. With the `rbl` extra, Malware.Expert's rule 400010 already drops
 POSTs from rbl.malware.expert and XMart Guard's 7700801 is left out.
+
+When the Malware.Expert feed linked to a server has the `recaptcha` extra,
+its CAPTCHA protects the login pages there (rule 1000050: addresses on
+blacklist.recaptcha.cloud are sent to recaptcha.cloud) and XMart Guard's
+login-page CAPTCHA is not rendered on that server, since it would stop every
+visitor before Malware.Expert's rule. Settings » WAF shows "Captcha by
+Malware.Expert" instead of the switch.

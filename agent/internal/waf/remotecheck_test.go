@@ -101,3 +101,27 @@ func TestFeedHitsAndVendorRBL(t *testing.T) {
 		t.Fatal(inc)
 	}
 }
+
+func TestVendorLoginCaptcha(t *testing.T) {
+	m := &Manager{RulesDir: t.TempDir()}
+	var rs RuleSets
+	rs.Remote = []RemoteRules{{ID: "me", Name: "Malware.Expert", Key: "ABCD.1", URL: "https://rules.malware.expert/download.php?rules=generic&extra=webshell,recaptcha", Enabled: true}}
+	m.SetRuleSets(rs)
+	if m.VendorLoginCaptcha() != "Malware.Expert" {
+		t.Fatal("recaptcha extra not seen")
+	}
+	_, _, states := m.extras(Target{Name: "rhel"})
+	if !strings.Contains(states[len(states)-2].Detail, "login CAPTCHA by Malware.Expert") {
+		t.Fatalf("%+v", states)
+	}
+	rs.Remote[0].URL = "https://rules.malware.expert/download.php?rules=generic&extra=webshell"
+	m.SetRuleSets(rs)
+	if m.VendorLoginCaptcha() != "" {
+		t.Fatal("no recaptcha extra")
+	}
+	rs.Remote[0].URL, rs.Remote[0].Enabled = "https://rules.malware.expert/download.php?rules=generic&extra=recaptcha", false
+	m.SetRuleSets(rs)
+	if m.VendorLoginCaptcha() != "" {
+		t.Fatal("disabled feed counted")
+	}
+}
