@@ -130,12 +130,13 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
   // ---- agents
 
   app.post('/api/agent/waf/config', { bodyLimit: 64 * 1024 }, async (req, reply) => {
-    const r = await signedPayload(pool, req.body, z.object({ version: z.number().int().min(0), crs_version: z.string().max(20), crs_enabled: z.boolean().optional() }), reply);
+    const r = await signedPayload(pool, req.body, z.object({ version: z.number().int().min(0), crs_version: z.string().max(20), crs_enabled: z.boolean().optional(), own_replaced_by: z.string().max(60).optional() }), reply);
     if (!r) return;
     const cur = await loadConfig(pool, r.accountId);
     const c = cur.version ? cur.config : DEFAULT_CONFIG;
     // Malware.Expert replaces the OWASP CRS on the servers that use it.
-    const replaced = c.crs.enabled && usesMalwareExpert(c, r.serverId);
+    const meHere = usesMalwareExpert(c, r.serverId);
+    const replaced = c.crs.enabled && meHere;
     const crsOn = c.crs.enabled && !replaced;
     const crsVersion = crsOn ? await crs.resolve(c.crs.version) : null;
     // The agent reports the CRS release it runs ('' = none), so a server
@@ -143,12 +144,17 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
     // Older agents only report the release.
     const crsState = r.data.crs_enabled === undefined ? crsOn || r.data.crs_version === '' : r.data.crs_enabled === crsOn;
     const crsCurrent = crsState && (!crsOn || !crsVersion || crsVersion === r.data.crs_version);
-    if (cur.version === r.data.version && crsCurrent) return { unchanged: true };
+    // Malware.Expert also replaces xPGuard's own blocking rules there (two
+    // rule sets would handle the same attacks). Agents from 0.11.4 report
+    // what they run, so a server whose linking changed is resynced.
+    const ownReplacedBy = cur.version && meHere ? 'Malware.Expert' : '';
+    const ownCurrent = r.data.own_replaced_by === undefined || r.data.own_replaced_by === ownReplacedBy;
+    if (cur.version === r.data.version && crsCurrent && ownCurrent) return { unchanged: true };
     const config = {
       version: cur.version,
       // Unset until the account saves its rule sets, so existing per-server
       // WAF switches are left alone.
-      xmartguard: cur.version ? c.xmartguard : undefined,
+      xmartguard: cur.version ? { ...c.xmartguard, replaced_by: ownReplacedBy || undefined } : undefined,
       crs: { ...c.crs, enabled: crsOn, version: crsVersion ?? '', replaced_by: replaced ? 'Malware.Expert' : undefined },
       // Licensed feeds go only to the servers they are linked to.
       vendors: c.vendors.filter((v) => linkedTo(v, r.serverId)).map(({ servers: _s, ...v }) => v),

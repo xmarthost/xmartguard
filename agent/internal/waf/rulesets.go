@@ -21,6 +21,11 @@ type RuleSets struct {
 	Version  int64 `json:"version"`
 	OwnRules *struct {
 		Enabled bool `json:"enabled"`
+		// ReplacedBy names the rule set used instead of xPGuard's own
+		// blocking rules on this server (the portal sets it where
+		// Malware.Expert is linked, so the same attacks are not handled by
+		// two rule sets).
+		ReplacedBy string `json:"replaced_by,omitempty"`
 	} `json:"xmartguard,omitempty"`
 	CRS struct {
 		Enabled           bool   `json:"enabled"`

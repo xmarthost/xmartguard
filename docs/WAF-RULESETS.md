@@ -125,6 +125,33 @@ The WHM ModSecurity vendors card is the older way to install the same rule
 sets; it is hidden unless a vendor is configured. Use either the WHM vendor
 or the remote feed for the same rules on a server, not both.
 
+## Malware.Expert replaces xPGuard's own rules (0.11.4)
+
+On a server linked to Malware.Expert the portal sends `xmartguard.replaced_by:
+"Malware.Expert"`. The agent then renders none of its own blocking rules there
+(upload scan, sensitive files, WordPress hardening, bots, web shells, CAPTCHA
+gate): two rule sets handling the same attacks cause double blocks and false
+positives. What stays is the self-test rule (7700000, proves the WAF is
+enforced) and the failed-login detectors (7700401-7700405, `pass,log`: they
+block nothing and feed the brute-force bans). The per-server WAF settings page
+says so, and the switches apply again when Malware.Expert is unlinked. Agents
+report what they run (`own_replaced_by`), so a server whose linking changed is
+resynced without waiting for a new rule-set version.
+
+## Trusted services (0.11.4)
+
+Overview » Trusted Services is one list for all servers (table
+`trusted_services`, pushed with `trusted.apply`; servers that were offline
+fetch it from `/api/agent/trusted/config`). Groups: search engines, social
+link previews (Meta via RADb AS32934, Telegram), AI assistants and MCP clients
+(OpenAI, Perplexity official JSON lists; Anthropic 160.79.104.0/21 from its
+IP-addresses page), CDNs and website firewalls (Cloudflare, QUIC.cloud, Fastly,
+Bunny, CloudFront, Sucuri, Imperva), uptime monitors, payments, WordPress and
+hosting vendors, plus the administrator's own addresses. The firewall never
+bans any of them; the WAF's bot rules skip only crawlers, monitors, payments,
+vendors and the own list (CDN addresses carry every visitor of a proxied site,
+and AI crawlers still follow "Block AI crawlers").
+
 ## Settings clean-up (0.9.6)
 
 - Captcha is switched on and set up on the Firewall page only; Settings »

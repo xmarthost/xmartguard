@@ -13,6 +13,7 @@ import Monitoring from './pages/Monitoring';
 import { AccountPage, SecurityLogPage, SupportPage, UsersPage } from './pages/Admin';
 import { ManualScans, ScannerLogs } from './pages/Scanner';
 import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
+import TrustedServices from './pages/TrustedServices';
 import SecurityMonitor from './pages/SecurityMonitor';
 import SettingsPage from './pages/Settings';
 import { BotAttacks, WafLogs } from './pages/WAF';
@@ -63,6 +64,7 @@ export default function App() {
         <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
         <Route path="/ai" element={<Protected><AIScanner /></Protected>} />
         <Route path="/waf-rulesets" element={<Protected><WafRuleSets /></Protected>} />
+        <Route path="/trusted-services" element={<Protected><TrustedServices /></Protected>} />
         <Route path="/appearance" element={<Protected><AppearancePage /></Protected>} />
         <Route path="/ai-connector" element={<Protected role="admin"><AIConnector /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />

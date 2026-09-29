@@ -125,3 +125,36 @@ func TestVendorLoginCaptcha(t *testing.T) {
 		t.Fatal("disabled feed counted")
 	}
 }
+
+// Where Malware.Expert replaces xPGuard's rules only the failed-login
+// detectors remain: nothing of ours blocks a request there.
+func TestRenderLoginWatch(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.LoginURLs = []string{"/wp-login.php", "/my-login"}
+	out := RenderLoginWatch(c, "Malware.Expert")
+	if strings.Contains(out, "deny") || strings.Contains(out, "redirect:") || strings.Contains(out, "@pmFromFile") || strings.Contains(out, "@inspectFile") {
+		t.Fatalf("blocking rule kept:\n%s", out)
+	}
+	for _, want := range []string{"Malware.Expert's rules are used instead", "id:7700401", "Failed login: WordPress", "/wp-login.php", "(?:/my-login)$"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in\n%s", want, out)
+		}
+	}
+	c.BruteForce = false
+	if strings.Contains(RenderLoginWatch(c, "Malware.Expert"), "SecRule") {
+		t.Fatal("rules with brute force off")
+	}
+	m := &Manager{}
+	if m.OwnRulesReplacedBy() != "" {
+		t.Fatal("replaced without portal config")
+	}
+	var rs RuleSets
+	rs.OwnRules = &struct {
+		Enabled    bool   `json:"enabled"`
+		ReplacedBy string `json:"replaced_by,omitempty"`
+	}{true, "Malware.Expert"}
+	m.SetRuleSets(rs)
+	if m.OwnRulesReplacedBy() != "Malware.Expert" {
+		t.Fatal("replacement not seen")
+	}
+}

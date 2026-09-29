@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { CheckCircle2, Download, Globe, RefreshCw, Search, Settings as Gear, ShieldAlert, Trash2, XCircle } from 'lucide-react';
 import { downloadCSV, useCountries } from '../components/geo';
 import { flag } from '../components/WorldMap';
@@ -39,8 +39,6 @@ interface TrustedSvc {
   updated: number;
   error: string;
 }
-
-const TRUSTED_GROUPS: Record<string, string> = { search: 'Search engines', monitor: 'Uptime monitors', cdn: 'CDN', payment: 'Payments', vendor: 'Vendors' };
 
 interface FwSettings {
   trusted_services?: boolean;
@@ -531,58 +529,20 @@ export function FirewallPage() {
 
       <Section
         title="Trusted services"
-        desc="Search engine crawlers, uptime monitors, Cloudflare, payment callbacks and vendor servers are never blocked: not by the firewall, IPDB, automatic bans or the WAF's bot rules, so websites keep their SEO and monitoring. Lists come from each provider's official source and are refreshed daily."
+        desc="Search engine crawlers, social link previews, AI assistants and MCP clients, CDNs (Cloudflare, QUIC.cloud…), uptime monitors, payment callbacks and vendor servers are never blocked by this server's firewall, IPDB or automatic bans."
       >
-        <SettingRow title="Protect trusted services" desc="Recommended. Turn a single service off below if you want to block it.">
-          <Toggle on={fw.trusted_services !== false} disabled={!isAdmin || busy} onChange={(v) => save({ trusted_services: v }, v ? 'Trusted services protected' : 'Trusted services protection off').then(trustedSvc.reload)} />
-        </SettingRow>
-        {!trustedSvc.data ? (
-          <SectionLoader />
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
-                <th className="py-2 pr-3">Service</th>
-                <th className="py-2 pr-3">Type</th>
-                <th className="py-2 pr-3">Addresses</th>
-                <th className="py-2 pr-3">Source</th>
-                <th className="py-2 text-right">Protected</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {trustedSvc.data.services.map((t) => (
-                <tr key={t.id}>
-                  <td className="py-2 pr-3 font-medium">
-                    {t.name}
-                    {t.error && <div className="text-xs font-normal text-amber-700" title={t.error}>last update failed, previous list kept</div>}
-                  </td>
-                  <td className="py-2 pr-3 text-slate-500">{TRUSTED_GROUPS[t.group] ?? t.group}</td>
-                  <td className="py-2 pr-3">{t.addresses}</td>
-                  <td className="py-2 pr-3 text-xs text-slate-500">
-                    {t.source === 'official' ? 'official list' : t.source === 'dns' ? 'DNS' : t.source === 'builtin' ? 'built-in' : '—'}
-                    {t.updated > 0 && <div>{fmtTime(t.updated)}</div>}
-                  </td>
-                  <td className="py-2 text-right">
-                    <Toggle
-                      on={t.enabled}
-                      disabled={!isAdmin || busy || fw.trusted_services === false}
-                      onChange={(v) => {
-                        const off = new Set(fw.trusted_disabled ?? []);
-                        if (v) off.delete(t.id);
-                        else off.add(t.id);
-                        save({ trusted_disabled: Array.from(off) }, `${t.name} ${v ? 'protected' : 'not protected'}`).then(trustedSvc.reload);
-                      }}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <div className="mt-3 flex justify-end">
-          <button className="btn-outline" disabled={!isAdmin || busy} onClick={() => run(() => agentCall(id!, 'trusted.refresh').then(trustedSvc.reload), 'Trusted service lists updated')}>
-            <RefreshCw className="h-4 w-4" /> Update lists now
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">
+          <span>
+            The list is the same for all servers and is managed in <b>Overview » Trusted Services</b>.{' '}
+            {trustedSvc.data && (
+              <>
+                On this server: {trustedSvc.data.enabled ? 'protected' : 'protection off'},{' '}
+                {trustedSvc.data.services.filter((t) => t.enabled).reduce((n, t) => n + t.addresses, 0).toLocaleString()} trusted addresses from{' '}
+                {trustedSvc.data.services.filter((t) => t.enabled).length} services.
+              </>
+            )}
+          </span>
+          <Link to="/trusted-services" className="btn-outline">Manage trusted services</Link>
         </div>
       </Section>
 

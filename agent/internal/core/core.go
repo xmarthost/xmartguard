@@ -119,6 +119,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		Protected: a.protectedIPs,
 	}
 	a.Trusted = trusted.New(filepath.Join(store.StateDir(), "trusted-services.json"))
+	a.Trusted.SetCustom(st.Get().Firewall.TrustedCustom)
 	a.Firewall.Trusted = a.trustedCIDRs
 	a.Firewall.TrustedMatch = func(ip string) string {
 		fw := a.Settings.Get().Firewall
@@ -154,7 +155,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
-		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.trustedCIDRs,
+		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs,
 		Gate: func() *waf.Gate {
 			cur := a.Settings.Get()
 			if !captcha.GateWanted(cur) {
@@ -573,6 +574,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		if err != nil {
 			return nil, err
 		}
+		a.Trusted.SetCustom(next.Firewall.TrustedCustom)
 		if strings.Join(before.DDNS, ",") != strings.Join(next.Firewall.DDNS, ",") {
 			a.Firewall.RefreshDDNS(ctx)
 		}
@@ -680,6 +682,19 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return a.clamStatus(), nil
 	}
 	h["trusted.status"] = func(context.Context, json.RawMessage) (any, error) {
+		fw := a.Settings.Get().Firewall
+		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil
+	}
+	// trusted.apply is the fleet-wide list from the portal (Overview »
+	// Trusted Services): pushed to every online server when saved.
+	h["trusted.apply"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[trustedConfig](p)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.applyTrustedConfig(ctx, in); err != nil {
+			return nil, err
+		}
 		fw := a.Settings.Get().Firewall
 		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil
 	}

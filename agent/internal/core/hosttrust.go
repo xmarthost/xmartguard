@@ -2,11 +2,14 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/hostfw"
+	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
 // portalAddrs are the addresses the agent reaches the portal at.
@@ -115,12 +118,78 @@ func (a *Agent) trustedLoop(ctx context.Context) {
 		return
 	case <-time.After(2 * time.Minute):
 	}
+	last := time.Time{}
 	for {
-		a.refreshTrusted(ctx)
+		a.pullTrustedConfig(ctx)
+		if time.Since(last) > 24*time.Hour {
+			a.refreshTrusted(ctx)
+			last = time.Now()
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(24 * time.Hour):
+		case <-time.After(30 * time.Minute):
 		}
+	}
+}
+
+// trustedConfig is the fleet-wide trusted services list made in the portal
+// (Overview » Trusted Services).
+type trustedConfig struct {
+	Version  int64    `json:"version"`
+	Enabled  bool     `json:"enabled"`
+	Disabled []string `json:"disabled"`
+	Custom   []string `json:"custom"`
+}
+
+// wafTrustedCIDRs are the trusted addresses the WAF's bot rules skip: not
+// CDNs (every visitor of a proxied site comes from them) nor AI crawlers
+// (they follow "Block AI crawlers").
+func (a *Agent) wafTrustedCIDRs() []string {
+	fw := a.Settings.Get().Firewall
+	if !fw.TrustedServices || a.Trusted == nil {
+		return nil
+	}
+	return a.Trusted.WAFCIDRs(fw.TrustedDisabled)
+}
+
+// applyTrustedConfig makes the portal's list this server's list, through
+// the same path as a settings change (firewall and WAF follow).
+func (a *Agent) applyTrustedConfig(ctx context.Context, c trustedConfig) error {
+	if c.Disabled == nil {
+		c.Disabled = []string{}
+	}
+	if c.Custom == nil {
+		c.Custom = []string{}
+	}
+	patch, _ := json.Marshal(map[string]any{"firewall": map[string]any{
+		"trusted_services": c.Enabled, "trusted_disabled": c.Disabled, "trusted_custom": c.Custom}})
+	if _, err := a.Handlers()["settings.set"](ctx, patch); err != nil {
+		return err
+	}
+	_ = store.SetKV(a.DB, "trusted_version", strconv.FormatInt(c.Version, 10))
+	return nil
+}
+
+// pullTrustedConfig fetches the portal's list when it changed (servers that
+// were offline when it was saved catch up here).
+func (a *Agent) pullTrustedConfig(ctx context.Context) {
+	if a.AI == nil || a.AI.Portal == nil {
+		return
+	}
+	cur, _ := strconv.ParseInt(store.GetKV(a.DB, "trusted_version"), 10, 64)
+	var r struct {
+		Unchanged bool           `json:"unchanged"`
+		Config    *trustedConfig `json:"config"`
+	}
+	if err := a.AI.Portal.Post(ctx, "/api/agent/trusted/config", map[string]any{"version": cur}, &r); err != nil {
+		a.Log.Debug("trusted services config not fetched", "err", err)
+		return
+	}
+	if r.Unchanged || r.Config == nil {
+		return
+	}
+	if err := a.applyTrustedConfig(ctx, *r.Config); err != nil {
+		a.Log.Warn("could not apply the portal's trusted services", "err", err)
 	}
 }

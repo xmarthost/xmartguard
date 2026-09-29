@@ -209,6 +209,8 @@ describe('Malware.Expert replaces the OWASP CRS', () => {
     expect(a.body.config.crs.enabled).toBe(false);
     expect(a.body.config.crs.replaced_by).toBe('Malware.Expert');
     expect(a.body.crs).toBeUndefined();
+    // xPGuard's own blocking rules are replaced there too.
+    expect(a.body.config.xmartguard).toEqual({ enabled: true, replaced_by: 'Malware.Expert' });
     // Switched off: CRS comes back.
     expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...me, enabled: false }] }))).status).toBe(200);
     const b = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
@@ -233,6 +235,11 @@ describe('CRS replacement reaches servers that are up to date', () => {
     expect(c.body.config.crs.enabled).toBe(false);
     const d = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: false });
     expect(d.body.unchanged).toBe(true);
+    // A server still running xPGuard's own rules next to Malware.Expert is resynced.
+    const e = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: false, own_replaced_by: '' });
+    expect(e.body.config.xmartguard.replaced_by).toBe('Malware.Expert');
+    const f = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: false, own_replaced_by: 'Malware.Expert' });
+    expect(f.body.unchanged).toBe(true);
   });
 });
 

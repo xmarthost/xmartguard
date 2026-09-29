@@ -736,7 +736,7 @@ interface WafRule {
 
 function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }: { serverId: string; s: WAFS; all: AllSettings; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void; saveAll: (p: Partial<Record<keyof AllSettings, any>>, msg?: string) => Promise<unknown>; onReload: () => void }) {
   const { run } = useAction();
-  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string; enabled_since: number }; rules: WafRule[] }>(serverId, 'waf.status');
+  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string; enabled_since: number; replaced_by?: string }; rules: WafRule[] }>(serverId, 'waf.status');
   const doms = useAgent<{ domains: { domain: string; user: string }[] }>(serverId, 'domains.list');
   const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
   useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
@@ -889,7 +889,13 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {info.data && (
         <div className="py-4">
           <div className="mb-1 font-medium text-navy-900">xPGuard rules</div>
-          {meFeed && (
+          {info.data.status.replaced_by ? (
+            <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <b>Not loaded on this server.</b> {info.data.status.replaced_by}'s rules protect this server, so xPGuard's own blocking rules are switched off here
+              (two rule sets handling the same attacks cause double blocks and false positives). Only the failed-login detection is kept: it blocks nothing and
+              lets xPGuard ban brute-force attackers. The switches below apply again if {info.data.status.replaced_by} is unlinked from this server.
+            </p>
+          ) : meFeed && (
             <p className="mb-2 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
               This list shows xPGuard's own rules only. The Malware.Expert rules on this server are downloaded by the web server straight from Malware.Expert
               when it starts, so they are not stored here; whether they loaded shows under WAF Rule Sets » Rollout, and their blocks appear in WAF Logs with

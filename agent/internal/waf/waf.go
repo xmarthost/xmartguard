@@ -63,6 +63,9 @@ type Status struct {
 	Error     string `json:"error"`
 	Warning   string `json:"warning"`
 	Rules     int    `json:"rules"`
+	// ReplacedBy: xPGuard's own blocking rules are off here because this
+	// rule set is used instead (e.g. Malware.Expert).
+	ReplacedBy string `json:"replaced_by,omitempty"`
 	// EnabledSince is when the rules were first hooked into the web server.
 	EnabledSince int64 `json:"enabled_since"`
 	// Logs the agent reads ModSecurity hits from.
@@ -97,7 +100,8 @@ func (m *Manager) Status() Status {
 	}
 	since, _ := strconv.ParseInt(store.GetKV(m.DB, "waf_enabled_since"), 10, 64)
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
-		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest, EnabledSince: since}
+		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest, EnabledSince: since,
+		ReplacedBy: m.OwnRulesReplacedBy()}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {
@@ -249,7 +253,11 @@ func (m *Manager) Apply() error {
 		_ = store.SetKV(m.DB, "waf_enabled_since", "")
 	default:
 		rules := ""
-		if cfg.Enabled {
+		if by := m.OwnRulesReplacedBy(); cfg.Enabled && by != "" {
+			// Only the vendor's rules block here. The failed-login detectors
+			// stay: they block nothing and feed the brute-force bans.
+			rules = RenderLoginWatch(cfg, by)
+		} else if cfg.Enabled {
 			opts := Options{Dir: m.RulesDir, UploadScan: true, Trusted: len(m.trustedList()) > 0}
 			// A vendor's own login CAPTCHA (Malware.Expert recaptcha) wins.
 			if m.Gate != nil && m.VendorLoginCaptcha() == "" {
@@ -739,4 +747,15 @@ func (c *counter) reset(ip string) {
 	c.mu.Lock()
 	delete(c.hits, ip)
 	c.mu.Unlock()
+}
+
+// OwnRulesReplacedBy names the rule set used instead of xPGuard's own
+// blocking rules on this server ("" = ours are used).
+func (m *Manager) OwnRulesReplacedBy() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ruleSets.OwnRules != nil {
+		return m.ruleSets.OwnRules.ReplacedBy
+	}
+	return ""
 }

@@ -320,4 +320,16 @@ CREATE TABLE account_appearance (
 );
 `,
   },
+  {
+    version: '008_trusted_services',
+    sql: `
+-- Trusted services for all servers (Overview » Trusted Services).
+CREATE TABLE trusted_services (
+  account_id  uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  config      jsonb NOT NULL,
+  version     bigint NOT NULL DEFAULT 1,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

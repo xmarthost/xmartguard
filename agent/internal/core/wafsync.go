@@ -61,7 +61,7 @@ func (a *Agent) syncWAF(ctx context.Context, force bool) (WAFSyncResult, error) 
 			Files   map[string]string `json:"files"`
 		} `json:"crs"`
 	}
-	if err := a.AI.Portal.Post(ctx, "/api/agent/waf/config", map[string]any{"version": cur.Version, "crs_version": haveCRS, "crs_enabled": cur.CRS.Enabled}, &r); err != nil {
+	if err := a.AI.Portal.Post(ctx, "/api/agent/waf/config", map[string]any{"version": cur.Version, "crs_version": haveCRS, "crs_enabled": cur.CRS.Enabled, "own_replaced_by": a.WAF.OwnRulesReplacedBy()}, &r); err != nil {
 		return WAFSyncResult{}, err
 	}
 	if r.Unchanged && !force {
@@ -106,7 +106,9 @@ func (a *Agent) wafResult(ctx context.Context, rs waf.RuleSets) WAFSyncResult {
 	st := a.WAF.Status()
 	res := WAFSyncResult{Version: rs.Version, Status: st, At: time.Now().Unix()}
 	xg := waf.RuleSetState{ID: "xmartguard", Name: "xPGuard rules", State: "off"}
-	if a.Settings.Get().WAF.Enabled {
+	if by := a.WAF.OwnRulesReplacedBy(); by != "" && a.Settings.Get().WAF.Enabled {
+		xg.Detail = "replaced by " + by + " on this server (only failed-login detection, which blocks nothing, is kept)"
+	} else if a.Settings.Get().WAF.Enabled {
 		xg.State, xg.Detail = "active", ""
 		if !st.Available {
 			xg.State, xg.Detail = "unsupported", st.WebServer

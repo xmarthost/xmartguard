@@ -111,6 +111,9 @@ type Firewall struct {
 	// service ids turned off.
 	TrustedServices bool     `json:"trusted_services"`
 	TrustedDisabled []string `json:"trusted_disabled"`
+	// TrustedCustom are the administrator's own trusted addresses (set
+	// for all servers in the portal: Overview » Trusted Services).
+	TrustedCustom []string `json:"trusted_custom"`
 	// PortFilter restricts traffic to the listed ports.
 	PortFilter bool   `json:"port_filter"`
 	TCPIn      string `json:"tcp_in"`
@@ -510,6 +513,7 @@ func normalize(s *Settings) {
 	s.Firewall.DDNS = clean(lower(s.Firewall.DDNS), false)
 	s.Firewall.ExcludedJails = clean(s.Firewall.ExcludedJails, false)
 	s.Firewall.TrustedDisabled = clean(s.Firewall.TrustedDisabled, false)
+	s.Firewall.TrustedCustom = clean(s.Firewall.TrustedCustom, false)
 	if s.Firewall.WAFBanThreshold <= 0 {
 		s.Firewall.WAFBanThreshold = 15
 	}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import {
-  BookOpen,
+  BookOpen, BadgeCheck,
   Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
@@ -288,6 +288,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
         { label: 'AI Scanner', icon: <BrainCircuit />, to: '/ai' },
         { label: 'WAF Rule Sets', icon: <ShieldHalf />, to: '/waf-rulesets' },
+        { label: 'Trusted Services', icon: <BadgeCheck />, to: '/trusted-services' },
         { label: 'AI Connector', icon: <Cable />, to: '/ai-connector' },
         { label: 'Appearance', icon: <Palette />, to: '/appearance' },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },

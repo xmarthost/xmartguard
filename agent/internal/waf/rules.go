@@ -337,6 +337,31 @@ func Render(c settings.WAF, o Options) string {
 	return b.String()
 }
 
+// RenderLoginWatch is what stays of xPGuard's rules where another rule set
+// (Malware.Expert) replaces them: only the failed-login detectors, which
+// pass every request and let the agent ban brute-force attackers.
+func RenderLoginWatch(c settings.WAF, replacedBy string) string {
+	var b strings.Builder
+	b.WriteString("# xPGuard's own blocking rules are off on this server: " + replacedBy + "'s rules are used instead.\n")
+	b.WriteString("# Kept: failed-login detection (pass, log only) for the brute-force bans.\n\n")
+	if !c.BruteForce {
+		return b.String()
+	}
+	full := Render(settings.WAF{BruteForce: true, LoginURLs: c.LoginURLs, DisabledRules: c.DisabledRules}, Options{})
+	keep := false
+	for _, l := range strings.Split(full, "\n") {
+		if strings.HasPrefix(l, "SecRule ") {
+			keep = strings.Contains(l, "tag:'xpguard/login'")
+		} else if !strings.HasPrefix(l, "  ") {
+			keep = false
+		}
+		if keep {
+			b.WriteString(l + "\n")
+		}
+	}
+	return b.String()
+}
+
 // BotFiles returns the bot list files to write next to the rules.
 func BotFiles(c settings.WAF) map[string]string {
 	join := func(l []string) string { return strings.Join(l, "\n") + "\n" }
