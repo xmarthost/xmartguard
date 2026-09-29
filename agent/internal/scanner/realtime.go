@@ -366,10 +366,11 @@ func (s *Scanner) Scheduler(ctx context.Context, lastRun func(kind string) int64
 	t := time.NewTicker(15 * time.Minute)
 	defer t.Stop()
 	for {
-		now := time.Now()
 		cfg := s.Settings.Get().Scanner
-		// Run in the quiet hours (02:00-05:00 local) at most once per period.
-		if cfg.Enabled && now.Hour() >= 2 && now.Hour() < 5 {
+		now := time.Now().In(ScheduleZone(cfg.ScheduleTZ))
+		// Run just after midnight (00:00-03:00 in the schedule's time zone,
+		// whatever the server's clock is set to) at most once per period.
+		if cfg.Enabled && now.Hour() < 3 {
 			if cfg.WeeklyScan && now.Weekday() == time.Sunday && now.Unix()-lastRun("weekly") > 6*86400 {
 				if _, err := s.Start("weekly", "", "scheduler"); err == nil {
 					markRun("weekly")

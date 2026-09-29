@@ -31,7 +31,8 @@ interface ScannerS {
   yara: boolean;
   db_whitelist: { id: string; reason: string }[];
   keep_days: number;
-  scan_speed?: 'low' | 'normal' | 'fast';
+  scan_speed?: 'auto' | 'low' | 'fast';
+  schedule_tz?: string;
 }
 interface AIS {
   enabled: boolean;
@@ -171,6 +172,21 @@ interface Meta {
   server_ips: string[];
   default_rbls: string[];
 }
+
+/** Time zones for the nightly scan schedule. */
+const SCHEDULE_TZS: [string, string][] = [
+  ['Asia/Karachi', 'Pakistan (PKT, UTC+5)'],
+  ['Asia/Dubai', 'Gulf (UTC+4)'],
+  ['Asia/Kolkata', 'India (UTC+5:30)'],
+  ['Asia/Riyadh', 'Saudi Arabia (UTC+3)'],
+  ['Europe/London', 'United Kingdom'],
+  ['Europe/Berlin', 'Central Europe'],
+  ['America/New_York', 'US Eastern'],
+  ['America/Los_Angeles', 'US Pacific'],
+  ['Australia/Sydney', 'Australia Eastern'],
+  ['UTC', 'UTC'],
+];
+const tzLabel = (tz?: string) => (SCHEDULE_TZS.find(([v]) => v === (tz || 'Asia/Karachi'))?.[1] ?? tz ?? 'PKT');
 
 type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'ipdb' | 'additional' | 'notifications' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
@@ -312,19 +328,28 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         <SettingRow title="Realtime scanning" desc="Scan files in website directories as soon as they are written" recommended>
           <Toggle on={s.realtime} disabled={dis} onChange={(v) => onSave({ realtime: v })} />
         </SettingRow>
-        <SettingRow title="Daily scan" desc="Scan all files modified in the last 24 hours (runs between 02:00 and 05:00)" recommended>
+        <SettingRow title="Daily scan" desc={`Scan all files modified in the last 24 hours (every night after 12:00 AM, ${tzLabel(s.schedule_tz)})`} recommended>
           <Toggle on={s.daily_scan} disabled={dis} onChange={(v) => onSave({ daily_scan: v })} />
         </SettingRow>
-        <SettingRow title="Weekly scan" desc="Scan all files modified in the last 7 days (Sunday night)" recommended>
+        <SettingRow title="Weekly scan" desc={`Scan all files modified in the last 7 days (Saturday to Sunday night, after 12:00 AM, ${tzLabel(s.schedule_tz)}); replaces that night's daily scan`} recommended>
           <Toggle on={s.weekly_scan} disabled={dis} onChange={(v) => onSave({ weekly_scan: v })} />
+        </SettingRow>
+        <SettingRow title="Scan schedule time zone" desc="The nightly scans start between 12:00 AM and 3:00 AM in this time zone, whatever the server's own clock is set to.">
+          <select className="input w-56" value={s.schedule_tz || 'Asia/Karachi'} disabled={dis} onChange={(e) => onSave({ schedule_tz: e.target.value })}>
+            {SCHEDULE_TZS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
         </SettingRow>
         <SettingRow
           title="Scan speed"
-          desc="How much of the server a scan may use. Scan threads always run at the lowest CPU and disk priority and pause while the server is busy, so websites come first. Low: 1 thread. Normal: a quarter of the CPUs (at most 4). Fast: half of the CPUs (at most 8)."
+          desc="Auto (recommended): the agent watches the server and uses only the CPU the websites, PHP, MySQL and mail leave free: more threads on a quiet or large server (up to half of the CPUs), one thread as soon as the server gets busy or short of memory. Low: always one thread. Fast: always half of the CPUs. Scan threads always run at the lowest CPU and disk priority."
         >
-          <select className="input w-56" value={s.scan_speed ?? 'normal'} disabled={dis} onChange={(e) => onSave({ scan_speed: e.target.value as ScannerS['scan_speed'] })}>
+          <select className="input w-56" value={s.scan_speed === 'low' || s.scan_speed === 'fast' ? s.scan_speed : 'auto'} disabled={dis} onChange={(e) => onSave({ scan_speed: e.target.value as ScannerS['scan_speed'] })}>
+            <option value="auto">Auto (recommended)</option>
             <option value="low">Low</option>
-            <option value="normal">Normal (recommended)</option>
             <option value="fast">Fast</option>
           </select>
         </SettingRow>

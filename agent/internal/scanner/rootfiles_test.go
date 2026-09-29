@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -121,15 +122,46 @@ func TestRestoreSystemFiles(t *testing.T) {
 	}
 }
 
-func TestScanWorkers(t *testing.T) {
+func TestScanThreads(t *testing.T) {
 	for _, c := range []struct {
 		speed string
 		cpus  int
 		want  int
-	}{{"low", 32, 1}, {"normal", 2, 1}, {"normal", 16, 4}, {"normal", 64, 4}, {"fast", 16, 8}, {"fast", 4, 2}, {"", 8, 2}} {
-		if got := scanWorkers(c.speed, c.cpus); got != c.want {
+	}{{"low", 32, 1}, {"auto", 2, 1}, {"auto", 12, 6}, {"fast", 16, 8}, {"auto", 128, 32}} {
+		if got := maxWorkers(c.speed, c.cpus); got != c.want {
 			t.Errorf("%s/%d cpus: %d, want %d", c.speed, c.cpus, got, c.want)
 		}
+	}
+	// Auto on 12 CPUs (at most 6 threads; the scan may bring the server to 9 cores).
+	for _, c := range []struct {
+		cur    int
+		others float64
+		mem    float64
+		want   int
+	}{
+		{1, 0.5, 0.5, 2},  // quiet: grow one at a time
+		{5, 0.5, 0.5, 6},  // up to the most
+		{6, 0.5, 0.5, 6},  // capped
+		{6, 7.5, 0.5, 1},  // websites busy: drop at once
+		{6, 11.5, 0.5, 1}, // overloaded: still one, so the scan ends
+		{4, 5.2, 0.5, 3},  // 3.8 cores free: 3 threads
+		{6, 0.5, 0.05, 1}, // little RAM left
+	} {
+		if got := nextWorkers(c.cur, 6, 12, c.others, c.mem); got != c.want {
+			t.Errorf("cur %d, others %.1f, mem %.2f: %d, want %d", c.cur, c.others, c.mem, got, c.want)
+		}
+	}
+	if m := memAvailable(); m <= 0 || m > 1 {
+		t.Errorf("memAvailable %v", m)
+	}
+	a, ok1 := readCPU()
+	x := 0
+	for i := 0; i < 5e7; i++ {
+		x += i
+	}
+	b, ok2 := readCPU()
+	if !ok1 || !ok2 || b.self < a.self || b.total <= a.total {
+		t.Errorf("readCPU: %+v %+v %d", a, b, x)
 	}
 }
 
@@ -147,5 +179,17 @@ func TestLowPriorityThread(t *testing.T) {
 	// Getpriority returns 20 - nice.
 	if p := <-done; p != 1 {
 		t.Fatalf("priority %d, want 1 (nice 19)", p)
+	}
+}
+
+func TestScheduleZone(t *testing.T) {
+	pkt := ScheduleZone("")
+	// 19:30 UTC is 00:30 the next day in Pakistan: inside the nightly window.
+	at := time.Date(2026, 9, 29, 19, 30, 0, 0, time.UTC).In(pkt)
+	if at.Hour() != 0 || at.Day() != 30 {
+		t.Fatalf("PKT: %s", at)
+	}
+	if ScheduleZone("Nowhere/Invalid").String() != DefaultScheduleTZ || ScheduleZone("Europe/Berlin").String() != "Europe/Berlin" {
+		t.Fatal("zones")
 	}
 }

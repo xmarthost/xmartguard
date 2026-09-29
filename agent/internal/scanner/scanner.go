@@ -729,7 +729,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 		det *Detection
 		err error
 	}
-	workers := scanWorkers(cfg.ScanSpeed, runtime.NumCPU())
+	gov, workers := newGovernor(ctx, cfg.ScanSpeed, runtime.NumCPU())
 	jobs := make(chan job, 256)
 	results := make(chan result, 256)
 	var wg sync.WaitGroup
@@ -738,7 +738,12 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 		go func() {
 			defer wg.Done()
 			lowPriorityThread()
-			for j := range jobs {
+			for {
+				gov.wait(ctx, i)
+				j, ok := <-jobs
+				if !ok {
+					return
+				}
 				waitForIdle(ctx, cfg.ScanSpeed)
 				det, err := s.CheckFile(j.path, j.info, cfg)
 				results <- result{j, det, err}

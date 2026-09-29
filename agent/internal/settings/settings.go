@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+	_ "time/tzdata" // schedule time zones even without system zoneinfo
 
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 )
@@ -25,17 +27,20 @@ const (
 )
 
 type Scanner struct {
-	Enabled          bool     `json:"enabled"`
-	Realtime         bool     `json:"realtime"`
-	VirusAction      string   `json:"virus_action"`
-	SuspiciousAction string   `json:"suspicious_action"`
-	BinaryAction     string   `json:"binary_action"`
-	DailyScan        bool     `json:"daily_scan"`
-	WeeklyScan       bool     `json:"weekly_scan"`
-	MaxFileSizeMB    int      `json:"max_file_size_mb"`
-	WhitelistUsers   []string `json:"whitelist_users"`
-	WhitelistPaths   []string `json:"whitelist_paths"`
-	BlacklistNames   []string `json:"blacklist_names"`
+	Enabled          bool   `json:"enabled"`
+	Realtime         bool   `json:"realtime"`
+	VirusAction      string `json:"virus_action"`
+	SuspiciousAction string `json:"suspicious_action"`
+	BinaryAction     string `json:"binary_action"`
+	DailyScan        bool   `json:"daily_scan"`
+	WeeklyScan       bool   `json:"weekly_scan"`
+	// ScheduleTZ is the time zone of the nightly scans (daily after
+	// midnight, weekly after midnight on Sunday); "" is Asia/Karachi.
+	ScheduleTZ     string   `json:"schedule_tz"`
+	MaxFileSizeMB  int      `json:"max_file_size_mb"`
+	WhitelistUsers []string `json:"whitelist_users"`
+	WhitelistPaths []string `json:"whitelist_paths"`
+	BlacklistNames []string `json:"blacklist_names"`
 	// ListDefaults is the version of the built-in whitelist/blacklist
 	// entries already added; they are added once, so an entry the
 	// administrator removes stays removed.
@@ -77,10 +82,11 @@ type Scanner struct {
 	DBWhitelist []Exclusion `json:"db_whitelist"`
 	// KeepDays is how long logs and quarantined files are kept.
 	KeepDays int `json:"keep_days"`
-	// ScanSpeed sets how much of the server a scan may use: "low" (one
-	// thread), "normal" (a quarter of the CPUs, at most 4) or "fast" (half,
-	// at most 8). Scan threads always run at the lowest CPU and disk
-	// priority and slow down while the server is busy.
+	// ScanSpeed sets how many threads a scan uses: "auto" (the default:
+	// as many as the CPU time the rest of the server leaves free allows,
+	// from one up to half of the CPUs, at most 8), "low" (one) or "fast"
+	// (half of the CPUs, at most 8). Scan threads always run at the lowest
+	// CPU and disk priority and pause while the server is overloaded.
 	ScanSpeed string `json:"scan_speed"`
 }
 
@@ -391,9 +397,9 @@ func Defaults() Settings {
 		Scanner: Scanner{
 			Enabled: true, Realtime: true,
 			VirusAction: ActionQuarantine, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
-			DailyScan: true, WeeklyScan: true, MaxFileSizeMB: 10,
+			DailyScan: true, WeeklyScan: true, ScheduleTZ: "Asia/Karachi", MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
-			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60, ScanSpeed: "normal",
+			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60, ScanSpeed: "auto",
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
@@ -645,10 +651,14 @@ func normalize(s *Settings) {
 	if s.WAF.BFWindowMin <= 0 {
 		s.WAF.BFWindowMin = 10
 	}
+	if _, err := time.LoadLocation(s.Scanner.ScheduleTZ); err != nil || s.Scanner.ScheduleTZ == "" {
+		s.Scanner.ScheduleTZ = "Asia/Karachi"
+	}
+	// "normal" (a quarter of the CPUs) was replaced by "auto".
 	switch s.Scanner.ScanSpeed {
-	case "low", "normal", "fast":
+	case "auto", "low", "fast":
 	default:
-		s.Scanner.ScanSpeed = "normal"
+		s.Scanner.ScanSpeed = "auto"
 	}
 	if s.Scanner.MaxFileSizeMB <= 0 {
 		s.Scanner.MaxFileSizeMB = 10
