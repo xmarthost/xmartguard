@@ -17,10 +17,13 @@ import (
 
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/local"
+	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 )
 
 // When re-executed as another user, the test binary acts as a socket client.
 func TestMain(m *testing.M) {
+	// Tests run as root: their files are root's.
+	scanner.ScanRootFiles = true
 	if req := os.Getenv("XG_HELPER_CALL"); req != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()

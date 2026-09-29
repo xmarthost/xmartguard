@@ -77,12 +77,6 @@ type Scanner struct {
 	DBWhitelist []Exclusion `json:"db_whitelist"`
 	// KeepDays is how long logs and quarantined files are kept.
 	KeepDays int `json:"keep_days"`
-	// RootOwned also acts on files owned by root. Off (the default, as in
-	// Imunify360): root's files outside the hosting accounts' homes are not
-	// scanned (cPanel builds, SpamAssassin's compiled rules, package
-	// managers write them; a hacked website can only create files as its
-	// account's user), and root's files inside a home are only reported.
-	RootOwned bool `json:"root_owned"`
 }
 
 // Exclusion is an ignored id with the reason an admin gave.

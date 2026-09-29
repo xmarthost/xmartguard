@@ -23,8 +23,7 @@ func newTestAgent(t *testing.T, settingsJSON string) *Agent {
 	os.MkdirAll(filepath.Join(dir, "conf"), 0o700)
 	os.WriteFile(filepath.Join(dir, "conf", "settings.json"), []byte(settingsJSON), 0o600)
 	{
-		// Tests choose actions explicitly; start from "report only". Test
-		// files are root's (tests run as root) and outside any home.
+		// Tests choose actions explicitly; start from "report only".
 		var doc map[string]any
 		json.Unmarshal([]byte(settingsJSON), &doc)
 		if doc == nil {
@@ -36,9 +35,6 @@ func newTestAgent(t *testing.T, settingsJSON string) *Agent {
 		}
 		if _, ok := sc["virus_action"]; !ok {
 			sc["virus_action"] = "notify"
-		}
-		if _, ok := sc["root_owned"]; !ok {
-			sc["root_owned"] = true
 		}
 		doc["scanner"] = sc
 		b, _ := json.Marshal(doc)

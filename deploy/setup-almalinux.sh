@@ -228,6 +228,20 @@ if [ -f /etc/csf/csf.conf ]; then
   chmod 700 "$CSFPOST"
   ok "CSF restarts recreate Docker's firewall rules (csfpost.sh)"
 fi
+# nftables.service (re)loads start with "flush ruleset", which removes
+# Docker's chains too (a restart of nftables took the portal down once):
+# restart Docker right after, so they are recreated.
+if systemctl list-unit-files nftables.service 2>/dev/null | grep -q '^nftables.service'; then
+  mkdir -p /etc/systemd/system/nftables.service.d
+  cat > /etc/systemd/system/nftables.service.d/xpguard-docker.conf <<'EOF'
+# xPGuard portal: recreate Docker's firewall chains after nftables flushed them.
+[Service]
+ExecStartPost=-/usr/bin/systemctl --no-block try-restart docker.service
+ExecReload=-/usr/bin/systemctl --no-block try-restart docker.service
+EOF
+  systemctl daemon-reload
+  ok "nftables restarts recreate Docker's firewall rules"
+fi
 remove_local_ai
 docker image prune -f >/dev/null
 

@@ -20,7 +20,6 @@ interface ScannerS {
   whitelist_paths: string[];
   blacklist_names: string[];
   delete_symlinks: boolean;
-  root_owned: boolean;
   auto_clean: boolean;
   wp_core_repair: boolean;
   feeds: boolean;
@@ -320,12 +319,6 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         </SettingRow>
         <SettingRow title="Delete insecure symbolic links" desc="Remove links that point into another account's files, or to files the user could not read otherwise" recommended>
           <Toggle on={s.delete_symlinks} disabled={dis} onChange={(v) => onSave({ delete_symlinks: v })} />
-        </SettingRow>
-        <SettingRow
-          title="Act on files owned by root"
-          desc="Off (recommended, as in Imunify360): root's files outside the hosting accounts are not scanned (cPanel builds, SpamAssassin's compiled rules and package managers write them in /var/tmp; a hacked website can only create files as its own user), and root's files inside an account are only reported, never quarantined."
-        >
-          <Toggle on={!!s.root_owned} disabled={dis} onChange={(v) => onSave({ root_owned: v })} />
         </SettingRow>
         <SettingRow
           title="Repair infected WordPress core files"

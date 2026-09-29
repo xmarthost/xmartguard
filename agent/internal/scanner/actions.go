@@ -228,13 +228,11 @@ func (s *Scanner) Get(id int64) (Finding, error) {
 }
 
 // RestoreSystemFiles undoes quarantines the current rules would not make:
-// root's files outside the hosting accounts' homes (unless root-owned files
-// are acted on) and "binaries" that cannot run (relocatable objects such as
+// root's files and "binaries" that cannot run (relocatable objects such as
 // SpamAssassin's compiled rules). A file whose folder is gone (a finished
 // build in /var/tmp) is not recreated: its quarantined copy is deleted and
 // the finding is marked ignored. Returns the number of findings handled.
 func (s *Scanner) RestoreSystemFiles() int {
-	cfg := s.Settings.Get().Scanner
 	rows, err := s.DB.Query(`SELECT id, path, qpath, orig_uid, signature FROM findings WHERE status = 'quarantined'`)
 	if err != nil {
 		return 0
@@ -251,7 +249,7 @@ func (s *Scanner) RestoreSystemFiles() int {
 		if rows.Scan(&c.id, &c.path, &c.qpath, &uid, &sig) != nil {
 			continue
 		}
-		system := uid == 0 && !cfg.RootOwned && !s.inHome(c.path)
+		system := uid == 0 && !ScanRootFiles
 		if !system && sig == "Binary.ELF.InWebOrTempDir" {
 			system = !runnableELF(c.qpath)
 		}

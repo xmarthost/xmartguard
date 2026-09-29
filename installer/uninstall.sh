@@ -72,6 +72,7 @@ safe_path() {
     /opt/xpguard|/opt/xpguard/*) return 0 ;;
     /usr/local/bin/xpguard-agent) return 0 ;;
     /etc/sysctl.d/xmartguard.conf) return 0 ;;
+    /etc/systemd/system/nftables.service.d/xpguard-agent.conf) return 0 ;;
   esac
   return 1
 }
@@ -127,6 +128,7 @@ if [ -x "$BIN" ] && { [ -d /usr/local/cpanel/whostmgr/docroot/cgi/xpguard ] || [
   elif "$BIN" panel uninstall >/dev/null 2>&1; then ok "cPanel/WHM plugins removed"
   else warn "cPanel/WHM plugins could not be fully removed"; fi
 fi
+UNITS+=(/etc/systemd/system/nftables.service.d/xpguard-agent.conf)
 for u in "${UNITS[@]}"; do
   safe_path "$u" || { warn "skipping unexpected path $u"; continue; }
   [ -e "$u" ] && run rm -f "$u"

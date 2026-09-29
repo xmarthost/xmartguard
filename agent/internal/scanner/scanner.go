@@ -101,9 +101,13 @@ type Scanner struct {
 	cancels map[int64]context.CancelFunc
 	sem     chan struct{}
 	users   map[uint32]string
-	homes   []string
-	homesAt time.Time
 }
+
+// ScanRootFiles makes the scanner look at files owned by root. It is off:
+// root's files are the system's (cPanel builds, SpamAssassin's compiled
+// rules, package managers), and a hacked website can only create files as
+// its account's user. Tests, which run as root, turn it on.
+var ScanRootFiles = false
 
 // New creates a scanner and marks scans interrupted by a restart as failed.
 func New(db *sql.DB, st *settings.Store, log *slog.Logger) *Scanner {
@@ -313,21 +317,6 @@ func elfType(head []byte) int {
 	return int(head[17])<<8 | int(head[16])
 }
 
-// inHome reports whether path lies in a hosting account's home directory.
-func (s *Scanner) inHome(path string) bool {
-	s.mu.Lock()
-	if s.homesAt.IsZero() || time.Since(s.homesAt) > 10*time.Minute {
-		s.homes = s.homes[:0]
-		for _, u := range Users() {
-			s.homes = append(s.homes, u.Home)
-		}
-		s.homesAt = time.Now()
-	}
-	homes := s.homes
-	s.mu.Unlock()
-	return underAny(path, homes)
-}
-
 func (s *Scanner) owner(uid uint32) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -366,7 +355,7 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		if st.Uid == 0 && !cfg.RootOwned && !s.inHome(path) {
+		if st.Uid == 0 && !ScanRootFiles {
 			return nil, ErrTrusted // the system's own file (no YARA either)
 		}
 		owner := s.owner(st.Uid)
@@ -595,8 +584,8 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 			}
 		}
 	}
-	// Root's files are only reported (see settings.Scanner.RootOwned).
-	if f.Owner == "root" && !cfg.RootOwned {
+	// Root's files are never acted on (see ScanRootFiles).
+	if f.Owner == "root" && !ScanRootFiles {
 		action = settings.ActionNotify
 	}
 	switch action {

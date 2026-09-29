@@ -244,6 +244,17 @@ fi
 if [ -f /etc/csf/csf.pignore ] && grep -qxF "exe:$OLD_HOME/bin/xmartguard-agent" /etc/csf/csf.pignore; then
   grep -vxF "exe:$OLD_HOME/bin/xmartguard-agent" /etc/csf/csf.pignore >/etc/csf/csf.pignore.xg && cat /etc/csf/csf.pignore.xg >/etc/csf/csf.pignore && rm -f /etc/csf/csf.pignore.xg
 fi
+# nftables.service (re)loads start with "flush ruleset", which removes our
+# rules too: put them back at once instead of at the next minute's check.
+if systemctl list-unit-files nftables.service 2>/dev/null | grep -q '^nftables.service'; then
+  mkdir -p /etc/systemd/system/nftables.service.d
+  cat > /etc/systemd/system/nftables.service.d/xpguard-agent.conf <<EOF
+# xPGuard: reload the agent's firewall rules after nftables flushed them.
+[Service]
+ExecStartPost=-/bin/sh -c 'timeout 30 $BIN call fw.apply >/dev/null 2>&1 || true'
+ExecReload=-/bin/sh -c 'timeout 30 $BIN call fw.apply >/dev/null 2>&1 || true'
+EOF
+fi
 systemctl daemon-reload
 systemctl enable --now xpguard-agent >/dev/null 2>&1
 sleep 3

@@ -57,7 +57,7 @@ func newScanner(t *testing.T) *Scanner {
 		t.Fatal(err)
 	}
 	// Tests choose actions explicitly; start from "report only".
-	if _, err := st.Patch([]byte(`{"scanner":{"virus_action":"notify","root_owned":true}}`)); err != nil {
+	if _, err := st.Patch([]byte(`{"scanner":{"virus_action":"notify"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	return New(db, st, slog.New(slog.NewTextHandler(io.Discard, nil)))

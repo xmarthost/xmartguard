@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+// Tests run as root: their files are root's, so the scanner must look at them.
+func TestMain(m *testing.M) {
+	ScanRootFiles = true
+	os.Exit(m.Run())
+}
+
+// system switches off ScanRootFiles for one test, as on a real server.
+func system(t *testing.T) {
+	ScanRootFiles = false
+	t.Cleanup(func() { ScanRootFiles = true })
+}
+
 // compile builds a relocatable object and a program from a tiny C file.
 func compile(t *testing.T, dir string) (obj, prog string) {
 	t.Helper()
@@ -47,24 +59,23 @@ func TestObjectFilesAreNotBinaries(t *testing.T) {
 	}
 }
 
-// Root's files outside the hosting homes are the system's: not scanned
-// unless root_owned is on.
-func TestRootFilesOutsideHomesAreSkipped(t *testing.T) {
+// Root's files are the system's: never scanned.
+func TestRootFilesAreSkipped(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("needs root-owned files")
 	}
 	s := newScanner(t)
-	s.Settings.Patch([]byte(`{"scanner":{"root_owned":false,"binary_action":"quarantine"}}`))
-	dir := filepath.Join(t.TempDir(), "tmp")
+	s.Settings.Patch([]byte(`{"scanner":{"binary_action":"quarantine"}}`))
+	dir := filepath.Join(t.TempDir(), "public_html")
 	os.MkdirAll(dir, 0o755)
 	_, prog := compile(t, dir)
-	info, _ := os.Stat(prog)
-	if d, err := s.CheckFile(prog, info, s.Settings.Get().Scanner); d != nil || err != ErrTrusted {
-		t.Fatalf("root's program in a temp folder: %+v %v", d, err)
-	}
-	s.Settings.Patch([]byte(`{"scanner":{"root_owned":true}}`))
-	if d, _ := s.CheckFile(prog, info, s.Settings.Get().Scanner); d == nil {
-		t.Fatal("root_owned on: program not flagged")
+	os.WriteFile(filepath.Join(dir, "x.php"), []byte(`<?php eval(base64_decode($_POST["x"]));`), 0o644)
+	system(t)
+	for _, p := range []string{prog, filepath.Join(dir, "x.php")} {
+		info, _ := os.Stat(p)
+		if d, err := s.CheckFile(p, info, s.Settings.Get().Scanner); d != nil || err != ErrTrusted {
+			t.Fatalf("root's %s: %+v %v", filepath.Base(p), d, err)
+		}
 	}
 }
 
@@ -74,7 +85,7 @@ func TestRestoreSystemFiles(t *testing.T) {
 		t.Skip("needs root-owned files")
 	}
 	s := newScanner(t)
-	s.Settings.Patch([]byte(`{"scanner":{"root_owned":true,"binary_action":"quarantine"}}`))
+	s.Settings.Patch([]byte(`{"scanner":{"binary_action":"quarantine"}}`))
 	dir := filepath.Join(t.TempDir(), "tmp")
 	os.MkdirAll(dir, 0o755)
 	_, prog := compile(t, dir)
@@ -90,7 +101,7 @@ func TestRestoreSystemFiles(t *testing.T) {
 		}
 	}
 	os.RemoveAll(filepath.Dir(gone)) // the build folder was cleaned up
-	s.Settings.Patch([]byte(`{"scanner":{"root_owned":false}}`))
+	system(t)
 	if n := s.RestoreSystemFiles(); n != 2 {
 		t.Fatalf("handled %d, want 2", n)
 	}
