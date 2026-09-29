@@ -190,12 +190,40 @@ remove_local_ai() {
 
 step "Building and starting the portal (first build takes several minutes)"
 cd "$DIR/deploy"
-if [ "$MODE" = caddy ]; then
-  docker compose --profile caddy up -d --build --remove-orphans
-else
-  # A Caddy container from an earlier attempt would fight Apache for port 80.
-  docker compose --profile caddy rm -sf caddy >/dev/null 2>&1 || true
-  docker compose up -d --build --remove-orphans
+# CSF (`csf -r`) flushes Docker's firewall chains; without them no container
+# can publish its port. Recreate them first (restarts Docker only if needed).
+if ! iptables -w -t nat -n -L DOCKER >/dev/null 2>&1 && iptables -w -n -L >/dev/null 2>&1; then
+  warn "Docker's firewall rules are missing (flushed by a firewall restart such as csf -r); restarting Docker"
+fi
+bash "$DIR/deploy/docker-fw-check.sh" || die "Docker did not come back after a restart (systemctl status docker)"
+compose_up() {
+  if [ "$MODE" = caddy ]; then
+    docker compose --profile caddy up -d --build --remove-orphans
+  else
+    # A Caddy container from an earlier attempt would fight Apache for port 80.
+    docker compose --profile caddy rm -sf caddy >/dev/null 2>&1 || true
+    docker compose up -d --build --remove-orphans
+  fi
+}
+if ! compose_up; then
+  # The rules can be flushed while the image builds: recreate them and retry once.
+  warn "starting the containers failed; restarting Docker and trying again"
+  systemctl restart docker
+  for _ in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  compose_up
+fi
+
+# Recreate Docker's rules after every `csf -r` from now on.
+CSFPOST=/usr/local/csf/bin/csfpost.sh
+CSFTAG="# xPGuard portal: recreate Docker's firewall rules after csf -r"
+if [ -f /etc/csf/csf.conf ]; then
+  mkdir -p "$(dirname "$CSFPOST")"
+  [ -s "$CSFPOST" ] || printf '#!/bin/sh\n' > "$CSFPOST"
+  sed -i "\|$CSFTAG|d" "$CSFPOST"
+  [ -z "$(tail -c1 "$CSFPOST")" ] || echo >> "$CSFPOST"
+  echo "(sleep 5; bash $DIR/deploy/docker-fw-check.sh) >/dev/null 2>&1 & $CSFTAG" >> "$CSFPOST"
+  chmod 700 "$CSFPOST"
+  ok "CSF restarts recreate Docker's firewall rules (csfpost.sh)"
 fi
 remove_local_ai
 docker image prune -f >/dev/null
