@@ -36,6 +36,10 @@ type Scanner struct {
 	WhitelistUsers   []string `json:"whitelist_users"`
 	WhitelistPaths   []string `json:"whitelist_paths"`
 	BlacklistNames   []string `json:"blacklist_names"`
+	// ListDefaults is the version of the built-in whitelist/blacklist
+	// entries already added; they are added once, so an entry the
+	// administrator removes stays removed.
+	ListDefaults int `json:"list_defaults"`
 	// DeleteSymlinks removes symbolic links that point outside the owner's
 	// home (a common way to read other accounts' files).
 	DeleteSymlinks bool `json:"delete_symlinks"`
@@ -369,6 +373,14 @@ type Settings struct {
 
 // Defaults are safe: detections are reported, not acted on, until an admin
 // opts into quarantine.
+// Built-in scanner list entries, added once to every server.
+var (
+	DefaultScanWhitelist = []string{"mysql.sock"}
+	DefaultScanBlacklist = []string{"1.sh", "libworker.so"}
+)
+
+const scannerListDefaultsVersion = 1
+
 func Defaults() Settings {
 	return Settings{
 		Scanner: Scanner{
@@ -492,6 +504,13 @@ func clean(list []string, upper bool) []string {
 
 func normalize(s *Settings) {
 	s.Scanner.WhitelistUsers = clean(s.Scanner.WhitelistUsers, false)
+	if s.Scanner.ListDefaults < scannerListDefaultsVersion {
+		// Like cPGuard: MySQL's socket is never a threat; two names are
+		// known malware droppers (a shell loader and a cryptominer library).
+		s.Scanner.WhitelistPaths = append(s.Scanner.WhitelistPaths, DefaultScanWhitelist...)
+		s.Scanner.BlacklistNames = append(s.Scanner.BlacklistNames, DefaultScanBlacklist...)
+		s.Scanner.ListDefaults = scannerListDefaultsVersion
+	}
 	s.Scanner.WhitelistPaths = clean(s.Scanner.WhitelistPaths, false)
 	s.Scanner.BlacklistNames = clean(s.Scanner.BlacklistNames, false)
 	s.Firewall.BlockedCountries = clean(s.Firewall.BlockedCountries, true)

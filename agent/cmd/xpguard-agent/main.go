@@ -373,6 +373,8 @@ func cmdCheck(args []string) error {
 	}
 	cfg := settings.Defaults().Scanner
 	cfg.MaxFileSizeMB = 20
+	cfg.WhitelistPaths = append(cfg.WhitelistPaths, settings.DefaultScanWhitelist...)
+	cfg.BlacklistNames = append(cfg.BlacklistNames, settings.DefaultScanBlacklist...)
 	sc := scanner.NewOffline()
 	sc.NoHash = *noHash
 	// Same ClamAV-format databases as the running agent (installed ClamAV
