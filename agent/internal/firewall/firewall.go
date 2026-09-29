@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,6 +79,9 @@ type Manager struct {
 	mu        sync.Mutex
 	lastError string
 	stats     dropStats
+	// lifted holds addresses unblocked in the last minutes, so the DoS
+	// sync does not record the kernel's copy of a ban being removed.
+	lifted map[string]time.Time
 }
 
 // Backend returns the provider selected in settings.
@@ -355,11 +359,17 @@ func (m *Manager) Remove(kind, addr string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("%s is not in the %s list", c, kind)
 	}
-	if kind == KindDeny || kind == KindTempBan {
+	lifted := kind == KindDeny || kind == KindTempBan
+	if lifted {
+		m.lift(c)
 		_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status = 'blocked'`, c)
 	}
 	if m.Settings.Get().Firewall.Enabled {
-		return m.Apply()
+		err := m.Apply()
+		if lifted {
+			forgetRedirects(c)
+		}
+		return err
 	}
 	return nil
 }
@@ -370,12 +380,56 @@ func (m *Manager) Unblock(addr string) error {
 	if err != nil {
 		return err
 	}
+	m.lift(c)
 	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind IN ('deny','tempban') AND cidr = ?`, c)
 	_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status = 'blocked'`, c)
 	if m.Settings.Get().Firewall.Enabled {
-		return m.Apply()
+		err := m.Apply()
+		forgetRedirects(c)
+		return err
 	}
 	return nil
+}
+
+// lift notes that a ban on addr is being removed.
+func (m *Manager) lift(addr string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lifted == nil {
+		m.lifted = map[string]time.Time{}
+	}
+	now := time.Now()
+	for a, t := range m.lifted {
+		if now.Sub(t) > 2*time.Minute {
+			delete(m.lifted, a)
+		}
+	}
+	m.lifted[addr] = now
+}
+
+func (m *Manager) recentlyLifted(addr string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.lifted[addr]
+	return ok && time.Since(t) < 2*time.Minute
+}
+
+// forgetRedirects drops the kernel's NAT state of connections from addr
+// that were redirected to the CAPTCHA, so they do not outlive the ban
+// (best effort: needs the conntrack tool; the CAPTCHA server also closes
+// every connection after one response).
+var forgetRedirects = func(addr string) {
+	bin, err := exec.LookPath("conntrack")
+	if err != nil || strings.Contains(addr, "/") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fam := "ipv4"
+	if strings.Contains(addr, ":") {
+		fam = "ipv6"
+	}
+	_ = exec.CommandContext(ctx, bin, "-D", "-f", fam, "-p", "tcp", "-s", addr, "--dst-nat").Run()
 }
 
 // CaptchaSolved lifts temporary bans on ip and allows it for the given
@@ -391,6 +445,7 @@ func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 			return fmt.Errorf("%s is blocked permanently", c)
 		}
 	}
+	m.lift(c)
 	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempban' AND cidr = ?`, c)
 	_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'captcha' WHERE ip = ? AND status = 'blocked'`, c)
 	if allow < time.Minute {
@@ -645,7 +700,7 @@ func (m *Manager) syncDoSBans() {
 	}
 	{
 		for _, ip := range ips {
-			if known[ip] {
+			if known[ip] || m.recentlyLifted(ip) {
 				continue
 			}
 			now := store.Now()

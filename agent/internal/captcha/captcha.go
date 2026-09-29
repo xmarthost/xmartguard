@@ -108,11 +108,9 @@ func (s *Server) sync() {
 		return
 	}
 	s.ports = ports
-	plain := &http.Server{Addr: fmt.Sprintf(":%d", ports[0]), Handler: s, ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second}
-	secure := &http.Server{Addr: fmt.Sprintf(":%d", ports[1]), Handler: s, ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second,
-		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.certs().Get}}
+	plain := HTTPServer(ports[0], s)
+	secure := HTTPServer(ports[1], s)
+	secure.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.certs().Get}
 	s.running = [2]*http.Server{plain, secure}
 	go func() {
 		if err := plain.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -125,6 +123,18 @@ func (s *Server) sync() {
 		}
 	}()
 	s.Log.Info("captcha server listening", "http", ports[0], "https", ports[1])
+}
+
+// HTTPServer builds a CAPTCHA listener. Keep-alive is off:
+// banned visitors reach this server through a NAT redirect, which the kernel
+// keeps for the life of each connection, so a browser's reused connection
+// would keep showing the CAPTCHA after the address is unblocked. Closing
+// after every response (HTTP/2: GOAWAY) sends the next request to the site.
+func HTTPServer(port int, h http.Handler) *http.Server {
+	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: h, ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 5 * time.Second}
+	srv.SetKeepAlivesEnabled(false)
+	return srv
 }
 
 func (s *Server) certs() *CertStore {

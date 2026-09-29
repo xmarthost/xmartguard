@@ -107,6 +107,14 @@ if ! command -v ipset >/dev/null 2>&1; then
   command -v ipset >/dev/null 2>&1 && ok "Installed ipset" || warn "ipset could not be installed; the firewall will need it"
 fi
 
+# conntrack clears the CAPTCHA redirect of an unblocked visitor's open connections.
+if ! command -v conntrack >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then dnf -y -q install conntrack-tools >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then yum -y -q install conntrack-tools >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then DEBIAN_FRONTEND=noninteractive apt-get install -y -q conntrack >/dev/null 2>&1 || true
+  fi
+fi
+
 # ---------------------------------------------------------------- download
 # Not /tmp: hardened servers (cPanel "securetmp") mount it noexec.
 TMP=$(mktemp -d -p "$HOME_DIR" .install.XXXXXX)

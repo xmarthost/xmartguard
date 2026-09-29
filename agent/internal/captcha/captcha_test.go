@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -246,5 +247,28 @@ func TestCertIndexFindsAddonDomains(t *testing.T) {
 	}
 	if cert, _ := c.Get(&tls.ClientHelloInfo{ServerName: "other.example"}); bytes.Equal(cert.Certificate[0], der) {
 		t.Fatal("unrelated name got the site certificate")
+	}
+}
+
+// Redirected connections must not be reused: after an unblock the next
+// request of the browser has to reach the site, not this server.
+func TestServerClosesEveryConnection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := HTTPServer(0, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "captcha") }))
+	go srv.Serve(ln)
+	defer srv.Close()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	io.WriteString(c, "GET / HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n")
+	_ = c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	all, _ := io.ReadAll(c)
+	if n := strings.Count(string(all), "HTTP/1.1 200"); n != 1 || !strings.Contains(string(all), "Connection: close") {
+		t.Fatalf("connection kept open (%d responses):\n%s", n, all)
 	}
 }
