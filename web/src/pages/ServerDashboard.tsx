@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Activity, ChevronLeft, Cpu, HardDrive, Info, MemoryStick, Network, RefreshCw, Search } from 'lucide-react';
 import { api, type Server } from '../api';
@@ -125,13 +125,26 @@ export default function ServerDashboard() {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <Link to="/servers" className="text-navy-900 hover:text-blue-700" aria-label="All servers">
+        <div className="w-full min-w-0 sm:w-auto sm:max-w-full">
+          <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+            <Link to="/servers" className="shrink-0 text-navy-900 hover:text-blue-700" aria-label="All servers">
               <ChevronLeft className="h-6 w-6" />
             </Link>
-            <h1 className="h-title">{s.hostname}</h1>
-            <button className="text-navy-800 hover:text-blue-700" title="Server information" onClick={() => setInfo(true)}>
+            {/* Long hostnames: smaller on phones; if still too long they
+                wrap after a dot instead of widening the page. */}
+            <h1 className="h-title min-w-0 !text-[14px] min-[400px]:!text-base !leading-snug [overflow-wrap:anywhere] sm:!text-2xl" title={s.hostname}>
+              {s.hostname.split('.').map((part, i, all) => (
+                <Fragment key={i}>
+                  {part}
+                  {i < all.length - 1 && (
+                    <>
+                      .<wbr />
+                    </>
+                  )}
+                </Fragment>
+              ))}
+            </h1>
+            <button className="shrink-0 text-navy-800 hover:text-blue-700" title="Server information" onClick={() => setInfo(true)}>
               <Info className="h-5 w-5" />
             </button>
           </div>
