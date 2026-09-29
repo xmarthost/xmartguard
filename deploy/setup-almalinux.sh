@@ -196,13 +196,16 @@ if ! iptables -w -t nat -n -L DOCKER >/dev/null 2>&1 && iptables -w -n -L >/dev/
   warn "Docker's firewall rules are missing (flushed by a firewall restart such as csf -r); restarting Docker"
 fi
 bash "$DIR/deploy/docker-fw-check.sh" || die "Docker did not come back after a restart (systemctl status docker)"
+# --force-recreate: a container left from a failed start (e.g. its network
+# could not be set up) would otherwise be started again with a broken network
+# ("getaddrinfo EAI_AGAIN db"). Data lives in named volumes and is kept.
 compose_up() {
   if [ "$MODE" = caddy ]; then
-    docker compose --profile caddy up -d --build --remove-orphans
+    docker compose --profile caddy up -d --build --remove-orphans --force-recreate
   else
     # A Caddy container from an earlier attempt would fight Apache for port 80.
     docker compose --profile caddy rm -sf caddy >/dev/null 2>&1 || true
-    docker compose up -d --build --remove-orphans
+    docker compose up -d --build --remove-orphans --force-recreate
   fi
 }
 if ! compose_up; then
@@ -234,6 +237,18 @@ for _ in $(seq 1 60); do
   if curl -fsS --max-time 3 "http://127.0.0.1:$PORTAL_PORT/api/health" >/dev/null 2>&1; then healthy=1; break; fi
   sleep 3
 done
+if [ "$healthy" = 0 ]; then
+  # Recreate the stack's network and containers once (volumes are kept).
+  warn "the portal did not answer; recreating its containers and network"
+  docker compose logs --tail 20 portal || true
+  docker compose down --remove-orphans
+  bash "$DIR/deploy/docker-fw-check.sh" || true
+  compose_up
+  for _ in $(seq 1 60); do
+    if curl -fsS --max-time 3 "http://127.0.0.1:$PORTAL_PORT/api/health" >/dev/null 2>&1; then healthy=1; break; fi
+    sleep 3
+  done
+fi
 [ "$healthy" = 1 ] || { docker compose logs --tail 60 portal; die "portal did not become healthy"; }
 ok "portal answers on 127.0.0.1:$PORTAL_PORT"
 
