@@ -215,6 +215,13 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.reportLoop(ctx)
 	go a.hostTrustLoop(ctx)
 	go a.proxyListLoop(ctx)
+	// Put back system files that older rules quarantined (root's temp
+	// files, SpamAssassin's compiled rules).
+	go func() {
+		if n := a.Scanner.RestoreSystemFiles(); n > 0 {
+			a.Log.Info("restored system files quarantined by older rules", "count", n)
+		}
+	}()
 	go a.trustedLoop(ctx)
 	go a.clamLoop(ctx)
 	go a.gateLoop(ctx)

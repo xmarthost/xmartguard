@@ -226,3 +226,68 @@ func (s *Scanner) Get(id int64) (Finding, error) {
 	}
 	return f, err
 }
+
+// RestoreSystemFiles undoes quarantines the current rules would not make:
+// root's files outside the hosting accounts' homes (unless root-owned files
+// are acted on) and "binaries" that cannot run (relocatable objects such as
+// SpamAssassin's compiled rules). A file whose folder is gone (a finished
+// build in /var/tmp) is not recreated: its quarantined copy is deleted and
+// the finding is marked ignored. Returns the number of findings handled.
+func (s *Scanner) RestoreSystemFiles() int {
+	cfg := s.Settings.Get().Scanner
+	rows, err := s.DB.Query(`SELECT id, path, qpath, orig_uid, signature FROM findings WHERE status = 'quarantined'`)
+	if err != nil {
+		return 0
+	}
+	type cand struct {
+		id          int64
+		path, qpath string
+	}
+	var list []cand
+	for rows.Next() {
+		var c cand
+		var uid int
+		var sig string
+		if rows.Scan(&c.id, &c.path, &c.qpath, &uid, &sig) != nil {
+			continue
+		}
+		system := uid == 0 && !cfg.RootOwned && !s.inHome(c.path)
+		if !system && sig == "Binary.ELF.InWebOrTempDir" {
+			system = !runnableELF(c.qpath)
+		}
+		if system {
+			list = append(list, c)
+		}
+	}
+	rows.Close()
+	n := 0
+	for _, c := range list {
+		if _, err := os.Stat(filepath.Dir(c.path)); err != nil {
+			_ = os.Remove(c.qpath)
+			if s.setStatus(c.id, "ignored", "") == nil {
+				n++
+			}
+			continue
+		}
+		if err := s.Restore(c.id); err != nil {
+			s.Log.Warn("could not restore a system file", "path", c.path, "err", err)
+			continue
+		}
+		s.Log.Info("restored a system file quarantined by an older rule", "path", c.path)
+		n++
+	}
+	return n
+}
+
+// runnableELF reports whether a file is an ELF program or shared library.
+func runnableELF(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return true // unknown: leave it quarantined
+	}
+	defer f.Close()
+	head := make([]byte, 20)
+	n, _ := io.ReadFull(f, head)
+	t := elfType(head[:n])
+	return t == elfExec || t == elfDyn || t == 0
+}

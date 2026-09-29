@@ -77,6 +77,12 @@ type Scanner struct {
 	DBWhitelist []Exclusion `json:"db_whitelist"`
 	// KeepDays is how long logs and quarantined files are kept.
 	KeepDays int `json:"keep_days"`
+	// RootOwned also acts on files owned by root. Off (the default, as in
+	// Imunify360): root's files outside the hosting accounts' homes are not
+	// scanned (cPanel builds, SpamAssassin's compiled rules, package
+	// managers write them; a hacked website can only create files as its
+	// account's user), and root's files inside a home are only reported.
+	RootOwned bool `json:"root_owned"`
 }
 
 // Exclusion is an ignored id with the reason an admin gave.
@@ -399,7 +405,7 @@ func Defaults() Settings {
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
 		IPDB:       IPDB{Enabled: true, Report: true, Log: true},
 		CMS: CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 24, Vulns: true,
-			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 12},
+			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 1},
 		OSM: OSM{Enabled: true, PerMinute: 50, PerHour: 300, Action: "notify", CheckSubjects: true,
 			SpamPatterns: []string{}, WhitelistSenders: []string{}, WhitelistIPs: []string{}, WhitelistPaths: []string{}},
 		AutoSuspend: AutoSuspend{Enabled: false, Detections: 10, WindowHours: 24, ExcludeUsers: []string{}, WhitelistDomains: []string{}},
@@ -553,7 +559,7 @@ func normalize(s *Settings) {
 	s.CMS.BlacklistPlugins = clean(lower(s.CMS.BlacklistPlugins), false)
 	s.CMS.ExcludeUsers = clean(s.CMS.ExcludeUsers, false)
 	if s.CMS.WPCronHours <= 0 {
-		s.CMS.WPCronHours = 12
+		s.CMS.WPCronHours = 1
 	}
 	if s.Scanner.KeepDays <= 0 {
 		s.Scanner.KeepDays = 60

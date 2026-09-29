@@ -24,6 +24,12 @@ func TestJudge(t *testing.T) {
 		{ProcInfo{Exe: "/home/u/bin/app (deleted)", Cmdline: "app"}, "/home/u", true},
 		{ProcInfo{Exe: "/usr/bin/python3", Cmdline: "python3 miner.py -o stratum+tcp://pool.example:3333"}, "/home/u", true},
 		{ProcInfo{Exe: "/usr/bin/node", Cmdline: "node /home/u/app/server.js"}, "/home/u", false},
+		// PHP updated while old lsphp processes run: not malware.
+		{ProcInfo{Exe: "/opt/cpanel/ea-php81/root/usr/bin/lsphp (deleted)", Cmdline: "lsphp"}, "/home/u", false},
+		{ProcInfo{Exe: "/usr/local/lsws/lsphp82/bin/lsphp (deleted)", Cmdline: "lsphp"}, "/home/u", false},
+		{ProcInfo{Exe: "/opt/alt/php74/usr/bin/lsphp (deleted)", Cmdline: "lsphp"}, "/home/u", false},
+		{ProcInfo{Exe: "/memfd:x (deleted)", Cmdline: "kworker"}, "/home/u", true},
+		{ProcInfo{Exe: "/tmp/.x/run (deleted)", Cmdline: "run"}, "/home/u", true},
 	}
 	for _, c := range cases {
 		if _, bad := Judge(c.p, c.home); bad != c.bad {

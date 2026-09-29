@@ -20,6 +20,7 @@ interface ScannerS {
   whitelist_paths: string[];
   blacklist_names: string[];
   delete_symlinks: boolean;
+  root_owned: boolean;
   auto_clean: boolean;
   wp_core_repair: boolean;
   feeds: boolean;
@@ -319,6 +320,12 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         </SettingRow>
         <SettingRow title="Delete insecure symbolic links" desc="Remove links that point into another account's files, or to files the user could not read otherwise" recommended>
           <Toggle on={s.delete_symlinks} disabled={dis} onChange={(v) => onSave({ delete_symlinks: v })} />
+        </SettingRow>
+        <SettingRow
+          title="Act on files owned by root"
+          desc="Off (recommended, as in Imunify360): root's files outside the hosting accounts are not scanned (cPanel builds, SpamAssassin's compiled rules and package managers write them in /var/tmp; a hacked website can only create files as its own user), and root's files inside an account are only reported, never quarantined."
+        >
+          <Toggle on={!!s.root_owned} disabled={dis} onChange={(v) => onSave({ root_owned: v })} />
         </SettingRow>
         <SettingRow
           title="Repair infected WordPress core files"
@@ -1067,13 +1074,26 @@ function CMSSection({ s, meta, admin, busy, onSave }: { s: CMSS; meta: Meta; adm
       <SettingRow title="Vulnerability database" desc="Look plugins, themes and WordPress core up in the free WPVulnerability database (CVE ids and CVSS scores)" recommended>
         <Toggle on={s.vulns} disabled={dis || !s.enabled} onChange={(v) => onSave({ vulns: v })} />
       </SettingRow>
-      <SettingRow title="Override wordpress wp-cron.php" desc="Adds DISABLE_WP_CRON to wp-config and creates a cron job for the site owner">
+      <SettingRow
+        title="Override wordpress wp-cron.php"
+        desc="Performance setting, not a malware action: WordPress normally runs its scheduled tasks (wp-cron.php) on visitors' page loads. This adds DISABLE_WP_CRON to wp-config.php and runs wp-cron.php from the site owner's cron instead, at the interval below. Turning it off puts both back."
+      >
         <Toggle on={s.wp_cron} disabled={dis || !s.enabled} onChange={(v) => onSave({ wp_cron: v })} />
       </SettingRow>
-      <SettingRow title="Interval for running wp-cron.php" desc="How frequently wp-cron.php is executed">
+      <SettingRow
+        title="Interval for running wp-cron.php"
+        desc={
+          s.wp_cron_hours > 1
+            ? `WordPress runs scheduled posts, WooCommerce orders and emails, backups and plugin tasks only this often: every ${s.wp_cron_hours} hours can delay them up to ${s.wp_cron_hours} hours. Every hour is recommended.`
+            : 'How often wp-cron.php runs (scheduled posts, WooCommerce tasks, emails, backups). Every hour is recommended.'
+        }
+      >
         <select className="input w-40" value={s.wp_cron_hours} disabled={dis || !s.wp_cron} onChange={(e) => onSave({ wp_cron_hours: Number(e.target.value) })}>
           {[1, 2, 6, 12, 24].map((h) => (
-            <option key={h} value={h}>Every {h} Hour{h > 1 ? 's' : ''}</option>
+            <option key={h} value={h}>
+              Every {h} Hour{h > 1 ? 's' : ''}
+              {h === 1 ? ' (recommended)' : ''}
+            </option>
           ))}
         </select>
       </SettingRow>

@@ -154,6 +154,19 @@ var procBad = []struct {
 // Places where hosting users have no reason to run programs from.
 var tmpDirs = []string{"/tmp/", "/var/tmp/", "/dev/shm/"}
 
+// systemExeDirs hold the programs of installed packages (distribution,
+// cPanel EasyApache, CloudLinux alt-php, LiteSpeed).
+var systemExeDirs = []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt/cpanel", "/opt/alt", "/opt/remi", "/usr/local/lsws", "/opt/plesk"}
+
+func underAny(p string, dirs []string) bool {
+	for _, d := range dirs {
+		if p == d || strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // ProcInfo is what the monitor reads about a process.
 type ProcInfo struct {
 	PID     int
@@ -172,7 +185,14 @@ func Judge(p ProcInfo, home string) (string, bool) {
 	}
 	exe := p.Exe
 	if strings.HasSuffix(exe, " (deleted)") {
-		return "running program was deleted from disk (a common way to hide malware)", true
+		exe = strings.TrimSuffix(exe, " (deleted)")
+		// An update of a system package (PHP, LiteSpeed's lsphp) replaces
+		// the program while old processes keep running: their program shows
+		// as deleted. Only programs deleted from elsewhere (a temp or home
+		// folder, or memory-only "memfd:" programs) are hiding.
+		if !underAny(exe, systemExeDirs) {
+			return "running program was deleted from disk (a common way to hide malware)", true
+		}
 	}
 	for _, d := range tmpDirs {
 		if strings.HasPrefix(exe, d) {

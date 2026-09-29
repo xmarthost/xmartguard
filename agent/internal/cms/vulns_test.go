@@ -89,4 +89,24 @@ func TestEnsureRealCron(t *testing.T) {
 	if changed, _ := EnsureRealCron(site, "nobody", 12); changed {
 		t.Fatal("second run changed things again")
 	}
+	// A new interval replaces the line (one line per site).
+	if changed, err := EnsureRealCron(site, "nobody", 1); err != nil || !changed {
+		t.Fatalf("interval change: %v %v", changed, err)
+	}
+	tab, _ = exec.Command("crontab", "-u", "nobody", "-l").Output()
+	if strings.Count(string(tab), "cd "+site) != 1 || !strings.Contains(string(tab), "0 */1 * * * cd "+site) {
+		t.Fatalf("crontab after interval change: %s", tab)
+	}
+	// Turning the option off undoes both changes.
+	if changed, err := RemoveRealCron(site, "nobody"); err != nil || !changed {
+		t.Fatalf("remove: %v %v", changed, err)
+	}
+	tab, _ = exec.Command("crontab", "-u", "nobody", "-l").Output()
+	cfg, _ = os.ReadFile(filepath.Join(site, "wp-config.php"))
+	if strings.Contains(string(tab), site) || strings.Contains(string(cfg), "DISABLE_WP_CRON") || string(cfg) != "<?php\ndefine('DB_NAME','x');\n" {
+		t.Fatalf("not undone:\n%s\n%q", tab, cfg)
+	}
+	if changed, _ := RemoveRealCron(site, "nobody"); changed {
+		t.Fatal("second remove changed things")
+	}
 }

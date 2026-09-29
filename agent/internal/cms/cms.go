@@ -215,18 +215,23 @@ func (m *Manager) scan(ctx context.Context) error {
 		m.save(s)
 	}
 	// Forget installations that no longer exist.
-	rows, err := m.DB.Query(`SELECT path FROM cms_sites`)
+	rows, err := m.DB.Query(`SELECT path, user FROM cms_sites`)
 	if err == nil {
-		var gone []string
+		type site struct{ path, user string }
+		var gone []site
 		for rows.Next() {
-			var p string
-			if rows.Scan(&p) == nil && !seen[p] {
-				gone = append(gone, p)
+			var x site
+			if rows.Scan(&x.path, &x.user) == nil && !seen[x.path] {
+				gone = append(gone, x)
 			}
 		}
 		rows.Close()
-		for _, p := range gone {
-			_, _ = m.DB.Exec(`DELETE FROM cms_sites WHERE path = ?`, p)
+		for _, x := range gone {
+			_, _ = m.DB.Exec(`DELETE FROM cms_sites WHERE path = ?`, x.path)
+			// Its wp-cron job would only fail now.
+			if x.user != "" {
+				_, _ = RemoveRealCron(x.path, x.user)
+			}
 		}
 	}
 	return nil

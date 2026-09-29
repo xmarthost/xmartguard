@@ -208,7 +208,7 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 			return false, fmt.Errorf("unexpected wp-config.php")
 		}
 		i += len("<?php")
-		text = text[:i] + "\ndefine( 'DISABLE_WP_CRON', true ); // added by xPGuard (real cron job)\n" + text[i:]
+		text = text[:i] + cronDefineLine + text[i:]
 		st, _ := os.Stat(cfgPath)
 		if err := os.WriteFile(cfgPath, []byte(text), st.Mode().Perm()); err != nil {
 			return false, err
@@ -219,23 +219,93 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 	if _, err := os.Stat(php); err != nil {
 		php = "php"
 	}
-	line := fmt.Sprintf("0 */%d * * * cd %s && %s -q wp-cron.php >/dev/null 2>&1 # xpguard-wp-cron", max(1, min(hours, 24)), site, php)
+	line := fmt.Sprintf("0 */%d * * * cd %s && %s -q wp-cron.php >/dev/null 2>&1 %s", max(1, min(hours, 24)), site, php, cronMarker)
 	out, _ := exec.Command("crontab", "-u", owner, "-l").Output()
-	cur := string(out)
-	// Jobs added before the xPGuard name carry the old marker: rename it.
-	renamed := strings.Contains(cur, "# xmartguard-wp-cron")
-	cur = strings.ReplaceAll(cur, "# xmartguard-wp-cron", "# xpguard-wp-cron")
-	if strings.Contains(cur, "cd "+site+" && ") && strings.Contains(cur, "xpguard-wp-cron") {
-		if !renamed {
-			return changed, nil
+	cur := strings.ReplaceAll(string(out), legacyCronMarker, cronMarker)
+	// Keep one line for the site, with the current interval.
+	var keep []string
+	found := false
+	for _, l := range strings.Split(strings.TrimRight(cur, "\n"), "\n") {
+		if isOurCronLine(l, site) {
+			if !found && l == line {
+				keep = append(keep, l)
+			}
+			found = found || l == line
+			continue
 		}
-		return true, installCrontab(owner, cur)
+		keep = append(keep, l)
 	}
-	next := strings.TrimRight(cur, "\n") + "\n" + line + "\n"
+	if !found {
+		keep = append(keep, line)
+	}
+	next := strings.TrimLeft(strings.Join(keep, "\n")+"\n", "\n")
+	if next == strings.TrimLeft(string(out), "\n") {
+		return changed, nil
+	}
 	if err := installCrontab(owner, next); err != nil {
 		return changed, err
 	}
 	return true, nil
+}
+
+const (
+	cronMarker       = "# xpguard-wp-cron"
+	legacyCronMarker = "# xmartguard-wp-cron" // before the xPGuard name
+	cronDefine       = "// added by xPGuard (real cron job)"
+	cronDefineLine   = "\ndefine( 'DISABLE_WP_CRON', true ); " + cronDefine + "\n"
+)
+
+func isOurCronLine(l, site string) bool {
+	return strings.Contains(l, "cd "+site+" && ") && (strings.Contains(l, cronMarker) || strings.Contains(l, legacyCronMarker))
+}
+
+// RemoveRealCron undoes EnsureRealCron (the option was turned off or the
+// site was removed): it deletes the crontab line and, when the site still
+// exists, the DISABLE_WP_CRON line xPGuard added, so WordPress runs its
+// scheduled tasks on page loads again. It returns true when it changed
+// something.
+func RemoveRealCron(site, owner string) (bool, error) {
+	if owner == "" || strings.ContainsAny(owner, " /;&|$`") {
+		return false, fmt.Errorf("invalid owner")
+	}
+	changed := false
+	cfgPath := filepath.Join(site, "wp-config.php")
+	if raw, err := os.ReadFile(cfgPath); err == nil && strings.Contains(string(raw), cronDefine) {
+		text := string(raw)
+		if strings.Contains(text, cronDefineLine) {
+			text = strings.Replace(text, cronDefineLine, "", 1) // exactly what was inserted
+		} else {
+			var keep []string
+			for _, l := range strings.Split(text, "\n") {
+				if !strings.Contains(l, cronDefine) {
+					keep = append(keep, l)
+				}
+			}
+			text = strings.Join(keep, "\n")
+		}
+		st, _ := os.Stat(cfgPath)
+		if err := os.WriteFile(cfgPath, []byte(text), st.Mode().Perm()); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	out, err := exec.Command("crontab", "-u", owner, "-l").Output()
+	if err != nil {
+		return changed, nil // no crontab
+	}
+	var keep []string
+	drop := false
+	for _, l := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if isOurCronLine(l, site) {
+			drop = true
+			continue
+		}
+		keep = append(keep, l)
+	}
+	if !drop {
+		return changed, nil
+	}
+	return true, installCrontab(owner, strings.Join(keep, "\n")+"\n")
 }
 
 func installCrontab(owner, text string) error {
@@ -300,12 +370,16 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 			}
 		}
 	}
+	// The wp-cron override is a performance setting, not a security fix:
+	// it is logged, not reported as a patch (as cPGuard does).
 	if cfg.WPCron {
 		if changed, err := EnsureRealCron(s.Path, s.User, cfg.WPCronHours); err != nil {
 			m.Log.Warn("wp-cron override failed", "site", s.Path, "err", err)
 		} else if changed {
-			done = append(done, fmt.Sprintf("replaced wp-cron with a real cron job every %d hours", cfg.WPCronHours))
+			m.Log.Info("wp-cron.php now runs from the account's crontab", "site", s.Path, "every_hours", cfg.WPCronHours)
 		}
+	} else if changed, err := RemoveRealCron(s.Path, s.User); err == nil && changed {
+		m.Log.Info("wp-cron override removed", "site", s.Path)
 	}
 	return done
 }

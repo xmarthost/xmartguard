@@ -101,6 +101,8 @@ type Scanner struct {
 	cancels map[int64]context.CancelFunc
 	sem     chan struct{}
 	users   map[uint32]string
+	homes   []string
+	homesAt time.Time
 }
 
 // New creates a scanner and marks scans interrupted by a restart as failed.
@@ -294,6 +296,38 @@ func cpanelDocroots(user string) []string {
 	return out
 }
 
+// ELF file types (e_type).
+const (
+	elfExec = 2
+	elfDyn  = 3
+)
+
+// elfType reads e_type from an ELF header (0 when too short).
+func elfType(head []byte) int {
+	if len(head) < 18 || !IsELF(head) {
+		return 0
+	}
+	if head[5] == 2 { // big-endian
+		return int(head[16])<<8 | int(head[17])
+	}
+	return int(head[17])<<8 | int(head[16])
+}
+
+// inHome reports whether path lies in a hosting account's home directory.
+func (s *Scanner) inHome(path string) bool {
+	s.mu.Lock()
+	if s.homesAt.IsZero() || time.Since(s.homesAt) > 10*time.Minute {
+		s.homes = s.homes[:0]
+		for _, u := range Users() {
+			s.homes = append(s.homes, u.Home)
+		}
+		s.homesAt = time.Now()
+	}
+	homes := s.homes
+	s.mu.Unlock()
+	return underAny(path, homes)
+}
+
 func (s *Scanner) owner(uid uint32) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -332,6 +366,9 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		if st.Uid == 0 && !cfg.RootOwned && !s.inHome(path) {
+			return nil, ErrTrusted // the system's own file (no YARA either)
+		}
 		owner := s.owner(st.Uid)
 		for _, u := range cfg.WhitelistUsers {
 			if u == owner {
@@ -384,7 +421,7 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	}
 	if content != nil {
 		if ext == "" && IsELF(content) {
-			return binaryCheck(path)
+			return binaryCheck(path, content)
 		}
 		if d := analyze(ext, content); d != nil {
 			return capHeuristic(path, ext, d), nil
@@ -417,11 +454,11 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	if err != nil {
 		return nil, err
 	}
-	head := make([]byte, 4)
+	head := make([]byte, 20)
 	n, _ := io.ReadFull(f, head)
 	f.Close()
 	if IsELF(head[:n]) {
-		d, err := binaryCheck(path)
+		d, err := binaryCheck(path, head[:n])
 		if d != nil && s.clearedFile(path) {
 			return nil, ErrTrusted
 		}
@@ -443,7 +480,12 @@ func (s *Scanner) clearedFile(path string) bool {
 }
 
 // binaryCheck flags executables inside web-accessible directories.
-func binaryCheck(path string) (*Detection, error) {
+// Only programs and shared libraries count: relocatable objects (.o, e.g.
+// SpamAssassin's sa-compile output in /var/tmp) and core dumps cannot run.
+func binaryCheck(path string, head []byte) (*Detection, error) {
+	if t := elfType(head); t != elfExec && t != elfDyn {
+		return nil, nil
+	}
 	for _, part := range strings.Split(path, "/") {
 		if part == "public_html" || part == "www" || part == "html" || part == "tmp" || part == "shm" {
 			return &Detection{CatBinary, "Binary.ELF.InWebOrTempDir"}, nil
@@ -552,6 +594,10 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 				_ = s.setStatus(f.ID, "deleted", "")
 			}
 		}
+	}
+	// Root's files are only reported (see settings.Scanner.RootOwned).
+	if f.Owner == "root" && !cfg.RootOwned {
+		action = settings.ActionNotify
 	}
 	switch action {
 	case settings.ActionQuarantine:

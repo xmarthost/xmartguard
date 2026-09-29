@@ -57,7 +57,7 @@ func newScanner(t *testing.T) *Scanner {
 		t.Fatal(err)
 	}
 	// Tests choose actions explicitly; start from "report only".
-	if _, err := st.Patch([]byte(`{"scanner":{"virus_action":"notify"}}`)); err != nil {
+	if _, err := st.Patch([]byte(`{"scanner":{"virus_action":"notify","root_owned":true}}`)); err != nil {
 		t.Fatal(err)
 	}
 	return New(db, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -274,7 +274,7 @@ func TestAutoQuarantineAndWhitelist(t *testing.T) {
 func TestBlacklistNameAndBinary(t *testing.T) {
 	s := newScanner(t)
 	s.Settings.Patch([]byte(`{"scanner":{"blacklist_names":["libworker.so"]}}`))
-	root := writeTree(t, map[string]string{"libworker.so": "harmless", "bin/miner": "\x7fELF\x02\x01\x01rest-of-binary"})
+	root := writeTree(t, map[string]string{"libworker.so": "harmless", "bin/miner": "\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00rest-of-binary"})
 	id, _ := s.Start("path", root, "test")
 	fs, _, _ := s.ListFindings(FindingFilter{ScanID: id})
 	waitScan(t, s, id)
