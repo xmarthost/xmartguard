@@ -58,7 +58,7 @@ func TestYARAScan(t *testing.T) {
 	os.WriteFile(filepath.Join(FeedYARADir(), "webshells.yar"), []byte(`rule Feed_Marker { strings: $a = "FEED-MARKER-11aa" condition: $a }`), 0o644)
 	feed := filepath.Join(dir, "c.php")
 	os.WriteFile(feed, []byte("<?php // FEED-MARKER-11aa"), 0o644)
-	got := yaraScan(t.Context(), []string{hit, miss, feed})
+	got := yaraScan(t.Context(), []string{hit, miss, feed}, 1)
 	if got[hit] != "admin:XG_Test_Marker" || got[feed] != "feed:Feed_Marker" || len(got) != 2 {
 		t.Fatalf("yara: %v", got)
 	}

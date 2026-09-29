@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -109,7 +110,9 @@ func ValidYARA(path string) error {
 }
 
 // yaraScan runs the rules over a list of files and returns path -> rule.
-func yaraScan(ctx context.Context, files []string) map[string]string {
+// It runs with the scan's thread count, at the lowest CPU and disk
+// priority.
+func yaraScan(ctx context.Context, files []string, threads int) map[string]string {
 	bin, rules := YARABin(), YARARules()
 	out := map[string]string{}
 	if bin == "" || len(rules) == 0 || len(files) == 0 {
@@ -128,9 +131,18 @@ func yaraScan(ctx context.Context, files []string) map[string]string {
 	list.Close()
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
-	args := append([]string{"-w", "-e", "--scan-list"}, rules...)
+	args := append([]string{"-w", "-e", "-p", strconv.Itoa(max(threads, 1)), "--scan-list"}, rules...)
 	args = append(args, list.Name())
-	raw, _ := exec.CommandContext(cctx, bin, args...).Output()
+	cmd := bin
+	if p, err := exec.LookPath("ionice"); err == nil {
+		args = append([]string{"-c3", cmd}, args...)
+		cmd = p
+	}
+	if p, err := exec.LookPath("nice"); err == nil {
+		args = append([]string{"-n", "19", cmd}, args...)
+		cmd = p
+	}
+	raw, _ := exec.CommandContext(cctx, cmd, args...).Output()
 	for _, line := range bytes.Split(raw, []byte("\n")) {
 		rule, path, ok := strings.Cut(string(line), " ")
 		if ok && rule != "" && path != "" {

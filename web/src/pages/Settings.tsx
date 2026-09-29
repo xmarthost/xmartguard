@@ -31,6 +31,7 @@ interface ScannerS {
   yara: boolean;
   db_whitelist: { id: string; reason: string }[];
   keep_days: number;
+  scan_speed?: 'low' | 'normal' | 'fast';
 }
 interface AIS {
   enabled: boolean;
@@ -316,6 +317,16 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         </SettingRow>
         <SettingRow title="Weekly scan" desc="Scan all files modified in the last 7 days (Sunday night)" recommended>
           <Toggle on={s.weekly_scan} disabled={dis} onChange={(v) => onSave({ weekly_scan: v })} />
+        </SettingRow>
+        <SettingRow
+          title="Scan speed"
+          desc="How much of the server a scan may use. Scan threads always run at the lowest CPU and disk priority and pause while the server is busy, so websites come first. Low: 1 thread. Normal: a quarter of the CPUs (at most 4). Fast: half of the CPUs (at most 8)."
+        >
+          <select className="input w-56" value={s.scan_speed ?? 'normal'} disabled={dis} onChange={(e) => onSave({ scan_speed: e.target.value as ScannerS['scan_speed'] })}>
+            <option value="low">Low</option>
+            <option value="normal">Normal (recommended)</option>
+            <option value="fast">Fast</option>
+          </select>
         </SettingRow>
         <SettingRow title="Delete insecure symbolic links" desc="Remove links that point into another account's files, or to files the user could not read otherwise" recommended>
           <Toggle on={s.delete_symlinks} disabled={dis} onChange={(v) => onSave({ delete_symlinks: v })} />

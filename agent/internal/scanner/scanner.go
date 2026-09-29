@@ -717,9 +717,9 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	useYARA := cfg.YARA && YARABin() != "" && len(YARARules()) > 0
 	maxSize := int64(cfg.MaxFileSizeMB) << 20
 
-	// Files are checked by a worker pool (half the CPUs, so websites stay
-	// fast); one collector records results, so the YARA batch
-	// need no locking.
+	// Files are checked by a worker pool sized by the scan speed setting,
+	// at the lowest priority (see throttle.go); one collector records
+	// results, so the YARA batch needs no locking.
 	type job struct {
 		path string
 		info fs.FileInfo
@@ -729,13 +729,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 		det *Detection
 		err error
 	}
-	workers := runtime.NumCPU() / 2
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > 8 {
-		workers = 8
-	}
+	workers := scanWorkers(cfg.ScanSpeed, runtime.NumCPU())
 	jobs := make(chan job, 256)
 	results := make(chan result, 256)
 	var wg sync.WaitGroup
@@ -743,7 +737,9 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			lowPriorityThread()
 			for j := range jobs {
+				waitForIdle(ctx, cfg.ScanSpeed)
 				det, err := s.CheckFile(j.path, j.info, cfg)
 				results <- result{j, det, err}
 			}
@@ -824,7 +820,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	close(results)
 	<-collected
 	if ctx.Err() == nil {
-		for path, rule := range yaraScan(ctx, scripts) {
+		for path, rule := range yaraScan(ctx, scripts, workers) {
 			// Public feed rules are broad: suspicious, confirmed by the AI.
 			cat := CatVirus
 			if ns, name, ok := strings.Cut(rule, ":"); ok {

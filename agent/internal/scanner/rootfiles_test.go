@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // Tests run as root: their files are root's, so the scanner must look at them.
@@ -116,5 +118,34 @@ func TestRestoreSystemFiles(t *testing.T) {
 		if f.Status == "quarantined" {
 			t.Fatalf("still quarantined: %+v", f)
 		}
+	}
+}
+
+func TestScanWorkers(t *testing.T) {
+	for _, c := range []struct {
+		speed string
+		cpus  int
+		want  int
+	}{{"low", 32, 1}, {"normal", 2, 1}, {"normal", 16, 4}, {"normal", 64, 4}, {"fast", 16, 8}, {"fast", 4, 2}, {"", 8, 2}} {
+		if got := scanWorkers(c.speed, c.cpus); got != c.want {
+			t.Errorf("%s/%d cpus: %d, want %d", c.speed, c.cpus, got, c.want)
+		}
+	}
+}
+
+// Scan threads run at nice 19.
+func TestLowPriorityThread(t *testing.T) {
+	done := make(chan int)
+	go func() {
+		lowPriorityThread()
+		p, err := unix.Getpriority(unix.PRIO_PROCESS, unix.Gettid())
+		if err != nil {
+			p = -1
+		}
+		done <- p
+	}()
+	// Getpriority returns 20 - nice.
+	if p := <-done; p != 1 {
+		t.Fatalf("priority %d, want 1 (nice 19)", p)
 	}
 }

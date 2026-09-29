@@ -77,6 +77,11 @@ type Scanner struct {
 	DBWhitelist []Exclusion `json:"db_whitelist"`
 	// KeepDays is how long logs and quarantined files are kept.
 	KeepDays int `json:"keep_days"`
+	// ScanSpeed sets how much of the server a scan may use: "low" (one
+	// thread), "normal" (a quarter of the CPUs, at most 4) or "fast" (half,
+	// at most 8). Scan threads always run at the lowest CPU and disk
+	// priority and slow down while the server is busy.
+	ScanSpeed string `json:"scan_speed"`
 }
 
 // Exclusion is an ignored id with the reason an admin gave.
@@ -388,7 +393,7 @@ func Defaults() Settings {
 			VirusAction: ActionQuarantine, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
-			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60,
+			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60, ScanSpeed: "normal",
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
@@ -639,6 +644,11 @@ func normalize(s *Settings) {
 	}
 	if s.WAF.BFWindowMin <= 0 {
 		s.WAF.BFWindowMin = 10
+	}
+	switch s.Scanner.ScanSpeed {
+	case "low", "normal", "fast":
+	default:
+		s.Scanner.ScanSpeed = "normal"
 	}
 	if s.Scanner.MaxFileSizeMB <= 0 {
 		s.Scanner.MaxFileSizeMB = 10
