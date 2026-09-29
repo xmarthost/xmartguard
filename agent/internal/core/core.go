@@ -899,6 +899,43 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "stats": a.WAF.Stats()}, nil
 	}
 	// waf.sync pulls the portal's WAF Rule Sets now and applies them.
+	// waf.vendor_rules: where Malware.Expert replaces xPGuard's rules, its
+	// packages and the rules of it that triggered here.
+	h["waf.vendor_rules"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.WAF.VendorRules(), nil
+	}
+	// waf.vendor_rule switches one vendor rule off (false positive) or on.
+	h["waf.vendor_rule"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ID      int  `json:"id"`
+			Enabled bool `json:"enabled"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if in.ID <= 0 || in.ID > 99999999 {
+			return nil, errors.New("invalid rule id")
+		}
+		cur := a.Settings.Get().WAF.DisabledRules
+		next := []int{}
+		for _, id := range cur {
+			if id != in.ID {
+				next = append(next, id)
+			}
+		}
+		if !in.Enabled {
+			next = append(next, in.ID)
+		}
+		raw, _ := json.Marshal(map[string]any{"waf": map[string]any{"disabled_rules": next}})
+		if _, err := a.Settings.Patch(raw); err != nil {
+			return nil, err
+		}
+		res := map[string]any{"vendor": a.WAF.VendorRules()}
+		if err := a.WAF.Apply(); err != nil {
+			res["warning"] = err.Error()
+		}
+		return res, nil
+	}
 	h["waf.sync"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
 		res, err := a.syncWAF(ctx, true)
 		if err != nil {

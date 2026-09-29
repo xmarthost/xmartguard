@@ -5,7 +5,7 @@ import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
-import { ListEditor, SettingRow, Tabs, Toggle, agentCall, isIPorCIDR, useAction, useAgent } from '../components/controls';
+import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
 
 interface ScannerS {
   enabled: boolean;
@@ -742,6 +742,9 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
   useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
   const dis = !admin || busy;
   const st = info.data?.status;
+  // Malware.Expert replaces xPGuard's own rules on this server: only its
+  // list is shown, not ours.
+  const replaced = st?.replaced_by;
   const captchaOn = Boolean(all.firewall?.captcha);
   // Malware.Expert feed from WAF Rule Sets linked to this server, if any.
   const rs = useApi<{ config: { remote: { url: string; enabled: boolean; servers?: string[] }[] } }>('/api/waf/rulesets');
@@ -785,7 +788,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>
-      {row('bad_bots', 'SCANNER protection', 'Prevent bad User-Agents and crawlers: vulnerability scanners and attack tools (sqlmap, nikto, wpscan, nuclei…)', true)}
+      {!replaced && row('bad_bots', 'SCANNER protection', 'Prevent bad User-Agents and crawlers: vulnerability scanners and attack tools (sqlmap, nikto, wpscan, nuclei…)', true)}
       <SettingRow title="Captcha protection" desc="Blocked visitors can unblock their address by solving a CAPTCHA. Switched on and set up (built-in, Cloudflare Turnstile or Google reCAPTCHA) on the Firewall page, together with the temporary bans it belongs to.">
         <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${captchaOn ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
           {captchaOn ? `On (${{ builtin: 'built-in', turnstile: 'Turnstile', recaptcha: 'reCAPTCHA' }[all.captcha?.provider ?? 'builtin'] ?? 'built-in'})` : 'Off'}
@@ -809,9 +812,14 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
           </Link>
         </SettingRow>
       )}
-      {row('webshell', 'WEBSHELL protection', 'Web shell attack protection: block requests to well-known web shell files, their folders and exploit probes', true)}
-      {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
-      {row('proxy_ip_check', 'Proxy IP check', 'Enables IP blacklist checks using the real client IP behind Cloudflare or a local proxy (blocked, banned and IPDB addresses)')}
+      {replaced && <VendorRulesCard serverId={serverId} name={replaced} admin={admin} onChanged={onReload} />}
+      {!replaced && (
+        <>
+          {row('webshell', 'WEBSHELL protection', 'Web shell attack protection: block requests to well-known web shell files, their folders and exploit probes', true)}
+          {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
+          {row('proxy_ip_check', 'Proxy IP check', 'Enables IP blacklist checks using the real client IP behind Cloudflare or a local proxy (blocked, banned and IPDB addresses)')}
+        </>
+      )}
       <div className="mt-2 border-t border-slate-200" />
       {row('bruteforce', 'Bruteforce & Bot protection', 'Ban IPs that repeatedly fail logins on the protected URLs below (WordPress, Joomla, OpenCart and your own)', true)}
       <div className="flex flex-wrap items-end gap-3 border-b border-slate-100 py-4">
@@ -833,7 +841,11 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
           ? 'Login pages protected by the WAF brute-force module. On this server Malware.Expert protects them with its own CAPTCHA: visitors whose address is on its blacklist (blacklist.recaptcha.cloud) are sent to recaptcha.cloud; other visitors log in normally. xPGuard\'s login-page CAPTCHA is off here. Banned addresses still get xPGuard\'s CAPTCHA on the whole site (Firewall » CAPTCHA).'
           : `Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF).`}
         header={
-          meExtras.includes('recaptcha') ? (
+          replaced && !meExtras.includes('recaptcha') ? (
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600" title={`xPGuard's login-page CAPTCHA is one of its own rules, which are off on this server. Add the recaptcha extra to the ${replaced} feed for a login CAPTCHA.`}>
+              Off ({replaced} rules only)
+            </span>
+          ) : meExtras.includes('recaptcha') ? (
             <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700" title="Malware.Expert's recaptcha extra is linked to this server, so its CAPTCHA replaces xPGuard's on the login pages.">
               Captcha by Malware.Expert
             </span>
@@ -847,7 +859,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         validate={(v) => (v.startsWith('/') ? null : 'Enter a path starting with /')}
         onChange={(v) => onSave({ login_urls: v })}
       />
-      <ListEditor
+      {!replaced && <ListEditor
         title="Bad Bot blocker"
         desc="Block web requests from the bad bots listed below with ModSecurity (the User-Agent contains the entry, any case)"
         header={<Toggle on={s.bot_blocker} disabled={dis || !s.enabled} onChange={(v) => onSave({ bot_blocker: v })} />}
@@ -857,10 +869,10 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         placeholder="UserAgent"
         validate={(v) => (v.length >= 2 && !/["'\\]/.test(v) ? null : 'Enter at least 2 characters, without quotes')}
         onChange={(v) => onSave({ bot_list: v })}
-      />
+      />}
       <ListEditor
         title="Whitelisted rules"
-        desc="Disable certain WAF rules by adding specific rule ID (ours or any vendor's). WAF Logs also has a button to disable a rule causing false positives."
+        desc={replaced ? `Switch off ${replaced} rules by id (for a false positive). The list above has a switch for every ${replaced} rule that triggered here.` : "Disable certain WAF rules by adding specific rule ID (ours or any vendor's). WAF Logs also has a button to disable a rule causing false positives."}
         items={s.disabled_rules.map(String)}
         disabled={dis}
         placeholder="Type here"
@@ -870,7 +882,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       />
       <ListEditor
         title="Whitelisted domains"
-        desc="Choose domains that should always be allowed by the WAF and CAPTCHA rules"
+        desc={replaced ? `Domains ${replaced}'s rules never inspect` : 'Choose domains that should always be allowed by the WAF and CAPTCHA rules'}
         items={s.whitelist_domains ?? []}
         options={doms.data?.domains?.length ? doms.data.domains.map((d) => d.domain) : undefined}
         placeholder="example.com"
@@ -879,6 +891,8 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         onChange={(v) => onSave({ whitelist_domains: v.map((x) => x.toLowerCase()) })}
       />
 
+      {replaced && <ListEditor title="WAF whitelist" desc={`These IPs are never inspected by ${replaced}'s rules`} items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />}
+      {!replaced && (<>
       <h3 className="mt-6 text-base font-semibold text-navy-900">More xPGuard protections</h3>
       {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the xPGuard engine before it is saved; malware is refused.', true)}
       {row('sensitive_files', 'Protect sensitive files', 'Block web access to .env, .git, config backups, logs and SQL dumps', true)}
@@ -889,13 +903,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {info.data && (
         <div className="py-4">
           <div className="mb-1 font-medium text-navy-900">xPGuard rules</div>
-          {info.data.status.replaced_by ? (
-            <p className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <b>Not loaded on this server.</b> {info.data.status.replaced_by}'s rules protect this server, so xPGuard's own blocking rules are switched off here
-              (two rule sets handling the same attacks cause double blocks and false positives). Only the failed-login detection is kept: it blocks nothing and
-              lets xPGuard ban brute-force attackers. The switches below apply again if {info.data.status.replaced_by} is unlinked from this server.
-            </p>
-          ) : meFeed && (
+          {meFeed && (
             <p className="mb-2 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
               This list shows xPGuard's own rules only. The Malware.Expert rules on this server are downloaded by the web server straight from Malware.Expert
               when it starts, so they are not stored here; whether they loaded shows under WAF Rule Sets » Rollout, and their blocks appear in WAF Logs with
@@ -928,6 +936,109 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
             </tbody>
           </table>
         </div>
+      )}
+      </>)}
+    </div>
+  );
+}
+
+interface VendorRule {
+  id: number;
+  msg: string;
+  hits: number;
+  hits_24h: number;
+  last: number;
+  enabled: boolean;
+}
+
+/** Where Malware.Expert replaces xPGuard's rules: its packages and its rules
+ *  that triggered on this server (from the web server log; the rules are
+ *  loaded by the web server straight from Malware.Expert). */
+function VendorRulesCard({ serverId, name, admin, onChanged }: { serverId: string; name: string; admin: boolean; onChanged: () => void }) {
+  const v = useAgent<{ name: string; packages: { id: string; title: string; desc: string }[]; rules: VendorRule[] }>(serverId, 'waf.vendor_rules', {}, 60_000);
+  const { run, busy } = useAction();
+  const [q, setQ] = useState('');
+  const rules = (v.data?.rules ?? []).filter((r) => !q || String(r.id).includes(q) || r.msg.toLowerCase().includes(q.toLowerCase()));
+  return (
+    <div className="my-4 rounded-xl border border-sky-200 bg-sky-50/40 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-base font-semibold text-navy-900">{name} rules on this server</h3>
+          <p className="text-sm text-slate-600">
+            Only {name}'s rules protect this server; xPGuard's own WAF rules and the OWASP Core Rule Set are off here, so no request is handled twice. The web
+            server downloads the rules straight from {name} with your key when it starts; below are the packages you linked and every {name} rule that has
+            blocked something here.
+          </p>
+        </div>
+        <Link to="/waf-rulesets" className="text-sm text-blue-700 hover:underline">
+          Change packages
+        </Link>
+      </div>
+      {v.error && !v.data && <p className="mt-2 text-sm text-red-600">{v.error}</p>}
+      {v.data && (
+        <>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {v.data.packages.map((p) => (
+              <div key={p.id} className="rounded-lg border border-slate-200 bg-white p-3">
+                <div className="flex items-center gap-2 text-sm font-medium text-navy-900">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" /> {p.title}
+                  <span className="font-mono text-xs text-slate-400">{p.id}</span>
+                </div>
+                {p.desc && <div className="mt-0.5 text-xs text-slate-500">{p.desc}</div>}
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm font-medium text-navy-900">
+              Rules that triggered here <span className="font-normal text-slate-500">({v.data.rules.length})</span>
+            </div>
+            <input className="input w-56" placeholder="Search id or message" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          {v.data.rules.length === 0 ? (
+            <p className="mt-2 rounded-lg bg-white p-3 text-sm text-slate-500">
+              No {name} rule has blocked anything on this server yet. When one does it appears here with its hits, and you can switch it off if it blocks a
+              real visitor.
+            </p>
+          ) : (
+            <div className="mt-2 max-h-[420px] overflow-auto rounded-lg border border-slate-200 bg-white">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead className="sticky top-0 bg-slate-50 text-left text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Rule</th>
+                    <th className="py-2 pr-3">Message</th>
+                    <th className="py-2 pr-3 text-right">Hits (24 h)</th>
+                    <th className="py-2 pr-3">Last</th>
+                    <th className="py-2 pr-3 text-right">Active</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rules.map((r) => (
+                    <tr key={r.id}>
+                      <td className="px-3 py-2 font-mono text-xs text-slate-600">{r.id}</td>
+                      <td className="py-2 pr-3">{r.msg ? r.msg.replace(/^Malware\.Expert\s*-\s*/i, '') : <span className="text-slate-400">—</span>}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {r.hits.toLocaleString()} <span className="text-xs text-slate-400">({r.hits_24h.toLocaleString()})</span>
+                      </td>
+                      <td className="py-2 pr-3 text-xs text-slate-500">{r.last ? fmtTime(r.last) : '—'}</td>
+                      <td className="py-2 pr-3 text-right">
+                        <Toggle
+                          on={r.enabled}
+                          disabled={!admin || busy}
+                          onChange={async (on) => {
+                            const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.vendor_rule', { id: r.id, enabled: on }), `${name} rule ${r.id} ${on ? 'on' : 'off'}`);
+                            if (res?.warning) alert(res.warning);
+                            v.reload();
+                            onChanged();
+                          }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

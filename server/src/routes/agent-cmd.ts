@@ -69,6 +69,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'clamav.reload': { role: 'admin', mutates: true, timeoutMs: 1_500_000 },
   'waf.apply': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'waf.rule': { role: 'admin', mutates: true, timeoutMs: 180_000 },
+  'waf.vendor_rules': { role: 'viewer', mutates: false },
+  'waf.vendor_rule': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'waf.sync': { role: 'admin', mutates: true, timeoutMs: 300_000 },
   'cms.update': { role: 'admin', mutates: true, timeoutMs: 660_000 },
   'osm.release': { role: 'admin', mutates: true, timeoutMs: 120_000 },

@@ -1,12 +1,14 @@
 package waf
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
+	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
 func TestRemoteFromLogs(t *testing.T) {
@@ -156,5 +158,53 @@ func TestRenderLoginWatch(t *testing.T) {
 	m.SetRuleSets(rs)
 	if m.OwnRulesReplacedBy() != "Malware.Expert" {
 		t.Fatal("replacement not seen")
+	}
+}
+
+func TestVendorRulesList(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
+	db, _ := store.Open()
+	defer db.Close()
+	st, _ := settings.Load()
+	st.Patch([]byte(`{"waf":{"disabled_rules":[1000050, 7700201]}}`))
+	m := &Manager{DB: db, Settings: st}
+	var rs RuleSets
+	rs.OwnRules = &struct {
+		Enabled    bool   `json:"enabled"`
+		ReplacedBy string `json:"replaced_by,omitempty"`
+	}{true, "Malware.Expert"}
+	rs.Remote = []RemoteRules{{ID: "me", Name: "Malware.Expert", Key: "K.1", Enabled: true, URL: "https://rules.malware.expert/download.php?rules=generic&extra=webshell,rbl,recaptcha"}}
+	m.SetRuleSets(rs)
+	now := store.Now()
+	for _, e := range []struct {
+		id  int
+		msg string
+		at  int64
+	}{{400010, "Malware.Expert - Malware host detected", now}, {400010, "", now - 3*86400}, {7700201, "xPGuard - sensitive", now}, {942100, "CRS SQLi", now - 5*86400}, {1100050, "", now}} {
+		db.Exec(`INSERT INTO waf_events (at, ip, rule_id, msg, category) VALUES (?, '203.0.113.9', ?, ?, 'waf')`, e.at, e.id, e.msg)
+	}
+	v := m.VendorRules()
+	if v.Name != "Malware.Expert" || len(v.Packages) != 4 || v.Packages[0].Title != "Generic rules" || v.Packages[3].ID != "recaptcha" {
+		t.Fatalf("packages: %+v", v.Packages)
+	}
+	ids := []int{}
+	for _, r := range v.Rules {
+		ids = append(ids, r.ID)
+	}
+	// Ours and CRS are left out; switched-off vendor rules stay listed.
+	if fmt.Sprint(ids) != "[400010 1100050 1000050]" {
+		t.Fatalf("rules %v", ids)
+	}
+	if r := v.Rules[0]; r.Hits != 2 || r.Hits24h != 1 || r.Msg != "Malware.Expert - Malware host detected" || !r.Enabled {
+		t.Fatalf("%+v", r)
+	}
+	if v.Rules[2].Enabled || !v.Rules[1].Enabled {
+		t.Fatal("disabled rule shown on")
+	}
+	out := RenderLoginWatch(st.Get().WAF, "Malware.Expert")
+	if !strings.Contains(out, "ctl:ruleRemoveById=1000050") {
+		t.Fatalf("disabled vendor rule not removed:\n%s", out)
 	}
 }
