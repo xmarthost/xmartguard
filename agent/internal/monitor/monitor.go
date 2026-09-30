@@ -50,6 +50,18 @@ type Monitor struct {
 	Rkhunter  string
 	killed    map[int]bool
 	processed map[string]bool
+	// cpu is the previous CPU reading of each flagged process.
+	cpu map[cpuKey]cpuSample
+}
+
+type cpuKey struct {
+	pid   int
+	start uint64
+}
+
+type cpuSample struct {
+	ticks uint64
+	at    time.Time
 }
 
 func (m *Monitor) init() {
@@ -70,6 +82,7 @@ func (m *Monitor) init() {
 	if m.killed == nil {
 		m.killed = map[int]bool{}
 		m.processed = map[string]bool{}
+		m.cpu = map[cpuKey]cpuSample{}
 	}
 }
 
@@ -154,6 +167,67 @@ var procBad = []struct {
 // Places where hosting users have no reason to run programs from.
 var tmpDirs = []string{"/tmp/", "/var/tmp/", "/dev/shm/"}
 
+// devToolDirs are hidden folders in a home directory where developer tools
+// keep their programs (Node.js through nvm, PM2, Bun, Volta, pip --user,
+// Rust, Puppeteer's Chrome …): running from them is normal.
+var devToolDirs = []string{".nvm", ".volta", ".fnm", ".n", ".nodenv", ".bun", ".deno", ".npm", ".npm-global", ".pm2", ".yarn",
+	".pnpm", ".pnpm-store", ".local/bin", ".local/share/pnpm", ".local/share/fnm", ".local/share/uv", ".cargo", ".rustup",
+	".pyenv", ".rbenv", ".rvm", ".gem", ".sdkman", ".asdf", ".jdks", ".dotnet", ".composer", ".config/composer",
+	".cache/puppeteer", ".cache/ms-playwright", ".cache/node", ".vscode-server", ".cursor-server", ".linuxbrew", ".nix-profile"}
+
+// inDevTools reports a program of a developer tool: in one of the tool
+// folders of the home directory, or in a project's node_modules.
+func inDevTools(exe, home string) bool {
+	if strings.Contains(exe, "/node_modules/") {
+		return true
+	}
+	if home == "" || !strings.HasPrefix(exe, home+"/") {
+		return false
+	}
+	rel := strings.TrimPrefix(exe, home+"/")
+	for _, d := range devToolDirs {
+		if rel == d || strings.HasPrefix(rel, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// Level is how sure a finding is.
+type Level int
+
+const (
+	// Clean: nothing found.
+	Clean Level = iota
+	// Suspicious: an unusual place to run a program from (temporary or
+	// hidden folder, deleted program). Only reported, and killed only when
+	// it keeps a CPU core busy for a long time (a miner).
+	Suspicious
+	// Malicious: a cryptominer or reverse shell by its command line.
+	Malicious
+)
+
+// Kill policy for suspicious processes: running at least this long and
+// using at least this share of one CPU core, over its life and since the
+// previous check.
+const (
+	SuspectMinAge = 30 * time.Minute
+	SuspectMinCPU = 0.5
+)
+
+// ShouldKill decides whether to kill a process the monitor flagged (with
+// killing switched on): malicious ones at once, suspicious ones only when
+// they have kept a CPU core busy for a long time.
+func ShouldKill(level Level, age time.Duration, lifeCPU, recentCPU float64) bool {
+	switch level {
+	case Malicious:
+		return true
+	case Suspicious:
+		return age >= SuspectMinAge && lifeCPU >= SuspectMinCPU && recentCPU >= SuspectMinCPU
+	}
+	return false
+}
+
 // systemExeDirs hold the programs of installed packages (distribution,
 // cPanel EasyApache, CloudLinux alt-php, LiteSpeed).
 var systemExeDirs = []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt/cpanel", "/opt/alt", "/opt/remi", "/usr/local/lsws", "/opt/plesk"}
@@ -174,39 +248,55 @@ type ProcInfo struct {
 	User    string
 	Exe     string
 	Cmdline string
+	// Age is how long it has run; Start its start time and CPUTicks its
+	// CPU time, in clock ticks.
+	Age      time.Duration
+	Start    uint64
+	CPUTicks uint64
 }
 
-// Judge decides whether a process of a hosting user is malicious.
+// Judge decides whether a process of a hosting user is malicious or
+// suspicious.
 func Judge(p ProcInfo, home string) (string, bool) {
+	r, l := Assess(p, home)
+	return r, l != Clean
+}
+
+// Assess returns why a process is flagged and how sure that is.
+func Assess(p ProcInfo, home string) (string, Level) {
 	for _, b := range procBad {
 		if b.re.MatchString(p.Cmdline) {
-			return b.reason, true
+			return b.reason, Malicious
 		}
 	}
 	exe := p.Exe
-	if strings.HasSuffix(exe, " (deleted)") {
-		exe = strings.TrimSuffix(exe, " (deleted)")
-		// An update of a system package (PHP, LiteSpeed's lsphp) replaces
-		// the program while old processes keep running: their program shows
-		// as deleted. Only programs deleted from elsewhere (a temp or home
-		// folder, or memory-only "memfd:" programs) are hiding.
-		if !underAny(exe, systemExeDirs) {
-			return "running program was deleted from disk (a common way to hide malware)", true
-		}
+	deleted := strings.HasSuffix(exe, " (deleted)")
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	// Programs of developer tools (Node.js from nvm run by PM2 …) are
+	// normal, also after the tool updated itself (deleted program).
+	if inDevTools(exe, home) {
+		return "", Clean
+	}
+	// An update of a system package (PHP, LiteSpeed's lsphp) replaces the
+	// program while old processes keep running: their program shows as
+	// deleted. Only programs deleted from elsewhere (a temp or home folder,
+	// or memory-only "memfd:" programs) are hiding.
+	if deleted && !underAny(exe, systemExeDirs) {
+		return "running program was deleted from disk (a common way to hide malware)", Suspicious
 	}
 	for _, d := range tmpDirs {
 		if strings.HasPrefix(exe, d) {
-			return "program runs from " + strings.TrimSuffix(d, "/"), true
+			return "program runs from " + strings.TrimSuffix(d, "/"), Suspicious
 		}
 	}
 	// A compiled program inside the account's website folders.
 	if home != "" && strings.HasPrefix(exe, home+"/") && strings.Contains(exe, "/public_html/") {
-		return "program runs from the website folder", true
+		return "program runs from the website folder", Suspicious
 	}
 	if strings.Contains(exe, "/.") && home != "" && strings.HasPrefix(exe, home+"/") {
-		return "program runs from a hidden folder in the home directory", true
+		return "program runs from a hidden folder in the home directory", Suspicious
 	}
-	return "", false
+	return "", Clean
 }
 
 func (m *Monitor) procs() []ProcInfo {
@@ -215,6 +305,7 @@ func (m *Monitor) procs() []ProcInfo {
 		return nil
 	}
 	names := map[uint32]string{}
+	uptime := readUptime(m.ProcRoot)
 	var out []ProcInfo
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
@@ -241,9 +332,51 @@ func (m *Monitor) procs() []ProcInfo {
 			name = userName(sys.Uid)
 			names[sys.Uid] = name
 		}
-		out = append(out, ProcInfo{PID: pid, UID: sys.Uid, User: name, Exe: exe, Cmdline: cmd})
+		p := ProcInfo{PID: pid, UID: sys.Uid, User: name, Exe: exe, Cmdline: cmd}
+		if raw, err := os.ReadFile(filepath.Join(dir, "stat")); err == nil {
+			p.Start, p.CPUTicks = parseStat(string(raw))
+			if up := uptime; up > 0 && p.Start > 0 {
+				p.Age = time.Duration((up - float64(p.Start)/clockTicks) * float64(time.Second))
+			}
+		}
+		out = append(out, p)
 	}
 	return out
+}
+
+// clockTicks is the kernel's USER_HZ (100 on every Linux server).
+const clockTicks = 100
+
+// parseStat reads a process's start time and CPU time (utime + stime) in
+// clock ticks from /proc/PID/stat.
+func parseStat(stat string) (start, cpu uint64) {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0, 0
+	}
+	// f[0] is field 3 (state): utime is field 14, stime 15, starttime 22.
+	f := strings.Fields(stat[i+1:])
+	if len(f) < 20 {
+		return 0, 0
+	}
+	ut, _ := strconv.ParseUint(f[11], 10, 64)
+	st, _ := strconv.ParseUint(f[12], 10, 64)
+	start, _ = strconv.ParseUint(f[19], 10, 64)
+	return start, ut + st
+}
+
+// readUptime is the seconds since boot (0 = unknown).
+func readUptime(procRoot string) float64 {
+	raw, err := os.ReadFile(filepath.Join(procRoot, "uptime"))
+	if err != nil {
+		return 0
+	}
+	f := strings.Fields(string(raw))
+	if len(f) == 0 {
+		return 0
+	}
+	v, _ := strconv.ParseFloat(f[0], 64)
+	return v
 }
 
 func userName(uid uint32) string {
@@ -267,6 +400,8 @@ func (m *Monitor) CheckProcesses() {
 	if m.Users != nil {
 		homes = m.Users()
 	}
+	now := time.Now()
+	seen := map[cpuKey]bool{}
 	for _, p := range m.procs() {
 		if contains(cfg.WhitelistUsers, p.User) || matchesAny(p.Cmdline+" "+p.Exe, cfg.WhitelistStrings) {
 			continue
@@ -275,19 +410,38 @@ func (m *Monitor) CheckProcesses() {
 		if !hosting && len(homes) > 0 {
 			continue // only hosting accounts
 		}
-		reason, bad := Judge(p, home)
-		if !bad {
+		reason, level := Assess(p, home)
+		if level == Clean {
 			continue
 		}
+		// CPU use over the process's life and since the previous check.
+		key := cpuKey{p.PID, p.Start}
+		seen[key] = true
+		life, recent := 0.0, 0.0
+		if p.Age > 0 {
+			life = float64(p.CPUTicks) / clockTicks / p.Age.Seconds()
+		}
+		if prev, ok := m.cpu[key]; ok && now.Sub(prev.at) >= 30*time.Second && p.CPUTicks >= prev.ticks {
+			recent = float64(p.CPUTicks-prev.ticks) / clockTicks / now.Sub(prev.at).Seconds()
+		}
+		m.cpu[key] = cpuSample{p.CPUTicks, now}
 		action := "alerted"
-		if cfg.Kill && !m.killed[p.PID] {
+		if cfg.Kill && !m.killed[p.PID] && ShouldKill(level, p.Age, life, recent) {
 			if err := syscall.Kill(p.PID, syscall.SIGKILL); err == nil {
 				action = "killed"
 				m.killed[p.PID] = true
+				if level == Suspicious {
+					reason += fmt.Sprintf(", and kept %.0f%% of a CPU core busy for %s", recent*100, p.Age.Round(time.Minute))
+				}
 			}
 		}
 		if action == "killed" || m.once(fmt.Sprintf("proc|%s|%s|%s", p.User, p.Exe, p.Cmdline)) {
 			m.record(Event{Kind: "process", User: p.User, Subject: fmt.Sprintf("[%d] %s", p.PID, p.Cmdline), Reason: reason, Action: action})
+		}
+	}
+	for k := range m.cpu {
+		if !seen[k] {
+			delete(m.cpu, k)
 		}
 	}
 }
@@ -312,35 +466,64 @@ func matchesAny(s string, subs []string) bool {
 
 // ------------------------------------------------------------ cron
 
+// cronBad are crontab patterns of malware. Weak ones (hidden folders) are
+// only reported, never switched off: developer tools live in hidden
+// folders too.
 var cronBad = []struct {
 	re     *regexp.Regexp
 	reason string
+	weak   bool
 }{
-	{regexp.MustCompile(`(?i)\b(?:curl|wget|fetch)\b[^|;]*\|\s*(?:ba|z|da)?sh\b`), "downloads and runs a script"},
-	{regexp.MustCompile(`(?i)\b(?:curl|wget)\b[^;|]*(?:-o|-O)\s*\S*(?:/tmp/|/dev/shm/|/var/tmp/)`), "downloads a file into a temporary folder"},
-	{regexp.MustCompile(`(?i)base64\s+(?:-d|--decode)[^|]*\|\s*(?:ba)?sh`), "runs base64-encoded commands"},
-	{regexp.MustCompile(`/dev/tcp/`), "opens a raw network connection"},
-	{regexp.MustCompile(`(?:^|\s)(?:/tmp/|/dev/shm/|/var/tmp/)\S+`), "runs a program from a temporary folder"},
-	{regexp.MustCompile(`(?i)stratum\+tcp|xmrig|minerd|\bkinsing\b|kdevtmpfsi|kthreaddi|\btsm64\b`), "cryptominer"},
-	{regexp.MustCompile(`(?i)gs-netcat|\bGS_ARGS\b|gsocket|\bdefunct\.dat\b`), "backdoor (gsocket)"},
-	{regexp.MustCompile(`(?i)\b(?:python[0-9.]*|perl|php)\s+-(?:c|e|r)\s+['"].*(?:base64|decode|exec|eval|socket)`), "runs inline encoded code"},
-	{regexp.MustCompile(`/\.[a-z0-9_-]{1,20}/[^ ]*\s*>\s*/dev/null\s+2>&1\s*&?$`), "silently runs a program from a hidden folder"},
-	{regexp.MustCompile(`(?i)^@reboot\s+(?:\S+/)?(?:nohup\s+)?\S*/\.[^/\s]+/`), "starts a program from a hidden folder at every boot"},
-	{regexp.MustCompile(`(?i)/(?:wp-content/)?uploads/\S+\.(?:php\d?|phtml|sh|pl|py|cgi)\b`), "runs a script from an uploads folder"},
+	{regexp.MustCompile(`(?i)\b(?:curl|wget|fetch)\b[^|;]*\|\s*(?:ba|z|da)?sh\b`), "downloads and runs a script", false},
+	{regexp.MustCompile(`(?i)\b(?:curl|wget)\b[^;|]*(?:-o|-O)\s*\S*(?:/tmp/|/dev/shm/|/var/tmp/)`), "downloads a file into a temporary folder", false},
+	{regexp.MustCompile(`(?i)base64\s+(?:-d|--decode)[^|]*\|\s*(?:ba)?sh`), "runs base64-encoded commands", false},
+	{regexp.MustCompile(`/dev/tcp/`), "opens a raw network connection", false},
+	{regexp.MustCompile(`(?:^|\s)(?:/tmp/|/dev/shm/|/var/tmp/)\S+`), "runs a program from a temporary folder", false},
+	{regexp.MustCompile(`(?i)stratum\+tcp|xmrig|minerd|\bkinsing\b|kdevtmpfsi|kthreaddi|\btsm64\b`), "cryptominer", false},
+	{regexp.MustCompile(`(?i)gs-netcat|\bGS_ARGS\b|gsocket|\bdefunct\.dat\b`), "backdoor (gsocket)", false},
+	{regexp.MustCompile(`(?i)\b(?:python[0-9.]*|perl|php)\s+-(?:c|e|r)\s+['"].*(?:base64|decode|exec|eval|socket)`), "runs inline encoded code", false},
+	{regexp.MustCompile(`(?i)/(?:wp-content/)?uploads/\S+\.(?:php\d?|phtml|sh|pl|py|cgi)\b`), "runs a script from an uploads folder", false},
+	{regexp.MustCompile(`/\.[a-z0-9_-]{1,20}/[^ ]*\s*>\s*/dev/null\s+2>&1\s*&?$`), "silently runs a program from a hidden folder", true},
+	{regexp.MustCompile(`(?i)^@reboot\s+(?:\S+/)?(?:nohup\s+)?\S*/\.[^/\s]+/`), "starts a program from a hidden folder at every boot", true},
 }
 
-// JudgeCron returns why a crontab line is malicious, if it is.
+// reDevToolPath finds developer tool folders in a crontab line (PM2 or
+// Node.js from nvm started at boot is normal).
+var reDevToolPath = func() *regexp.Regexp {
+	alt := make([]string, len(devToolDirs))
+	for i, d := range devToolDirs {
+		alt[i] = regexp.QuoteMeta(d)
+	}
+	return regexp.MustCompile(`/(?:` + strings.Join(alt, "|") + `)/|/node_modules/`)
+}()
+
+// JudgeCron returns why a crontab line is malicious or suspicious, if it is.
 func JudgeCron(line string) (string, bool) {
+	r, l := AssessCron(line)
+	return r, l != Clean
+}
+
+// AssessCron returns why a crontab line is flagged and how sure that is:
+// only malicious lines are switched off.
+func AssessCron(line string) (string, Level) {
 	l := strings.TrimSpace(line)
 	if l == "" || strings.HasPrefix(l, "#") || strings.Contains(strings.SplitN(l, " ", 2)[0], "=") {
-		return "", false
+		return "", Clean
 	}
 	for _, b := range cronBad {
-		if b.re.MatchString(l) {
-			return b.reason, true
+		if !b.re.MatchString(l) {
+			continue
 		}
+		if !b.weak {
+			return b.reason, Malicious
+		}
+		// Hidden folders of developer tools are not hiding anything.
+		if reDevToolPath.MatchString(l) {
+			continue
+		}
+		return b.reason, Suspicious
 	}
-	return "", false
+	return "", Clean
 }
 
 // DisabledPrefix marks a crontab line the monitor switched off; the rest of
@@ -393,36 +576,60 @@ func (m *Monitor) CheckCron() {
 			type hit struct {
 				i      int
 				reason string
+				level  Level
 			}
 			var hits []hit
+			var restore []int
 			for i, line := range lines {
-				reason, bad := JudgeCron(line)
-				if !bad && strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") && m.runsMalware(line) {
-					reason, bad = "runs a file detected as malware", true
-				}
-				if !bad || store.GetKV(m.DB, cronAllowKey(e.Name(), line)) != "" {
+				t := strings.TrimSpace(line)
+				// A line switched off by an older, stricter check that is not
+				// malicious now: switch it back on.
+				if orig, ok := strings.CutPrefix(t, strings.TrimSpace(DisabledPrefix)); ok {
+					orig = strings.TrimSpace(orig)
+					if _, lv := AssessCron(orig); lv != Malicious && !m.runsMalware(orig) {
+						restore = append(restore, i)
+					}
 					continue
 				}
-				hits = append(hits, hit{i, reason})
+				reason, level := AssessCron(line)
+				if level == Clean && t != "" && !strings.HasPrefix(t, "#") && m.runsMalware(line) {
+					reason, level = "runs a file detected as malware", Malicious
+				}
+				if level == Clean || store.GetKV(m.DB, cronAllowKey(e.Name(), line)) != "" {
+					continue
+				}
+				hits = append(hits, hit{i, reason, level})
 			}
-			if len(hits) == 0 {
+			if len(hits) == 0 && len(restore) == 0 {
 				continue
 			}
-			disabled := false
-			if cfg.Disable {
-				out := append([]string(nil), lines...)
-				for _, h := range hits {
+			out := append([]string(nil), lines...)
+			switchOff := 0
+			for _, h := range hits {
+				if cfg.Disable && h.level == Malicious {
 					out[h.i] = DisabledPrefix + strings.TrimSpace(lines[h.i])
+					switchOff++
 				}
+			}
+			for _, i := range restore {
+				out[i] = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), strings.TrimSpace(DisabledPrefix)))
+			}
+			written := false
+			if switchOff > 0 || len(restore) > 0 {
 				if err := m.writeCrontab(e.Name(), file, strings.Join(out, "\n")); err != nil {
-					m.Log.Warn("could not disable malicious cron job", "user", e.Name(), "err", err)
+					m.Log.Warn("could not update the crontab", "user", e.Name(), "err", err)
 				} else {
-					disabled = true
+					written = true
+				}
+			}
+			if written {
+				for _, i := range restore {
+					m.record(Event{Kind: "cron", User: e.Name(), Subject: out[i], Reason: "switched back on: not considered malicious any more", Action: "restored"})
 				}
 			}
 			for _, h := range hits {
 				line := strings.TrimSpace(lines[h.i])
-				if disabled {
+				if written && cfg.Disable && h.level == Malicious {
 					m.record(Event{Kind: "cron", User: e.Name(), Subject: line, Reason: h.reason, Action: "disabled"})
 				} else if m.once("cron|" + e.Name() + "|" + lines[h.i]) {
 					m.record(Event{Kind: "cron", User: e.Name(), Subject: line, Reason: h.reason, Action: "alerted"})

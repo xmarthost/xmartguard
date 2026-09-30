@@ -600,10 +600,10 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         <Toggle on={st.scanner.user_scans} disabled={dis} onChange={(v) => save({ scanner: { user_scans: v } })} />
       </SettingRow>
       <div className="my-3 rounded-xl border border-slate-200 p-4">
-        <SettingRow title="Proactive process monitor" desc="Periodically check processes running under hosting users for miners, reverse shells and programs run from temporary or hidden folders">
+        <SettingRow title="Proactive process monitor" desc="Every minute, check processes of hosting users for miners, reverse shells and programs run from temporary or hidden folders. Developer tools are normal: Node.js from nvm run by PM2, Bun, Volta, pip --user, Puppeteer's Chrome and programs in node_modules are not flagged.">
           <Toggle on={st.processes.enabled} disabled={dis} onChange={(v) => save({ processes: { enabled: v } })} />
         </SettingRow>
-        <SettingRow title="Kill malicious processes" desc="Terminate detected processes instead of only alerting">
+        <SettingRow title="Kill malicious processes" desc="Miners and reverse shells are killed at once. Programs that only run from an unusual place (temporary or hidden folder, deleted program) are killed only when they have run for 30 minutes and keep at least half a CPU core busy (like a miner); a short load spike never gets a process killed. Everything else is only alerted.">
           <Toggle on={st.processes.kill} disabled={dis || !st.processes.enabled} onChange={(v) => save({ processes: { kill: v } })} />
         </SettingRow>
         <ListEditor title="Whitelist Users" desc="Processes running under these users will not be monitored or terminated" items={st.processes.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ processes: { whitelist_users: v } })} />
@@ -613,7 +613,7 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         <SettingRow title="Cron monitor" desc="Monitor cron jobs and alert on suspicious cron activities">
           <Toggle on={st.cron.enabled} disabled={dis} onChange={(v) => save({ cron: { enabled: v } })} />
         </SettingRow>
-        <SettingRow title="Disable malicious cron jobs" desc="Comment out malicious lines in the user's crontab (the rest is kept). Re-enable a line from Process & Cron Monitor. Off: alert only">
+        <SettingRow title="Disable malicious cron jobs" desc="Comment out malicious lines in the user's crontab (the rest is kept): downloaded and run scripts, miners, backdoors, programs in temporary folders, files the scanner found. Lines that only start a program from a hidden folder are alerted, not switched off, and developer tools (PM2 or Node.js from nvm at boot) are not flagged. Re-enable a line from Process & Cron Monitor. Off: alert only">
           <Toggle on={st.cron.disable ?? true} disabled={dis || !st.cron.enabled} onChange={(v) => save({ cron: { disable: v } })} />
         </SettingRow>
         <ListEditor title="Whitelist Users" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />

