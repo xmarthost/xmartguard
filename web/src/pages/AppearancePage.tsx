@@ -123,7 +123,10 @@ export default function AppearancePage() {
   // back right after a save.)
   const savedRef = useRef<Appearance | null>(null);
   savedRef.current = saved;
-  useEffect(() => void (cur && applyAppearance(cur)), [cur]);
+  // Colours preview live. The style (the layout of every page) switches only
+  // when saved: switching it swaps the whole frame, which reloads this page
+  // and lost the unsaved choice (the page seemed to refresh back to Classic).
+  useEffect(() => void (cur && saved && applyAppearance({ ...cur, style: saved.style })), [cur, saved]);
   useEffect(() => () => void (savedRef.current && applyAppearance(savedRef.current)), []);
 
   if (!cur) return <PageLoader />;
@@ -167,6 +170,12 @@ export default function AppearancePage() {
             );
           })}
         </div>
+        {saved && curStyle !== (saved.style === 'modern' ? 'modern' : 'classic') && (
+          <p className="mt-3 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-800">
+            {admin ? 'Press "Save for everyone" below to switch every page to the ' : 'An administrator can switch every page to the '}
+            {curStyle === 'modern' ? 'Modern' : 'Classic'} style.
+          </p>
+        )}
       </Card>
 
       <Card title="Themes" desc="Click a theme to preview it on this page.">
