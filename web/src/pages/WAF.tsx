@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Ban, Download, EyeOff, Search, ShieldAlert, Trash2 } from 'lucide-react';
+import { Ban, CheckCircle2, Download, EyeOff, Search, ShieldAlert, Trash2, X } from 'lucide-react';
+import { exclusionError, uriPath, type RuleExclusion } from '../components/RuleExclusions';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
@@ -61,6 +62,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
   const { run, busy } = useAction();
   const [sel, setSel] = useState<number[]>([]);
   const [exporting, setExporting] = useState('');
+  const [allow, setAllow] = useState<WafEvent | null>(null);
   const rows = ev.data?.events ?? [];
   const allSel = rows.length > 0 && rows.every((r) => sel.includes(r.id));
 
@@ -240,8 +242,13 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
                           <button className="mr-2 text-red-600 hover:text-red-800" title="Block this IP in the firewall" disabled={busy} onClick={() => blockIP(e.ip)}>
                             <Ban className="h-4 w-4" />
                           </button>
+                          {admin && e.host && (
+                            <button className="mr-2 text-emerald-600 hover:text-emerald-800" title="Allow on this site (false positive): switch the rule off for this website only" disabled={busy} onClick={() => setAllow(e)}>
+                              <CheckCircle2 className="h-4 w-4" />
+                            </button>
+                          )}
                           {admin && (
-                            <button className="text-slate-500 hover:text-navy-900" title={`Disable rule ${e.rule_id} (false positive)`} disabled={busy} onClick={() => disableRule(e.rule_id)}>
+                            <button className="text-slate-500 hover:text-navy-900" title={`Disable rule ${e.rule_id} on every website of this server (false positive)`} disabled={busy} onClick={() => disableRule(e.rule_id)}>
                               <EyeOff className="h-4 w-4" />
                             </button>
                           )}
@@ -255,6 +262,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
           )}
         </div>
       </div>
+      {allow && <AllowDialog serverId={id!} ev={allow} onClose={() => setAllow(null)} />}
       {ev.data && (
         <div className="flex flex-wrap items-center justify-end gap-3 text-sm">
           <label className="flex items-center gap-2 text-slate-500">
@@ -268,6 +276,100 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
           <Pager total={ev.data.total} limit={limit} offset={offset} onChange={(o) => (setSel([]), setOffset(o))} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** The rules to allow for a blocked request: for an OWASP CRS score block
+ *  (949110), the rules that added to the score, recorded by the agent. */
+function rulesOf(e: WafEvent): number[] {
+  const m = e.detail?.match(/^Matched rules: ([\d, ]+)/);
+  if (m) {
+    const ids = m[1].split(',').map((x) => Number(x.trim())).filter((n) => n > 0);
+    if (ids.length) return ids;
+  }
+  return [e.rule_id];
+}
+
+/** "Allow on this site": switches the rules that blocked a request off for
+ *  its website (and optionally only its path), not for every website. */
+function AllowDialog({ serverId, ev, onClose }: { serverId: string; ev: WafEvent; onClose: () => void }) {
+  const candidates = rulesOf(ev);
+  const [rules, setRules] = useState<number[]>(candidates);
+  const [scope, setScope] = useState<'path' | 'site'>(uriPath(ev.uri) && uriPath(ev.uri) !== '/' ? 'path' : 'site');
+  const [err, setErr] = useState('');
+  const { run, busy } = useAction();
+  const path = uriPath(ev.uri);
+  const domain = (ev.host || '').toLowerCase().replace(/^www\./, '');
+  const save = async () => {
+    const add: RuleExclusion[] = rules.map((rule) => ({ rule, domain, path: scope === 'path' ? path : undefined, note: `WAF Logs: ${ev.method} ${path || ev.uri}`.slice(0, 200) }));
+    const bad = add.map(exclusionError).find(Boolean);
+    if (bad) return setErr(bad);
+    const ok = await run(async () => {
+      const cur = await agentCall<{ settings: { waf: { rule_exclusions?: RuleExclusion[] } } }>(serverId, 'settings.get');
+      const list = [...(cur.settings.waf?.rule_exclusions ?? []), ...add];
+      await agentCall(serverId, 'settings.set', { waf: { rule_exclusions: list } });
+      return true;
+    }, `Allowed on ${domain}`);
+    if (ok) onClose();
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl" onClick={(x) => x.stopPropagation()}>
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-navy-900">Allow on this site</h3>
+            <p className="text-sm text-slate-500">
+              Switches the rule off for <b>{domain}</b> only; every other website stays protected. Use it for a false positive (a request the website really needs).
+            </p>
+          </div>
+          <button className="text-slate-400 hover:text-slate-700" onClick={onClose}>
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="mb-3 rounded-lg bg-slate-50 p-3 text-xs">
+          <div className="font-mono break-all text-slate-700">
+            {ev.method} {ev.uri}
+          </div>
+          <div className="mt-1 text-slate-500">
+            #{ev.rule_id} – {ev.msg}
+          </div>
+        </div>
+        <div className="mb-3">
+          <div className="label">Rules to allow</div>
+          {candidates.map((r) => (
+            <label key={r} className="mr-4 inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" className="h-4 w-4" checked={rules.includes(r)} onChange={(x) => setRules(x.target.checked ? [...rules, r] : rules.filter((y) => y !== r))} />
+              <span className="font-mono">{r}</span>
+            </label>
+          ))}
+          {candidates[0] !== ev.rule_id && (
+            <p className="mt-1 text-xs text-slate-500">The OWASP Core Rule Set blocked this request by score (rule {ev.rule_id}); these are the rules that scored.</p>
+          )}
+        </div>
+        <div className="mb-4">
+          <div className="label">Where</div>
+          {path && path !== '/' && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="radio" checked={scope === 'path'} onChange={() => setScope('path')} />
+              Only <span className="font-mono text-xs break-all">{path}</span> on {domain}
+            </label>
+          )}
+          <label className="flex items-center gap-2 text-sm">
+            <input type="radio" checked={scope === 'site'} onChange={() => setScope('site')} />
+            The whole website {domain}
+          </label>
+        </div>
+        {err && <p className="mb-3 text-sm text-red-600">{err}</p>}
+        <div className="flex justify-end gap-2">
+          <button className="btn-outline" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" disabled={busy || !rules.length || !domain} onClick={save}>
+            <CheckCircle2 className="h-4 w-4" /> Allow
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

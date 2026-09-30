@@ -143,8 +143,8 @@ func TestRenderLoginWatch(t *testing.T) {
 		}
 	}
 	c.BruteForce = false
-	if strings.Contains(RenderLoginWatch(c, "Malware.Expert"), "SecRule") {
-		t.Fatal("rules with brute force off")
+	if strings.Contains(RenderLoginWatch(c, "Malware.Expert"), "xpguard/login") {
+		t.Fatal("login rules with brute force off")
 	}
 	m := &Manager{}
 	if m.OwnRulesReplacedBy() != "" {

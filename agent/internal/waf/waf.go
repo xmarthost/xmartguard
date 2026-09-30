@@ -117,6 +117,8 @@ func (m *Manager) Status() Status {
 
 func categoryEnabled(c settings.WAF, cat string) bool {
 	switch cat {
+	case "exclusions":
+		return true
 	case "upload_scan":
 		return c.UploadScan
 	case "sensitive_files":
@@ -351,7 +353,7 @@ func (m *Manager) Apply() error {
 			}
 			rules = Render(cfg, opts)
 		} else {
-			rules = "# xPGuard's own rules are turned off; rule sets from the portal follow.\n"
+			rules = RenderExclusionsOnly(cfg)
 		}
 		rules = selfTestRule + "\n" + rules
 		bots := m.listFiles(cfg)

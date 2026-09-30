@@ -87,6 +87,9 @@ type RuleInfo struct {
 
 // Catalog lists every rule xPGuard can load.
 var Catalog = []RuleInfo{
+	{IDWPAdminExcl, "exclusions", "Allow code and HTML in WordPress admin screens of logged-in users (WPCode, theme options, page builders): injection rules skip them", "allow"},
+	{IDWPAjaxExcl, "exclusions", "Allow code and HTML in admin-ajax.php / admin-post.php requests of logged-in users sent from the admin screens (editor saves)", "allow"},
+	{IDWPRestExcl, "exclusions", "Allow code and HTML in writes to WordPress core REST routes (posts, pages, blocks, templates, media…; WordPress checks the user's rights)", "allow"},
 	{IDUploadMalware, "upload_scan", "Scan uploaded files with the xPGuard malware engine", "block"},
 	{IDUploadPHP, "block_php_upload", "Block uploads of PHP files through web forms", "block"},
 	{IDSensitive, "sensitive_files", "Block access to .env, .git, config backups, logs and SQL dumps", "block"},
@@ -334,6 +337,11 @@ func Render(c settings.WAF, o Options) string {
 	w("# xPGuard WAF rules. Managed by the xPGuard agent: changes here are overwritten.")
 	w("# Configure them in the xPGuard portal (Settings » WAF & Bruteforce).")
 	w("")
+	off := map[int]bool{}
+	for _, id := range c.DisabledRules {
+		off[id] = true
+	}
+	renderExclusions(w, c, off)
 	if len(c.WhitelistIPs) > 0 {
 		ips := make([]string, len(c.WhitelistIPs))
 		for i, a := range c.WhitelistIPs {
@@ -354,10 +362,6 @@ func Render(c settings.WAF, o Options) string {
 		// blacklisted address behind a trusted proxy is still checked.
 		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
 			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet)
-	}
-	off := map[int]bool{}
-	for _, id := range c.DisabledRules {
-		off[id] = true
 	}
 	// rule writes one of our rules unless it was switched off.
 	rule := func(id int, format string, a ...any) {
@@ -653,6 +657,11 @@ func RenderLoginWatch(c settings.WAF, replacedBy string) string {
 	b.WriteString("# xPGuard's own blocking rules are off on this server: " + replacedBy + "'s rules are used instead.\n")
 	b.WriteString("# Kept: the portal's whitelists and switched-off rules (applied to " + replacedBy + "'s rules),\n")
 	b.WriteString("# and failed-login detection (pass, log only) for the brute-force bans.\n\n")
+	off := map[int]bool{}
+	for _, id := range c.DisabledRules {
+		off[id] = true
+	}
+	renderExclusions(func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }, c, off)
 	// Whitelisted addresses and domains skip the vendor's rules too.
 	if len(c.WhitelistIPs) > 0 {
 		ips := make([]string, len(c.WhitelistIPs))

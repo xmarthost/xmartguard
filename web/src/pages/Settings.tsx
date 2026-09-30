@@ -6,6 +6,7 @@ import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
 import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
+import { RuleExclusionsEditor, type RuleExclusion } from '../components/RuleExclusions';
 
 interface ScannerS {
   enabled: boolean;
@@ -111,6 +112,7 @@ interface WAFS {
   virtual_patches: boolean;
   ipdb_post: boolean;
   tor_action: 'off' | 'captcha' | 'post' | 'block';
+  rule_exclusions?: RuleExclusion[];
 }
 interface CMSS {
   enabled: boolean;
@@ -998,6 +1000,13 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         empty="No whitelisted rules"
         validate={(v) => (/^\d{1,8}$/.test(v) ? null : 'Enter a numeric rule id')}
         onChange={(v) => onSave({ disabled_rules: v.map(Number) })}
+      />
+      <RuleExclusionsEditor
+        items={s.rule_exclusions ?? []}
+        domains={doms.data?.domains?.map((d) => d.domain)}
+        disabled={dis}
+        vendor={replaced}
+        onChange={(v) => onSave({ rule_exclusions: v })}
       />
       <ListEditor
         title="Whitelisted domains"

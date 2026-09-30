@@ -726,7 +726,7 @@
   var wState = { waf: { q: '', offset: 0 }, bot: { q: '', offset: 0 } };
   function wafPage(cat) {
     var st = wState[cat];
-    var title = cat === 'bot' ? 'Bot attacks' : 'WAF logs', sub = cat === 'bot' ? 'Bad bots and crawlers stopped on your websites' : 'Web attacks the firewall stopped on your websites';
+    var title = cat === 'bot' ? 'Bot attacks' : 'WAF logs', sub = cat === 'bot' ? 'Bad bots and crawlers stopped on your websites' : 'Web attacks the firewall stopped on your websites. If one of them was you, send the rule number to your host: it can be allowed for your website only.';
     body.innerHTML = '<div class="card"><div class="head"><h3>' + title + '</h3><span class="muted small">' + sub + '</span><div class="r">' +
       searchBox('xg-q', st.q, 'Search IP, domain, URI…') + '</div></div><div id="xg-list"></div></div>';
     bindSearch('xg-q', function (v) { st.q = v; st.offset = 0; load().catch(quiet); });
@@ -737,6 +737,7 @@
         set('xg-list', ev.length ? '<div class="tw"><table><tr><th>Time</th><th>IP address</th><th>Website</th><th>Reason</th><th>Action</th></tr>' +
           ev.map(function (e) {
             return '<tr><td class="nw">' + when(e.at) + '</td><td class="mono nw">' + esc(e.ip) + '</td><td class="path"><b>' + esc(e.host) + '</b><div class="muted mono small">' + esc(e.method) + ' ' + esc(e.uri) + '</div></td><td>' + esc(e.msg) +
+              '<div class="muted small">Rule ' + esc(e.rule_id) + (e.detail && e.detail.indexOf('Matched rules: ') === 0 ? ' · ' + esc(e.detail.slice(15)) : '') + '</div>' +
               '</td><td title="' + esc(e.action) + '">' + actionBadge(e.action) + '</td></tr>';
           }).join('') + '</table></div>' + pager(d.total, st.offset, PAGE) : empty(st.q ? 'No events match your search' : 'No attacks recorded. Nice and quiet.', 'shield'));
       });

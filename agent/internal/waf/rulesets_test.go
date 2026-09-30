@@ -264,7 +264,7 @@ func TestCRSNamePrefersTheAttack(t *testing.T) {
 	}
 	d, _ := ParseLine(`[client 1.2.3.4:1] ModSecurity: Access denied with code 403 (phase 2). Operator GE matched 5 at TX:anomaly_score. [file "/x"] [id "949110"] [msg "Inbound Anomaly Score Exceeded (Total Score: 8)"] [uri "/"] [unique_id "U2"]`)
 	d = r.apply(d)
-	if !strings.HasPrefix(d.Msg, "SQL Injection") || d.Detail != "Operator GE matched 5 at TX:anomaly_score." {
+	if !strings.HasPrefix(d.Msg, "SQL Injection") || d.Detail != "Matched rules: 920350, 942100" {
 		t.Fatalf("%q / %q", d.Msg, d.Detail)
 	}
 }

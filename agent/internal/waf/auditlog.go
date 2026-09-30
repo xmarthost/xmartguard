@@ -201,6 +201,32 @@ func attackRank(id int) int {
 type reason struct {
 	msg  string
 	rank int
+	ids  []int // the rules that added to the score
+}
+
+// ScoredPrefix starts the detail of a CRS score block: the rules that
+// scored, so the portal can switch off the one causing a false positive.
+const ScoredPrefix = "Matched rules: "
+
+// addScored adds a rule that scored (not the score rules themselves).
+func addScored(ids []int, id int) []int {
+	if isScoreRule(id) || id < 900000 || id >= 1000000 || len(ids) >= 10 {
+		return ids
+	}
+	for _, x := range ids {
+		if x == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
+func scoredDetail(ids []int) string {
+	s := make([]string, len(ids))
+	for i, id := range ids {
+		s[i] = strconv.Itoa(id)
+	}
+	return ScoredPrefix + strings.Join(s, ", ")
 }
 
 func (r *reasons) apply(e Event) Event {
@@ -213,6 +239,9 @@ func (r *reasons) apply(e Event) Event {
 		if m, ok := r.msg[e.UID]; ok {
 			e.Msg = scoreMsg(m.msg, e.Msg)
 			e.Category = classify(e.RuleID, e.Msg)
+			if len(m.ids) > 0 {
+				e.Detail = scoredDetail(m.ids)
+			}
 		}
 		return e
 	}
@@ -221,9 +250,11 @@ func (r *reasons) apply(e Event) Event {
 	}
 	rank := attackRank(e.RuleID)
 	if old, ok := r.msg[e.UID]; ok {
+		old.ids = addScored(old.ids, e.RuleID)
 		if rank > old.rank {
-			r.msg[e.UID] = reason{e.Msg, rank}
+			old.msg, old.rank = e.Msg, rank
 		}
+		r.msg[e.UID] = old
 		return e
 	}
 	if old := r.ring[r.pos]; old != "" {
@@ -231,7 +262,7 @@ func (r *reasons) apply(e Event) Event {
 	}
 	r.ring[r.pos] = e.UID
 	r.pos = (r.pos + 1) % len(r.ring)
-	r.msg[e.UID] = reason{e.Msg, rank}
+	r.msg[e.UID] = reason{e.Msg, rank, addScored(nil, e.RuleID)}
 	return e
 }
 

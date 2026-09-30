@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,6 +262,56 @@ type WAF struct {
 	// (Cloudflare): their real address comes from CF-Connecting-IP /
 	// X-Forwarded-For when the request arrives from the proxy's network.
 	ProxyIPCheck bool `json:"proxy_ip_check"`
+	// RuleExclusions switch single rules (ours, the OWASP CRS or a vendor's)
+	// off for one website or path only, for false positives that should not
+	// turn the rule off everywhere.
+	RuleExclusions []RuleExclusion `json:"rule_exclusions"`
+}
+
+// RuleExclusion switches rule Rule off for requests to Domain (any website
+// when empty; "*.example.com" for its subdomains) whose path starts with
+// Path (any path when empty).
+type RuleExclusion struct {
+	Rule   int    `json:"rule"`
+	Domain string `json:"domain,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
+var (
+	reExclDomain = regexp.MustCompile(`^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$`)
+	reExclPath   = regexp.MustCompile(`^/[A-Za-z0-9._~/-]*$`)
+)
+
+// MaxRuleExclusions keeps the rendered rules small.
+const MaxRuleExclusions = 200
+
+// CleanExclusions drops invalid and duplicate exclusions.
+func CleanExclusions(in []RuleExclusion) []RuleExclusion {
+	out := []RuleExclusion{}
+	seen := map[string]bool{}
+	for _, e := range in {
+		e.Domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(e.Domain)), ".")
+		e.Domain = strings.TrimPrefix(strings.TrimPrefix(e.Domain, "https://"), "http://")
+		e.Path = strings.TrimSpace(e.Path)
+		e.Note = strings.TrimSpace(e.Note)
+		if len(e.Note) > 200 {
+			e.Note = e.Note[:200]
+		}
+		if e.Rule <= 0 || e.Rule > 99999999 || (e.Domain != "" && !reExclDomain.MatchString(e.Domain)) || len(e.Path) > 200 || (e.Path != "" && !reExclPath.MatchString(e.Path)) {
+			continue
+		}
+		if e.Path == "/" {
+			e.Path = ""
+		}
+		k := fmt.Sprintf("%d|%s|%s", e.Rule, e.Domain, e.Path)
+		if seen[k] || len(out) >= MaxRuleExclusions {
+			continue
+		}
+		seen[k] = true
+		out = append(out, e)
+	}
+	return out
 }
 
 // DefaultBotList is the Bad Bot blocker's starting list: crawlers, scrapers
@@ -677,6 +728,7 @@ func normalize(s *Settings) {
 	if _, err := time.LoadLocation(s.Scanner.ScheduleTZ); err != nil || s.Scanner.ScheduleTZ == "" {
 		s.Scanner.ScheduleTZ = "Asia/Karachi"
 	}
+	s.WAF.RuleExclusions = CleanExclusions(s.WAF.RuleExclusions)
 	switch s.WAF.TorAction {
 	case "off", "captcha", "post", "block":
 	default:
