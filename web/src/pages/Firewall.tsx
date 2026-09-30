@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { CheckCircle2, Download, Globe, RefreshCw, Search, Settings as Gear, ShieldAlert, Trash2, XCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Download, Globe, RefreshCw, Search, Settings as Gear, ShieldAlert, Trash2, X, XCircle } from 'lucide-react';
+import { api } from '../api';
 import { downloadCSV, useCountries } from '../components/geo';
 import { flag } from '../components/WorldMap';
 import { can, useAuth } from '../auth';
@@ -27,6 +28,9 @@ interface Rule {
   comment: string;
   created_at: number;
   expires_at: number;
+  proto?: string;
+  ports?: string;
+  dir?: string;
 }
 
 interface TrustedSvc {
@@ -177,20 +181,341 @@ function ListModal({ serverId, kind, title, onClose }: { serverId: string; kind:
   );
 }
 
-function AddRemove({ serverId, kind, label, placeholder = 'Enter IP or CIDR range', withComment, withDuration, removeLabel, onChanged }: {
+/** An IP field with a globe button that fills in this browser's address. */
+function IPInput({ value, onChange, placeholder = 'Enter IP or CIDR range', className = '' }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; className?: string;
+}) {
+  return (
+    <div className={`relative ${className}`}>
+      <input className="input pr-10" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      {value ? (
+        <button type="button" className="absolute top-1/2 right-9 -translate-y-1/2 text-slate-400 hover:text-navy-800" title="Clear" onClick={() => onChange('')}>
+          <X className="h-4 w-4" />
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="absolute top-1/2 right-3 -translate-y-1/2 text-navy-800 hover:text-navy-600"
+        title="Use my IP address"
+        onClick={() => api<{ ip: string }>('GET', '/api/geo/me').then((r) => r.ip && onChange(r.ip)).catch(() => {})}
+      >
+        <Globe className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+// What each "Found in" list means.
+const FOUND: Record<string, string> = {
+  WHITELIST: 'Whitelisted: never blocked by the firewall',
+  'WHITELIST-COUNTRY': 'Its country is whitelisted: never blocked by the firewall (WAF and CAPTCHA settings still apply)',
+  'TEMP-ALLOW': 'Temporarily allowed',
+  IGNORE: 'Ignored by automatic blocking',
+  BLACKLIST: 'Blacklisted: blocked permanently',
+  'TEMP-BAN': 'Temporarily banned',
+  IPDB: 'Listed on the IPDB (shared blocklist)',
+  'BLOCKED-COUNTRY': 'Its country is blocked',
+  'TRUSTED-SERVICE': 'A trusted service: never blocked',
+  'SERVER-OR-PORTAL': 'This server or the xPGuard portal: never blocked',
+};
+
+interface CheckResult {
+  ip: string;
+  status: string;
+  found?: string[];
+  country?: string;
+  trusted?: string;
+  protected: boolean;
+  matches: Rule[];
+  events: { id: number; reason: string; source: string; created_at: number; status: string }[];
+}
+
+const ruleOpts = (r: Rule) =>
+  r.proto || r.ports || r.dir
+    ? ` (${[r.proto ? r.proto.toUpperCase() : 'any protocol', r.ports ? `port ${r.ports}` : '', r.dir === 'in' ? 'IN' : r.dir === 'out' ? 'OUT' : 'IN or OUT'].filter(Boolean).join(', ')})`
+    : '';
+
+/** cPGuard-style Check IP pop-up: which lists the address is in, and its country. */
+function CheckIPModal({ serverId, initial, onClose }: { serverId: string; initial: string; onClose: () => void }) {
+  const [ip, setIp] = useState(initial);
+  const [res, setRes] = useState<CheckResult | null>(null);
+  const [geo, setGeo] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const search = async (v = ip) => {
+    v = v.trim();
+    if (!v) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const [r, g] = await Promise.all([
+        agentCall(serverId, 'fw.check', { ip: v }) as Promise<CheckResult>,
+        api<{ countries: Record<string, string> }>('POST', '/api/geo/lookup', { ips: [v] }).catch(() => ({ countries: {} as Record<string, string> })),
+      ]);
+      setRes(r);
+      setGeo(g.countries[v] || '');
+    } catch (e) {
+      setRes(null);
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    search(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const cc = res?.country || geo;
+  const found = res?.found ?? [];
+  const blocked = res && /block/.test(res.status);
+  return (
+    <div className="fixed inset-0 z-40 flex items-start justify-center bg-black/40 p-4 pt-[12vh]" onClick={onClose}>
+      <div className="card w-full max-w-3xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 pt-5 pb-4">
+          <h2 className="text-xl font-semibold text-navy-900">Check IP</h2>
+          <button onClick={onClose} className="text-slate-500 hover:text-navy-800" aria-label="close">
+            <X />
+          </button>
+        </div>
+        <form
+          className="mx-6 mb-4 flex items-center gap-2 rounded-lg border border-slate-300 p-1.5 pl-3 focus-within:border-navy-500"
+          onSubmit={(e) => {
+            e.preventDefault();
+            search();
+          }}
+        >
+          <input className="min-w-0 flex-1 bg-transparent text-base outline-none" value={ip} onChange={(e) => setIp(e.target.value)} placeholder="Enter IP address" autoFocus />
+          <button className="rounded-md bg-blue-600 px-5 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50" disabled={busy || !ip.trim()}>
+            {busy ? 'Searching…' : 'Search'}
+          </button>
+        </form>
+        <div className="max-h-[60vh] overflow-y-auto border-t border-slate-200 px-6 py-4">
+          {err && <p className="text-sm text-red-600">{err}</p>}
+          {res && (
+            <div className="rounded-lg border border-slate-300 p-4">
+              <div className="flex flex-wrap items-center gap-2 text-lg font-semibold text-navy-900">
+                {blocked ? <XCircle className="h-5 w-5 text-red-600" /> : found.length ? <CheckCircle2 className="h-5 w-5 text-green-600" /> : null}
+                {found.length ? <>Found in : {found.join(', ')}</> : 'Not found in any firewall list'}
+              </div>
+              <div className="mt-2 space-y-1 text-sm text-slate-600">
+                <div>
+                  IP : <span className="font-mono text-navy-900">{res.ip}</span>
+                </div>
+                <div>
+                  Country :{' '}
+                  {cc ? (
+                    <span className="text-navy-900">
+                      <span className="mr-1 text-base">{flag(cc)}</span>
+                      {countryName(cc)}
+                    </span>
+                  ) : (
+                    'unknown'
+                  )}
+                </div>
+                <div>
+                  Firewall :{' '}
+                  <span className={blocked ? 'font-medium text-red-600' : res.status === 'none' ? 'text-navy-900' : 'font-medium text-green-700'}>
+                    {res.status === 'none' ? 'not listed (normal traffic)' : res.status}
+                  </span>
+                </div>
+                {res.trusted && <div>Trusted service : {res.trusted}</div>}
+              </div>
+              {found.length > 0 && (
+                <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-sm text-slate-600">
+                  {found.map((f) => (
+                    <li key={f}>
+                      <b className="text-navy-900">{f}</b> — {FOUND[f] ?? ''}
+                      {res.matches
+                        .filter((m) => ({ allow: 'WHITELIST', deny: 'BLACKLIST', tempban: 'TEMP-BAN', tempallow: 'TEMP-ALLOW', ignore: 'IGNORE' })[m.kind] === f)
+                        .map((m) => (
+                          <div key={m.kind + m.cidr} className="ml-4 text-xs text-slate-500">
+                            {m.cidr}
+                            {ruleOpts(m)}
+                            {m.comment && ` — ${m.comment}`}
+                            {m.expires_at ? ` (until ${fmtTime(m.expires_at)})` : ''}
+                          </div>
+                        ))}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {res.events.length > 0 && (
+                <div className="mt-3 border-t border-slate-100 pt-3 text-sm">
+                  <div className="mb-1 font-medium text-navy-900">Recent firewall events</div>
+                  {res.events.slice(0, 8).map((e) => (
+                    <div key={e.id} className="text-xs text-slate-500">
+                      {fmtTime(e.created_at)} · {e.reason} · {e.source} · {e.status}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const PROTOS = [
+  { v: '', l: 'Any protocol' },
+  { v: 'tcp', l: 'TCP' },
+  { v: 'udp', l: 'UDP' },
+];
+const DIRS = [
+  { v: '', l: 'IN or OUT' },
+  { v: 'in', l: 'IN' },
+  { v: 'out', l: 'OUT' },
+];
+
+/** Advanced Options of the whitelist: an entry for a protocol, ports or
+ *  one direction, and the whole list with search. */
+function WhitelistDrawer({ serverId, onClose }: { serverId: string; onClose: () => void }) {
+  const list = useAgent<{ rules: Rule[] }>(serverId, 'fw.list', { kind: 'allow' });
+  const { run, busy } = useAction();
+  const { user } = useAuth();
+  const canEdit = can(user, 'operator');
+  const blank = { addr: '', comment: '', proto: '', dir: '', ports: '' };
+  const [f, setF] = useState(blank);
+  const [qIP, setQIP] = useState('');
+  const [qReason, setQReason] = useState('');
+  const rows = (list.data?.rules ?? []).filter((r) => {
+    const hay = `${r.cidr} ${r.ports ?? ''} ${r.proto || 'any'}`.toLowerCase();
+    return hay.includes(qIP.trim().toLowerCase()) && (r.comment || '').toLowerCase().includes(qReason.trim().toLowerCase());
+  });
+  const add = async () => {
+    const bad = isIPorCIDR(f.addr.trim());
+    if (bad) return alert(bad);
+    const r = await run(
+      () => agentCall(serverId, 'fw.add', { kind: 'allow', addr: f.addr.trim(), comment: f.comment, proto: f.proto, ports: f.ports, dir: f.dir }).then(() => {
+        list.reload();
+        return true;
+      }),
+      `${f.addr.trim()} whitelisted`,
+    );
+    if (r) setF(blank);
+  };
+  const label = 'w-40 shrink-0 text-sm text-navy-900';
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40" onClick={onClose}>
+      <div className="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between px-6 pt-5">
+          <div>
+            <h2 className="text-lg font-semibold text-navy-900">Whitelisted IPs</h2>
+            <p className="text-xs text-slate-500">Choose IPs that should be always allowed by the brute force engine and IPDB firewall</p>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-navy-800" aria-label="close">
+            <X />
+          </button>
+        </div>
+        <div className="space-y-3 px-6 pt-6">
+          <div className="flex items-center gap-3">
+            <div className={label}>IP Address</div>
+            <IPInput value={f.addr} onChange={(v) => setF({ ...f, addr: v })} placeholder="Enter IP Address" className="flex-1" />
+          </div>
+          <div className="flex items-center gap-3">
+            <div className={label}>Reason (optional)</div>
+            <input className="input flex-1" value={f.comment} onChange={(e) => setF({ ...f, comment: e.target.value })} placeholder="Enter reason" />
+          </div>
+          <div className="flex items-center gap-3">
+            <div className={label}>Protocol</div>
+            <select className="input flex-1" value={f.proto} onChange={(e) => setF({ ...f, proto: e.target.value })}>
+              {PROTOS.map((p) => (
+                <option key={p.v} value={p.v}>{p.l}</option>
+              ))}
+            </select>
+            <select className="input flex-1" value={f.dir} onChange={(e) => setF({ ...f, dir: e.target.value })}>
+              {DIRS.map((p) => (
+                <option key={p.v} value={p.v}>{p.l}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className={label}>Port</div>
+            <input className="input flex-1" value={f.ports} onChange={(e) => setF({ ...f, ports: e.target.value })} placeholder="Enter Ports (e.g. 22, 2083, 8000-8100) · empty = all ports" />
+          </div>
+          <div className="flex justify-end gap-3 pt-1">
+            <button className="btn-outline px-6" onClick={() => setF(blank)}>Clear</button>
+            <button className="btn-primary px-8" disabled={!canEdit || busy || !f.addr.trim()} onClick={add}>Add</button>
+          </div>
+        </div>
+        <div className="mx-6 mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200">
+          <div className="grid grid-cols-[1fr_1fr_40px] gap-4 bg-slate-50 px-4 py-2 text-sm font-medium text-navy-900">
+            <div>
+              IP Address
+              <input className="input mt-1 py-1 text-sm font-normal" value={qIP} onChange={(e) => setQIP(e.target.value)} placeholder="Search IP/Port/Protocol" />
+            </div>
+            <div>
+              Reason
+              <input className="input mt-1 py-1 text-sm font-normal" value={qReason} onChange={(e) => setQReason(e.target.value)} placeholder="Search reason" />
+            </div>
+            <div />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {list.loading && !list.data ? (
+              <SectionLoader />
+            ) : rows.length === 0 ? (
+              <Empty text={list.data?.rules.length ? 'No match' : 'The whitelist is empty'} />
+            ) : (
+              rows.map((r) => (
+                <div key={r.cidr} className="grid grid-cols-[1fr_1fr_40px] items-center gap-4 border-t border-slate-100 px-4 py-3 text-sm">
+                  <div>
+                    <div className="font-mono text-navy-900">{r.cidr}</div>
+                    {ruleOpts(r) && <div className="text-xs text-slate-500">{ruleOpts(r).slice(2, -1)}</div>}
+                  </div>
+                  <div className="text-slate-700">{r.comment || '–'}</div>
+                  <div className="text-right">
+                    {canEdit && (
+                      <button
+                        className="text-slate-400 hover:text-red-600"
+                        title="Remove"
+                        disabled={busy}
+                        onClick={() => run(() => agentCall(serverId, 'fw.remove', { kind: 'allow', addr: r.cidr }).then(list.reload), `${r.cidr} removed`)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="flex justify-end px-6 py-4">
+          <button className="btn-primary px-8" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddRemove({ serverId, kind, label, placeholder = 'Enter IP or CIDR range', withComment, withDuration, removeLabel, onChanged, onAdvanced }: {
   serverId: string; kind: string; label: string; placeholder?: string; withComment?: boolean; withDuration?: boolean; removeLabel: string; onChanged?: () => void;
+  onAdvanced?: () => void;
 }) {
   const [addr, setAddr] = useState('');
   const [comment, setComment] = useState('');
   const [dur, setDur] = useState('60');
   const [unit, setUnit] = useState('60'); // minutes multiplier
   const [raddr, setRaddr] = useState('');
+  const [menu, setMenu] = useState(false);
   const { run, busy } = useAction();
   const { user } = useAuth();
   const disabled = !can(user, 'operator') || busy;
+  const submit = async () => {
+    const err = isIPorCIDR(addr.trim());
+    if (err) return alert(err);
+    const minutes = withDuration ? Number(dur) * Number(unit) : 0;
+    const r = await run(() => agentCall(serverId, 'fw.add', { kind, addr: addr.trim(), comment, minutes }), `${addr.trim()} added`);
+    if (r) {
+      setAddr('');
+      setComment('');
+      onChanged?.();
+    }
+  };
   return (
     <>
-      <Row title={label} desc={withDuration ? 'Temporarily for a specified duration' : `Add an IP or CIDR to the ${kind} list`}>
+      <Row title={label} desc={withDuration ? 'Temporarily for a specified duration' : `Add an IP or CIDR to the ${kind === 'allow' ? 'whitelist' : kind === 'deny' ? 'blacklist' : `${kind} list`}`}>
         {withDuration && (
           <div className="flex gap-2">
             <input className="input" type="number" min={1} value={dur} onChange={(e) => setDur(e.target.value)} placeholder="Expiry time" />
@@ -201,31 +526,44 @@ function AddRemove({ serverId, kind, label, placeholder = 'Enter IP or CIDR rang
             </select>
           </div>
         )}
-        <input className="input" value={addr} onChange={(e) => setAddr(e.target.value)} placeholder={withDuration ? 'Enter IP address' : placeholder} />
+        <IPInput value={addr} onChange={setAddr} placeholder={withDuration ? 'Enter IP address' : placeholder} />
         {withComment && <input className="input" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Comment" />}
         <div className="flex justify-end">
-          <button
-            className="btn-primary px-6"
-            disabled={disabled || !addr.trim()}
-            onClick={async () => {
-              const err = isIPorCIDR(addr.trim());
-              if (err) return alert(err);
-              const minutes = withDuration ? Number(dur) * Number(unit) : 0;
-              const r = await run(() => agentCall(serverId, 'fw.add', { kind, addr: addr.trim(), comment, minutes }), `${addr.trim()} added`);
-              if (r) {
-                setAddr('');
-                setComment('');
-                onChanged?.();
-              }
-            }}
-          >
-            {label.split(' ')[0]}
-          </button>
+          {onAdvanced ? (
+            <div className="relative">
+              <div className="inline-flex overflow-hidden rounded-lg">
+                <button className="btn-primary rounded-r-none px-6" disabled={disabled || !addr.trim()} onClick={submit}>
+                  {label.split(' ')[0]}
+                </button>
+                <button className="btn-primary rounded-l-none border-l border-white/20 px-2" title="More options" onClick={() => setMenu(!menu)}>
+                  <ChevronDown className={`h-4 w-4 transition ${menu ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
+              {menu && <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />}
+              {menu && (
+                <div className="absolute right-0 z-20 mt-2 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                  <button
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-navy-900 hover:bg-slate-50"
+                    onClick={() => {
+                      setMenu(false);
+                      onAdvanced();
+                    }}
+                  >
+                    <Gear className="h-4 w-4" /> Advanced Options
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button className="btn-primary px-6" disabled={disabled || !addr.trim()} onClick={submit}>
+              {label.split(' ')[0]}
+            </button>
+          )}
         </div>
       </Row>
-      <Row title={removeLabel} desc={`Remove an IP or CIDR from the ${kind} list`}>
+      <Row title={removeLabel} desc={`Remove an IP or CIDR from the ${kind === 'allow' ? 'whitelist' : kind === 'deny' ? 'blacklist' : `${kind} list`}`}>
         <div className="flex gap-2">
-          <input className="input" value={raddr} onChange={(e) => setRaddr(e.target.value)} placeholder={placeholder} />
+          <IPInput value={raddr} onChange={setRaddr} placeholder={placeholder} className="flex-1" />
           <button
             className="btn-primary px-6"
             disabled={disabled || !raddr.trim()}
@@ -286,7 +624,8 @@ export function FirewallPage() {
   const [jail, setJail] = useState('');
   const [fw, setFw] = useState<FwSettings | null>(null);
   const [check, setCheck] = useState('');
-  const [checkRes, setCheckRes] = useState<any>(null);
+  const [checkOpen, setCheckOpen] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
   const [view, setView] = useState<{ kind: string; title: string } | null>(null);
   const [providerOpen, setProviderOpen] = useState(false);
   const [provider, setProvider] = useState<'iptables' | 'nftables'>('iptables');
@@ -338,38 +677,30 @@ export function FirewallPage() {
       {!status.available && <ErrorBox message={`The ${status.provider} provider is not available on this server: ${status.providers[status.provider]}`} />}
 
       <Section title="Quick Actions" desc="IP block management">
-        <Row title="Check IP" desc="Check the status of an IP in the firewall">
+        <Row title="Check IP" desc="Check the status of an IP or CIDR in the firewall">
           <form
             className="flex gap-2"
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault();
-              const r = await run(() => agentCall(id!, 'fw.check', { ip: check.trim() }));
-              if (r) setCheckRes(r);
+              if (check.trim()) setCheckOpen(true);
             }}
           >
-            <input className="input" value={check} onChange={(e) => setCheck(e.target.value)} placeholder="Enter IP address" />
-            <button className="btn-primary px-6" disabled={!check.trim()}>Check IP</button>
+            <IPInput value={check} onChange={setCheck} className="flex-1" />
+            <button className="btn-primary px-6">Check IP</button>
           </form>
-          {checkRes && (
-            <div className="rounded-lg bg-slate-50 p-3 text-sm">
-              <div className="flex items-center gap-2 font-medium">
-                {checkRes.status.includes('block') ? <XCircle className="h-4 w-4 text-red-600" /> : <CheckCircle2 className="h-4 w-4 text-green-600" />}
-                {checkRes.ip}: {checkRes.status === 'none' ? 'not listed' : checkRes.status}
-                {checkRes.protected && <span className="text-xs text-slate-500">(protected server/portal address)</span>}
-              </div>
-              {checkRes.matches.map((m: Rule) => (
-                <div key={m.kind + m.cidr} className="text-slate-600">
-                  {m.kind}: {m.cidr} {m.comment && `— ${m.comment}`} {m.expires_at ? `(until ${fmtTime(m.expires_at)})` : ''}
-                </div>
-              ))}
-            </div>
-          )}
         </Row>
       </Section>
 
       <Section title="Whitelist" desc="Addresses that xPGuard will never block">
-        <AddRemove serverId={id!} kind="allow" label="Allow IP" removeLabel="Allow remove" withComment />
-        <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'allow', title: 'Whitelist' })}>View whitelist</button></div>
+        <AddRemove serverId={id!} kind="allow" label="Allow IP" removeLabel="Allow remove" withComment onAdvanced={() => setAdvanced(true)} />
+        <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setAdvanced(true)}>View whitelist</button></div>
+        <Row title="Whitelisted countries" desc="Every address of these countries is whitelisted: never blocked by the firewall, brute force or IPDB. The WAF and its CAPTCHA still check their visitors.">
+          <CountryPicker value={fw.ignored_countries} disabled={!isAdmin} onChange={(v) => setFw({ ...fw, ignored_countries: v })} />
+          <div className="flex justify-end gap-2">
+            <button className="btn-outline" disabled={!isAdmin} onClick={() => setFw({ ...fw, ignored_countries: all.firewall.ignored_countries })}>Reset</button>
+            <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => save({ ignored_countries: fw.ignored_countries }, 'Whitelisted countries saved')}>Save</button>
+          </div>
+        </Row>
       </Section>
 
       <Section title="Blacklist" desc="Permanently blocked addresses">
@@ -425,13 +756,6 @@ export function FirewallPage() {
       <Section title="Ignore IPs" desc="IPs excluded from automatic blocking (brute force, DoS)">
         <AddRemove serverId={id!} kind="ignore" label="Ignore IP" removeLabel="Remove ignored IP" withComment />
         <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'ignore', title: 'Ignored IPs' })}>View ignored list</button></div>
-        <Row title="Ignore Countries" desc="IPs of these countries are never blocked by any firewall rule">
-          <CountryPicker value={fw.ignored_countries} disabled={!isAdmin} onChange={(v) => setFw({ ...fw, ignored_countries: v })} />
-          <div className="flex justify-end gap-2">
-            <button className="btn-outline" disabled={!isAdmin} onClick={() => setFw({ ...fw, ignored_countries: all.firewall.ignored_countries })}>Reset</button>
-            <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => save({ ignored_countries: fw.ignored_countries }, 'Ignored countries saved')}>Save</button>
-          </div>
-        </Row>
       </Section>
 
       <Section title="IPDB distributed firewall" desc="IPDB is the shared blocklist of all your servers: an attacker banned on one server is dropped on every server">
@@ -512,15 +836,12 @@ export function FirewallPage() {
       </Section>
 
       <Section title="Country filtering" desc="Restrict inbound traffic based on geographic location (IPv4)">
-        <Row title="Allowed Countries" desc="IPs of these countries bypass country blocking">
-          <CountryPicker value={fw.allowed_countries} disabled={!isAdmin} onChange={(v) => setFw({ ...fw, allowed_countries: v })} />
-        </Row>
-        <Row title="Blocked Countries" desc="Block connections from these countries">
+        <Row title="Blocked Countries" desc="Block connections from these countries (whitelisted countries and addresses are never blocked)">
           <CountryPicker value={fw.blocked_countries} disabled={!isAdmin} onChange={(v) => setFw({ ...fw, blocked_countries: v })} />
         </Row>
         <div className="flex justify-end gap-2">
           <button className="btn-outline" disabled={!isAdmin} onClick={() => setFw(s.data!.settings.firewall)}>Reset</button>
-          <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => save({ allowed_countries: fw.allowed_countries, blocked_countries: fw.blocked_countries }, 'Country rules saved')}>
+          <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => save({ blocked_countries: fw.blocked_countries }, 'Country rules saved')}>
             <Globe className="h-4 w-4" /> Save
           </button>
         </div>
@@ -697,6 +1018,8 @@ export function FirewallPage() {
       )}
 
       {view && <ListModal serverId={id!} kind={view.kind} title={view.title} onClose={() => setView(null)} />}
+      {checkOpen && <CheckIPModal serverId={id!} initial={check.trim()} onClose={() => setCheckOpen(false)} />}
+      {advanced && <WhitelistDrawer serverId={id!} onClose={() => setAdvanced(false)} />}
 
       {providerOpen && (
         <Modal title="Firewall Provider" onClose={() => setProviderOpen(false)}>

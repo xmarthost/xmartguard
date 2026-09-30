@@ -36,6 +36,105 @@ type Rule struct {
 	Comment   string `json:"comment"`
 	CreatedAt int64  `json:"created_at"`
 	ExpiresAt int64  `json:"expires_at"`
+	// Advanced whitelist options ("" = any): tcp | udp, a port list
+	// ("22,8080,1000-2000"), in | out.
+	Proto string `json:"proto,omitempty"`
+	Ports string `json:"ports,omitempty"`
+	Dir   string `json:"dir,omitempty"`
+}
+
+// Advanced reports whether an allow rule is limited to a protocol, ports
+// or one direction (it is then not part of the plain allow set).
+func (r Rule) Advanced() bool { return r.Proto != "" || r.Ports != "" || r.Dir != "" }
+
+// Scope describes an advanced rule's traffic ("TCP port 22,2087 IN").
+func (r Rule) Scope() string {
+	p := "any protocol"
+	if r.Proto != "" {
+		p = strings.ToUpper(r.Proto)
+	}
+	if r.Ports != "" {
+		p += " port " + r.Ports
+	}
+	switch r.Dir {
+	case DirIn:
+		p += " IN"
+	case DirOut:
+		p += " OUT"
+	default:
+		p += " IN/OUT"
+	}
+	return p
+}
+
+// Inbound reports whether the rule applies to incoming traffic.
+func (r Rule) Inbound() bool { return r.Dir != DirOut }
+
+// Directions of an advanced allow rule ("" = in and out).
+const (
+	DirIn  = "in"
+	DirOut = "out"
+)
+
+// AllowOpts are the advanced options of a whitelist entry.
+type AllowOpts struct {
+	Proto string `json:"proto"`
+	Ports string `json:"ports"`
+	Dir   string `json:"dir"`
+}
+
+// clean validates and normalizes the options.
+func (o AllowOpts) clean() (AllowOpts, error) {
+	o.Proto, o.Dir = strings.ToLower(strings.TrimSpace(o.Proto)), strings.ToLower(strings.TrimSpace(o.Dir))
+	switch o.Proto {
+	case "", "any":
+		o.Proto = ""
+	case "tcp", "udp":
+	default:
+		return o, fmt.Errorf("invalid protocol %q (tcp, udp or any)", o.Proto)
+	}
+	switch o.Dir {
+	case "", "both", "inout":
+		o.Dir = ""
+	case DirIn, DirOut:
+	default:
+		return o, fmt.Errorf("invalid direction %q (in, out or both)", o.Dir)
+	}
+	ports, err := ParsePorts(o.Ports)
+	if err != nil {
+		return o, err
+	}
+	o.Ports = strings.Join(ports, ",")
+	return o, nil
+}
+
+// ParsePorts checks a port list ("22, 80,1000-2000"); at most 30 entries.
+func ParsePorts(s string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+		lo, hi, rng := strings.Cut(f, "-")
+		if !rng {
+			hi = lo
+		}
+		a, e1 := strconv.Atoi(lo)
+		b, e2 := strconv.Atoi(hi)
+		if e1 != nil || e2 != nil || a < 1 || b > 65535 || a > b {
+			return nil, fmt.Errorf("invalid port %q (1-65535, or a range like 1000-2000)", f)
+		}
+		p := strconv.Itoa(a)
+		if a != b {
+			p += "-" + strconv.Itoa(b)
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if len(out) > 30 {
+		return nil, errors.New("at most 30 ports per entry")
+	}
+	return out, nil
 }
 
 // Event is a block event shown in Firewall Logs.
@@ -127,7 +226,7 @@ func (m *Manager) Status() Status {
 }
 
 func (m *Manager) rules(kind string) ([]Rule, error) {
-	q := `SELECT id, kind, cidr, comment, created_at, expires_at FROM fw_rules WHERE (expires_at = 0 OR expires_at > ?)`
+	q := `SELECT id, kind, cidr, comment, created_at, expires_at, proto, ports, dir FROM fw_rules WHERE (expires_at = 0 OR expires_at > ?)`
 	args := []any{store.Now()}
 	if kind != "" {
 		q += ` AND kind = ?`
@@ -141,7 +240,7 @@ func (m *Manager) rules(kind string) ([]Rule, error) {
 	out := []Rule{}
 	for rows.Next() {
 		var r Rule
-		if err := rows.Scan(&r.ID, &r.Kind, &r.CIDR, &r.Comment, &r.CreatedAt, &r.ExpiresAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Kind, &r.CIDR, &r.Comment, &r.CreatedAt, &r.ExpiresAt, &r.Proto, &r.Ports, &r.Dir); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -165,7 +264,11 @@ func (m *Manager) Build() (Ruleset, error) {
 	for _, r := range all {
 		switch r.Kind {
 		case KindAllow:
-			rs.Allow = append(rs.Allow, r.CIDR)
+			if r.Advanced() {
+				rs.AllowRules = append(rs.AllowRules, r)
+			} else {
+				rs.Allow = append(rs.Allow, r.CIDR)
+			}
 		case KindIgnore:
 			rs.Ignore = append(rs.Ignore, r.CIDR)
 		case KindDeny:
@@ -289,6 +392,20 @@ func (m *Manager) trustedService(addr string) string {
 
 // Add stores a rule and applies it. ttl is used for temp kinds.
 func (m *Manager) Add(kind, addr, comment string, ttl time.Duration) (Rule, error) {
+	return m.add(kind, addr, comment, ttl, AllowOpts{})
+}
+
+// AddAllow whitelists an address, optionally only for a protocol, ports
+// or one direction (the "Advanced Options" of the whitelist).
+func (m *Manager) AddAllow(addr, comment string, o AllowOpts) (Rule, error) {
+	o, err := o.clean()
+	if err != nil {
+		return Rule{}, err
+	}
+	return m.add(KindAllow, addr, comment, 0, o)
+}
+
+func (m *Manager) add(kind, addr, comment string, ttl time.Duration, o AllowOpts) (Rule, error) {
 	c, err := ParseAddr(addr)
 	if err != nil {
 		return Rule{}, err
@@ -321,14 +438,16 @@ func (m *Manager) Add(kind, addr, comment string, ttl time.Duration) (Rule, erro
 		comment = comment[:200]
 	}
 	now := store.Now()
-	_, err = m.DB.Exec(`INSERT INTO fw_rules (kind, cidr, comment, created_at, expires_at) VALUES (?,?,?,?,?)
-		ON CONFLICT(kind, cidr) DO UPDATE SET comment = excluded.comment, created_at = excluded.created_at, expires_at = excluded.expires_at`,
-		kind, c, comment, now, expires)
+	_, err = m.DB.Exec(`INSERT INTO fw_rules (kind, cidr, comment, created_at, expires_at, proto, ports, dir) VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT(kind, cidr) DO UPDATE SET comment = excluded.comment, created_at = excluded.created_at, expires_at = excluded.expires_at,
+		proto = excluded.proto, ports = excluded.ports, dir = excluded.dir`,
+		kind, c, comment, now, expires, o.Proto, o.Ports, o.Dir)
 	if err != nil {
 		return Rule{}, err
 	}
-	// Allowing an address lifts any block on it.
-	if kind == KindAllow || kind == KindTempAllow || kind == KindIgnore {
+	// Allowing an address (for incoming traffic on every port) lifts any
+	// block on it.
+	if (kind == KindAllow && o.Dir != DirOut && o.Proto == "" && o.Ports == "") || kind == KindTempAllow || kind == KindIgnore {
 		_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind IN ('deny','tempban') AND cidr = ?`, c)
 	}
 	if kind == KindDeny || kind == KindTempBan {
@@ -340,7 +459,7 @@ func (m *Manager) Add(kind, addr, comment string, ttl time.Duration) (Rule, erro
 			return Rule{}, err
 		}
 	}
-	return Rule{Kind: kind, CIDR: c, Comment: comment, CreatedAt: now, ExpiresAt: expires}, nil
+	return Rule{Kind: kind, CIDR: c, Comment: comment, CreatedAt: now, ExpiresAt: expires, Proto: o.Proto, Ports: o.Ports, Dir: o.Dir}, nil
 }
 
 func orDefault(s, d string) string {
@@ -462,10 +581,18 @@ func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 // CheckResult explains how the firewall treats an address.
 type CheckResult struct {
 	IP        string  `json:"ip"`
-	Status    string  `json:"status"` // allowed | blocked | temp-blocked | ignored | country-blocked | none
+	Status    string  `json:"status"` // allowed | blocked | temp-blocked | ignored | ipdb-blocked | country-blocked | none
 	Matches   []Rule  `json:"matches"`
 	Events    []Event `json:"events"`
 	Protected bool    `json:"protected"`
+	// Found names every list the address is in, like cPGuard's
+	// "Found in": WHITELIST, WHITELIST-COUNTRY, BLACKLIST, TEMP-BAN, ...
+	Found []string `json:"found"`
+	// Country is the whitelisted or blocked country the address is in
+	// (the portal looks up any other country).
+	Country string `json:"country,omitempty"`
+	// Trusted names the trusted service the address belongs to.
+	Trusted string `json:"trusted,omitempty"`
 }
 
 // Check looks an IP up in all lists.
@@ -474,36 +601,83 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 	if ip == nil {
 		return CheckResult{}, fmt.Errorf("invalid IP address: %q", addr)
 	}
-	res := CheckResult{IP: ip.String(), Status: "none", Matches: []Rule{}, Events: []Event{}, Protected: m.isProtected(ip.String())}
+	res := CheckResult{IP: ip.String(), Status: "none", Matches: []Rule{}, Events: []Event{}, Found: []string{}, Protected: m.isProtected(ip.String())}
 	all, err := m.rules("")
 	if err != nil {
 		return res, err
 	}
+	found := func(l string) {
+		for _, f := range res.Found {
+			if f == l {
+				return
+			}
+		}
+		res.Found = append(res.Found, l)
+	}
+	if res.Protected {
+		found("SERVER-OR-PORTAL")
+	}
+	if svc := m.trustedService(res.IP); svc != "" {
+		res.Trusted = svc
+		found("TRUSTED-SERVICE")
+	}
+	label := map[string]string{KindAllow: "WHITELIST", KindTempAllow: "TEMP-ALLOW", KindIgnore: "IGNORE", KindDeny: "BLACKLIST", KindTempBan: "TEMP-BAN"}
 	prio := map[string]int{KindAllow: 5, KindTempAllow: 4, KindIgnore: 3, KindDeny: 2, KindTempBan: 1}
-	best := 0
+	best, partial := 0, ""
 	for _, r := range all {
 		if Contains(r.CIDR, res.IP) {
 			res.Matches = append(res.Matches, r)
+			found(label[r.Kind])
+			// An entry limited to ports or outgoing traffic does not let
+			// every connection in.
+			if r.Kind == KindAllow && r.Advanced() && !(r.Inbound() && r.Proto == "" && r.Ports == "") {
+				if partial == "" {
+					partial = "allowed only for " + r.Scope()
+				}
+				continue
+			}
 			if prio[r.Kind] > best {
 				best = prio[r.Kind]
 				res.Status = map[string]string{KindAllow: "allowed", KindTempAllow: "allowed", KindIgnore: "ignored", KindDeny: "blocked", KindTempBan: "temp-blocked"}[r.Kind]
 			}
 		}
 	}
-	if best == 0 && m.IPDB != nil && m.Settings.Get().IPDB.Enabled {
+	cfg := m.Settings.Get().Firewall
+	if m.Geo != nil {
+		// A whitelisted country is in the kernel's allow set: it wins over
+		// blocks, like a whitelisted address.
+		if cc := m.Geo.Lookup(res.IP, cfg.IgnoredCountries); cc != "" {
+			res.Country = cc
+			found("WHITELIST-COUNTRY")
+			if best < prio[KindIgnore] {
+				best = prio[KindIgnore]
+				res.Status = "allowed"
+			}
+		}
+	}
+	if m.IPDB != nil && m.Settings.Get().IPDB.Enabled {
 		for _, e := range m.ipdbEntries() {
 			if Contains(e, res.IP) {
-				res.Status = "ipdb-blocked (" + e + ")"
-				best = -1
+				found("IPDB")
+				if best == 0 {
+					res.Status = "ipdb-blocked (" + e + ")"
+					best = -1
+				}
 				break
 			}
 		}
 	}
-	if best == 0 && m.Geo != nil {
-		cfg := m.Settings.Get().Firewall
-		if cc := m.Geo.Lookup(res.IP, cfg.BlockedCountries); cc != "" && m.Geo.Lookup(res.IP, cfg.AllowedCountries) == "" {
-			res.Status = "country-blocked (" + cc + ")"
+	if m.Geo != nil {
+		if cc := m.Geo.Lookup(res.IP, cfg.BlockedCountries); cc != "" {
+			res.Country = cc
+			found("BLOCKED-COUNTRY")
+			if best == 0 {
+				res.Status = "country-blocked (" + cc + ")"
+			}
 		}
+	}
+	if res.Status == "none" && partial != "" {
+		res.Status = partial
 	}
 	evs, _, _ := m.Events(EventFilter{Query: res.IP, Limit: 20})
 	res.Events = evs
@@ -586,7 +760,7 @@ func (m *Manager) AutoBan(ip, reason, source string) {
 		return
 	}
 	for _, r := range mustRules(m) {
-		if (r.Kind == KindAllow || r.Kind == KindIgnore || r.Kind == KindTempAllow) && Contains(r.CIDR, c) {
+		if (r.Kind == KindAllow || r.Kind == KindIgnore || r.Kind == KindTempAllow) && r.Inbound() && Contains(r.CIDR, c) {
 			return
 		}
 		if (r.Kind == KindTempBan || r.Kind == KindDeny) && r.CIDR == c {
@@ -594,6 +768,11 @@ func (m *Manager) AutoBan(ip, reason, source string) {
 		}
 	}
 	cfg := m.Settings.Get().Firewall
+	// Whitelisted countries are never banned (the kernel lets them in anyway).
+	if m.Geo != nil && m.Geo.Lookup(c, cfg.IgnoredCountries) != "" {
+		m.Log.Debug("automatic ban skipped: whitelisted country", "ip", c, "reason", reason)
+		return
+	}
 	ttl := time.Duration(cfg.BanMinutes) * time.Minute
 	now := store.Now()
 	exp := now + int64(ttl.Seconds())

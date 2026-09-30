@@ -110,7 +110,8 @@ type Firewall struct {
 	AllowedCountries []string `json:"allowed_countries"`
 	// LogBlocked samples dropped connections for the live monitors.
 	LogBlocked bool `json:"log_blocked"`
-	// IgnoredCountries are never blocked by any firewall rule.
+	// IgnoredCountries are the whitelisted countries: never blocked by any
+	// firewall rule (the WAF and its CAPTCHA still apply).
 	IgnoredCountries []string `json:"ignored_countries"`
 	// DDNS hostnames are resolved every few minutes and allowed.
 	DDNS []string `json:"ddns"`
@@ -620,6 +621,13 @@ func normalize(s *Settings) {
 	s.OSM.WhitelistPaths = clean(s.OSM.WhitelistPaths, false)
 	s.AutoSuspend.ExcludeUsers = clean(s.AutoSuspend.ExcludeUsers, false)
 	s.AutoSuspend.WhitelistDomains = clean(lower(s.AutoSuspend.WhitelistDomains), false)
+	// "Allowed countries" only let a country past country blocking, which
+	// no country needs that is not blocked: like cPGuard's country
+	// whitelist, they are now whitelisted countries (never blocked).
+	if len(s.Firewall.AllowedCountries) > 0 {
+		s.Firewall.IgnoredCountries = append(s.Firewall.IgnoredCountries, s.Firewall.AllowedCountries...)
+		s.Firewall.AllowedCountries = []string{}
+	}
 	s.Firewall.IgnoredCountries = clean(s.Firewall.IgnoredCountries, true)
 	s.Firewall.DDNS = clean(lower(s.Firewall.DDNS), false)
 	s.Firewall.ExcludedJails = clean(s.Firewall.ExcludedJails, false)

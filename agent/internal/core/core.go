@@ -631,9 +631,14 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			Addr    string `json:"addr"`
 			Comment string `json:"comment"`
 			Minutes int    `json:"minutes"`
+			firewall.AllowOpts
 		}](p)
 		if err != nil {
 			return nil, err
+		}
+		if in.Kind == firewall.KindAllow {
+			r, err := a.Firewall.AddAllow(in.Addr, in.Comment, in.AllowOpts)
+			return map[string]any{"rule": r}, err
 		}
 		r, err := a.Firewall.Add(in.Kind, in.Addr, in.Comment, time.Duration(in.Minutes)*time.Minute)
 		return map[string]any{"rule": r}, err

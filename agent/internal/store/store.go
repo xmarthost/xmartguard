@@ -327,6 +327,10 @@ var columnMigrations = []string{
 	`ALTER TABLE db_findings ADD COLUMN category TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE db_findings ADD COLUMN snippet TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE db_findings ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0`,
+	// Whitelist advanced options: protocol, ports and direction.
+	`ALTER TABLE fw_rules ADD COLUMN proto TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE fw_rules ADD COLUMN ports TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE fw_rules ADD COLUMN dir TEXT NOT NULL DEFAULT ''`,
 }
 
 // Now is the clock used for timestamps (overridable in tests).

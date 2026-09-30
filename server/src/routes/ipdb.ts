@@ -161,6 +161,12 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
     return { countries: out };
   });
 
+  /** The address the portal sees for this browser (the globe button of IP fields). */
+  app.get('/api/geo/me', viewer, async (req) => {
+    const ip = req.ip;
+    return { ip, country: net.isIP(ip) ? ipdb.geo.lookup(ip) || '' : '' };
+  });
+
   /** What the IPDB knows about one address. */
   app.get('/api/ipdb/check', viewer, async (req, reply) => {
     const ip = String((req.query as Record<string, string>).ip ?? '').trim();

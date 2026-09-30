@@ -285,6 +285,14 @@ func renderRules(r Ruleset, v6 bool) string {
 	add("-i lo -j RETURN")
 	add("-m set --match-set xg_allow" + sfx + " src -j RETURN")
 	add("-m set --match-set xg_tallow" + sfx + " src -j RETURN")
+	// Whitelist entries limited to a protocol or ports.
+	for _, ar := range r.AllowRules {
+		if ar.Inbound() && strings.Contains(ar.CIDR, ":") == v6 {
+			for _, m := range iptAllowMatches(ar, "--dports") {
+				add("-s " + ar.CIDR + m + " -j RETURN")
+			}
+		}
+	}
 	if cp := r.Captcha; cp != nil {
 		// Only redirected connections from banned addresses reach these ports.
 		add(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -m conntrack --ctstate DNAT -j ACCEPT", cp.HTTPPort, cp.HTTPSPort))
@@ -323,6 +331,20 @@ func renderRules(r Ruleset, v6 bool) string {
 		out := func(rule string) { fmt.Fprintf(&b, "-A %s %s\n", ChainOut, rule) }
 		out("-o lo -j RETURN")
 		out("-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN")
+		// Whitelisted addresses may be reached on any port; advanced
+		// entries on their protocol and ports.
+		for _, c := range r.Allow {
+			if strings.Contains(c, ":") == v6 {
+				out("-d " + c + " -j RETURN")
+			}
+		}
+		for _, ar := range r.AllowRules {
+			if ar.Dir != DirIn && strings.Contains(ar.CIDR, ":") == v6 {
+				for _, m := range iptAllowMatches(ar, "--dports") {
+					out("-d " + ar.CIDR + m + " -j RETURN")
+				}
+			}
+		}
 		for _, c := range multiport(pf.TCPOut) {
 			out("-p tcp -m multiport --dports " + c + " -j RETURN")
 		}
@@ -334,6 +356,30 @@ func renderRules(r Ruleset, v6 bool) string {
 	}
 	b.WriteString("COMMIT\n")
 	return b.String()
+}
+
+// iptAllowMatches are the protocol/port matches of an advanced allow
+// rule ("" for any traffic), one per protocol and port chunk.
+func iptAllowMatches(r Rule, flag string) []string {
+	protos := []string{r.Proto}
+	if r.Proto == "" {
+		if r.Ports == "" {
+			return []string{""}
+		}
+		protos = []string{"tcp", "udp"}
+	}
+	ports, _ := ParsePorts(r.Ports)
+	var out []string
+	for _, p := range protos {
+		if len(ports) == 0 {
+			out = append(out, " -p "+p)
+			continue
+		}
+		for _, c := range multiport(ports) {
+			out = append(out, " -p "+p+" -m multiport "+flag+" "+c)
+		}
+	}
+	return out
 }
 
 // renderNAT builds the nat-table script for the CAPTCHA redirect.

@@ -28,6 +28,9 @@ var dropLegacy = fmt.Sprintf("add table inet %s\ndelete table inet %s\n", legacy
 // Ruleset is the desired state rendered into nft syntax.
 type Ruleset struct {
 	Allow, Deny, Ignore        []string // IPs/CIDRs (both families)
+	// AllowRules are whitelist entries limited to a protocol, ports or
+	// one direction (rendered one rule each).
+	AllowRules []Rule
 	TempAllow, TempBan         map[string]time.Duration
 	CountryBlock, CountryAllow []string // IPv4 CIDRs
 	DoS                        bool
@@ -199,6 +202,14 @@ func (r Ruleset) Render() string {
 	b.WriteString("\t\tiifname \"lo\" accept\n")
 	b.WriteString("\t\tip saddr @allow4 accept\n\t\tip6 saddr @allow6 accept\n")
 	b.WriteString("\t\tip saddr @tempallow4 accept\n\t\tip6 saddr @tempallow6 accept\n")
+	// Whitelist entries limited to a protocol or ports.
+	for _, ar := range r.AllowRules {
+		if ar.Inbound() {
+			for _, m := range nftAllowMatches(ar) {
+				fmt.Fprintf(&b, "\t\t%s saddr %s%s accept\n", nftFam(ar.CIDR), ar.CIDR, m)
+			}
+		}
+	}
 	if cp := r.Captcha; cp != nil {
 		// Only connections the captcha chain redirected reach these ports from banned addresses.
 		fmt.Fprintf(&b, "\t\tct status dnat tcp dport { %d, %d } accept\n", cp.HTTPPort, cp.HTTPSPort)
@@ -236,12 +247,45 @@ func (r Ruleset) Render() string {
 	if pf := r.Ports; pf != nil {
 		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter - 5; policy accept;\n")
 		b.WriteString("\t\toifname \"lo\" accept\n\t\tct state established,related accept\n")
+		// Whitelisted addresses may be reached on any port; advanced
+		// entries on their protocol and ports.
+		for _, c := range r.Allow {
+			fmt.Fprintf(&b, "\t\t%s daddr %s accept\n", nftFam(c), c)
+		}
+		for _, ar := range r.AllowRules {
+			if ar.Dir != DirIn {
+				for _, m := range nftAllowMatches(ar) {
+					fmt.Fprintf(&b, "\t\t%s daddr %s%s accept\n", nftFam(ar.CIDR), ar.CIDR, m)
+				}
+			}
+		}
 		nftPorts(&b, "tcp", pf.TCPOut)
 		nftPorts(&b, "udp", pf.UDPOut)
 		b.WriteString("\t\tmeta l4proto { tcp, udp } counter drop comment \"xg-port-out\"\n\t}\n")
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func nftFam(cidr string) string {
+	if strings.Contains(cidr, ":") {
+		return "ip6"
+	}
+	return "ip"
+}
+
+// nftAllowMatches are the protocol/port matches of an advanced allow rule.
+func nftAllowMatches(r Rule) []string {
+	ports, _ := ParsePorts(r.Ports)
+	switch {
+	case r.Proto == "" && len(ports) == 0:
+		return []string{""}
+	case len(ports) == 0:
+		return []string{" meta l4proto " + r.Proto}
+	case r.Proto == "":
+		return []string{" meta l4proto { tcp, udp } th dport { " + strings.Join(ports, ", ") + " }"}
+	}
+	return []string{" " + r.Proto + " dport { " + strings.Join(ports, ", ") + " }"}
 }
 
 func nftPorts(b *strings.Builder, proto string, ports []string) {

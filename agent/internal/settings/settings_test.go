@@ -63,3 +63,14 @@ func TestScannerListDefaults(t *testing.T) {
 		t.Fatalf("re-added: %v", st.Get().Scanner.BlacklistNames)
 	}
 }
+
+// Old "allowed countries" become whitelisted countries.
+func TestAllowedCountriesBecomeWhitelisted(t *testing.T) {
+	s := Defaults()
+	s.Firewall.AllowedCountries = []string{"pk", "AE"}
+	s.Firewall.IgnoredCountries = []string{"PK"}
+	normalize(&s)
+	if len(s.Firewall.AllowedCountries) != 0 || strings.Join(s.Firewall.IgnoredCountries, ",") != "PK,AE" {
+		t.Fatalf("%v %v", s.Firewall.AllowedCountries, s.Firewall.IgnoredCountries)
+	}
+}

@@ -107,6 +107,9 @@ func (a *Agent) centralSuspects() []string {
 		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow} {
 			if rs, err := a.Firewall.List(kind); err == nil {
 				for _, r := range rs {
+					if !r.Inbound() {
+						continue
+					}
 					skip[r.CIDR] = true
 				}
 			}
