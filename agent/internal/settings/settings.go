@@ -150,6 +150,13 @@ type Captcha struct {
 	// URLs (Settings » WAF » Captcha Protected URLs) before the login page;
 	// the rest of the website is not affected.
 	LoginGate bool `json:"login_gate"`
+	// Central sends suspicious visitors of the protected login URLs (IPDB,
+	// recent bans, repeated WAF blocks) to the portal's CAPTCHA page
+	// (CentralURL); solving it lets the address in for CentralMinutes. Set
+	// fleet-wide in the portal (Overview » CAPTCHA page).
+	Central        bool   `json:"central"`
+	CentralURL     string `json:"central_url"`
+	CentralMinutes int    `json:"central_minutes"`
 }
 
 // AI gives files a second opinion ("AI scanner"). The default provider is
@@ -423,7 +430,7 @@ func Defaults() Settings {
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
 			UserOutdated: "never", ExcludeUsers: []string{},
 		},
-		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 60, HTTPPort: 7780, HTTPSPort: 7743},
+		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 60, HTTPPort: 7780, HTTPSPort: 7743, CentralMinutes: 720},
 		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true, RestoreClean: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
 		Cron:      CronMonitor{Enabled: true, Disable: true, WhitelistUsers: []string{}},
@@ -574,6 +581,9 @@ func normalize(s *Settings) {
 	}
 	if s.Captcha.Provider == "" {
 		s.Captcha.Provider = "builtin"
+	}
+	if s.Captcha.CentralMinutes <= 0 {
+		s.Captcha.CentralMinutes = 720
 	}
 	if s.Captcha.AllowMinutes <= 0 {
 		s.Captcha.AllowMinutes = 60

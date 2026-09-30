@@ -264,6 +264,10 @@ func (m *Manager) Apply() error {
 	return err
 }
 
+// IsProtected reports addresses that must never be blocked (this server,
+// the portal).
+func (m *Manager) IsProtected(addr string) bool { return m.isProtected(addr) }
+
 func (m *Manager) isProtected(addr string) bool {
 	if m.Protected == nil {
 		return false

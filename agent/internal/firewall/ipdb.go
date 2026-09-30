@@ -349,6 +349,14 @@ func (m *Manager) BlockedAddrs() []string {
 	return out
 }
 
+// IPDBEntries is the IPDB list minus anything covering a protected address.
+func (m *Manager) IPDBEntries() []string {
+	if m.IPDB == nil {
+		return nil
+	}
+	return m.ipdbEntries()
+}
+
 func (m *Manager) ipdbEntries() []string {
 	_, entries := m.IPDB.Snapshot()
 	if len(entries) == 0 {

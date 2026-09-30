@@ -50,6 +50,7 @@ const (
 	IDProxyBlocked  = 7700701
 	IDGateNoCookie  = 7700902
 	IDGateBadCookie = 7700903
+	IDCentralGate   = 7700904
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -143,7 +144,46 @@ type Options struct {
 	// Gate sends visitors of the protected login URLs to the CAPTCHA page
 	// until they carry a valid pass cookie (nil = off).
 	Gate *Gate
+	// Central sends suspicious visitors of the protected login URLs to the
+	// portal's CAPTCHA page (captcha.xpguard.org) until they solve it (nil =
+	// off; not used together with Gate, which already asks everyone).
+	Central *Central
 }
+
+// Central is the portal's CAPTCHA page for suspicious visitors: the
+// addresses it applies to (suspects) and those that solved it (pass).
+type Central struct {
+	URL      string // e.g. https://captcha.xpguard.org/v
+	ServerID string
+	Suspects []string
+	Pass     []string
+}
+
+// Files the central CAPTCHA rule reads.
+const (
+	FileCaptchaSuspects = "captcha-suspects.txt"
+	FileCaptchaPass     = "captcha-pass.txt"
+)
+
+// CentralFiles are the address lists of the central CAPTCHA rule.
+func CentralFiles(c *Central) map[string]string {
+	list := func(l []string) string {
+		var ok []string
+		for _, a := range l {
+			if strings.TrimSpace(a) != "" {
+				ok = append(ok, modsecAddr(a))
+			}
+		}
+		if len(ok) == 0 {
+			ok = []string{placeholderIP}
+		}
+		return strings.Join(ok, "\n") + "\n"
+	}
+	return map[string]string{FileCaptchaSuspects: list(c.Suspects), FileCaptchaPass: list(c.Pass)}
+}
+
+var reCentralURL = regexp.MustCompile(`^https://[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9/_-]*$`)
+var reServerID = regexp.MustCompile(`^[a-f0-9-]{8,64}$`)
 
 // Gate is the login-page CAPTCHA: the cookie values accepted now and the
 // CAPTCHA server's ports.
@@ -310,6 +350,20 @@ func Render(c settings.WAF, o Options) string {
 			gate(IDGateNoCookie, `SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none"`)
 			gate(IDGateBadCookie, fmt.Sprintf(`SecRule REQUEST_HEADERS:Cookie "!@rx %s" "t:none"`, pass))
 		}
+	}
+	if ct := o.Central; ct != nil && o.Gate == nil && len(c.LoginURLs) > 0 && reCentralURL.MatchString(ct.URL) && reServerID.MatchString(ct.ServerID) {
+		var urls []string
+		for _, u := range c.LoginURLs {
+			urls = append(urls, regexp.QuoteMeta(strings.ToLower(u)))
+		}
+		// A suspicious address (IPDB, recent bans, repeated WAF blocks) that
+		// has not solved the CAPTCHA yet is sent to the portal's page with
+		// this server, its address, the site and the page it asked for (the
+		// page last: it may hold "&"). Logged, not counted as an attack.
+		w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI},log,msg:'xPGuard - suspicious visitor sent to the CAPTCHA',tag:'xpguard/captcha',chain"`,
+			strings.Join(urls, "|"), IDCentralGate, ct.URL, ct.ServerID)
+		w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileCaptchaPass)
 	}
 	if c.Webshell {
 		rule(IDWebshell, `SecRule REQUEST_FILENAME "@rx /(?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell request blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(WebshellNames), "|"), IDWebshell)

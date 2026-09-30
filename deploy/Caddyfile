@@ -2,3 +2,9 @@
 	encode gzip
 	reverse_proxy portal:8080
 }
+
+# The CAPTCHA page for suspicious visitors (served by the portal).
+{$CAPTCHA_DOMAIN:http://captcha.invalid} {
+	encode gzip
+	reverse_proxy portal:8080
+}

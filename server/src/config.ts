@@ -65,6 +65,24 @@ export interface Config {
   crsSync: boolean;
   crsApi: string;
   crsRepo: string;
+  /** Base URL of the CAPTCHA page for suspicious visitors (served by this portal). */
+  captchaUrl: string;
+  /** Cloudflare Turnstile's verification endpoint (a stand-in for offline testing). */
+  turnstileVerifyUrl: string;
+}
+
+/** captcha.<parent domain> of the portal (app.xpguard.org → captcha.xpguard.org). */
+export function defaultCaptchaUrl(publicUrl: string): string {
+  try {
+    const u = new URL(publicUrl);
+    const labels = u.hostname.split('.');
+    if (u.protocol === 'https:' && labels.length >= 3 && !/^[0-9.]+$/.test(u.hostname)) {
+      return `https://captcha.${labels.slice(1).join('.')}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return publicUrl;
 }
 
 /**
@@ -98,6 +116,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST || '0.0.0.0',
     port: int(env.PORT, 8080),
     publicUrl,
+    captchaUrl: (env.CAPTCHA_URL || defaultCaptchaUrl(publicUrl)).replace(/\/+$/, ''),
+    turnstileVerifyUrl: env.TURNSTILE_VERIFY_URL || 'https://challenges.cloudflare.com/turnstile/v0/siteverify',
     cookieSecure: bool(env.COOKIE_SECURE, publicUrl.startsWith('https://')),
     trustProxy: bool(env.TRUST_PROXY, false),
     downloadsDir: path.resolve(env.DOWNLOADS_DIR || path.join(repoRoot, 'dist', 'downloads')),

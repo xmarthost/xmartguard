@@ -332,4 +332,27 @@ CREATE TABLE trusted_services (
 );
 `,
   },
+  {
+    version: '009_central_captcha',
+    sql: `
+-- CAPTCHA page for suspicious visitors of the login pages (Overview » CAPTCHA page).
+CREATE TABLE captcha_config (
+  account_id  uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  config      jsonb NOT NULL,
+  version     bigint NOT NULL DEFAULT 1,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+-- Solved / failed checks, for the statistics on that page (kept 30 days).
+CREATE TABLE captcha_events (
+  id          bigserial PRIMARY KEY,
+  account_id  uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  server_id   uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  at          timestamptz NOT NULL DEFAULT now(),
+  ip          text NOT NULL,
+  host        text NOT NULL,
+  result      text NOT NULL CHECK (result IN ('passed','failed','rejected','offline'))
+);
+CREATE INDEX captcha_events_account_at ON captcha_events (account_id, at DESC);
+`,
+  },
 ];

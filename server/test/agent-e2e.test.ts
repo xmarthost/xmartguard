@@ -9,6 +9,15 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, waitFor, type Harness } from './helpers.js';
 
+/**
+ * Website files belong to a hosting account, not root (the agent never
+ * scans root's files): give test files to "nobody" when running as root.
+ */
+function asAccount(p: string) {
+  if (process.getuid?.() !== 0) return;
+  execFileSync('chown', ['-R', '65534:65534', p]);
+}
+
 const repo = path.resolve(import.meta.dirname, '..', '..');
 const agentBin = path.join(os.tmpdir(), 'xg-agent-e2e');
 
@@ -92,6 +101,7 @@ describe('agent end-to-end', () => {
     fs.mkdirSync(path.join(webDir, 'up'), { recursive: true });
     fs.writeFileSync(path.join(webDir, 'up', 'x.php'), shell);
     fs.writeFileSync(path.join(webDir, 'index.php'), '<?php echo "hello";');
+    asAccount(webDir);
     const start = await cmd('scan.start', { kind: 'path', path: webDir });
     expect(start.status).toBe(200);
     const scan = await waitFor(async () => {
@@ -175,6 +185,7 @@ describe('agent end-to-end', () => {
       const dir = path.join(webDir, 'plugin');
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'plugin.php'), injected);
+      asAccount(dir);
       const start = await cmd('scan.start', { kind: 'path', path: dir });
       const trimmed = await waitFor(async () => {
         const r = await cmd('findings.list', { scan_id: start.body.id });

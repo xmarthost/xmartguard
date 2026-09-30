@@ -40,6 +40,9 @@ type Manager struct {
 	TrustedIPs func() []string
 	// Gate is the login-page CAPTCHA for the rules (nil or returning nil = off).
 	Gate func() *Gate
+	// Central is the portal's CAPTCHA page for suspicious visitors (nil or
+	// returning nil = off).
+	Central func() *Central
 
 	mu       sync.Mutex
 	target   Target
@@ -176,6 +179,25 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 	return files
 }
 
+// CentralChanged reports whether the central CAPTCHA's address lists on
+// disk differ from the current ones (so a reload is due).
+func (m *Manager) CentralChanged() bool {
+	if m.Central == nil || !m.Settings.Get().WAF.Enabled || m.OwnRulesReplacedBy() != "" {
+		return false
+	}
+	c := m.Central()
+	if c == nil {
+		return false
+	}
+	for name, body := range CentralFiles(c) {
+		cur, err := os.ReadFile(filepath.Join(m.RulesDir, name))
+		if err != nil || string(cur) != body {
+			return true
+		}
+	}
+	return false
+}
+
 // BlockedListChanged reports whether the proxy IP check's blocked list on
 // disk differs from the firewall's current list (so a reload is due).
 func (m *Manager) BlockedListChanged() bool {
@@ -241,6 +263,7 @@ func (m *Manager) Apply() error {
 	cfg := m.Settings.Get().WAF
 	extra, extraFiles, states := m.extras(t)
 	var err error
+	var central *Central
 	switch {
 	case !t.ModSec || t.IncludeFile == "":
 		for i := range states {
@@ -263,6 +286,10 @@ func (m *Manager) Apply() error {
 			if m.Gate != nil && m.VendorLoginCaptcha() == "" {
 				opts.Gate = m.Gate()
 			}
+			if opts.Gate == nil && m.Central != nil && m.VendorLoginCaptcha() == "" {
+				opts.Central = m.Central()
+			}
+			central = opts.Central
 			if cfg.UploadScan {
 				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
 			}
@@ -272,6 +299,11 @@ func (m *Manager) Apply() error {
 		}
 		rules = selfTestRule + "\n" + rules
 		bots := m.listFiles(cfg)
+		if central != nil {
+			for k, v := range CentralFiles(central) {
+				bots[k] = v
+			}
+		}
 		for k, v := range extraFiles {
 			bots[strings.TrimPrefix(k, m.RulesDir+"/")] = v
 		}

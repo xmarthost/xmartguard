@@ -28,6 +28,7 @@ import { mcpRoutes } from './routes/mcp.js';
 import { wafRulesetRoutes } from './routes/waf-rulesets.js';
 import { appearanceRoutes } from './routes/appearance.js';
 import { trustedRoutes } from './routes/trusted.js';
+import { captchaRoutes } from './routes/captcha.js';
 import { CRSService } from './waf/rulesets.js';
 
 export interface App {
@@ -90,6 +91,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   wafRulesetRoutes(app, pool, hub, crs);
   appearanceRoutes(app, pool);
   trustedRoutes(app, pool, hub);
+  captchaRoutes(app, pool, cfg, hub);
   // API answers are live data: never stored by browsers or proxies/CDNs.
   app.addHook('onSend', async (req, reply, payload) => {
     if (req.url.startsWith('/api/') && !reply.hasHeader('Cache-Control')) reply.header('Cache-Control', 'no-store');

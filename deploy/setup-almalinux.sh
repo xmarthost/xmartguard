@@ -2,6 +2,11 @@
 # One-shot xPGuard PORTAL setup for AlmaLinux / Rocky / RHEL / CloudLinux 9.
 #
 #   bash setup-almalinux.sh --domain app.xpguard.org --email you@example.com [--branch BRANCH] [--token GITHUB_TOKEN]
+#                           [--captcha-domain captcha.xpguard.org | none]
+#
+# The CAPTCHA page for suspicious visitors of the websites' login pages is
+# served by the portal on its own domain, by default captcha.<parent domain>
+# (app.xpguard.org -> captcha.xpguard.org). Point that name at this server.
 #
 # The AI scanner uses free AI APIs (Google Gemini, Groq, OpenRouter, ...)
 # whose keys are added in the portal under "AI Scanner"; no model runs on
@@ -16,7 +21,7 @@
 # Safe to re-run: it updates the code and restarts the stack.
 set -Eeuo pipefail
 
-DOMAIN=""; EMAIL=""; BRANCH="main"; TOKEN="${GITHUB_TOKEN:-}"
+DOMAIN=""; EMAIL=""; BRANCH="main"; TOKEN="${GITHUB_TOKEN:-}"; CAPTCHA_DOMAIN=""
 REPO="github.com/xmarthost/xmartguard.git"
 DIR=/opt/xmartguard-portal
 # Portal setups before 0.3.0 used /opt/xmartguard, which now belongs to the agent.
@@ -29,6 +34,7 @@ while [ $# -gt 0 ]; do
     --email)  EMAIL="$2"; shift 2 ;;
     --branch) BRANCH="$2"; shift 2 ;;
     --token)  TOKEN="$2"; shift 2 ;;
+    --captcha-domain) CAPTCHA_DOMAIN="$2"; shift 2 ;;
     --ai|--ai-url|--ai-model) echo "note: $1 is no longer used (AI keys are set in the portal)"; shift 2 ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
@@ -53,6 +59,11 @@ else
   MODE=caddy
 fi
 echo "mode: $MODE"
+if [ -z "$CAPTCHA_DOMAIN" ]; then
+  # captcha.<parent domain>, when the portal runs on a subdomain.
+  if [ "$(tr -cd . <<<"$DOMAIN" | wc -c)" -ge 2 ]; then CAPTCHA_DOMAIN="captcha.${DOMAIN#*.}"; else CAPTCHA_DOMAIN=none; fi
+fi
+[ "$CAPTCHA_DOMAIN" = "$DOMAIN" ] && CAPTCHA_DOMAIN=none
 
 step "Checking DNS for $DOMAIN"
 MYIP=$(curl -4 -fsS --max-time 10 https://api.ipify.org || true)
@@ -151,6 +162,14 @@ else
   sed -i "s/^DOMAIN=.*/DOMAIN=$DOMAIN/" "$ENV"
   grep -q '^PORTAL_PORT=' "$ENV" || echo "PORTAL_PORT=$PORTAL_PORT" >>"$ENV"
   ok "kept existing $ENV"
+fi
+# The CAPTCHA page's address (empty: served on the portal's own domain).
+sed -i '/^CAPTCHA_DOMAIN=/d; /^CAPTCHA_URL=/d' "$ENV"
+if [ "$CAPTCHA_DOMAIN" != none ]; then
+  echo "CAPTCHA_DOMAIN=$CAPTCHA_DOMAIN" >>"$ENV"
+  echo "CAPTCHA_URL=https://$CAPTCHA_DOMAIN" >>"$ENV"
+else
+  echo "CAPTCHA_URL=https://$DOMAIN" >>"$ENV"
 fi
 PORTAL_PORT=$(sed -n 's/^PORTAL_PORT=//p' "$ENV")
 
@@ -323,6 +342,23 @@ ProxyPassReverse / http://127.0.0.1:$PORTAL_PORT/
   SecRuleEngine Off
 </IfModule>
 EOF
+  # The CAPTCHA page's domain: an alias of the portal's vhost, so the same
+  # proxy include serves it and AutoSSL puts it on the same certificate.
+  if [ "$CAPTCHA_DOMAIN" != none ]; then
+    COWNER=$(/usr/local/cpanel/scripts/whoowns "$CAPTCHA_DOMAIN" 2>/dev/null || true)
+    if [ -z "$COWNER" ]; then
+      out=$(whmapi1 --output=json create_parked_domain_for_user domain="$CAPTCHA_DOMAIN" username="$CPUSER" web_vhost_domain="$DOMAIN" 2>&1 || true)
+      if grep -q '"result":1' <<<"$out"; then
+        ok "added $CAPTCHA_DOMAIN (CAPTCHA page) as an alias of $DOMAIN"
+      else
+        warn "could not add $CAPTCHA_DOMAIN as an alias of $DOMAIN: $(grep -o '"reason":"[^"]*"' <<<"$out" | head -1)"
+      fi
+    elif [ "$COWNER" = "$CPUSER" ]; then
+      ok "$CAPTCHA_DOMAIN (CAPTCHA page) belongs to '$CPUSER'"
+    else
+      warn "$CAPTCHA_DOMAIN belongs to cPanel account '$COWNER': remove it there, or pass --captcha-domain none"
+    fi
+  fi
   /usr/local/cpanel/scripts/rebuildhttpdconf >/dev/null
   if ! httpd -t >/dev/null 2>&1; then
     httpd -t || true
@@ -348,6 +384,19 @@ EOF
   fi
   if cert_ok; then
     ok "https://$DOMAIN is live with a valid certificate"
+    if [ "$CAPTCHA_DOMAIN" != none ]; then
+      CIP=$(getent ahostsv4 "$CAPTCHA_DOMAIN" | awk 'NR==1{print $1}' || true)
+      captcha_ok() { curl -fsS --max-time 10 ${CHECK_IP:+--resolve "$CAPTCHA_DOMAIN:443:$CHECK_IP"} "https://$CAPTCHA_DOMAIN/" 2>/dev/null | grep -q 'xPGuard verification service'; }
+      if ! captcha_ok; then
+        /usr/local/cpanel/bin/autossl_check --user="$CPUSER" >/dev/null 2>&1 || true
+        for _ in $(seq 1 20); do captcha_ok && break; sleep 15; done
+      fi
+      if captcha_ok; then
+        ok "https://$CAPTCHA_DOMAIN (CAPTCHA page) is live"
+      else
+        warn "the CAPTCHA page https://$CAPTCHA_DOMAIN is not live yet (DNS: ${CIP:-not resolving}); add an A record for it pointing at ${MYIP:-this server} and run this script again"
+      fi
+    fi
   else
     warn "no valid certificate yet. In WHM open: SSL/TLS > Manage AutoSSL > Manage Users > run for '$CPUSER'"
     warn "then run this script again. The portal itself is running."
@@ -368,6 +417,7 @@ echo " Login email:         $(sed -n 's/^ADMIN_EMAIL=//p' "$ENV")"
 echo " First password:      $ADMIN_PASSWORD"
 echo "   (change it under Account after logging in)"
 echo " AI scanner:          add free AI API keys (Gemini, Groq, OpenRouter) under AI Scanner"
+[ "$CAPTCHA_DOMAIN" != none ] && echo " CAPTCHA page:        https://$CAPTCHA_DOMAIN  (add the Turnstile keys under Overview > CAPTCHA Page)"
 echo " Update later:        curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh"
 echo "                      bash /root/setup.sh --domain $DOMAIN --email $EMAIL"
 echo " Logs:                cd $DIR/deploy && docker compose logs -f portal"

@@ -14,6 +14,7 @@ import { AccountPage, SecurityLogPage, SupportPage, UsersPage } from './pages/Ad
 import { ManualScans, ScannerLogs } from './pages/Scanner';
 import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
 import TrustedServices from './pages/TrustedServices';
+import CaptchaPage from './pages/CaptchaPage';
 import SecurityMonitor from './pages/SecurityMonitor';
 import SettingsPage from './pages/Settings';
 import { BotAttacks, WafLogs } from './pages/WAF';
@@ -65,6 +66,7 @@ export default function App() {
         <Route path="/ai" element={<Protected><AIScanner /></Protected>} />
         <Route path="/waf-rulesets" element={<Protected><WafRuleSets /></Protected>} />
         <Route path="/trusted-services" element={<Protected><TrustedServices /></Protected>} />
+        <Route path="/captcha-page" element={<Protected><CaptchaPage /></Protected>} />
         <Route path="/appearance" element={<Protected><AppearancePage /></Protected>} />
         <Route path="/ai-connector" element={<Protected role="admin"><AIConnector /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />

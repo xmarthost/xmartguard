@@ -49,6 +49,7 @@ import (
 // Agent holds every module.
 type Agent struct {
 	Cfg      *config.Config
+	central  central
 	Log      *slog.Logger
 	DB       *sql.DB
 	Settings *settings.Store
@@ -163,6 +164,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			}
 			return &waf.Gate{Tokens: captcha.GateTokens(gateSecret, time.Now()), HTTPPort: cur.Captcha.HTTPPort, HTTPSPort: cur.Captcha.HTTPSPort}
 		}}
+	a.WAF.Central = a.centralWAF
 	a.CMS = &cms.Manager{DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
 		Accounts: func() []cms.Account {
 			var out []cms.Account
@@ -215,6 +217,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.reportLoop(ctx)
 	go a.hostTrustLoop(ctx)
 	go a.proxyListLoop(ctx)
+	go a.centralLoop(ctx)
 	// Put back system files that older rules quarantined (root's temp
 	// files, SpamAssassin's compiled rules).
 	go func() {
@@ -688,6 +691,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		a.reloadClam(ctx, true)
 		return a.clamStatus(), nil
 	}
+	a.centralHandlers(h)
 	h["trusted.status"] = func(context.Context, json.RawMessage) (any, error) {
 		fw := a.Settings.Get().Firewall
 		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil
