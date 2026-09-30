@@ -213,18 +213,12 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     );
     const last24h: Record<string, number> = { passed: 0, failed: 0, rejected: 0, offline: 0 };
     for (const r of rows) last24h[r.result] = r.n;
-    const recent = await pool.query(
-      `SELECT e.at, e.ip, e.host, e.result, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
-       WHERE e.account_id = $1 ORDER BY e.at DESC LIMIT 50`,
-      [acc],
-    );
     return {
       config: { enabled: cur.config.enabled, site_key: cur.config.site_key, secret_set: cur.config.secret_key !== '', minutes: cur.config.minutes },
       version: cur.version,
       updated_at: cur.updated_at,
       url: pageUrl,
       last24h,
-      recent: recent.rows,
       servers: await servers(acc),
     };
   });
@@ -268,10 +262,47 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
   });
 
   // Clear the list of checks (e.g. after trying the page out).
-  app.delete('/api/captcha/events', admin, async (req) => {
+  // The recorded checks, newest first, a page at a time.
+  const Events = z.object({
+    limit: z.coerce.number().int().refine((n) => [25, 50, 100, 200].includes(n)).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+    result: z.enum(['', 'passed', 'failed', 'rejected', 'offline']).default(''),
+    q: z.string().trim().max(100).default(''),
+  });
+  app.get('/api/captcha/events', viewer, async (req, reply) => {
+    const f = Events.safeParse(req.query);
+    if (!f.success) return reply.code(400).send({ error: 'invalid filter' });
     const acc = req.user!.accountId;
-    const r = await pool.query('DELETE FROM captcha_events WHERE account_id = $1', [acc]);
-    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.events_cleared', detail: { count: r.rowCount }, ip: req.ip });
+    const where = ['e.account_id = $1'];
+    const args: unknown[] = [acc];
+    if (f.data.result) {
+      args.push(f.data.result);
+      where.push(`e.result = $${args.length}`);
+    }
+    if (f.data.q) {
+      args.push(`%${f.data.q.replace(/[\\%_]/g, (c) => '\\' + c)}%`);
+      where.push(`(e.ip ILIKE $${args.length} OR e.host ILIKE $${args.length})`);
+    }
+    const w = where.join(' AND ');
+    const total = await pool.query(`SELECT count(*)::int AS n FROM captcha_events e WHERE ${w}`, args);
+    const rows = await pool.query(
+      `SELECT e.id::text, e.at, e.ip, e.host, e.result, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
+       WHERE ${w} ORDER BY e.at DESC, e.id DESC LIMIT ${f.data.limit} OFFSET ${f.data.offset}`,
+      args,
+    );
+    return { events: rows.rows, total: total.rows[0].n };
+  });
+
+  // Delete the chosen checks, or all of them when no ids are given.
+  const Del = z.object({ ids: z.array(z.string().regex(/^\d{1,19}$/)).max(1000).optional() });
+  app.delete('/api/captcha/events', admin, async (req, reply) => {
+    const b = Del.safeParse(req.body ?? {});
+    if (!b.success) return reply.code(400).send({ error: 'invalid request' });
+    const acc = req.user!.accountId;
+    const r = b.data.ids
+      ? await pool.query('DELETE FROM captcha_events WHERE account_id = $1 AND id = ANY($2::bigint[])', [acc, b.data.ids])
+      : await pool.query('DELETE FROM captcha_events WHERE account_id = $1', [acc]);
+    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.events_deleted', detail: { count: r.rowCount, all: !b.data.ids }, ip: req.ip });
     return { deleted: r.rowCount };
   });
 

@@ -119,7 +119,19 @@ describe('CAPTCHA page for suspicious visitors', () => {
     online = true;
     const g = await admin.req('GET', '/api/captcha');
     expect(g.body.last24h).toMatchObject({ passed: 2, failed: 1, rejected: 2, offline: 1 });
-    expect(g.body.recent[0]).toMatchObject({ server: 'web-captcha' });
+    const ev = await admin.req('GET', '/api/captcha/events?limit=25');
+    expect(ev.body.total).toBe(6);
+    expect(ev.body.events[0]).toMatchObject({ server: 'web-captcha' });
+    // Filter, pages, search.
+    expect((await admin.req('GET', '/api/captcha/events?result=passed')).body.total).toBe(2);
+    expect((await admin.req('GET', '/api/captcha/events?q=evil.example')).body.total).toBe(1);
+    const p2 = await admin.req('GET', '/api/captcha/events?limit=25&offset=5');
+    expect(p2.body.events).toHaveLength(1);
+    expect((await admin.req('GET', '/api/captcha/events?limit=7')).status).toBe(400);
+    // Delete chosen rows.
+    const del = await admin.req('DELETE', '/api/captcha/events', { ids: [ev.body.events[0].id, ev.body.events[1].id] });
+    expect(del.body.deleted).toBe(2);
+    expect((await admin.req('GET', '/api/captcha/events')).body.total).toBe(4);
   });
 
   it('previews: tests only the check, asks no server, records nothing', async () => {
@@ -134,10 +146,12 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect((await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'cf-connecting-ip': '198.51.100.20' }, payload: { ...p, token: 'bad' } })).statusCode).toBe(403);
     expect(passes.length).toBe(before);
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.recent.some((x: { host: string }) => x.host === 'example.com')).toBe(false);
+    expect(g.status).toBe(200);
+    const ev = await admin.req('GET', '/api/captcha/events?q=example.com&limit=200');
+    expect(ev.body.events.some((x: { host: string }) => x.host === 'example.com')).toBe(false);
     // Clearing the list.
     expect((await admin.req('DELETE', '/api/captcha/events')).body.deleted).toBeGreaterThan(0);
-    expect((await admin.req('GET', '/api/captcha')).body.recent).toHaveLength(0);
+    expect((await admin.req('GET', '/api/captcha/events')).body.total).toBe(0);
   });
 
   it('shows only the service page on the CAPTCHA host', async () => {

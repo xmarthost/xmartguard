@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink, Save, ShieldQuestion, Trash2 } from 'lucide-react';
+import { ExternalLink, Save, Search, ShieldQuestion, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, ErrorBox, PageLoader } from '../components/ui';
-import { Card, SettingRow, Toggle, useAction } from '../components/controls';
+import { Card, Pager, SettingRow, Toggle, useAction } from '../components/controls';
 import { useApi } from '../hooks';
 
 interface Resp {
@@ -12,7 +12,6 @@ interface Resp {
   updated_at: string | null;
   url: string;
   last24h: { passed: number; failed: number; rejected: number; offline: number };
-  recent: { at: string; ip: string; host: string; result: string; server: string }[];
   servers: { id: string; hostname: string; online: boolean }[];
 }
 
@@ -147,55 +146,159 @@ export default function CaptchaPage() {
         </div>
       </Card>
 
-      <Card
-        title="Recent checks"
-        desc="The last 50 visitors sent to the page (kept 30 days)."
-        right={
-          admin && d.recent.length > 0 ? (
-            <button
-              className="btn-outline"
-              disabled={busy}
-              onClick={() => confirm('Clear the list of checks?') && run(() => api('DELETE', '/api/captcha/events').then(res.reload), 'List cleared')}
-            >
-              <Trash2 className="h-4 w-4" /> Clear list
-            </button>
-          ) : undefined
-        }
-      >
-        {d.recent.length === 0 ? (
-          <p className="text-sm text-slate-500">No checks yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
-                  <th className="py-2 pr-3">Time</th>
-                  <th className="py-2 pr-3">Address</th>
-                  <th className="py-2 pr-3">Website</th>
-                  <th className="py-2 pr-3">Server</th>
-                  <th className="py-2">Result</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {d.recent.map((r, i) => {
-                  const [label, cls] = RESULT[r.result] ?? [r.result, 'bg-slate-100 text-slate-600'];
-                  return (
-                    <tr key={i}>
-                      <td className="py-2 pr-3 whitespace-nowrap text-slate-500">{new Date(r.at).toLocaleString()}</td>
-                      <td className="py-2 pr-3 font-mono">{r.ip}</td>
-                      <td className="py-2 pr-3 break-all">{r.host}</td>
-                      <td className="py-2 pr-3">{r.server}</td>
-                      <td className="py-2">
-                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+      <RecentChecks admin={admin} />
     </div>
+  );
+}
+
+interface Check {
+  id: string;
+  at: string;
+  ip: string;
+  host: string;
+  result: string;
+  server: string;
+}
+
+const PAGE_SIZES = [25, 50, 100, 200];
+
+function savedPageSize(): number {
+  try {
+    const n = Number(localStorage.getItem('xg-captcha-page-size'));
+    return PAGE_SIZES.includes(n) ? n : 50;
+  } catch {
+    return 50;
+  }
+}
+
+/** The recorded checks: filter, search, page size, pages, delete chosen or all. */
+function RecentChecks({ admin }: { admin: boolean }) {
+  const [limit, setLimit] = useState(savedPageSize);
+  const [offset, setOffset] = useState(0);
+  const [result, setResult] = useState('');
+  const [q, setQ] = useState('');
+  const [query, setQuery] = useState('');
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const { run, busy } = useAction();
+  const path = `/api/captcha/events?limit=${limit}&offset=${offset}&result=${result}&q=${encodeURIComponent(query)}`;
+  const res = useApi<{ events: Check[]; total: number }>(path);
+  useEffect(() => setSel(new Set()), [path]);
+  // Search as you type, a moment after the last key.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setOffset(0);
+      setQuery(q.trim());
+    }, 400);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const rows = res.data?.events ?? [];
+  const total = res.data?.total ?? 0;
+  const allOn = rows.length > 0 && rows.every((r) => sel.has(r.id));
+  const toggle = (id: string) => {
+    const n = new Set(sel);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    setSel(n);
+  };
+  const del = (ids?: string[]) =>
+    run(
+      () => api<{ deleted: number }>('DELETE', '/api/captcha/events', ids ? { ids } : {}).then((r) => (res.reload(), r)),
+      (r) => `${r.deleted} check${r.deleted === 1 ? '' : 's'} deleted`,
+    );
+
+  return (
+    <Card title="Recent checks" desc="Visitors sent to the page, newest first (kept 30 days).">
+      <div className="flex flex-wrap items-center gap-2 pb-3">
+        <div className="relative min-w-[180px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input className="input w-full pl-9" placeholder="Search address or website" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <select className="input w-40" value={result} onChange={(e) => (setOffset(0), setResult(e.target.value))}>
+          <option value="">All results</option>
+          <option value="passed">Passed</option>
+          <option value="failed">Failed check</option>
+          <option value="rejected">Refused</option>
+          <option value="offline">Server offline</option>
+        </select>
+        <select
+          className="input w-32"
+          value={limit}
+          aria-label="Rows per page"
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            setLimit(n);
+            setOffset(0);
+            try {
+              localStorage.setItem('xg-captcha-page-size', String(n));
+            } catch {
+              /* not kept */
+            }
+          }}
+        >
+          {PAGE_SIZES.map((n) => (
+            <option key={n} value={n}>
+              {n} per page
+            </option>
+          ))}
+        </select>
+        {admin && (
+          <>
+            <button className="btn-outline" disabled={busy || sel.size === 0} onClick={() => confirm(`Delete ${sel.size} selected check(s)?`) && del(Array.from(sel))}>
+              <Trash2 className="h-4 w-4" /> Delete selected{sel.size ? ` (${sel.size})` : ''}
+            </button>
+            <button className="btn-outline text-red-600" disabled={busy || total === 0} onClick={() => confirm('Delete all recorded checks?') && del()}>
+              <Trash2 className="h-4 w-4" /> Clear all
+            </button>
+          </>
+        )}
+      </div>
+      {res.error && !res.data ? (
+        <ErrorBox message={res.error} />
+      ) : rows.length === 0 ? (
+        <p className="py-4 text-sm text-slate-500">{res.data ? 'No checks.' : 'Loading…'}</p>
+      ) : (
+        <div className="max-h-[560px] overflow-auto rounded-lg border border-slate-100">
+          <table className="w-full min-w-[620px] text-sm">
+            <thead className="sticky top-0 bg-white">
+              <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
+                {admin && (
+                  <th className="w-8 py-2 pl-3">
+                    <input type="checkbox" checked={allOn} onChange={() => setSel(allOn ? new Set() : new Set(rows.map((r) => r.id)))} aria-label="Select all on this page" />
+                  </th>
+                )}
+                <th className="py-2 pr-3">Time</th>
+                <th className="py-2 pr-3">Address</th>
+                <th className="py-2 pr-3">Website</th>
+                <th className="py-2 pr-3">Server</th>
+                <th className="py-2 pr-3">Result</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rows.map((r) => {
+                const [label, cls] = RESULT[r.result] ?? [r.result, 'bg-slate-100 text-slate-600'];
+                return (
+                  <tr key={r.id} className={sel.has(r.id) ? 'bg-slate-50' : ''}>
+                    {admin && (
+                      <td className="py-2 pl-3">
+                        <input type="checkbox" checked={sel.has(r.id)} onChange={() => toggle(r.id)} aria-label="Select" />
+                      </td>
+                    )}
+                    <td className="py-2 pr-3 whitespace-nowrap text-slate-500">{new Date(r.at).toLocaleString()}</td>
+                    <td className="py-2 pr-3 font-mono">{r.ip}</td>
+                    <td className="py-2 pr-3 break-all">{r.host}</td>
+                    <td className="py-2 pr-3">{r.server}</td>
+                    <td className="py-2 pr-3">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <Pager total={total} limit={limit} offset={offset} onChange={setOffset} />
+    </Card>
   );
 }
