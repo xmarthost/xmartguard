@@ -155,6 +155,9 @@ type Options struct {
 type Central struct {
 	URL      string // e.g. https://captcha.xpguard.org/v
 	ServerID string
+	// All sends every visitor of the login pages, not only suspects (the
+	// login-page CAPTCHA for everyone).
+	All      bool
 	Suspects []string
 	Pass     []string
 }
@@ -362,7 +365,9 @@ func Render(c settings.WAF, o Options) string {
 		// page last: it may hold "&"). Logged, not counted as an attack.
 		w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI},log,msg:'xPGuard - suspicious visitor sent to the CAPTCHA',tag:'xpguard/captcha',chain"`,
 			strings.Join(urls, "|"), IDCentralGate, ct.URL, ct.ServerID)
-		w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+		if !ct.All {
+			w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+		}
 		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileCaptchaPass)
 	}
 	if c.Webshell {

@@ -272,3 +272,33 @@ func TestServerClosesEveryConnection(t *testing.T) {
 		t.Fatalf("connection kept open (%d responses):\n%s", n, all)
 	}
 }
+
+// While the portal's CAPTCHA page is on, banned visitors and the login-page
+// CAPTCHA are sent there, back to the page they asked for.
+func TestCentralRedirect(t *testing.T) {
+	s, _ := newServer(t)
+	s.ServerID = "15d69a72-653a-47b6-90f6-fde737bce061"
+	get := func(target string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", target, nil)
+		r.Host = "shop.example.com:7743"
+		r.RemoteAddr = "203.0.113.5:4000"
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	if w := get("/blog/?p=1"); w.Code == 302 {
+		t.Fatalf("own page while the portal's is off: %d", w.Code)
+	}
+	s.Settings.Patch([]byte(`{"captcha":{"central":true,"central_url":"https://captcha.xpguard.org/v"}}`))
+	for target, u := range map[string]string{
+		"/blog/?p=1": "/blog/?p=1",
+		"/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1": "/wp-login.php?redirect_to=/wp-admin/&reauth=1",
+		"/.xpguard/gate?back=//evil.com":                                    "/",
+	} {
+		w := get(target)
+		want := "https://captcha.xpguard.org/v?s=15d69a72-653a-47b6-90f6-fde737bce061&ip=203.0.113.5&h=shop.example.com&u=" + u
+		if w.Code != 302 || w.Header().Get("Location") != want {
+			t.Errorf("%s: %d %q", target, w.Code, w.Header().Get("Location"))
+		}
+	}
+}

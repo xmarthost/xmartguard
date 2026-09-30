@@ -97,9 +97,27 @@ func TestCentralCaptchaAgent(t *testing.T) {
 		t.Fatalf("expired pass kept: %v", l)
 	}
 
-	// The login-page CAPTCHA for everyone replaces it.
-	h["settings.set"](ctx, []byte(`{"captcha":{"login_gate":true}}`))
-	if a.centralWAF() != nil {
-		t.Fatal("central CAPTCHA together with the gate")
+	// The login-page CAPTCHA for everyone uses the portal's page too, for
+	// every visitor, and the server's own gate is not rendered.
+	h["settings.set"](ctx, []byte(`{"captcha":{"login_gate":true},"waf":{"enabled":true,"login_urls":["/wp-login.php"]}}`))
+	if w := a.centralWAF(); w == nil || !w.All || len(w.Suspects) != 0 {
+		t.Fatalf("login-page CAPTCHA for everyone: %+v", w)
+	}
+	if a.WAF.Gate() != nil {
+		t.Fatal("the server's own login-page CAPTCHA is still used")
+	}
+
+	// A pass lifts a temporary ban (the firewall's CAPTCHA redirect), not a
+	// permanent block.
+	a.Firewall.AutoBan("198.51.100.7", "test", "waf")
+	a.Firewall.Add("deny", "198.51.100.9", "manual", 0)
+	pass("198.51.100.7", "shop.example.com")
+	pass("198.51.100.9", "shop.example.com")
+	check := func(ip string) string { r, _ := a.Firewall.Check(ip); return r.Status }
+	if s := check("198.51.100.7"); s == "temp-blocked" {
+		t.Fatalf("temporary ban kept after the CAPTCHA: %s", s)
+	}
+	if s := check("198.51.100.9"); s != "blocked" {
+		t.Fatalf("permanent block lifted: %s", s)
 	}
 }

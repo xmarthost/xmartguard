@@ -152,7 +152,7 @@ interface IPDBS {
 }
 interface AllSettings {
   firewall?: { captcha: boolean };
-  captcha?: { provider: string; site_key: string; login_gate?: boolean; allow_minutes?: number; http_port?: number; https_port?: number };
+  captcha?: { provider: string; site_key: string; login_gate?: boolean; allow_minutes?: number; http_port?: number; https_port?: number; central?: boolean; central_url?: string };
   scanner: ScannerS;
   ipdb: IPDBS;
   waf: WAFS;
@@ -875,7 +875,9 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         title="Captcha Protected URLs"
         desc={meExtras.includes('recaptcha')
           ? 'Login pages protected by the WAF brute-force module. On this server Malware.Expert protects them with its own CAPTCHA: visitors whose address is on its blacklist (blacklist.recaptcha.cloud) are sent to recaptcha.cloud; other visitors log in normally. xPGuard\'s login-page CAPTCHA is off here. Banned addresses still get xPGuard\'s CAPTCHA on the whole site (Firewall » CAPTCHA).'
-          : `Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF).`}
+          : all.captcha?.central
+            ? `Login pages protected by the WAF brute-force module. xPGuard's CAPTCHA page (Overview » CAPTCHA Page, ${all.captcha.central_url ?? ''}) is on: suspicious visitors are sent there; with the switch on, every visitor is. Banned addresses get the same page (Firewall » CAPTCHA).`
+            : `Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF). Turn on Overview » CAPTCHA Page to use xPGuard's CAPTCHA page instead.`}
         header={
           replaced && !meExtras.includes('recaptcha') ? (
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600" title={`xPGuard's login-page CAPTCHA is one of its own rules, which are off on this server. Add the recaptcha extra to the ${replaced} feed for a login CAPTCHA.`}>

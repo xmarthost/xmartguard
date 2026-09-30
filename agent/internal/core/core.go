@@ -152,14 +152,16 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			return out
 		}}
 	gateSecret := loadGateSecret(db)
-	a.Captcha = &captcha.Server{Settings: st, Log: log, GateSecret: gateSecret, Solved: func(ip string) error {
+	a.Captcha = &captcha.Server{Settings: st, Log: log, GateSecret: gateSecret, ServerID: cfg.ServerID, Solved: func(ip string) error {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
 		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs,
 		Gate: func() *waf.Gate {
 			cur := a.Settings.Get()
-			if !captcha.GateWanted(cur) {
+			// While the portal's CAPTCHA page is on, it serves the login
+			// pages too (see centralWAF).
+			if !captcha.GateWanted(cur) || (cur.Captcha.Central && cur.Captcha.CentralURL != "") {
 				return nil
 			}
 			return &waf.Gate{Tokens: captcha.GateTokens(gateSecret, time.Now()), HTTPPort: cur.Captcha.HTTPPort, HTTPSPort: cur.Captcha.HTTPSPort}

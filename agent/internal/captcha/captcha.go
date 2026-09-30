@@ -44,6 +44,10 @@ type Server struct {
 	VerifyURL string
 	// GateSecret signs the login-page pass cookie (see GateTokens).
 	GateSecret []byte
+	// ServerID names this server to the portal's CAPTCHA page. While that
+	// page is on (settings Captcha.Central), visitors are sent there
+	// instead of this server's own page.
+	ServerID string
 
 	key      []byte
 	mu       sync.Mutex
@@ -191,6 +195,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	ip := clientIP(r)
+	if to := s.centralURL(r, ip); to != "" {
+		http.Redirect(w, r, to, http.StatusFound)
+		return
+	}
 	switch {
 	case r.URL.Path == pathPrefix+"captcha.png" || r.URL.Path == legacyPrefix+"captcha.png":
 		s.image(w, r)
@@ -209,6 +217,35 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.page(w, r, ip, "")
+}
+
+// centralURL is the portal's CAPTCHA page for this visitor, or "" while
+// that page is off: banned visitors (whatever page they asked for) and the
+// login-page CAPTCHA go there, and come back to the page they wanted.
+func (s *Server) centralURL(r *http.Request, ip string) string {
+	c := s.Settings.Get().Captcha
+	if !c.Central || c.CentralURL == "" || s.ServerID == "" || net.ParseIP(ip) == nil {
+		return ""
+	}
+	back := r.URL.RequestURI()
+	if r.URL.Path == pathPrefix+"gate" || r.URL.Path == legacyPrefix+"gate" {
+		back = "/"
+		if i := strings.Index(r.URL.RawQuery, "back="); i >= 0 {
+			back = r.URL.RawQuery[i+5:]
+		}
+	}
+	back = safeBack(back)
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "" || strings.ContainsAny(host, "/?#@&= ") {
+		return ""
+	}
+	// The page ("u") goes last and as it is: the portal reads everything
+	// after "&u=".
+	return fmt.Sprintf("%s?s=%s&ip=%s&h=%s&u=%s", c.CentralURL, url.QueryEscape(s.ServerID), url.QueryEscape(ip), url.QueryEscape(host), back)
 }
 
 // token binds a challenge answer to an address and an expiry.

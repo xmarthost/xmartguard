@@ -28,7 +28,12 @@ func TestCentralRuleRender(t *testing.T) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	// The login-page CAPTCHA for everyone already covers suspects.
+	// Everyone (the login-page CAPTCHA for everyone): no suspect list.
+	all := Render(c, Options{Dir: "/x", Central: &Central{URL: ct.URL, ServerID: ct.ServerID, All: true}})
+	if !strings.Contains(all, "id:7700904") || strings.Contains(all, FileCaptchaSuspects) || !strings.Contains(all, FileCaptchaPass) {
+		t.Fatalf("all visitors:\n%s", all)
+	}
+	// The server's own login-page CAPTCHA, when it is used, wins.
 	if out := Render(c, Options{Dir: "/x", Central: ct, Gate: &Gate{Tokens: []string{"0123456789abcdef"}, HTTPSPort: 7743}}); strings.Contains(out, "7700904") {
 		t.Error("central rule rendered together with the gate")
 	}

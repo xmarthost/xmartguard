@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/captcha"
 	"github.com/xmarthost/xmartguard/agent/internal/client"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
@@ -54,10 +55,16 @@ type central struct {
 func (a *Agent) centralWAF() *waf.Central {
 	cur := a.Settings.Get()
 	c := cur.Captcha
-	if !c.Central || c.CentralURL == "" || c.LoginGate || a.Cfg == nil || a.Cfg.ServerID == "" {
+	if !c.Central || c.CentralURL == "" || a.Cfg == nil || a.Cfg.ServerID == "" {
 		return nil
 	}
-	return &waf.Central{URL: c.CentralURL, ServerID: a.Cfg.ServerID, Suspects: a.centralSuspects(), Pass: a.centralPassList()}
+	// The login-page CAPTCHA for everyone uses the portal's page too.
+	all := captcha.GateWanted(cur)
+	w := &waf.Central{URL: c.CentralURL, ServerID: a.Cfg.ServerID, All: all, Pass: a.centralPassList()}
+	if !all {
+		w.Suspects = a.centralSuspects()
+	}
+	return w
 }
 
 // centralSuspects lists the addresses sent to the CAPTCHA.
@@ -170,6 +177,35 @@ func (a *Agent) centralPass(ip string) error {
 	return nil
 }
 
+// centralLiftBan lets a visitor that solved the portal's page through the
+// firewall when it was sent there by a temporary ban or the IPDB (the
+// firewall's CAPTCHA redirect): as solving the server's own page did.
+// Permanent blocks stay.
+func (a *Agent) centralLiftBan(ip string) {
+	if a.Firewall == nil {
+		return
+	}
+	banned := false
+	if rs, err := a.Firewall.List(firewall.KindTempBan); err == nil {
+		for _, r := range rs {
+			if firewall.Contains(r.CIDR, ip) {
+				banned = true
+			}
+		}
+	}
+	if !banned && a.Firewall.IPDB != nil && a.Settings.Get().IPDB.Enabled {
+		if e, _ := a.Firewall.IPDB.Lookup(ip); e != "" {
+			banned = true
+		}
+	}
+	if !banned {
+		return
+	}
+	if err := a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute); err != nil {
+		a.Log.Info("CAPTCHA solved but the address stays blocked", "ip", ip, "err", err)
+	}
+}
+
 // hostedHere reports whether host (with or without www. and a port) is a
 // domain of this server. Servers without cPanel's domain list accept any.
 func hostedHere(host string, domains map[string]string) bool {
@@ -276,6 +312,7 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if err := a.centralPass(in.IP); err != nil {
 			return nil, err
 		}
+		a.centralLiftBan(in.IP)
 		return map[string]any{"ok": true, "minutes": a.Settings.Get().Captcha.CentralMinutes}, nil
 	}
 }

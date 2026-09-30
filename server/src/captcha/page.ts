@@ -105,7 +105,7 @@ ${d.params?.preview ? '<p class="preview">Preview of the page visitors see. Solv
 ${body}
 <noscript><div class="box">Please enable JavaScript to continue.</div></noscript>
 <details><summary>Why am I seeing this?</summary>
-<p>${host} uses xPGuard to keep attackers away from its login page. Your address was recently seen sending suspicious requests, or it is on a list of addresses used for attacks, so we ask you to confirm that you are a person.</p>
+<p>${host} uses xPGuard to keep attackers away. Your address was recently seen sending suspicious requests, or it is on a list of addresses used for attacks, or this page is only open to people, so we ask you to confirm that you are a person.</p>
 <p>After the check you go straight back to the page you asked for, and this address is not asked again for a while. The check is run by Cloudflare Turnstile; no account or personal details are needed.</p>
 </details>
 <div class="foot"><span>Powered by <img src="/xpguard-wordmark.png" alt="xPGuard"></span></div>

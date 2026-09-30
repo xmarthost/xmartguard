@@ -73,7 +73,8 @@ export default function CaptchaPage() {
           <p className="max-w-3xl text-sm text-slate-500">
             Suspicious visitors of the websites' login pages (addresses on the IPDB, banned in the last 7 days, or blocked by the WAF 3 times in 24 hours) are sent to
             xPGuard's own verification page. After a Cloudflare Turnstile check they go straight back to the login page, and the address is not asked again for the time
-            below. Everyone else logs in as usual.
+            below. Everyone else logs in as usual. While this page is on it also replaces each server's own CAPTCHA: the login-page CAPTCHA for every
+            visitor (WAF settings) and the CAPTCHA for banned addresses (Firewall » CAPTCHA) send visitors here, and solving it lifts a temporary ban.
           </p>
         </div>
         {admin && (
