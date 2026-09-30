@@ -148,3 +148,43 @@ func TestAdvancedAllowOnKernel(t *testing.T) {
 		}
 	})
 }
+
+// Country lists come from the portal (the GeoIP data the portal shows
+// countries with); a cached ipdeny list is replaced, and kept when the
+// portal is unreachable.
+func TestGeoPrefersPortal(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "pk.zone"), []byte("39.32.0.0/11\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "pk.src"), []byte("ipdeny\n"), 0o600)
+	var fail bool
+	calls := 0
+	g := &Geo{Dir: dir, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Portal: func(cc string) ([]string, error) {
+		calls++
+		if fail {
+			return nil, os.ErrDeadlineExceeded
+		}
+		return []string{"39.32.0.0/11", "154.192.0.0/17", "2400:adc0::/32"}, nil
+	}}
+	if g.Lookup("154.192.99.1", []string{"PK"}) != "" {
+		t.Fatal("ipdeny list should not have it")
+	}
+	g.Refresh([]string{"PK"}, false)
+	if g.Lookup("154.192.99.1", []string{"PK"}) != "PK" || g.Lookup("2400:adc0::5", []string{"PK"}) != "PK" || g.Source("PK") != "portal" || g.Loaded("PK") != 3 {
+		t.Fatalf("portal list not used: %s %d", g.Source("PK"), g.Loaded("PK"))
+	}
+	// Fresh portal list: no new download.
+	g.Refresh([]string{"PK"}, false)
+	if calls != 1 {
+		t.Fatalf("downloaded again: %d", calls)
+	}
+	// Forced refresh with the portal down keeps the list (ipdeny is
+	// unreachable in tests too).
+	fail = true
+	old := GeoURL
+	GeoURL = "http://127.0.0.1:1/%s"
+	defer func() { GeoURL = old }()
+	g.Refresh([]string{"PK"}, true)
+	if g.Loaded("PK") != 3 {
+		t.Fatal("list lost when the portal was down")
+	}
+}

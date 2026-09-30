@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GeoDB, v6num } from '../src/ipdb/geo.js';
+import { GeoDB, rangeToCidrs, v6num } from '../src/ipdb/geo.js';
 import { entryText, parseCidr, parseFeed, reportable } from '../src/ipdb/service.js';
 
 describe('geoip', () => {
@@ -14,6 +14,19 @@ describe('geoip', () => {
     expect(geo.lookup('8.8.8.0/24')).toBe('US');
     expect(geo.lookup('2001:db8::5')).toBe('NL');
     expect(geo.lookup('2001:db9::5')).toBe('');
+  });
+  it("lists a country's networks as CIDR blocks", () => {
+    const g = new GeoDB();
+    g.load(['154.192.0.0,154.192.227.255,PK', '1.0.0.0,1.0.0.255,AU', '2400:adc0::,2400:adc0:ffff:ffff:ffff:ffff:ffff:ffff,PK'].join('\n'));
+    expect(g.cidrs('pk')).toEqual([
+      '154.192.0.0/17',
+      '154.192.128.0/18',
+      '154.192.192.0/19',
+      '154.192.224.0/22',
+      '2400:adc0:0:0:0:0:0:0/32',
+    ]);
+    expect(g.cidrs('AU')).toEqual(['1.0.0.0/24']);
+    expect(rangeToCidrs(1n, 6n, 32, String)).toEqual(['1/32', '2/31', '4/31', '6/32']);
   });
   it('parses IPv6 forms', () => {
     expect(v6num('::1')).toBe(1n);

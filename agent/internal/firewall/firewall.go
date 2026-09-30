@@ -598,6 +598,18 @@ type CheckResult struct {
 	Trusted string `json:"trusted,omitempty"`
 	// Server names the xPGuard server of this account it belongs to.
 	Server string `json:"server,omitempty"`
+	// CountryLists are the whitelisted and blocked countries with the
+	// number of networks cached for each (0 = not downloaded) and where
+	// the list came from.
+	CountryLists []CountryList `json:"country_lists,omitempty"`
+}
+
+// CountryList is one country's cached network list.
+type CountryList struct {
+	CC       string `json:"cc"`
+	Kind     string `json:"kind"` // whitelist | block
+	Networks int    `json:"networks"`
+	Source   string `json:"source"`
 }
 
 // Check looks an IP up in all lists.
@@ -655,6 +667,14 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 	}
 	cfg := m.Settings.Get().Firewall
 	if m.Geo != nil {
+		for _, l := range []struct {
+			kind  string
+			codes []string
+		}{{"whitelist", cfg.IgnoredCountries}, {"block", cfg.BlockedCountries}} {
+			for _, cc := range l.codes {
+				res.CountryLists = append(res.CountryLists, CountryList{CC: cc, Kind: l.kind, Networks: m.Geo.Loaded(cc), Source: m.Geo.Source(cc)})
+			}
+		}
 		// A whitelisted country is in the kernel's allow set: it wins over
 		// blocks, like a whitelisted address.
 		if cc := m.Geo.Lookup(res.IP, cfg.IgnoredCountries); cc != "" {

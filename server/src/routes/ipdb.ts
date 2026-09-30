@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Pool } from '../db.js';
 import { audit, hasRole, requireRole, type SessionUser } from '../auth.js';
 import { entryText, parseCidr, type IPDBService } from '../ipdb/service.js';
+import { signedPayload } from '../agent-sign.js';
 
 const Paging = z.object({
   q: z.string().max(100).default(''),
@@ -159,6 +160,15 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
       if (net.isIP(ip)) out[raw] = ipdb.geo.lookup(ip) || '';
     }
     return { countries: out };
+  });
+
+  /** A country's networks for an agent's country whitelist/block, from the
+   *  same GeoIP database the portal shows countries with. */
+  app.post('/api/agent/geo/zone', { bodyLimit: 16 * 1024 }, async (req, reply) => {
+    const r = await signedPayload(pool, req.body, z.object({ cc: z.string().regex(/^[A-Za-z]{2}$/) }), reply);
+    if (!r) return;
+    if (!ipdb.geo.size) return reply.code(503).send({ error: 'the GeoIP database is not loaded yet' });
+    return { cc: r.data.cc.toUpperCase(), source: 'db-ip', loaded_at: ipdb.geo.loadedAt, cidrs: ipdb.geo.cidrs(r.data.cc) };
   });
 
   /** The address the portal sees for this browser (the globe button of IP fields). */

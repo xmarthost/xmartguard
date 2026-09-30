@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -146,6 +147,25 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			}
 			return id.SignB64(msg)
 		}}
+		// Country lists come from the portal's GeoIP database, so a
+		// whitelisted or blocked country matches the country shown.
+		a.Firewall.Geo.Portal = func(cc string) ([]string, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			var r struct {
+				CIDRs []string `json:"cidrs"`
+			}
+			if err := a.AI.Portal.Post(ctx, "/api/agent/geo/zone", map[string]string{"cc": strings.ToUpper(cc)}, &r); err != nil {
+				return nil, err
+			}
+			out := make([]string, 0, len(r.CIDRs))
+			for _, c := range r.CIDRs {
+				if p, err := netip.ParsePrefix(strings.TrimSpace(c)); err == nil {
+					out = append(out, p.Masked().String())
+				}
+			}
+			return out, nil
+		}
 	}
 	a.Monitor = &monitor.Monitor{DB: db, Settings: st, Log: log, OnEvent: a.onMonitorEvent,
 		Users: func() map[string]string {

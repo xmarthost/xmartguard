@@ -47,6 +47,19 @@ export class GeoDB {
     return this.size;
   }
 
+  /** The networks of one country as CIDR blocks (IPv4 first, then IPv6). */
+  cidrs(cc: string): string[] {
+    cc = cc.toUpperCase();
+    const out: string[] = [];
+    for (let i = 0; i < this.v4c.length; i++) {
+      if (this.v4c[i] === cc) out.push(...rangeToCidrs(BigInt(this.v4s[i]), BigInt(this.v4e[i]), 32, v4str));
+    }
+    for (let i = 0; i < this.v6c.length; i++) {
+      if (this.v6c[i] === cc) out.push(...rangeToCidrs(this.v6s[i], this.v6e[i], 128, v6str));
+    }
+    return out;
+  }
+
   /** Country code for an IP or CIDR (its network address), or ''. */
   lookup(addr: string): string {
     const ip = addr.split('/')[0];
@@ -62,6 +75,33 @@ export class GeoDB {
     }
     return '';
   }
+}
+
+/** Splits an address range into the fewest CIDR blocks (bits = 32 or 128). */
+export function rangeToCidrs(start: bigint, end: bigint, bits: number, fmt: (n: bigint) => string): string[] {
+  const out: string[] = [];
+  const B = BigInt(bits);
+  let cur = start;
+  while (cur <= end) {
+    // Largest block aligned at cur that fits in the range.
+    let size = 0n;
+    while (size < B) {
+      const next = size + 1n;
+      const mask = (1n << next) - 1n;
+      if ((cur & mask) !== 0n || cur + mask > end) break;
+      size = next;
+    }
+    out.push(`${fmt(cur)}/${bits - Number(size)}`);
+    cur += 1n << size;
+  }
+  return out;
+}
+
+const v4str = (n: bigint) => [24n, 16n, 8n, 0n].map((s) => String((n >> s) & 255n)).join('.');
+function v6str(n: bigint): string {
+  const g: string[] = [];
+  for (let i = 7; i >= 0; i--) g.push(((n >> BigInt(i * 16)) & 0xffffn).toString(16));
+  return g.join(':');
 }
 
 /** First index for which pred is true (pred is monotonic). */

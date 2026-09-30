@@ -21,6 +21,12 @@ var GeoURL = "https://www.ipdeny.com/ipblocks/data/aggregated/%s-aggregated.zone
 type Geo struct {
 	Dir string
 	Log *slog.Logger
+	// Portal returns a country's networks from the portal's GeoIP database,
+	// the one the portal shows countries with (DB-IP). It is preferred:
+	// registry lists (ipdeny) put many addresses in the country their block
+	// was registered in, not where they are used (e.g. AFRINIC blocks used
+	// in Pakistan), so a whitelisted country missed them.
+	Portal func(cc string) ([]string, error)
 
 	mu    sync.Mutex
 	cache map[string][]string
@@ -28,13 +34,46 @@ type Geo struct {
 
 func (g *Geo) file(cc string) string { return filepath.Join(g.Dir, strings.ToLower(cc)+".zone") }
 
-// Refresh downloads lists that are missing (or all, when force).
+func (g *Geo) srcFile(cc string) string { return filepath.Join(g.Dir, strings.ToLower(cc)+".src") }
+
+// Source is where a country's cached list came from ("portal", "ipdeny" or "").
+func (g *Geo) Source(cc string) string {
+	b, _ := os.ReadFile(g.srcFile(cc))
+	return strings.TrimSpace(string(b))
+}
+
+func (g *Geo) store(cc string, body []byte, src string) {
+	tmp := g.file(cc) + ".tmp"
+	if os.WriteFile(tmp, body, 0o600) == nil {
+		_ = os.Rename(tmp, g.file(cc))
+		_ = os.WriteFile(g.srcFile(cc), []byte(src+"\n"), 0o600)
+	}
+	g.mu.Lock()
+	delete(g.cache, cc)
+	g.mu.Unlock()
+}
+
+// Refresh downloads lists that are missing, older than a week or not from
+// the portal yet (or all, when force).
 func (g *Geo) Refresh(codes []string, force bool) {
 	_ = os.MkdirAll(g.Dir, 0o700)
 	client := &http.Client{Timeout: 60 * time.Second}
 	for _, cc := range codes {
 		cc = strings.ToLower(cc)
-		if st, err := os.Stat(g.file(cc)); err == nil && !force && time.Since(st.ModTime()) < 7*24*time.Hour {
+		st, err := os.Stat(g.file(cc))
+		fresh := err == nil && time.Since(st.ModTime()) < 7*24*time.Hour
+		if fresh && !force && (g.Portal == nil || g.Source(cc) == "portal") {
+			continue
+		}
+		if g.Portal != nil {
+			if cidrs, err := g.Portal(cc); err == nil && len(cidrs) > 0 {
+				g.store(cc, []byte(strings.Join(cidrs, "\n")+"\n"), "portal")
+				continue
+			} else if err != nil {
+				g.Log.Warn("country list from the portal failed; trying ipdeny.com", "country", cc, "err", err)
+			}
+		}
+		if fresh && !force {
 			continue
 		}
 		res, err := client.Get(fmt.Sprintf(GeoURL, cc))
@@ -48,15 +87,12 @@ func (g *Geo) Refresh(codes []string, force bool) {
 			g.Log.Warn("country list download failed", "country", cc, "status", res.StatusCode)
 			continue
 		}
-		tmp := g.file(cc) + ".tmp"
-		if os.WriteFile(tmp, body, 0o600) == nil {
-			_ = os.Rename(tmp, g.file(cc))
-		}
-		g.mu.Lock()
-		delete(g.cache, cc)
-		g.mu.Unlock()
+		g.store(cc, body, "ipdeny")
 	}
 }
+
+// Loaded is the number of networks cached for a country (0 = none).
+func (g *Geo) Loaded(cc string) int { return len(g.load(cc)) }
 
 func (g *Geo) load(cc string) []string {
 	cc = strings.ToLower(cc)
@@ -77,7 +113,7 @@ func (g *Geo) load(cc string) []string {
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
-		if _, _, err := net.ParseCIDR(line); err == nil && !strings.Contains(line, ":") {
+		if _, _, err := net.ParseCIDR(line); err == nil {
 			out = append(out, line)
 		}
 	}

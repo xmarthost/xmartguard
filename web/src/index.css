@@ -1,7 +1,19 @@
 @import "tailwindcss";
 
+/* Country flag emojis: Windows has no flag glyphs (it shows "PK"), so a
+   small font with only the flags is bundled. The flags come from Twemoji
+   (CC-BY 4.0, https://github.com/twitter/twemoji); the font file is from
+   country-flag-emoji-polyfill (MIT, TalkJS). unicode-range keeps it to the
+   flag characters. */
+@font-face {
+  font-family: "Twemoji Country Flags";
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
+  src: url("./assets/fonts/TwemojiCountryFlags.woff2") format("woff2");
+  font-display: swap;
+}
+
 @theme {
-  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Twemoji Country Flags", "Poppins", ui-sans-serif, system-ui, sans-serif;
   --color-navy-950: #0f1640;
   --color-navy-900: #172155;
   --color-navy-800: #1d2b64;

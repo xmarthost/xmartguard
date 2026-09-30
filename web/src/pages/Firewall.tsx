@@ -227,6 +227,7 @@ interface CheckResult {
   country?: string;
   trusted?: string;
   server?: string;
+  country_lists?: { cc: string; kind: string; networks: number; source: string }[];
   protected: boolean;
   matches: Rule[];
   events: { id: number; reason: string; source: string; created_at: number; status: string }[];
@@ -323,6 +324,14 @@ function CheckIPModal({ serverId, initial, onClose }: { serverId: string; initia
                 {res.trusted && <div>Trusted service : {res.trusted}</div>}
                 {res.server && <div>xPGuard server : <span className="text-navy-900">{res.server}</span></div>}
               </div>
+              {(res.country_lists ?? [])
+                .filter((l) => l.networks === 0)
+                .map((l) => (
+                  <p key={l.kind + l.cc} className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    The {l.kind === 'whitelist' ? 'whitelisted' : 'blocked'} country {flag(l.cc)} {countryName(l.cc)} has no address list on this server yet (it is
+                    downloaded from the portal when the firewall rules are applied: press Restart above).
+                  </p>
+                ))}
               {found.length > 0 && (
                 <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-sm text-slate-600">
                   {found.map((f) => (

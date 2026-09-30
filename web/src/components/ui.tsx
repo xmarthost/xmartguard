@@ -30,12 +30,12 @@ export function Spinner({ className = '' }: { className?: string }) {
 export function PageLoader() {
   return (
     <div className="flex min-h-[60vh] items-center justify-center" role="status" aria-label="Loading">
-      <div className="xg-loader flex items-center gap-3">
-        <span className="xg-loader-mark relative h-14 w-14">
-          <img src="/xpguard-icon.png" alt="" className="h-14 w-14 object-contain" />
+      <div className="xg-loader flex items-center gap-4">
+        <span className="xg-loader-mark relative h-20 w-20 sm:h-24 sm:w-24">
+          <img src="/xpguard-icon.png" alt="" className="h-full w-full object-contain" />
           <span className="xg-loader-sweep absolute inset-0" />
         </span>
-        <span className="xg-loader-word text-[34px] leading-none font-extrabold tracking-tight">xPGuard</span>
+        <span className="xg-loader-word text-[44px] leading-none font-extrabold tracking-tight sm:text-[60px]">xPGuard</span>
       </div>
     </div>
   );
