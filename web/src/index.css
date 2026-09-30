@@ -120,16 +120,9 @@ body {
   mix-blend-mode: screen;
   animation: xg-sweep 0.9s ease-in-out infinite alternate;
 }
-.xg-loader {
-  animation: xg-loader-in 0.25s ease-out both;
-}
 @keyframes xg-sweep {
   from { background-position: 100% 0; }
   to { background-position: 0% 0; }
-}
-@keyframes xg-loader-in {
-  from { opacity: 0; transform: scale(0.97); }
-  to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .xg-loader-word, .xg-loader-sweep { animation: none; }

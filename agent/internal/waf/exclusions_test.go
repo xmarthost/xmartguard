@@ -191,9 +191,10 @@ func TestSoftBlockWithCRS(t *testing.T) {
 	defer func() { CPanelUserdata = old }()
 	os.MkdirAll(filepath.Join(udata, "std/2_4/xenova/demo.xenovatech.co"), 0o755)
 	os.WriteFile(filepath.Join(udata, "std/2_4/xenova/demo.xenovatech.co/modsec.conf"), []byte("<IfModule mod_security2.c>\nSecRuleEngine Off\n</IfModule>\n"), 0o644)
-	var listed, passed []string
+	var listed, passed, trusted []string
 	m := crsManager(t, src, `{"waf":{"enabled":true,"wordpress":true,"webshell":true}}`, "", func(m *Manager) {
 		m.IPDBIPs = func() []string { return listed }
+		m.TrustedIPs = func() []string { return trusted }
 		m.Central = func() *Central {
 			return &Central{URL: "https://captcha.xpguard.test/v", ServerID: "49c5f26a-f37e-40e0-9eed-62ef53a8a85a", Pass: passed}
 		}
@@ -236,6 +237,17 @@ func TestSoftBlockWithCRS(t *testing.T) {
 	check("solved the CAPTCHA: weak GET passes", get("shop.example.com", weak), 200)
 	check("solved the CAPTCHA: weak POST passes", post(), 200)
 	check("solved the CAPTCHA: real attack still refused", get("shop.example.com", strong), 403)
+
+	// Trusted services (search and link-preview bots) are never sent to
+	// the CAPTCHA: a weak signal passes, a real attack is still refused.
+	passed, trusted = nil, []string{"127.0.0.1"}
+	reload()
+	check("trusted service: weak GET passes (no CAPTCHA)", get("shop.example.com", weak, "User-Agent: facebookexternalhit/1.1"), 200)
+	check("trusted service: weak POST passes", post(), 200)
+	check("trusted service: real attack still refused", get("shop.example.com", strong), 403)
+	trusted = nil
+	reload()
+	check("no longer trusted: CAPTCHA again", get("shop.example.com", weak), 302)
 
 	check("cPanel switched ModSecurity off: attack passes there", get("demo.xenovatech.co", strong), 200)
 	check("cPanel switched ModSecurity off: our rules too", get("demo.xenovatech.co", "/wso.php"), 200)

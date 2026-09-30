@@ -27,9 +27,13 @@ export function Spinner({ className = '' }: { className?: string }) {
  * Full-page loader: the xPGuard logo with a light sweeping through it,
  * shown only while a page loads its data.
  */
+/** The page loader: always in the middle of the screen (fixed), whether the
+ *  app is starting (no menu yet) or a page inside the menu is loading, so
+ *  the logo never jumps. index.html shows the same markup before the
+ *  scripts load. */
 export function PageLoader() {
   return (
-    <div className="flex min-h-[60vh] items-center justify-center" role="status" aria-label="Loading">
+    <div className="pointer-events-none fixed inset-0 z-20 flex items-center justify-center" role="status" aria-label="Loading">
       <div className="xg-loader flex items-center gap-4">
         <span className="xg-loader-mark relative h-20 w-20 sm:h-24 sm:w-24">
           <img src="/xpguard-icon.png" alt="" className="h-full w-full object-contain" />

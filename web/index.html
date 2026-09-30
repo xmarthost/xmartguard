@@ -10,9 +10,25 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <title>xPGuard</title>
+    <style>
+      .xg-boot-mark { width: 80px; height: 80px; object-fit: contain; }
+      .xg-boot-word { font-size: 44px; line-height: 1; font-weight: 800; letter-spacing: -0.025em; color: #172155; }
+      @media (min-width: 640px) {
+        .xg-boot-mark { width: 96px; height: 96px; }
+        .xg-boot-word { font-size: 60px; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Shown until the app starts; the same place and size as its PageLoader. -->
+    <div id="root">
+      <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#f3f4f7">
+        <div style="display:flex;align-items:center;gap:16px;font-family:Poppins,ui-sans-serif,system-ui,sans-serif">
+          <img class="xg-boot-mark" src="/xpguard-icon.png" alt="" />
+          <span class="xg-boot-word">xPGuard</span>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

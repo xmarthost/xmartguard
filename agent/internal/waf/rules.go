@@ -365,8 +365,13 @@ func Render(c settings.WAF, o Options) string {
 		// Crawlers and monitors keep their User-Agent: the bot rules, the
 		// empty User-Agent rule and the XML-RPC GET rule skip them, and a
 		// blacklisted address behind a trusted proxy is still checked.
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
-			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet)
+		// They are never sent to a CAPTCHA either (a link-preview or search
+		// bot cannot solve one, and the preview or the crawl breaks): the
+		// login gate, the central CAPTCHA and soft blocking skip them. A
+		// strong OWASP CRS signal still blocks them.
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet,
+			IDGateNoCookie, IDCentralGate, IDSoftCaptcha, IDSoftDeny)
 	}
 	// rule writes one of our rules unless it was switched off.
 	rule := func(id int, format string, a ...any) {
