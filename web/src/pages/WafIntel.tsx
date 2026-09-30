@@ -3,7 +3,7 @@ import { Brain, Check, EyeOff, Plus, RotateCcw, Save, Search } from 'lucide-reac
 import { api } from '../api';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, ErrorBox, PageLoader } from '../components/ui';
-import { Card, SettingRow, Toggle, useAction } from '../components/controls';
+import { Card, Pager, SettingRow, Toggle, useAction } from '../components/controls';
 import { useApi } from '../hooks';
 
 interface LearnedName {
@@ -43,6 +43,17 @@ const STATUS: Record<LearnedName['status'], [string, string]> = {
   not_allowed: ['Too common', 'bg-slate-100 text-slate-500'],
 };
 
+const PAGE_SIZES = [25, 50, 100, 200];
+
+function savedPageSize(): number {
+  try {
+    const n = Number(localStorage.getItem('xg-intel-page-size'));
+    return PAGE_SIZES.includes(n) ? n : 25;
+  } catch {
+    return 25;
+  }
+}
+
 /** Overview » WAF Intelligence: web shell names learned from the scanners of
  *  all servers, and the portal's virtual patches. */
 export default function WafIntel() {
@@ -55,6 +66,9 @@ export default function WafIntel() {
   const [off, setOff] = useState<number[]>([]);
   const [add, setAdd] = useState('');
   const [q, setQ] = useState('');
+  const [state, setState] = useState('');
+  const [limit, setLimit] = useState(savedPageSize);
+  const [offset, setOffset] = useState(0);
 
   useEffect(() => {
     if (!res.data) return;
@@ -71,7 +85,10 @@ export default function WafIntel() {
   const save = () => run(() => api<{ pushed: number; names: number; patches: number }>('PUT', '/api/waf/intel/config', { enabled, min_servers: minServers, disabled_patches: off }).then((r) => (res.reload(), r)), done);
   const setName = (name: string, status: string) =>
     run(() => api<{ pushed: number; names: number; patches: number }>('POST', '/api/waf/intel/names', { name, status }).then((r) => (res.reload(), r)), done);
-  const names = d.names.filter((n) => !q || n.name.includes(q.toLowerCase()) || n.tails.some((t) => t.includes(q.toLowerCase())));
+  const matching = d.names.filter((n) => (!state || n.status === state) && (!q || n.name.includes(q.toLowerCase()) || n.tails.some((t) => t.includes(q.toLowerCase()))));
+  // Back to the last page when the list got shorter (e.g. after a filter).
+  const from = offset < matching.length ? offset : Math.max(0, Math.floor((matching.length - 1) / limit) * limit);
+  const names = matching.slice(from, from + limit);
 
   return (
     <div className="space-y-5">
@@ -130,8 +147,53 @@ export default function WafIntel() {
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="relative min-w-[200px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
-            <input className="input w-full pl-9" placeholder="Search names" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input
+              className="input w-full pl-9"
+              placeholder="Search names"
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setOffset(0);
+              }}
+            />
           </div>
+          <select
+            className="input w-44"
+            value={state}
+            aria-label="State"
+            onChange={(e) => {
+              setState(e.target.value);
+              setOffset(0);
+            }}
+          >
+            <option value="">All states</option>
+            {(Object.keys(STATUS) as LearnedName['status'][]).map((k) => (
+              <option key={k} value={k}>
+                {STATUS[k][0]} ({d.names.filter((n) => n.status === k).length})
+              </option>
+            ))}
+          </select>
+          <select
+            className="input w-32"
+            value={limit}
+            aria-label="Rows per page"
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              setLimit(n);
+              setOffset(0);
+              try {
+                localStorage.setItem('xg-intel-page-size', String(n));
+              } catch {
+                /* not kept */
+              }
+            }}
+          >
+            {PAGE_SIZES.map((n) => (
+              <option key={n} value={n}>
+                {n} per page
+              </option>
+            ))}
+          </select>
           {admin && (
             <form
               className="flex gap-2"
@@ -148,7 +210,9 @@ export default function WafIntel() {
           )}
         </div>
         {names.length === 0 ? (
-          <p className="py-6 text-center text-sm text-slate-500">No web shell names yet. They appear here when a scanner finds one.</p>
+          <p className="py-6 text-center text-sm text-slate-500">
+            {d.names.length ? 'No names match the search or state.' : 'No web shell names yet. They appear here when a scanner finds one.'}
+          </p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -179,7 +243,6 @@ export default function WafIntel() {
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS[n.status][1]}`} title={n.reason}>
                         {STATUS[n.status][0]}
                       </span>
-                      <div className="mt-1 max-w-[240px] text-xs text-slate-400">{n.reason}</div>
                     </td>
                     {admin && (
                       <td className="whitespace-nowrap py-2 text-right">
@@ -204,6 +267,7 @@ export default function WafIntel() {
                 ))}
               </tbody>
             </table>
+            <Pager total={matching.length} limit={limit} offset={from} onChange={setOffset} />
           </div>
         )}
       </Card>
