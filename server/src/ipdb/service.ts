@@ -9,6 +9,8 @@ import type { GeoDB } from './geo.js';
 
 /** Agents older than this do not implement the ipdb.* commands. */
 export const IPDB_MIN_AGENT = '0.3.0';
+/** Agents that take the fleet whitelist (fleet.set). */
+export const FLEET_MIN_AGENT = '0.16.2';
 
 // Addresses that are never reported or listed.
 const reserved = new net.BlockList();
@@ -79,6 +81,9 @@ export class IPDBService {
   }
 
   start(): void {
+    // Every server whitelists the other servers of its account.
+    const fleet = () => this.syncFleetAll().catch((err) => this.log.warn({ err }, 'fleet sync failed'));
+    this.timers.push(setInterval(fleet, 10 * 60_000));
     if (!this.cfg.ipdbSync) return;
     const tick = async () => {
       try {
@@ -102,6 +107,12 @@ export class IPDBService {
 
   /** Called when an agent connects so it gets the list quickly. */
   onConnect(serverId: string, agentVersion: string): void {
+    if (!versionLess(agentVersion, FLEET_MIN_AGENT)) {
+      const f = setTimeout(() => {
+        this.syncFleet(serverId).catch((err) => this.log.warn({ serverId, err: (err as Error).message }, 'fleet sync failed'));
+      }, 3_000);
+      this.timers.push(f);
+    }
     if (!this.cfg.ipdbSync || versionLess(agentVersion, IPDB_MIN_AGENT)) return;
     const t = setTimeout(() => {
       this.ensureBuilt()
@@ -189,6 +200,35 @@ export class IPDBService {
     this.entries = lines;
     this.version = crypto.createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16);
     this.builtAt = Date.now();
+  }
+
+  /** The servers of an account with their addresses (the fleet whitelist). */
+  async fleet(accountId: string): Promise<{ ip: string; host: string }[]> {
+    const { rows } = await this.pool.query(
+      "SELECT hostname, primary_ip, inventory->'ips' AS ips FROM servers WHERE status = 'active' AND account_id = $1",
+      [accountId],
+    );
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      for (const ip of [r.primary_ip, ...(Array.isArray(r.ips) ? r.ips : [])]) {
+        if (typeof ip === 'string' && reportable(ip) && !out.has(ip)) out.set(ip, String(r.hostname ?? ''));
+      }
+    }
+    return [...out].map(([ip, host]) => ({ ip, host })).sort((a, b) => a.ip.localeCompare(b.ip));
+  }
+
+  /** Sends one server the addresses of its account's servers. */
+  async syncFleet(serverId: string): Promise<void> {
+    const { rows } = await this.pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [serverId]);
+    if (!rows[0]) return;
+    await this.hub.command(serverId, 'fleet.set', { servers: await this.fleet(rows[0].account_id) }, 60_000);
+  }
+
+  private async syncFleetAll(): Promise<void> {
+    const conns = this.hub.connections().filter((c) => !versionLess(c.version, FLEET_MIN_AGENT));
+    for (let i = 0; i < conns.length; i += 10) {
+      await Promise.all(conns.slice(i, i + 10).map((c) => this.syncFleet(c.serverId).catch(() => undefined)));
+    }
   }
 
   /** Every enrolled server's addresses: never listed. */

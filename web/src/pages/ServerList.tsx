@@ -81,6 +81,8 @@ function ServerCard({ s, onChange }: { s: Server; onChange: () => void }) {
   const sec = (m as any)?.security;
   const card: Card = sec?.card ?? {};
   const alerts = (sec?.scanner?.open_findings ?? 0) + (sec?.blacklisted_ips ?? 0) + (card.domains_blacklisted ?? 0);
+  const problems: { name: string; problem: string }[] = sec?.problems ?? [];
+  const down = problems.length > 0 || !s.online;
   const iconBtn = 'text-slate-400 transition hover:text-navy-700 [&>svg]:h-5 [&>svg]:w-5';
   return (
     <div className={`card flex flex-col p-6 transition hover:shadow-md ${s.online ? '' : 'opacity-80'}`}>
@@ -89,15 +91,33 @@ function ServerCard({ s, onChange }: { s: Server; onChange: () => void }) {
         <Link to={`/servers/${s.id}`} className="min-w-0 flex-1 truncate text-lg font-medium text-navy-900 hover:underline" title={s.hostname}>
           {s.hostname || '(unknown host)'}
         </Link>
-        <Link to={`/servers/${s.id}`} title={alerts ? `${alerts} alert(s)` : 'No alerts'} className="relative text-amber-400 hover:text-amber-500">
-          <Bell className="h-6 w-6" />
-          {alerts > 0 && <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />}
+        <Link
+          to={`/servers/${s.id}`}
+          title={
+            problems.length
+              ? problems.map((p) => `${p.name}: ${p.problem}`).join('\n')
+              : !s.online
+                ? 'The agent is offline'
+                : alerts
+                  ? `${alerts} alert(s)`
+                  : 'No alerts'
+          }
+          className={`relative ${down ? 'text-red-500 hover:text-red-600' : 'text-amber-400 hover:text-amber-500'}`}
+        >
+          {/* Red: a protection is not working (or the agent is offline); yellow: ordinary notifications. */}
+          <Bell className={`h-6 w-6 ${down ? 'fill-red-500' : ''}`} />
+          {!down && alerts > 0 && <span className="absolute -top-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />}
         </Link>
       </div>
       {!s.online && (
         <div className="mt-2 flex items-center gap-2 text-xs text-slate-400">
           <StatusDot online={false} /> offline · last seen {ago(s.last_seen_at)}
         </div>
+      )}
+      {s.online && problems.length > 0 && (
+        <Link to={`/servers/${s.id}`} className="mt-2 block truncate text-xs text-red-600 hover:underline" title={problems.map((p) => `${p.name}: ${p.problem}`).join('\n')}>
+          {problems.map((p) => p.name).join(', ')} not working
+        </Link>
       )}
       <div className="mt-6 grid grid-cols-3 gap-x-4 gap-y-6">
         <Stat value={compact(card.virus_attacks ?? sec?.scanner?.threats_30d ?? 0)} label="Virus Attacks" tone="green" />

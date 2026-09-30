@@ -121,6 +121,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		IPDB:      &firewall.IPDB{},
 		Protected: a.protectedIPs,
 	}
+	a.Firewall.FleetName = a.fleetName
 	a.Trusted = trusted.New(filepath.Join(store.StateDir(), "trusted-services.json"))
 	a.Tor = tor.New(filepath.Join(store.StateDir(), "tor-exits.json"))
 	a.Trusted.SetCustom(st.Get().Firewall.TrustedCustom)
@@ -273,7 +274,67 @@ func selfPath() string {
 	return NewBinPath
 }
 
-// protectedIPs are never blocked: this server's addresses, loopback and the portal.
+// FleetServer is another server of this account running xPGuard.
+type FleetServer struct {
+	IP   string `json:"ip"`
+	Host string `json:"host"`
+}
+
+const kvFleet = "fleet_servers"
+
+// fleet are the account's servers, as the portal last sent them.
+func (a *Agent) fleet() []FleetServer {
+	var out []FleetServer
+	_ = json.Unmarshal([]byte(store.GetKV(a.DB, kvFleet)), &out)
+	return out
+}
+
+// fleetName names the xPGuard server an address belongs to ("" = none).
+func (a *Agent) fleetName(ip string) string {
+	for _, f := range a.fleet() {
+		if f.IP == ip {
+			return orText(f.Host, f.IP)
+		}
+	}
+	return ""
+}
+
+// setFleet stores the portal's server list; a change reloads the firewall
+// so the new servers are never blocked.
+func (a *Agent) setFleet(list []FleetServer) (bool, error) {
+	clean := []FleetServer{}
+	seen := map[string]bool{}
+	for _, f := range list {
+		ip := net.ParseIP(strings.TrimSpace(f.IP))
+		if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || seen[ip.String()] || len(clean) >= 5000 {
+			continue
+		}
+		seen[ip.String()] = true
+		h := strings.TrimSpace(f.Host)
+		if len(h) > 253 {
+			h = h[:253]
+		}
+		clean = append(clean, FleetServer{IP: ip.String(), Host: h})
+	}
+	sort.Slice(clean, func(i, j int) bool { return clean[i].IP < clean[j].IP })
+	b, _ := json.Marshal(clean)
+	if string(b) == store.GetKV(a.DB, kvFleet) {
+		return false, nil
+	}
+	if err := store.SetKV(a.DB, kvFleet, string(b)); err != nil {
+		return false, err
+	}
+	a.protMu.Lock()
+	a.protected = nil
+	a.protMu.Unlock()
+	if a.Settings.Get().Firewall.Enabled {
+		return true, a.Firewall.Apply()
+	}
+	return true, nil
+}
+
+// protectedIPs are never blocked: this server's addresses, loopback, the
+// portal and the account's other xPGuard servers.
 func (a *Agent) protectedIPs() []string {
 	a.protMu.Lock()
 	defer a.protMu.Unlock()
@@ -285,6 +346,10 @@ func (a *Agent) protectedIPs() []string {
 		if addrs, err := net.LookupHost(u.Hostname()); err == nil {
 			ips = append(ips, addrs...)
 		}
+	}
+	// The other xPGuard servers of this account (sent by the portal).
+	for _, f := range a.fleet() {
+		ips = append(ips, f.IP)
 	}
 	a.protected, a.protAt = ips, time.Now()
 	return ips
@@ -343,7 +408,8 @@ func (a *Agent) SecuritySummary() any {
 			listed++
 		}
 	}
-	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": listed, "card": a.serverCard()}
+	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": listed, "card": a.serverCard(),
+		"problems": a.serviceProblems()}
 }
 
 // serverCard holds the numbers of the portal's server list card: all-time
@@ -657,6 +723,18 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return map[string]any{"ok": true}, a.Firewall.Unblock(in.Addr)
 	}
+	// fleet.set: the portal's list of this account's servers, whitelisted
+	// on every server automatically.
+	h["fleet.set"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Servers []FleetServer `json:"servers"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		changed, err := a.setFleet(in.Servers)
+		return map[string]any{"changed": changed, "servers": len(a.fleet())}, err
+	}
 	h["fw.check"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct{ IP string }](p)
 		if err != nil {
@@ -686,6 +764,8 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			// Other firewalls on the server and the portal entries in them.
 			"host_firewalls": a.hostTrustResults(),
 			"csf":            a.Firewall.CSF(),
+			// The account's xPGuard servers, whitelisted automatically.
+			"fleet": a.fleet(),
 		}, nil
 	}
 	// domains.list: websites hosted on the server (cPanel /etc/userdomains).

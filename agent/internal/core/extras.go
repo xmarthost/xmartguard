@@ -332,7 +332,7 @@ func (a *Agent) Dashboard(days int) map[string]any {
 	}
 	for _, h := range a.ServiceHealth() {
 		if !h.OK {
-			add(h.Level, h.Name+" is not running: "+h.Problem, h.Link)
+			add(h.Level, h.Name+" is not working: "+h.Problem, h.Link)
 		}
 	}
 	var osmRecent int
@@ -418,7 +418,8 @@ func (a *Agent) ServiceHealth() []Service {
 
 	ws := a.WAF.Status()
 	wafProblem := ""
-	if ws.Enabled {
+	// Right after start the rules are still being applied and tested.
+	if ws.Enabled && running(2*time.Minute) {
 		switch {
 		case !ws.Available:
 			wafProblem = "ModSecurity is not installed"
@@ -427,8 +428,34 @@ func (a *Agent) ServiceHealth() []Service {
 		case ws.SelfTest != nil && !ws.SelfTest.OK:
 			wafProblem = ws.SelfTest.Detail
 		}
+		// A rule set that failed (e.g. OWASP CRS does not block) is a
+		// problem of the WAF too, not only of the rule sets page.
+		for _, rs := range ws.RuleSets {
+			if wafProblem == "" && rs.State == "error" {
+				wafProblem = rs.Name + ": " + orText(rs.Detail, "error")
+			}
+		}
 	}
 	add("Web application firewall", "waf-logs", ws.Enabled, "warning", wafProblem)
+	return out
+}
+
+func orText(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+// serviceProblems are the enabled protections that are not working, for
+// the portal's server list (a red bell like cPGuard's).
+func (a *Agent) serviceProblems() []map[string]string {
+	out := []map[string]string{}
+	for _, s := range a.ServiceHealth() {
+		if !s.OK {
+			out = append(out, map[string]string{"name": s.Name, "problem": s.Problem, "link": s.Link})
+		}
+	}
 	return out
 }
 

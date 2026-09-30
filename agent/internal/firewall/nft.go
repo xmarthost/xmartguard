@@ -27,10 +27,10 @@ var dropLegacy = fmt.Sprintf("add table inet %s\ndelete table inet %s\n", legacy
 
 // Ruleset is the desired state rendered into nft syntax.
 type Ruleset struct {
-	Allow, Deny, Ignore        []string // IPs/CIDRs (both families)
+	Allow, Deny, Ignore []string // IPs/CIDRs (both families)
 	// AllowRules are whitelist entries limited to a protocol, ports or
 	// one direction (rendered one rule each).
-	AllowRules []Rule
+	AllowRules                 []Rule
 	TempAllow, TempBan         map[string]time.Duration
 	CountryBlock, CountryAllow []string // IPv4 CIDRs
 	DoS                        bool

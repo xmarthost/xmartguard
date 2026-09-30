@@ -410,7 +410,13 @@ func (m *Manager) Apply() error {
 		if wait == 0 {
 			wait = 30 * time.Second
 		}
-		r := runSelfTest(crsActive, wait)
+		captchaURL := ""
+		if m.Central != nil {
+			if c := m.Central(); c != nil {
+				captchaURL = c.URL
+			}
+		}
+		r := runSelfTest(crsActive, captchaURL, wait)
 		st = &r
 		for i := range states {
 			if states[i].ID == "owasp_crs" && states[i].State == "active" && r.CRS != "" && r.CRS != "blocked" {

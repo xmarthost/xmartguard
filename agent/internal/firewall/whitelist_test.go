@@ -115,7 +115,10 @@ func TestAdvancedAllowOnKernel(t *testing.T) {
 		if _, err := m.Settings.Patch([]byte(`{"firewall":{"enabled":true}}`)); err != nil {
 			t.Fatal(err)
 		}
-		get := func(p string) string { o, _ := in("curl", "-s", "-m", "2", "http://10.99.0.1:"+p+"/"); return string(o) }
+		get := func(p string) string {
+			o, _ := in("curl", "-s", "-m", "2", "http://10.99.0.1:"+p+"/")
+			return string(o)
+		}
 		if _, err := m.Add(KindDeny, "10.99.0.2", "", 0); err != nil {
 			t.Fatal(err)
 		}

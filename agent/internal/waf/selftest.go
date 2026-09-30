@@ -45,6 +45,12 @@ func isSelfTest(e Event) bool {
 var SelfTestURLs = []string{"http://127.0.0.1", "https://127.0.0.1"}
 
 func probe(path string) (int, error) {
+	code, _, err := probeLoc(path)
+	return code, err
+}
+
+// probeLoc also returns the redirect target of a 3xx answer.
+func probeLoc(path string) (int, string, error) {
 	c := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
@@ -57,7 +63,7 @@ func probe(path string) (int, error) {
 	for _, base := range SelfTestURLs {
 		req, err := http.NewRequest("GET", base+path, nil)
 		if err != nil {
-			return 0, err
+			return 0, "", err
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (xPGuard WAF self-test)")
 		res, err := c.Do(req)
@@ -66,14 +72,17 @@ func probe(path string) (int, error) {
 			continue
 		}
 		res.Body.Close()
-		return res.StatusCode, nil
+		return res.StatusCode, res.Header.Get("Location"), nil
 	}
-	return 0, last
+	return 0, "", last
 }
 
 // runSelfTest checks the rules are enforced. LiteSpeed and Apache may take a
 // few seconds to reload, so a pass is retried for up to wait.
-func runSelfTest(crs bool, wait time.Duration) SelfTest {
+// captchaURL is the central CAPTCHA page: with soft blocking on, OWASP
+// CRS sends GET requests with a weak attack signal there instead of
+// answering 403, which counts as blocked too.
+func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 	st := SelfTest{At: time.Now().Unix()}
 	deadline := time.Now().Add(wait)
 	for {
@@ -96,12 +105,14 @@ func runSelfTest(crs bool, wait time.Duration) SelfTest {
 	}
 	if st.OK && crs {
 		q := url.Values{"q": {"<script>alert(document.cookie)</script>"}}.Encode()
-		code, err := probe(crsTestPath + "?" + q)
+		code, loc, err := probeLoc(crsTestPath + "?" + q)
 		switch {
 		case err != nil:
 			st.CRS = err.Error()
 		case code == 403 || code == 406:
 			st.CRS = "blocked"
+		case code >= 300 && code < 400 && captchaURL != "" && strings.HasPrefix(loc, captchaURL):
+			st.CRS = "blocked" // sent to the CAPTCHA (soft blocking)
 		default:
 			st.CRS = fmt.Sprintf("OWASP CRS did not block a test XSS request (HTTP %d); check the paranoia level and anomaly threshold", code)
 		}

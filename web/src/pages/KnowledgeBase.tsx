@@ -34,7 +34,7 @@ const guides: Article[] = [
           The AI scanner runs afterwards in the background: the file is already marked (quarantined or notified) by the rules, and the AI verdict only
           confirms it or restores a false positive.
         </p>
-        <p className="mt-2">If the dashboard shows <b>Realtime scanner · Not running</b>, check on the server:</p>
+        <p className="mt-2">If the dashboard shows <b>Realtime scanner · Not working</b>, check on the server:</p>
         <Code>{`xgcli status                        # protection overview
 xgcli watch --list                  # directories the realtime scanner watches
 sysctl fs.inotify.max_user_watches  # the agent raises this to 500000

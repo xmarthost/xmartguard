@@ -217,6 +217,7 @@ const FOUND: Record<string, string> = {
   'BLOCKED-COUNTRY': 'Its country is blocked',
   'TRUSTED-SERVICE': 'A trusted service: never blocked',
   'SERVER-OR-PORTAL': 'This server or the xPGuard portal: never blocked',
+  'XPGUARD-SERVER': 'One of your servers running xPGuard: whitelisted automatically on every server',
 };
 
 interface CheckResult {
@@ -225,6 +226,7 @@ interface CheckResult {
   found?: string[];
   country?: string;
   trusted?: string;
+  server?: string;
   protected: boolean;
   matches: Rule[];
   events: { id: number; reason: string; source: string; created_at: number; status: string }[];
@@ -319,6 +321,7 @@ function CheckIPModal({ serverId, initial, onClose }: { serverId: string; initia
                   </span>
                 </div>
                 {res.trusted && <div>Trusted service : {res.trusted}</div>}
+                {res.server && <div>xPGuard server : <span className="text-navy-900">{res.server}</span></div>}
               </div>
               {found.length > 0 && (
                 <ul className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-sm text-slate-600">
@@ -372,6 +375,7 @@ const DIRS = [
  *  one direction, and the whole list with search. */
 function WhitelistDrawer({ serverId, onClose }: { serverId: string; onClose: () => void }) {
   const list = useAgent<{ rules: Rule[] }>(serverId, 'fw.list', { kind: 'allow' });
+  const meta = useAgent<{ fleet?: { ip: string; host: string }[] }>(serverId, 'fw.meta');
   const { run, busy } = useAction();
   const { user } = useAuth();
   const canEdit = can(user, 'operator');
@@ -379,6 +383,9 @@ function WhitelistDrawer({ serverId, onClose }: { serverId: string; onClose: () 
   const [f, setF] = useState(blank);
   const [qIP, setQIP] = useState('');
   const [qReason, setQReason] = useState('');
+  const fleet = qReason.trim()
+    ? []
+    : (meta.data?.fleet ?? []).filter((f) => `${f.ip} ${f.host}`.toLowerCase().includes(qIP.trim().toLowerCase()));
   const rows = (list.data?.rules ?? []).filter((r) => {
     const hay = `${r.cidr} ${r.ports ?? ''} ${r.proto || 'any'}`.toLowerCase();
     return hay.includes(qIP.trim().toLowerCase()) && (r.comment || '').toLowerCase().includes(qReason.trim().toLowerCase());
@@ -454,7 +461,7 @@ function WhitelistDrawer({ serverId, onClose }: { serverId: string; onClose: () 
           <div className="min-h-0 flex-1 overflow-y-auto">
             {list.loading && !list.data ? (
               <SectionLoader />
-            ) : rows.length === 0 ? (
+            ) : rows.length === 0 && fleet.length === 0 ? (
               <Empty text={list.data?.rules.length ? 'No match' : 'The whitelist is empty'} />
             ) : (
               rows.map((r) => (
@@ -478,6 +485,20 @@ function WhitelistDrawer({ serverId, onClose }: { serverId: string; onClose: () 
                   </div>
                 </div>
               ))
+            )}
+            {fleet.length > 0 && (
+              <>
+                <div className="border-t border-slate-200 bg-slate-50 px-4 py-2 text-xs font-medium tracking-wide text-slate-500 uppercase">
+                  Your xPGuard servers · whitelisted automatically
+                </div>
+                {fleet.map((f) => (
+                  <div key={f.ip} className="grid grid-cols-[1fr_1fr_40px] items-center gap-4 border-t border-slate-100 px-4 py-3 text-sm">
+                    <div className="font-mono text-navy-900">{f.ip}</div>
+                    <div className="text-slate-700">{f.host || 'xPGuard server'}</div>
+                    <div className="text-right text-xs text-slate-400" title="Added by the portal for every server of your account">auto</div>
+                  </div>
+                ))}
+              </>
             )}
           </div>
         </div>

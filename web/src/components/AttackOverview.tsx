@@ -49,7 +49,7 @@ function ServiceStrip({ services }: { services: Service[] }) {
       {services.map((sv) => {
         const tone = sv.off ? 'bg-slate-100 text-slate-500' : sv.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700';
         const dot = sv.off ? 'bg-slate-400' : sv.ok ? 'bg-green-500' : 'bg-red-500 animate-pulse';
-        const label = sv.off ? 'Off' : sv.ok ? 'Running' : 'Not running';
+        const label = sv.off ? 'Off' : sv.ok ? 'Running' : 'Not working';
         return (
           <Link key={sv.name} to={sv.off ? 'settings' : sv.link} title={sv.problem || label} className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm hover:opacity-80 ${tone}`}>
             <span className={`h-2 w-2 rounded-full ${dot}`} />

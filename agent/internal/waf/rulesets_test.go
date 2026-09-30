@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -223,8 +224,12 @@ func TestCRSBlockIsNamedAfterTheAttack(t *testing.T) {
 }
 
 func TestSelfTestReportsUnenforcedRules(t *testing.T) {
-	blocking := false
+	blocking, soft := false, ""
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if soft != "" && strings.Contains(r.URL.RawQuery, "script") {
+			http.Redirect(w, r, soft+"?s=x&u="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+			return
+		}
 		if blocking && (strings.HasPrefix(r.URL.Path, selfTestPath) || strings.Contains(r.URL.RawQuery, "script")) {
 			w.WriteHeader(403)
 			return
@@ -236,14 +241,24 @@ func TestSelfTestReportsUnenforcedRules(t *testing.T) {
 	SelfTestURLs = []string{srv.URL}
 	defer func() { SelfTestURLs = old }()
 
-	r := runSelfTest(true, 0)
+	r := runSelfTest(true, "", 0)
 	if r.OK || r.Status != 200 || !strings.Contains(r.Detail, "does not apply them") {
 		t.Fatalf("unenforced: %+v", r)
 	}
 	blocking = true
-	r = runSelfTest(true, 0)
+	r = runSelfTest(true, "", 0)
 	if !r.OK || r.CRS != "blocked" {
 		t.Fatalf("enforced: %+v", r)
+	}
+	// Soft blocking: CRS sends the test to the central CAPTCHA (LiteSpeed
+	// scores it below the relaxed threshold). That is a block.
+	soft = "https://captcha.example.org/c"
+	if r = runSelfTest(true, soft, 0); r.CRS != "blocked" {
+		t.Fatalf("CAPTCHA redirect: %+v", r)
+	}
+	// Any other redirect (e.g. to https) is not.
+	if r = runSelfTest(true, "https://other.example.org/c", 0); !strings.Contains(r.CRS, "HTTP 302") {
+		t.Fatalf("other redirect: %+v", r)
 	}
 	if !isSelfTest(Event{URI: selfTestPath + "?t=1"}) || !isSelfTest(Event{RuleID: IDSelfTest}) || isSelfTest(Event{URI: "/wp-login.php"}) {
 		t.Fatal("self-test events not recognised")

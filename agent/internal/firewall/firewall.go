@@ -164,6 +164,9 @@ type Manager struct {
 	Trusted func() []string
 	// TrustedMatch names the trusted service an address belongs to ("" = none).
 	TrustedMatch func(ip string) string
+	// FleetName names the xPGuard server of this account an address
+	// belongs to ("" = none); those are never blocked.
+	FleetName func(ip string) string
 	// OnBan is called for automatic bans (notifications).
 	OnBan func(Event)
 	// EssentialTCPOut are outgoing TCP ports the agent itself needs (the
@@ -414,7 +417,7 @@ func (m *Manager) add(kind, addr, comment string, ttl time.Duration, o AllowOpts
 	case KindAllow, KindIgnore:
 	case KindDeny, KindTempBan:
 		if m.isProtected(c) {
-			return Rule{}, fmt.Errorf("%s belongs to this server or the xPGuard portal and cannot be blocked", c)
+			return Rule{}, fmt.Errorf("%s belongs to this server, the xPGuard portal or another xPGuard server of this account and cannot be blocked", c)
 		}
 		if svc := m.trustedService(c); svc != "" {
 			return Rule{}, fmt.Errorf("%s belongs to %s, a trusted service that is never blocked (turn it off under Firewall » Trusted services to block it)", c, svc)
@@ -593,6 +596,8 @@ type CheckResult struct {
 	Country string `json:"country,omitempty"`
 	// Trusted names the trusted service the address belongs to.
 	Trusted string `json:"trusted,omitempty"`
+	// Server names the xPGuard server of this account it belongs to.
+	Server string `json:"server,omitempty"`
 }
 
 // Check looks an IP up in all lists.
@@ -614,7 +619,13 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 		}
 		res.Found = append(res.Found, l)
 	}
-	if res.Protected {
+	if name := ""; m.FleetName != nil {
+		if name = m.FleetName(res.IP); name != "" {
+			res.Server = name
+			found("XPGUARD-SERVER")
+		}
+	}
+	if res.Protected && res.Server == "" {
 		found("SERVER-OR-PORTAL")
 	}
 	if svc := m.trustedService(res.IP); svc != "" {
@@ -678,6 +689,11 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 	}
 	if res.Status == "none" && partial != "" {
 		res.Status = partial
+	}
+	// This server, the portal and the account's servers are in the
+	// kernel's allow set.
+	if res.Protected && best <= 0 {
+		res.Status = "allowed"
 	}
 	evs, _, _ := m.Events(EventFilter{Query: res.IP, Limit: 20})
 	res.Events = evs
