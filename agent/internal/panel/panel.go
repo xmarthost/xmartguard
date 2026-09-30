@@ -41,11 +41,6 @@ var Icon string
 // IconName is the icon's file name in both panels.
 const IconName = PluginID + ".svg"
 
-// mark is the xPGuard shield shown in the plugin page header.
-//
-//go:embed xpguard-mark.png
-var mark string
-
 // PluginID names the plugins in WHM and cPanel (and their URLs).
 const PluginID = "xpguard"
 
@@ -107,7 +102,7 @@ func Installed() bool {
 // Page renders the plugin page. fragment omits <html> (cPanel adds its own chrome).
 func Page(mode string, fragment bool) string {
 	ui := strings.Replace(uiHTML, "__MODE__", mode, 1)
-	ui = strings.Replace(ui, "__ICON__", "data:image/png;base64,"+base64.StdEncoding.EncodeToString([]byte(mark)), 1)
+	ui = strings.Replace(ui, "__ICON__", "data:image/svg+xml;base64,"+base64.StdEncoding.EncodeToString([]byte(Icon)), 1)
 	if fragment {
 		return ui
 	}

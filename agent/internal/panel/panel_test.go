@@ -103,7 +103,7 @@ func TestInstallReplacesLegacyPlugin(t *testing.T) {
 	if !Installed() {
 		t.Fatal("new plugin not installed")
 	}
-	if strings.Contains(Page("cpanel", true), "XMart") || !strings.Contains(Page("cpanel", true), "data:image/png;base64,") {
+	if strings.Contains(Page("cpanel", true), "XMart") || !strings.Contains(Page("cpanel", true), "data:image/svg+xml;base64,") {
 		t.Fatal("plugin page not rebranded")
 	}
 }

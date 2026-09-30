@@ -1,84 +1,220 @@
 <style>
-#xg{--navy:#132046;--navy2:#1f3a7a;--red:#dc2626;--green:#16a34a;--amber:#d97706;--muted:#64748b;--line:#e2e8f0;
-  font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#0f172a;max-width:1200px;margin:0 auto;padding:16px}
+#xg{--ink:#0f172a;--navy:#132046;--blue:#2563eb;--orange:#f97316;--red:#dc2626;--green:#16a34a;--amber:#d97706;--muted:#64748b;--line:#e2e8f0;--soft:#f8fafc;
+  font:14px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink);max-width:1240px;margin:0 auto;padding:16px}
 #xg *{box-sizing:border-box}
-#xg .top{display:flex;align-items:center;justify-content:space-between;background:linear-gradient(90deg,var(--navy),var(--navy2));color:#fff;border-radius:12px;padding:14px 20px;margin-bottom:16px}
-#xg .brand{display:flex;align-items:center;gap:10px;font-size:21px;font-weight:800;letter-spacing:-.01em}#xg .brand img{height:36px;width:36px}
-#xg .brand b{background:linear-gradient(90deg,#fbbf24,#f97316,#ef4444);-webkit-background-clip:text;background-clip:text;color:transparent}
-#xg .sub{opacity:.75;font-size:12px}
-#xg .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:16px}
-#xg .tab{border:0;background:none;padding:10px 14px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;font-size:14px}
-#xg .tab.on{color:var(--navy);border-color:var(--navy);font-weight:600}
-#xg .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-bottom:16px}
-#xg .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
-#xg .stat .v{font-size:28px;font-weight:700;color:var(--navy)}#xg .stat .l{color:var(--muted);font-size:13px}
+#xg h2,#xg h3,#xg p{margin:0}
+#xg button{font:inherit;line-height:1.2}
+#xg a{color:var(--blue)}
+#xg svg.i{width:18px;height:18px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* header */
+#xg .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 18px;margin-bottom:14px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+#xg .brand{display:flex;align-items:center;gap:12px}
+#xg .brand img{width:42px;height:42px}
+#xg .brand .n{font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--navy)}
+#xg .brand .n b{color:var(--orange)}
+#xg .brand .s{font-size:12px;color:var(--muted)}
+#xg .top .r{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#xg .pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 11px;font-size:12px;font-weight:600;background:#f1f5f9;color:#475569;white-space:nowrap}
+#xg .pill.ok{background:#dcfce7;color:#15803d}#xg .pill.bad{background:#fee2e2;color:#b91c1c}#xg .pill.warn{background:#fef3c7;color:#b45309}
+#xg .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+/* navigation */
+#xg .nav{display:flex;gap:4px;overflow-x:auto;background:#fff;border:1px solid var(--line);border-radius:14px;padding:5px;margin-bottom:16px;scrollbar-width:thin}
+#xg .nav button{display:flex;align-items:center;gap:7px;border:0;background:none;border-radius:10px;padding:9px 14px;color:var(--muted);cursor:pointer;font-weight:600;font-size:13px;white-space:nowrap}
+#xg .nav button:hover{background:var(--soft);color:var(--ink)}
+#xg .nav button.on{background:var(--navy);color:#fff}
+#xg .nav .cnt{background:var(--red);color:#fff;border-radius:999px;font-size:11px;padding:1px 7px}
+/* layout */
+#xg .grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:16px}
+#xg .two{display:grid;gap:14px;grid-template-columns:1fr 1fr;margin-bottom:16px}
+#xg .three{display:grid;gap:14px;grid-template-columns:repeat(3,1fr);margin-bottom:16px}
+#xg .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+#xg .two .card,#xg .three .card,#xg .grid .card{margin-bottom:0}
+#xg .head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+#xg .head h3{font-size:16px;font-weight:700;color:var(--navy)}
+#xg .head .r{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#xg .muted{color:var(--muted)}#xg .small{font-size:12px}
+#xg .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
 #xg .red{color:var(--red)!important}#xg .green{color:var(--green)!important}#xg .amber{color:var(--amber)!important}
-#xg h3{margin:0 0 10px;font-size:16px;color:var(--navy)}
+/* stat cards */
+#xg .stat{display:flex;gap:14px;align-items:flex-start}
+#xg .stat .ic{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none}
+#xg .stat .ic svg.i{width:22px;height:22px}
+#xg .ic.blue{background:#dbeafe;color:#1d4ed8}#xg .ic.orange{background:#ffedd5;color:#c2410c}#xg .ic.red{background:#fee2e2;color:#b91c1c}#xg .ic.green{background:#dcfce7;color:#15803d}#xg .ic.violet{background:#ede9fe;color:#6d28d9}#xg .ic.slate{background:#f1f5f9;color:#334155}
+#xg .stat .v{font-size:26px;font-weight:800;line-height:1.1;color:var(--navy)}
+#xg .stat .l{color:var(--muted);font-size:13px;margin-top:2px}
+#xg .trend{font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:middle}
+#xg .trend.up{background:#fee2e2;color:#b91c1c}#xg .trend.down{background:#dcfce7;color:#15803d}#xg .trend.flat{background:#f1f5f9;color:#64748b}
+/* banner */
+#xg .banner{display:flex;align-items:center;gap:16px;flex-wrap:wrap;border-radius:16px;padding:20px 22px;margin-bottom:16px;color:#fff}
+#xg .banner.ok{background:linear-gradient(120deg,#15803d,#22c55e)}
+#xg .banner.bad{background:linear-gradient(120deg,#b91c1c,#f97316)}
+#xg .banner .big{width:52px;height:52px;border-radius:14px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;flex:none}
+#xg .banner .big svg.i{width:28px;height:28px}
+#xg .banner h2{font-size:20px;font-weight:800}
+#xg .banner p{opacity:.9;font-size:13px;margin-top:2px}
+#xg .banner .r{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+#xg .banner .btn{background:#fff;color:var(--ink);border-color:#fff}
+#xg .banner .btn.o{background:transparent;color:#fff;border-color:rgba(255,255,255,.7)}
+/* buttons and inputs */
+#xg .btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--navy);background:var(--navy);color:#fff;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap}
+#xg .btn:hover{filter:brightness(1.12)}
+#xg .btn.o{background:#fff;color:var(--navy);border-color:#cbd5e1}
+#xg .btn.o:hover{background:var(--soft);filter:none}
+#xg .btn.d{background:var(--red);border-color:var(--red)}
+#xg .btn.g{background:var(--green);border-color:var(--green)}
+#xg .btn.sm{padding:5px 10px;font-size:12px}
+#xg .btn:disabled{opacity:.45;cursor:default;filter:none}
+#xg input[type=text],#xg input[type=number],#xg input[type=search],#xg select{border:1px solid #cbd5e1;border-radius:10px;padding:8px 11px;font-size:13px;background:#fff;color:var(--ink);height:36px}
+#xg input:focus,#xg select:focus{outline:2px solid #bfdbfe;border-color:var(--blue)}
+#xg .search{position:relative;display:flex;align-items:center}
+#xg .search svg.i{position:absolute;left:10px;color:#94a3b8;width:16px;height:16px}
+#xg .search input{padding-left:32px;min-width:240px}
+#xg .chips{display:flex;gap:6px;flex-wrap:wrap}
+#xg .chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer}
+#xg .chip.on{background:var(--navy);border-color:var(--navy);color:#fff}
+/* tables */
+#xg .tw{overflow-x:auto;margin:0 -18px;padding:0 18px}
 #xg table{width:100%;border-collapse:collapse;font-size:13px}
-#xg th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;padding:8px 6px;border-bottom:1px solid var(--line)}
-#xg td{padding:8px 6px;border-bottom:1px solid #f1f5f9;vertical-align:top;word-break:break-all}
-#xg .btn{border:1px solid var(--navy);background:var(--navy);color:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px}
-#xg .btn.o{background:#fff;color:var(--navy)}#xg .btn.d{background:var(--red);border-color:var(--red)}
-#xg .btn:disabled{opacity:.5;cursor:default}
-#xg input,#xg select{border:1px solid #cbd5e1;border-radius:8px;padding:8px 10px;font-size:13px}
-#xg .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
-#xg .badge{display:inline-block;white-space:nowrap;word-break:normal;border-radius:999px;padding:2px 8px;font-size:11px;background:#f1f5f9;color:#475569}
-#xg .b-detected,#xg .b-virus,#xg .b-failed{background:#fee2e2;color:#b91c1c}#xg .b-quarantined,#xg .b-blocked{background:var(--navy2);color:#fff}
-#xg .b-running,#xg .b-queued{background:#dbeafe;color:#1d4ed8}#xg .b-completed{background:#dcfce7;color:#15803d}#xg .b-suspicious{background:#fef3c7;color:#b45309}
-#xg .msg{padding:10px 14px;border-radius:8px;margin-bottom:12px;display:none}
-#xg .msg.ok{display:block;background:#dcfce7;color:#166534}#xg .msg.err{display:block;background:#fee2e2;color:#991b1b}
-#xg .muted{color:var(--muted)}#xg .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
-#xg .empty{padding:24px;text-align:center;color:var(--muted)}
-#xg .hero{display:grid;grid-template-columns:1fr 1.4fr;gap:12px;margin-bottom:16px}
-#xg .scanbox{background:linear-gradient(135deg,#06a5c1,#26c0da);color:#fff;border-radius:12px;padding:22px}
-#xg .scanbox h2{margin:0 0 4px;font-size:30px;font-weight:600;letter-spacing:.5px}
-#xg .scanbox .btn{background:#4caf50;border-color:#4caf50;margin-top:14px;font-size:15px;padding:10px 18px}
-#xg .scanbox .last{margin-top:12px;font-weight:600;font-size:13px}
-#xg .scanbox select,#xg .scanbox input{width:100%;margin-top:14px}
-#xg .seg{display:flex;gap:0;margin:-22px -22px 0;border-bottom:1px solid rgba(255,255,255,.35)}
-#xg .seg button{flex:1;background:none;border:0;color:#fff;padding:14px;font-weight:600;cursor:pointer;opacity:.75;text-transform:uppercase;font-size:13px}
-#xg .seg button.on{opacity:1;background:rgba(255,255,255,.12)}
-#xg .trend{font-size:12px;float:right}#xg .up{color:var(--red)}#xg .down{color:var(--green)}
-#xg svg.chart{width:100%;height:220px}
-#xg .pick{position:relative;margin-top:14px;color:#0f172a;text-align:left}
-#xg .pick-btn{width:100%;display:flex;align-items:center;gap:10px;background:#fff;border:1px solid rgba(255,255,255,.7);border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13px;color:#0f172a;box-shadow:0 2px 8px rgba(15,23,42,.12);text-align:left}
+#xg th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em;padding:9px 8px;border-bottom:1px solid var(--line);background:var(--soft);white-space:nowrap}
+#xg td{padding:10px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+#xg tr:hover td{background:#fcfdfe}
+#xg td.path{word-break:break-all;min-width:220px}
+#xg td.nw{white-space:nowrap}
+#xg .badge{display:inline-block;white-space:nowrap;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;background:#f1f5f9;color:#475569;text-transform:capitalize}
+#xg .b-detected,#xg .b-virus,#xg .b-failed,#xg .b-high,#xg .b-critical,#xg .b-denied{background:#fee2e2;color:#b91c1c}
+#xg .b-quarantined,#xg .b-blocked{background:#e0e7ff;color:#3730a3}
+#xg .b-running,#xg .b-queued{background:#dbeafe;color:#1d4ed8}
+#xg .b-completed,#xg .b-restored,#xg .b-ok,#xg .b-low{background:#dcfce7;color:#15803d}
+#xg .b-suspicious,#xg .b-medium,#xg .b-stopped,#xg .b-disabled{background:#fef3c7;color:#b45309}
+#xg .empty{padding:34px 16px;text-align:center;color:var(--muted)}
+#xg .empty svg.i{width:34px;height:34px;color:#cbd5e1;display:block;margin:0 auto 8px}
+#xg .pager{display:flex;align-items:center;gap:8px;justify-content:flex-end;margin-top:12px;font-size:12px;color:var(--muted)}
+#xg .selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:8px 12px;margin-bottom:12px}
+#xg .selbar b{color:#1d4ed8}
+/* scanner */
+#xg .sc{display:flex;flex-direction:column;gap:10px}
+#xg .sc .ic{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center}
+#xg .sc h3{font-size:16px;font-weight:700;color:var(--navy)}
+#xg .sc p{color:var(--muted);font-size:13px;flex:1}
+#xg .sc .last{font-size:12px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
+#xg .run{border:1px solid #bfdbfe;background:linear-gradient(180deg,#eff6ff,#fff)}
+#xg .bar{height:10px;border-radius:999px;background:#e2e8f0;overflow:hidden;margin:10px 0 6px}
+#xg .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),#38bdf8);border-radius:999px;transition:width .4s}
+#xg .bar.ind i{width:35%!important;animation:xgind 1.2s ease-in-out infinite}
+@keyframes xgind{0%{margin-left:-35%}100%{margin-left:100%}}
+#xg .spin{width:16px;height:16px;border:2px solid #bfdbfe;border-top-color:var(--blue);border-radius:50%;animation:xgspin .8s linear infinite;display:inline-block}
+@keyframes xgspin{to{transform:rotate(360deg)}}
+/* skeleton */
+#xg .sk{background:linear-gradient(90deg,#f1f5f9,#e2e8f0,#f1f5f9);background-size:200% 100%;animation:xgsk 1.2s infinite;border-radius:10px}
+@keyframes xgsk{to{background-position:-200% 0}}
+/* chart */
+#xg svg.chart{width:100%;height:170px;display:block}
+#xg .axis{display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-top:4px}
+/* list */
+#xg .li{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid #f1f5f9}
+#xg .li:last-child{border-bottom:0}
+#xg .li .p{flex:1;min-width:0;word-break:break-all}
+/* toast */
+#xg .toasts{position:fixed;right:18px;bottom:18px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:380px}
+#xg .toast{display:flex;gap:10px;align-items:flex-start;background:var(--ink);color:#fff;border-radius:12px;padding:12px 14px;box-shadow:0 12px 30px rgba(15,23,42,.25);font-size:13px;animation:xgpop .15s ease-out}
+#xg .toast.ok svg.i{color:#4ade80}#xg .toast.err svg.i{color:#f87171}
+@keyframes xgpop{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+/* directory picker */
+#xg .pick{position:relative;color:var(--ink);text-align:left}
+#xg .pick-btn{width:100%;display:flex;align-items:center;gap:10px;background:#fff;border:1px solid #cbd5e1;border-radius:10px;padding:8px 11px;cursor:pointer;font-size:13px;color:var(--ink);text-align:left;height:36px}
 #xg .pick-btn .ph{color:var(--muted)}#xg .pick-btn .val{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #xg .pick-btn .car{transition:transform .15s;color:var(--muted)}#xg .pick.open .pick-btn .car{transform:rotate(180deg)}
-#xg .pick-pop{display:none;position:absolute;z-index:60;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(15,23,42,.18),0 2px 6px rgba(15,23,42,.08);overflow:hidden}
+#xg .pick-pop{display:none;position:absolute;z-index:60;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 40px rgba(15,23,42,.18);overflow:hidden}
 #xg .pick.open .pick-pop{display:block;animation:xgpop .12s ease-out}
-@keyframes xgpop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-#xg .pick-s{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line);background:#f8fafc;color:var(--muted)}
-#xg .scanbox .pick-s input,#xg .pick-s input{flex:1;width:auto;margin:0;border:0;background:none;padding:2px 0;font-size:13px;outline:none;color:#0f172a}
-#xg .pick-list{max-height:280px;overflow:auto;padding:6px}
-#xg .pick-i{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:#0f172a}
+#xg .pick-s{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--soft);color:var(--muted)}
+#xg .pick-s input{flex:1;border:0!important;background:none!important;padding:2px 0!important;outline:none!important;height:auto!important}
+#xg .pick-list{max-height:260px;overflow:auto;padding:6px}
+#xg .pick-i{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;cursor:pointer;font-size:13px}
 #xg .pick-i svg{flex:none;color:#0ea5e9}#xg .pick-i .p{flex:1;min-width:0;word-break:break-all}#xg .pick-i .p i{font-style:normal;color:#94a3b8}
 #xg .pick-i:hover,#xg .pick-i.hl{background:#eff6ff}#xg .pick-i.sel{background:#e0f2fe;font-weight:600}
 #xg .pick-i .ck{visibility:hidden;color:#0284c7}#xg .pick-i.sel .ck{visibility:visible}
-#xg .pick-n{padding:8px 12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);background:#f8fafc}
+#xg .pick-n{padding:7px 12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);background:var(--soft)}
 #xg .pick-e{padding:18px;text-align:center;color:var(--muted);font-size:13px}
-@media (max-width:760px){#xg .hero{grid-template-columns:1fr}}
+@media (max-width:900px){#xg .two,#xg .three{grid-template-columns:1fr}#xg .search input{min-width:0;width:100%}#xg .search{flex:1}}
 </style>
 <div id="xg">
   <div class="top">
-    <div><div class="brand"><img src="__ICON__" alt=""><span><b>xP</b>Guard</span></div><div class="sub" id="xg-sub">Proactive server security</div></div>
-    <div class="sub" id="xg-ver"></div>
+    <div class="brand"><img src="__ICON__" alt=""><div><div class="n"><b>xP</b>Guard</div><div class="s" id="xg-sub">Proactive server security</div></div></div>
+    <div class="r"><span id="xg-state"></span><span class="pill" id="xg-ver" style="display:none"></span></div>
   </div>
-  <div id="xg-msg" class="msg"></div>
-  <div class="tabs" id="xg-tabs"></div>
+  <div class="nav" id="xg-nav"></div>
   <div id="xg-body"></div>
+  <div class="toasts" id="xg-toasts"></div>
 </div>
 <script>
 (function () {
   var MODE = "__MODE__"; // whm | cpanel
   var ENDPOINT = window.location.pathname;
+  var root = document.getElementById('xg');
   var body = document.getElementById('xg-body');
-  var timer = null;
+  var PAGE = 25;
+
+  // Every page load gets a new generation. Answers and timers of a page the
+  // visitor already left are dropped instead of writing into the new page.
+  var gen = 0, timers = [];
+
+  var P = {
+    home: 'M3 11.5 12 4l9 7.5M5.5 10v10h13V10M10 20v-6h4v6',
+    scan: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20.5 20.5 16 16',
+    file: 'M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8zM14 3v5h5M12 11v4M12 18h.01',
+    logs: 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
+    cms: 'M12 3 2.5 8 12 13l9.5-5zM2.5 12.5 12 17.5l9.5-5M2.5 16.5 12 21.5l9.5-5',
+    shield: 'M12 3 4.5 6v5.5c0 4.7 3.2 8.2 7.5 9.5 4.3-1.3 7.5-4.8 7.5-9.5V6z',
+    check: 'M12 3 4.5 6v5.5c0 4.7 3.2 8.2 7.5 9.5 4.3-1.3 7.5-4.8 7.5-9.5V6zM8.5 12l2.5 2.5 4.5-5',
+    alert: 'M12 3 2 20h20zM12 10v4M12 17h.01',
+    bot: 'M5 9h14v10H5zM12 5v4M12 5h.01M9 13.5h.01M15 13.5h.01M9.5 16.5h5M3 13v3M21 13v3',
+    wall: 'M3 5h18v14H3zM3 9.7h18M3 14.3h18M8 5v4.7M16 5v4.7M12 9.7v4.6M8 14.3V19M16 14.3V19',
+    globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.6 3.7 5.6 3.7 9s-1.2 6.4-3.7 9M12 3c-2.5 2.6-3.7 5.6-3.7 9s1.2 6.4 3.7 9',
+    box: 'M4 7.5 12 3l8 4.5v9L12 21l-8-4.5zM4 7.5l8 4.5 8-4.5M12 12v9',
+    bolt: 'M13 3 5 13.5h6L10 21l8-10.5h-6z',
+    folder: 'M3.5 6.5A1.5 1.5 0 0 1 5 5h4.5l2 2.5H19a1.5 1.5 0 0 1 1.5 1.5v9A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18z',
+    play: 'M7 4.5v15l12-7.5z',
+    stop: 'M6.5 6.5h11v11h-11z',
+    refresh: 'M20 11a8 8 0 0 0-14.8-3.5M4 4v4h4M4 13a8 8 0 0 0 14.8 3.5M20 20v-4h-4',
+    ok: 'M5 12.5 10 17.5 19.5 7',
+    x: 'M6 6l12 12M18 6 6 18',
+    lock: 'M6 11h12v9.5H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3',
+    target: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+    left: 'M15 5l-7 7 7 7', right: 'M9 5l7 7-7 7'
+  };
+  function ic(n, cls) { return '<svg class="i' + (cls ? ' ' + cls : '') + '" viewBox="0 0 24 24"><path d="' + P[n] + '"/></svg>'; }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
   function when(ts) { return ts ? new Date(ts * 1000).toLocaleString() : '–'; }
+  function ago(ts) {
+    if (!ts) return 'never';
+    var s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return Math.floor(s / 86400) + ' days ago';
+  }
+  function dur(a, b) {
+    if (!a || !b || b < a) return '';
+    var s = b - a;
+    return s < 60 ? s + ' s' : s < 3600 ? Math.floor(s / 60) + ' min ' + (s % 60) + ' s' : Math.floor(s / 3600) + ' h ' + Math.floor(s % 3600 / 60) + ' min';
+  }
   function num(n) { return (n || 0).toLocaleString(); }
-  function badge(v) { return '<span class="badge b-' + esc(v) + '">' + esc(v) + '</span>'; }
-  function flash(text, ok) { var m = document.getElementById('xg-msg'); m.className = 'msg ' + (ok ? 'ok' : 'err'); m.textContent = text; setTimeout(function () { m.className = 'msg'; }, 6000); }
+  function badge(v, cls) { return '<span class="badge b-' + esc(cls || v) + '">' + esc(v) + '</span>'; }
+  function $(id) { return document.getElementById(id); }
+  // set writes into an element only while it is still on the page.
+  function set(id, html) { var el = $(id); if (el) el.innerHTML = html; return el; }
+  function text(id, t) { var el = $(id); if (el) el.textContent = t; }
+  function empty(msg, icon) { return '<div class="empty">' + ic(icon || 'box') + esc(msg) + '</div>'; }
+
+  function toast(msg, ok) {
+    var box = $('xg-toasts'); if (!box) return;
+    var t = document.createElement('div');
+    t.className = 'toast ' + (ok ? 'ok' : 'err');
+    t.innerHTML = ic(ok ? 'ok' : 'alert') + '<div>' + esc(msg) + '</div>';
+    box.appendChild(t);
+    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 6000);
+  }
 
   // jsonEnd returns where the first JSON value in text ends (-1 if none).
   function jsonEnd(text) {
@@ -104,11 +240,7 @@
     try { return JSON.parse(text); } catch (e) {}
     var start = text.search(/[{\[]/), end = jsonEnd(text);
     if (start >= 0 && end > start) {
-      try {
-        var v = JSON.parse(text.slice(start, end));
-        if (window.console) console.warn('xPGuard: ignored extra output around the response:', text.slice(0, start).slice(0, 300), text.slice(end, end + 300));
-        return v;
-      } catch (e) {}
+      try { return JSON.parse(text.slice(start, end)); } catch (e) {}
     }
     throw new Error('Unexpected response from the server: ' + text.slice(0, 200));
   }
@@ -130,8 +262,8 @@
     });
   }
 
-  // call retries twice (after 1.5 s and 4 s) when the failure is transient.
-  function call(action, params) {
+  // api retries twice (after 1.5 s and 4 s) when the failure is transient.
+  function api(action, params) {
     var waits = [1500, 4000];
     function attempt(i) {
       return callOnce(action, params).catch(function (e) {
@@ -142,179 +274,317 @@
     return attempt(0);
   }
 
-  var TABS = MODE === 'whm'
-    ? [['overview', 'Overview'], ['scan', 'Virus Scanner'], ['findings', 'Detected Files'], ['firewall', 'Firewall'], ['ipdb', 'IPDB']]
-    : [['home', 'Home'], ['scan', 'Virus Scanner'], ['logs', 'Scanner Logs'], ['findings', 'Detected Files'], ['cms', 'CMS Threats'], ['waf', 'WAF'], ['bots', 'Bot Attacks']];
-
-  function tabs(cur) {
-    document.getElementById('xg-tabs').innerHTML = TABS.map(function (t) {
-      return '<button class="tab' + (t[0] === cur ? ' on' : '') + '" data-tab="' + t[0] + '">' + t[1] + '</button>';
-    }).join('');
+  // call is api for the page on screen: once the visitor moves on, its
+  // answer is dropped (the promise rejects with a "stale" error).
+  function call(action, params) {
+    var g = gen;
+    return api(action, params).then(function (d) {
+      if (g !== gen) { var e = new Error('stale'); e.stale = true; throw e; }
+      return d;
+    });
   }
-  document.getElementById('xg-tabs').addEventListener('click', function (e) {
-    var t = e.target.getAttribute('data-tab'); if (t) show(t);
+  // every runs fn periodically while the current page is on screen.
+  function every(ms, fn) {
+    var g = gen, t = setInterval(function () { if (g === gen) fn(); }, ms);
+    timers.push(t);
+    return t;
+  }
+  function stopTimer(t) { clearInterval(t); timers = timers.filter(function (x) { return x !== t; }); }
+  // quiet swallows stale answers; other errors are shown.
+  function quiet(e) { if (e && !e.stale) toast(e.message); }
+
+  var TABS = MODE === 'whm'
+    ? [['overview', 'Overview', 'home'], ['scan', 'Virus Scanner', 'scan'], ['findings', 'Detected Files', 'file'], ['firewall', 'Firewall', 'wall'], ['ipdb', 'IPDB', 'globe']]
+    : [['home', 'Home', 'home'], ['scan', 'Virus Scanner', 'scan'], ['findings', 'Detected Files', 'file'], ['logs', 'Scanner Logs', 'logs'], ['cms', 'CMS Threats', 'cms'], ['waf', 'WAF', 'shield'], ['bots', 'Bot Attacks', 'bot']];
+  var PAGES = {};
+  var badgeCount = 0;
+
+  function nav(cur) {
+    set('xg-nav', TABS.map(function (t) {
+      return '<button type="button" class="' + (t[0] === cur ? 'on' : '') + '" data-tab="' + t[0] + '">' + ic(t[2]) + t[1] +
+        (t[0] === 'findings' && badgeCount ? '<span class="cnt">' + num(badgeCount) + '</span>' : '') + '</button>';
+    }).join(''));
+  }
+  $('xg-nav').addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('[data-tab]') : null;
+    if (b) go(b.getAttribute('data-tab'));
   });
 
-  function show(name) {
-    if (timer) { clearInterval(timer); timer = null; }
-    tabs(name);
-    body.innerHTML = '<div class="empty">Loading…</div>';
-    ({ overview: overview, home: home, scan: scan, logs: logs, findings: findings, cms: cmsThreats, waf: function () { return wafLogs('waf'); },
-       bots: function () { return wafLogs('bot'); }, firewall: firewall, ipdb: ipdb })[name]()
-      .catch(function (e) { body.innerHTML = '<div class="card red">' + esc(e.message) + '</div>'; });
+  var current = '';
+  function go(name) {
+    if (!PAGES[name]) name = TABS[0][0];
+    if (window.history && history.replaceState) { try { history.replaceState(null, '', '#' + name); } catch (e) {} }
+    show(name);
   }
 
-  function stat(v, l, cls) { return '<div class="card stat"><div class="v ' + (cls || '') + '">' + v + '</div><div class="l">' + esc(l) + '</div></div>'; }
-
-  function overview() {
-    return call('overview').then(function (d) {
-      document.getElementById('xg-ver').textContent = 'v' + d.version;
-      if (MODE === 'cpanel') {
-        document.getElementById('xg-sub').textContent = 'Protection for ' + d.user;
-        var f = d.findings, last = d.last_scan && d.last_scan[0];
-        body.innerHTML = '<div class="grid">' +
-          stat(num(f.detected), 'Infected files needing action', f.detected ? 'red' : 'green') +
-          stat(num(f.quarantined), 'Files in quarantine') +
-          stat(d.realtime ? 'On' : 'Off', 'Realtime protection', d.realtime ? 'green' : 'amber') +
-          stat(last ? esc(last.status) : 'never', last ? 'Last scan ' + when(last.started_at) : 'Last scan') + '</div>' +
-          '<div class="card"><h3>Scan your website</h3><p class="muted">Checks every file under ' + esc(d.web_root || d.home) +
-          ' for web shells, backdoors, injected code and other malware.</p><button class="btn" id="xg-go">Scan now</button></div>';
-        document.getElementById('xg-go').onclick = function () { startUserScan(''); };
-        return;
-      }
-      var s = d.summary.scanner, fw = d.summary.firewall, ip = d.ipdb;
-      document.getElementById('xg-sub').textContent = 'Connected to ' + d.portal;
-      body.innerHTML = '<div class="grid">' +
-        stat(num(s.open_findings), 'Open detections', s.open_findings ? 'red' : 'green') +
-        stat(num(s.quarantined), 'Quarantined files') +
-        stat(num(s.threats_30d), 'Threats (30 days)') +
-        stat(num(fw.active_blocks), 'Blocked IPs') +
-        stat(num(ip.entries), 'IPDB addresses') +
-        stat(num(ip.hits_today), 'IPDB drops today', 'red') + '</div>' +
-        '<div class="card"><h3>Status</h3><table>' +
-        '<tr><td>Virus scanner</td><td>' + (d.scanner ? '<span class="green">running</span>' : '<span class="red">disabled</span>') + (d.realtime ? ' · realtime on' : ' · realtime off') + '</td></tr>' +
-        '<tr><td>Firewall</td><td>' + (d.firewall.healthy ? '<span class="green">active</span>' : '<span class="red">' + esc(d.firewall.error || 'inactive') + '</span>') + ' (' + esc(d.firewall.provider) + ')</td></tr>' +
-        '<tr><td>IPDB</td><td>' + (ip.enabled ? '<span class="green">protecting</span>' : '<span class="amber">off</span>') + ' · list ' + esc(ip.version || 'not received yet') + '</td></tr>' +
-        '<tr><td>Portal</td><td><a href="' + esc(d.portal) + '" target="_blank" rel="noreferrer">' + esc(d.portal) + '</a> (full dashboard, settings and history)</td></tr>' +
-        '</table></div>';
+  function show(name) {
+    gen++;
+    timers.forEach(clearInterval); timers = [];
+    current = name;
+    nav(name);
+    body.innerHTML = skeleton();
+    var g = gen;
+    var p;
+    try { p = PAGES[name](); } catch (e) { p = Promise.reject(e); }
+    Promise.resolve(p).catch(function (e) {
+      if (e && e.stale || g !== gen) return;
+      body.innerHTML = '<div class="card"><div class="empty">' + ic('alert') + '<b class="red">' + esc(e.message) + '</b><div style="margin-top:12px"><button class="btn o" id="xg-retry">' + ic('refresh') + 'Try again</button></div></div></div>';
+      var r = $('xg-retry'); if (r) r.onclick = function () { show(name); };
     });
   }
 
+  function skeleton() {
+    return '<div class="grid">' + [1, 2, 3, 4].map(function () { return '<div class="sk" style="height:86px"></div>'; }).join('') + '</div><div class="sk" style="height:240px"></div>';
+  }
+
+  function header(d) {
+    if (d.version) { var v = $('xg-ver'); if (v) { v.style.display = ''; v.textContent = 'v' + d.version; } }
+  }
+  function state(cls, label) { set('xg-state', '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(label) + '</span>'); }
+
+  function stat(icon, color, v, l, extra) {
+    return '<div class="card stat"><div class="ic ' + color + '">' + ic(icon) + '</div><div><div class="v">' + v + (extra || '') + '</div><div class="l">' + esc(l) + '</div></div></div>';
+  }
 
   function trend(cur, prev) {
-    if (!prev && !cur) return '';
-    if (!prev) return '<span class="trend up">▲ 100%</span>';
+    if (!cur && !prev) return '';
+    if (!prev) return '<span class="trend up" title="versus the 30 days before">new</span>';
     var p = Math.round((cur - prev) * 100 / prev);
-    return '<span class="trend ' + (p > 0 ? 'up' : 'down') + '">' + (p > 0 ? '▲ ' : '▼ ') + Math.abs(p) + '%</span>';
+    if (p === 0) return '<span class="trend flat">0%</span>';
+    return '<span class="trend ' + (p > 0 ? 'up' : 'down') + '" title="versus the 30 days before">' + (p > 0 ? '▲ ' : '▼ ') + Math.abs(p) + '%</span>';
   }
 
-  // chart draws a small line chart of {day, n} points (no library).
-  function chart(points) {
-    if (!points || points.length < 2) return '<div class="empty">Not enough data yet</div>';
-    var W = 700, H = 200, L = 34, B = 24, max = 1;
-    points.forEach(function (p) { if (p.n > max) max = p.n; });
-    var x = function (i) { return L + i * (W - L - 10) / (points.length - 1); };
-    var y = function (v) { return H - B - v * (H - B - 10) / max; };
-    var path = points.map(function (p, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.n).toFixed(1); }).join(' ');
-    var grid = [0, 0.5, 1].map(function (f) {
-      var v = Math.round(max * f);
-      return '<line x1="' + L + '" x2="' + W + '" y1="' + y(v) + '" y2="' + y(v) + '" stroke="#e2e8f0"/><text x="' + (L - 6) + '" y="' + (y(v) + 4) + '" font-size="11" text-anchor="end" fill="#64748b">' + v + '</text>';
-    }).join('');
-    var labels = points.map(function (p, i) {
-      return '<circle cx="' + x(i) + '" cy="' + y(p.n) + '" r="3.5" fill="#1f3a7a"><title>' + esc(p.day) + ': ' + p.n + '</title></circle>' +
-        '<text x="' + x(i) + '" y="' + (H - 6) + '" font-size="11" text-anchor="middle" fill="#64748b">' + esc(p.day.slice(8)) + '</text>';
-    }).join('');
-    return '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' + grid +
-      '<path d="' + path + '" fill="none" stroke="#1f3a7a" stroke-width="2.5"/>' + labels + '</svg>';
+  // series fills the missing days of {day, n} points (last `days` days).
+  function series(points, days) {
+    var m = {}; (points || []).forEach(function (p) { m[p.day] = p.n; });
+    var out = [], now = new Date();
+    for (var i = days - 1; i >= 0; i--) {
+      var d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i)).toISOString().slice(0, 10);
+      out.push({ day: d, n: m[d] || 0 });
+    }
+    return out;
   }
 
-  function home() {
-    return call('dashboard').then(function (d) {
-      document.getElementById('xg-ver').textContent = 'v' + d.version;
-      document.getElementById('xg-sub').textContent = 'Dashboard · ' + d.user + ' · last 30 days';
-      body.innerHTML = '<div class="grid">' +
-        '<div class="card stat">' + trend(d.threats, d.threats_prev) + '<div class="v">' + num(d.threats) + '</div><div class="l">Threats Stopped</div></div>' +
-        '<div class="card stat">' + trend(d.attacks, d.attacks_prev) + '<div class="v">' + num(d.attacks) + '</div><div class="l">Attacks Blocked</div></div>' +
-        '<div class="card stat"><div class="v ' + (d.cms_issues ? 'red' : '') + '">' + num(d.cms_issues) + '</div><div class="l">CMS Issues</div></div></div>' +
-        '<div class="card"><h3>Virus Infections</h3>' + chart(d.daily_threats) + '</div>' +
-        '<div class="card"><h3>Attacks blocked by WAF</h3><div class="muted">' + num(d.attacks) + ' total attacks blocked ' + trend(d.attacks, d.attacks_prev) + '</div>' + chart(d.daily_attacks) + '</div>';
+  // chart draws an area chart of {day, n} points (no library). The SVG is
+  // stretched to the card, so its labels are HTML and its lines keep their width.
+  var chartID = 0;
+  function chart(points, color) {
+    var total = 0, max = 1; points.forEach(function (p) { total += p.n; if (p.n > max) max = p.n; });
+    if (!total) return empty('Nothing in the last 30 days', 'check');
+    var W = 700, H = 170, id = 'xgg' + (++chartID);
+    var x = function (i) { return i * W / (points.length - 1); };
+    var y = function (v) { return H - 4 - v * (H - 14) / max; };
+    var line = points.map(function (p, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.n).toFixed(1); }).join(' ');
+    var area = line + ' L' + W + ' ' + H + ' L0 ' + H + 'Z';
+    var grid = [0, 0.5, 1].map(function (f) { var yy = y(max * f).toFixed(1); return '<line x1="0" x2="' + W + '" y1="' + yy + '" y2="' + yy + '" stroke="#eef2f7" vector-effect="non-scaling-stroke"/>'; }).join('');
+    var ticks = [0, 7, 14, 21, points.length - 1].map(function (i) { return '<span>' + esc(points[i].day.slice(5)) + '</span>'; }).join('');
+    var peak = points.reduce(function (a, p) { return p.n > a.n ? p : a; }, points[0]);
+    return '<div class="muted small" style="margin-bottom:4px">Peak <b style="color:' + color + '">' + num(peak.n) + '</b> on ' + esc(peak.day) + ' · total ' + num(total) + '</div>' +
+      '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none"><defs><linearGradient id="' + id + '" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + color + '" stop-opacity=".3"/><stop offset="1" stop-color="' + color + '" stop-opacity="0"/></linearGradient></defs>' + grid +
+      '<path d="' + area + '" fill="url(#' + id + ')"/><path d="' + line + '" fill="none" stroke="' + color + '" stroke-width="2.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>' +
+      '<div class="axis">' + ticks + '</div>';
+  }
+
+  function pager(total, offset, limit) {
+    if (total <= limit) return total ? '<div class="pager">' + num(total) + ' in total</div>' : '';
+    return '<div class="pager">' + num(offset + 1) + '–' + num(Math.min(offset + limit, total)) + ' of ' + num(total) +
+      '<button class="btn o sm" data-page="' + (offset - limit) + '"' + (offset <= 0 ? ' disabled' : '') + '>' + ic('left') + '</button>' +
+      '<button class="btn o sm" data-page="' + (offset + limit) + '"' + (offset + limit >= total ? ' disabled' : '') + '>' + ic('right') + '</button></div>';
+  }
+  function onPage(el, fn) {
+    if (!el) return;
+    el.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-page]') : null;
+      if (b && !b.disabled) fn(Math.max(0, Number(b.getAttribute('data-page'))));
     });
   }
+  function searchBox(id, value, ph) {
+    return '<div class="search">' + ic('scan') + '<input type="search" id="' + id + '" value="' + esc(value) + '" placeholder="' + esc(ph) + '"></div>';
+  }
+  // bindSearch reloads after the visitor stops typing.
+  function bindSearch(id, fn) {
+    var el = $(id), t = null;
+    if (!el) return;
+    el.oninput = function () { clearTimeout(t); t = setTimeout(function () { fn(el.value.trim()); }, 350); };
+    el.onkeydown = function (e) { if (e.key === 'Enter') { clearTimeout(t); fn(el.value.trim()); } };
+  }
+
+  /* ---------------- cPanel: home ---------------- */
+
+  PAGES.home = function () {
+    return Promise.all([call('dashboard'), call('overview'), call('findings.list', { limit: 5 })]).then(function (r) {
+      var d = r[0], o = r[1], recent = r[2].findings || [];
+      header(d);
+      text('xg-sub', 'Protection for ' + o.user);
+      var f = o.findings || {}, last = o.last_scan && o.last_scan[0];
+      badgeCount = f.detected || 0; nav('home');
+      state(f.detected ? 'bad' : 'ok', f.detected ? 'Action needed' : 'Protected');
+      var banner = f.detected
+        ? '<div class="banner bad"><div class="big">' + ic('alert') + '</div><div><h2>' + num(f.detected) + ' infected file' + (f.detected > 1 ? 's need' : ' needs') + ' your attention</h2><p>Quarantine or delete them to keep your website safe.</p></div>' +
+          '<div class="r"><button class="btn" data-go="findings">' + ic('file') + 'Review files</button></div></div>'
+        : '<div class="banner ok"><div class="big">' + ic('check') + '</div><div><h2>Your account is protected</h2><p>' +
+          (o.realtime ? 'Realtime protection is on' : 'Realtime protection is off') + ' · last scan ' + (last ? ago(last.started_at) : 'never') + '</p></div>' +
+          '<div class="r"><button class="btn" id="xg-quick">' + ic('play') + 'Scan my website</button></div></div>';
+      body.innerHTML = banner + '<div class="grid">' +
+        stat('shield', 'blue', num(d.threats), 'Threats stopped (30 days)', trend(d.threats, d.threats_prev)) +
+        stat('wall', 'orange', num(d.attacks), 'Attacks blocked (30 days)', trend(d.attacks, d.attacks_prev)) +
+        stat('lock', 'violet', num(f.quarantined), 'Files in quarantine') +
+        stat('cms', d.cms_issues ? 'red' : 'green', num(d.cms_issues), 'Websites with CMS issues') + '</div>' +
+        '<div class="two"><div class="card"><div class="head"><h3>Virus infections</h3><span class="r muted small">last 30 days</span></div>' + chart(series(d.daily_threats, 30), '#f97316') + '</div>' +
+        '<div class="card"><div class="head"><h3>Attacks blocked by the WAF</h3><span class="r muted small">last 30 days</span></div>' + chart(series(d.daily_attacks, 30), '#2563eb') + '</div></div>' +
+        '<div class="card"><div class="head"><h3>Recent detections</h3><div class="r"><button class="btn o sm" data-go="findings">View all</button></div></div>' +
+        (recent.length ? recent.map(function (x) {
+          return '<div class="li"><div class="ic ' + (x.status === 'detected' ? 'red' : 'slate') + '" style="width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center">' + ic('file') + '</div>' +
+            '<div class="p"><div class="mono">' + esc(x.path) + '</div><div class="muted small">' + esc(x.signature) + ' · ' + ago(x.created_at) + '</div></div>' + badge(x.status) + '</div>';
+        }).join('') : empty('No malware found on your account', 'check')) + '</div>';
+      var q = $('xg-quick'); if (q) q.onclick = function () { startUserScan('quick'); };
+    });
+  };
+
+  body.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('[data-go]') : null;
+    if (b) go(b.getAttribute('data-go'));
+  });
+
+  function startUserScan(kind, path) {
+    return api('scan.start', { kind: kind, path: path || '' }).then(function (r) {
+      toast('Scan #' + r.id + ' started', true);
+      if (current === 'scan') show('scan'); else go('scan');
+    }).catch(function (e) { toast(e.message); });
+  }
+
+  /* ---------------- scanner ---------------- */
 
   function scanType(s, home) {
     if (s.kind === 'quick') return 'Quick scan';
-    if (s.target === home) return 'Full scan';
+    if (s.kind === 'full' || s.target === home) return 'Full scan';
     return 'Path scan';
   }
+  function busy(s) { return s.status === 'running' || s.status === 'queued'; }
 
-  function userScan() {
-    var info = {};
-    var render = function () {
-      return call('scan.list').then(function (d) {
-        var list = d.scans, last = { full: null, quick: null, path: null };
-        list.forEach(function (s) { var t = scanType(s, info.home).split(' ')[0].toLowerCase(); if (!last[t]) last[t] = s; });
-        document.getElementById('xg-last-full').textContent = last.full ? when(last.full.started_at) : 'Never';
-        document.getElementById('xg-last-other').textContent = (last.quick || last.path) ? when((last.quick || last.path).started_at) : 'Never';
-        document.getElementById('xg-scans').innerHTML = list.length ? '<table><tr><th>Scan type</th><th>Target</th><th>Tested files</th><th>Infected files</th><th>Status</th><th>Time</th><th></th></tr>' +
-          list.map(function (s) {
-            return '<tr><td>' + scanType(s, info.home) + '</td><td class="mono">' + esc(s.target) + '</td><td>' + num(s.files) + (s.total ? ' / ' + num(s.total) : '') +
-              '</td><td class="' + (s.infected ? 'red' : '') + '">' + num(s.infected) + '</td><td>' + badge(s.status) + (s.error ? '<div class="muted">' + esc(s.error) + '</div>' : '') +
-              '</td><td>' + when(s.started_at) + '</td><td>' + (s.status === 'running' || s.status === 'queued' ? '<button class="btn o" data-stop="' + s.id + '">Stop</button>' : '') + '</td></tr>';
-          }).join('') + '</table>' : '<div class="empty">No data available in table</div>';
-        var busy = list.some(function (s) { return s.status === 'running' || s.status === 'queued'; });
-        document.getElementById('xg-refresh').textContent = busy ? 'Refreshing every 3s' : '';
-        if (busy && !timer) timer = setInterval(render, 3000);
-        if (!busy && timer) { clearInterval(timer); timer = null; }
-      });
+  function running(s) {
+    var pct = s.total ? Math.min(100, Math.round(s.files * 100 / s.total)) : 0;
+    return '<div class="card run"><div class="head"><span class="spin"></span><h3>Scan #' + s.id + ' is ' + esc(s.status) + '</h3>' +
+      '<div class="r"><button class="btn o sm" data-stop="' + s.id + '">' + ic('stop') + 'Stop</button></div></div>' +
+      '<div class="mono">' + esc(s.target) + '</div>' +
+      '<div class="bar' + (s.total ? '' : ' ind') + '"><i style="width:' + pct + '%"></i></div>' +
+      '<div class="muted small">' + (s.total ? pct + '% · ' + num(s.files) + ' of ' + num(s.total) + ' files' : s.status === 'queued' ? 'Waiting for its turn…' : 'Counting files… ' + num(s.files) + ' checked') +
+      (s.infected ? ' · <b class="red">' + num(s.infected) + ' infected</b>' : '') + (s.current ? '<div class="mono" style="margin-top:4px;word-break:break-all">' + esc(s.current) + '</div>' : '') + '</div></div>';
+  }
+
+  function scansTable(list, home) {
+    if (!list.length) return empty('No scans yet. Start one above.', 'scan');
+    return '<div class="tw"><table><tr><th>#</th><th>Type</th><th>Target</th><th>Files</th><th>Infected</th><th>Status</th><th>Started</th><th>Duration</th><th></th></tr>' +
+      list.map(function (s) {
+        return '<tr><td>' + s.id + '</td><td class="nw">' + scanType(s, home) + '</td><td class="mono path">' + esc(s.target) + '</td><td>' + num(s.files) + (s.total && s.total !== s.files ? ' / ' + num(s.total) : '') +
+          '</td><td class="' + (s.infected ? 'red' : '') + '"><b>' + num(s.infected) + '</b></td><td>' + badge(s.status) + (s.error ? '<div class="muted small">' + esc(s.error) + '</div>' : '') +
+          '</td><td class="nw">' + when(s.started_at) + '</td><td class="nw">' + dur(s.started_at, s.finished_at) + '</td><td>' + (busy(s) ? '<button class="btn o sm" data-stop="' + s.id + '">Stop</button>' : '') + '</td></tr>';
+      }).join('') + '</table></div>';
+  }
+
+  // watchScans refreshes the scan list every 3 s while a scan runs.
+  function watchScans(render) {
+    var t = null;
+    return function (list) {
+      var b = list.some(busy);
+      if (b && !t) t = every(3000, function () { render().catch(quiet); });
+      if (!b && t) { stopTimer(t); t = null; }
     };
-    var start = function (kind, path) {
-      call('scan.start', { kind: kind, path: path || '' }).then(function (r) { flash('Scan #' + r.id + ' started', true); render(); })
-        .catch(function (e) { flash(e.message); });
-    };
-    return Promise.all([call('overview'), call('dirs')]).then(function (res) {
-      info = res[0];
-      var dirs = res[1].dirs || [];
-      body.innerHTML = '<div class="hero">' +
-        '<div class="scanbox"><h2>FULL SCAN</h2><div>Start a full scan of the account</div><button class="btn" id="xg-full">RUN SCAN</button><div class="last">LAST SCAN : <span id="xg-last-full"></span></div></div>' +
-        '<div class="scanbox"><div class="seg"><button class="on" data-mode="quick">Quick scan</button><button data-mode="path">Path scan</button></div>' +
-        '<div id="xg-mode-quick"><p>Scans your website folder: ' + esc(info.web_root || info.home) + '</p></div>' +
-        '<div id="xg-mode-path" style="display:none"><div id="xg-dir"></div></div>' +
-        '<button class="btn" id="xg-other">RUN SCAN</button><div class="last">LAST SCAN : <span id="xg-last-other"></span></div></div></div>' +
-        '<div class="card"><div class="row"><h3 style="margin:0">Manual Scans</h3><span class="muted" id="xg-refresh" style="margin-left:auto"></span></div><div id="xg-scans"></div></div>';
-      var dirPick = picker(document.getElementById('xg-dir'), dirs, info.home, 'Choose a directory…');
-      var mode = 'quick';
-      body.querySelector('.seg').onclick = function (e) {
-        var m = e.target.getAttribute('data-mode'); if (!m) return;
-        mode = m;
-        body.querySelectorAll('.seg button').forEach(function (b) { b.className = b.getAttribute('data-mode') === m ? 'on' : ''; });
-        document.getElementById('xg-mode-quick').style.display = m === 'quick' ? '' : 'none';
-        document.getElementById('xg-mode-path').style.display = m === 'path' ? '' : 'none';
-      };
-      document.getElementById('xg-full').onclick = function () { start('full'); };
-      document.getElementById('xg-other').onclick = function () {
-        if (mode === 'quick') return start('quick');
-        var dir = dirPick.value();
-        if (!dir) return flash('Choose a directory first');
-        start('path', dir);
-      };
-      document.getElementById('xg-scans').onclick = function (e) {
-        var id = e.target.getAttribute('data-stop');
-        if (id) call('scan.stop', { ID: Number(id) }).then(render).catch(function (x) { flash(x.message); });
-      };
-      return render();
+  }
+
+  function bindStop(el, render) {
+    if (!el) return;
+    el.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('[data-stop]') : null;
+      if (!b) return;
+      b.disabled = true;
+      api('scan.stop', { ID: Number(b.getAttribute('data-stop')) }).then(function () { toast('Scan stopped', true); return render(); }).catch(quiet);
     });
   }
 
-  var FOLDER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></svg>';
+  PAGES.scan = function () {
+    if (MODE === 'whm') return whmScan();
+    var info = {}, dirPick = null;
+    var render = function () {
+      return call('scan.list').then(function (d) {
+        var list = d.scans || [], last = { full: null, quick: null, path: null };
+        list.forEach(function (s) { var t = scanType(s, info.home).split(' ')[0].toLowerCase(); if (!last[t]) last[t] = s; });
+        ['full', 'quick', 'path'].forEach(function (k) {
+          text('xg-last-' + k, last[k] ? ago(last[k].started_at) + ' · ' + num(last[k].infected) + ' infected' : 'never');
+        });
+        var active = list.filter(busy);
+        set('xg-active', active.map(running).join(''));
+        body.querySelectorAll('[data-kind]').forEach(function (b) { b.disabled = active.length > 0; });
+        set('xg-scans', scansTable(list, info.home));
+        watch(list);
+      });
+    };
+    var watch = watchScans(render);
+    return Promise.all([call('overview'), call('dirs')]).then(function (res) {
+      info = res[0];
+      header(info);
+      text('xg-sub', 'Virus scanner · ' + info.user);
+      var dirs = res[1].dirs || [];
+      body.innerHTML = '<div class="three">' +
+        '<div class="card sc"><div class="ic blue">' + ic('shield') + '</div><h3>Full scan</h3><p>Every file of your account: ' + esc(info.home) + '</p>' +
+        '<div><button class="btn" data-kind="full">' + ic('play') + 'Run full scan</button></div><div class="last">Last scan: <span id="xg-last-full">…</span></div></div>' +
+        '<div class="card sc"><div class="ic orange">' + ic('bolt') + '</div><h3>Quick scan</h3><p>Only your website folder: ' + esc(info.web_root || info.home) + '</p>' +
+        '<div><button class="btn" data-kind="quick">' + ic('play') + 'Run quick scan</button></div><div class="last">Last scan: <span id="xg-last-quick">…</span></div></div>' +
+        '<div class="card sc"><div class="ic violet">' + ic('folder') + '</div><h3>Path scan</h3><div id="xg-dir"></div>' +
+        '<div><button class="btn" data-kind="path">' + ic('play') + 'Scan this folder</button></div><div class="last">Last scan: <span id="xg-last-path">…</span></div></div></div>' +
+        '<div id="xg-active"></div>' +
+        '<div class="card"><div class="head"><h3>Scan history</h3><div class="r"><button class="btn o sm" id="xg-rf">' + ic('refresh') + 'Refresh</button></div></div><div id="xg-scans"></div></div>';
+      dirPick = picker($('xg-dir'), dirs, info.home, 'Choose a folder…');
+      body.querySelectorAll('[data-kind]').forEach(function (b) {
+        b.onclick = function () {
+          var k = b.getAttribute('data-kind');
+          if (k === 'path') {
+            var dir = dirPick.value();
+            if (!dir) return toast('Choose a folder first');
+            return startUserScan('path', dir);
+          }
+          if (k === 'full' && !confirm('Scan every file of your account? This can take a while.')) return;
+          startUserScan(k);
+        };
+      });
+      $('xg-rf').onclick = function () { render().catch(quiet); };
+      bindStop(body, render);
+      return render();
+    });
+  };
 
-  // picker turns el into a searchable directory list. Paths under home are
+  function whmScan() {
+    var render = function () {
+      return call('scan.list').then(function (d) {
+        var list = d.scans || [];
+        set('xg-active', list.filter(busy).map(running).join(''));
+        set('xg-scans', scansTable(list, ''));
+        watch(list);
+      });
+    };
+    var watch = watchScans(render);
+    body.innerHTML = '<div class="card"><div class="head"><h3>Start a scan</h3></div><div class="head" style="margin:0">' +
+      '<select id="xg-kind"><option value="quick">Quick scan (website folders)</option><option value="full">Full scan (all accounts)</option><option value="path">Custom path</option></select>' +
+      '<input type="text" id="xg-path" placeholder="/home/user/public_html" style="flex:1;min-width:240px"><button class="btn" id="xg-start">' + ic('play') + 'Start scan</button></div></div>' +
+      '<div id="xg-active"></div><div class="card"><div class="head"><h3>Scans</h3><div class="r"><button class="btn o sm" id="xg-rf">' + ic('refresh') + 'Refresh</button></div></div><div id="xg-scans"></div></div>';
+    $('xg-start').onclick = function () {
+      var path = $('xg-path').value.trim(), kind = $('xg-kind').value;
+      if (kind === 'quick' && path) kind = 'path';
+      if (kind === 'path' && !path) return toast('Enter a path to scan');
+      api('scan.start', { kind: kind, path: path, initiator: 'WHM' }).then(function (r) { toast('Scan #' + r.id + ' started', true); return render(); }).catch(quiet);
+    };
+    $('xg-rf').onclick = function () { render().catch(quiet); };
+    bindStop(body, render);
+    return render();
+  }
+
+  // picker turns el into a searchable folder list. Paths under home are
   // shown with the home part dimmed; the full path is what is returned.
   function picker(el, items, home, placeholder) {
     var cur = '', hl = -1, shown = [];
     el.className = 'pick';
     el.innerHTML = '<button type="button" class="pick-btn"><span class="val ph">' + esc(placeholder) + '</span><span class="car">&#9662;</span></button>' +
-      '<div class="pick-pop"><div class="pick-s"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>' +
-      '<input type="text" placeholder="Search folders…" autocomplete="off"></div><div class="pick-list"></div><div class="pick-n"></div></div>';
+      '<div class="pick-pop"><div class="pick-s">' + ic('scan') + '<input type="text" placeholder="Search folders…" autocomplete="off"></div><div class="pick-list"></div><div class="pick-n"></div></div>';
     var btn = el.querySelector('.pick-btn'), input = el.querySelector('input'), list = el.querySelector('.pick-list'), note = el.querySelector('.pick-n');
     function label(d) {
       if (home && d.indexOf(home + '/') === 0) return '<i>' + esc(home) + '/</i>' + esc(d.slice(home.length + 1));
@@ -325,7 +595,7 @@
       shown = items.filter(function (d) { return !q || d.toLowerCase().indexOf(q) >= 0; });
       if (hl >= shown.length) hl = shown.length - 1;
       list.innerHTML = shown.length ? shown.slice(0, 500).map(function (d, i) {
-        return '<div class="pick-i' + (d === cur ? ' sel' : '') + (i === hl ? ' hl' : '') + '" data-i="' + i + '">' + FOLDER + '<span class="p">' + label(d) + '</span><span class="ck">&#10003;</span></div>';
+        return '<div class="pick-i' + (d === cur ? ' sel' : '') + (i === hl ? ' hl' : '') + '" data-i="' + i + '">' + ic('folder') + '<span class="p">' + label(d) + '</span><span class="ck">&#10003;</span></div>';
       }).join('') : '<div class="pick-e">' + (items.length ? 'No folder matches “' + esc(input.value) + '”' : 'No folders found') + '</div>';
       note.textContent = shown.length + ' of ' + items.length + ' folders' + (shown.length > 500 ? ' (first 500 shown; type to narrow)' : '');
       var h = list.querySelector('.hl'); if (h && h.scrollIntoView) h.scrollIntoView({ block: 'nearest' });
@@ -352,184 +622,222 @@
       var it = e.target.closest ? e.target.closest('.pick-i') : null;
       if (it) choose(shown[Number(it.getAttribute('data-i'))]);
     };
-    document.addEventListener('mousedown', function (e) { if (!el.contains(e.target)) el.classList.remove('open'); });
+    var outside = function (e) {
+      if (!document.body.contains(el)) return document.removeEventListener('mousedown', outside);
+      if (!el.contains(e.target)) el.classList.remove('open');
+    };
+    document.addEventListener('mousedown', outside);
     return { value: function () { return cur; } };
   }
 
-  var lState = { q: '', offset: 0 };
-  function logs() {
-    body.innerHTML = '<div class="card"><div class="row"><h3 style="margin:0">Background Scanner Logs</h3><input id="xg-q" placeholder="Search by name, category or description" style="margin-left:auto;min-width:260px"></div><div id="xg-list"></div></div>';
-    var q = document.getElementById('xg-q');
-    q.value = lState.q;
-    q.onchange = function () { lState.q = q.value; load(); };
-    function load() {
-      return call('findings.list', { source: 'background', q: lState.q, limit: 100 }).then(function (d) {
-        document.getElementById('xg-list').innerHTML = d.findings.length ? '<table><tr><th>Filename</th><th>Category</th><th>Virus description</th><th>Status</th><th>Time</th></tr>' +
-          d.findings.map(function (f) {
-            return '<tr><td class="mono">' + esc(f.path) + '</td><td>' + badge(f.category) + '</td><td class="mono">' + esc(f.signature) + '</td><td>' + badge(f.status) + '</td><td>' + when(f.created_at) + '</td></tr>';
-          }).join('') + '</table>' : '<div class="empty">No data available in table</div>';
-      });
-    }
-    return load();
-  }
+  /* ---------------- detected files ---------------- */
 
-  function cmsThreats() {
-    return call('cms.list', { limit: 200 }).then(function (d) {
-      body.innerHTML = '<div class="card"><h3>CMS Threats</h3>' + (d.sites.length ? '<table><tr><th>Website</th><th>CMS</th><th>Version</th><th>Core files</th><th>Database</th><th>Vulnerable</th><th>Outdated</th><th>Risk</th></tr>' +
-        d.sites.map(function (s) {
-          return '<tr><td>' + esc(s.domain || s.path) + '<div class="muted mono">' + esc(s.path) + '</div></td><td>' + esc(s.type) + '</td><td>' + esc(s.version) +
-            (s.latest && s.latest !== s.version ? ' <span class="amber">(latest ' + esc(s.latest) + ')</span>' : '') + '</td><td class="' + (s.core_issues ? 'red' : '') + '">' + num(s.core_issues) +
-            '</td><td class="' + (s.db_issues ? 'red' : '') + '">' + num(s.db_issues) + '</td><td class="' + (s.vulnerable ? 'red' : '') + '">' + num(s.vulnerable) + '</td><td>' +
-            num((s.outdated_plugins || 0) + (s.outdated_themes || 0)) + '</td><td>' + badge(s.risk || 'ok') + '</td></tr>';
-        }).join('') + '</table>' : '<div class="empty">No WordPress, Joomla or OpenCart sites found yet</div>') + '</div>';
-    });
-  }
-
-  var wState = { q: '' };
-  function wafLogs(cat) {
-    var title = cat === 'bot' ? 'Bot Attacks' : 'WAF Logs';
-    body.innerHTML = '<div class="card"><div class="row"><h3 style="margin:0">' + title + '</h3><input id="xg-q" placeholder="Search by IP, Domain, URI, etc..." style="margin-left:auto;min-width:260px"></div><div id="xg-list"></div></div>';
-    var q = document.getElementById('xg-q');
-    q.value = wState.q;
-    q.onchange = function () { wState.q = q.value; load(); };
-    function load() {
-      return call('waf.events', { category: cat, q: wState.q, limit: 200 }).then(function (d) {
-        document.getElementById('xg-list').innerHTML = d.events.length ? '<table><tr><th>IP address</th><th>Reason</th><th>Hostname</th><th>Action</th><th>Time</th></tr>' +
-          d.events.map(function (e) {
-            return '<tr><td class="mono">' + esc(e.ip) + '</td><td>' + esc(e.msg) + '<div class="muted mono">' + esc(e.method) + ' ' + esc(e.uri) + '</div></td><td>' + esc(e.host) +
-              '</td><td>' + esc(e.action) + '</td><td>' + when(e.at) + '</td></tr>';
-          }).join('') + '</table>' : '<div class="empty">No data available in table</div>';
-      });
-    }
-    return load();
-  }
-
-  function startUserScan(path) {
-    return call('scan.start', { path: path }).then(function (r) { flash('Scan #' + r.id + ' started', true); show('scan'); })
-      .catch(function (e) { flash(e.message); });
-  }
-
-  function scansTable(list) {
-    if (!list.length) return '<div class="empty">No scans yet</div>';
-    return '<table><tr><th>#</th><th>Type</th><th>Target</th><th>Status</th><th>Files</th><th>Infected</th><th>Started</th><th></th></tr>' +
-      list.map(function (s) {
-        return '<tr><td>' + s.id + '</td><td>' + esc(s.kind) + '</td><td class="mono">' + esc(s.target) + '</td><td>' + badge(s.status) +
-          (s.error ? '<div class="muted">' + esc(s.error) + '</div>' : '') + '</td><td>' + num(s.files) + '</td><td class="' + (s.infected ? 'red' : '') + '">' + num(s.infected) +
-          '</td><td>' + when(s.started_at) + '</td><td>' + (s.status === 'running' || s.status === 'queued' ? '<button class="btn o" data-stop="' + s.id + '">Stop</button>' : '') + '</td></tr>';
-      }).join('') + '</table>';
-  }
-
-  function scan() {
-    if (MODE === 'cpanel') return userScan();
-    var form = MODE === 'whm'
-      ? '<div class="row"><select id="xg-kind"><option value="quick">Quick scan (website folders)</option><option value="full">Full scan (all accounts)</option><option value="path">Custom path</option></select>' +
-        '<input id="xg-path" placeholder="/home/user/public_html" style="flex:1;min-width:240px"><button class="btn" id="xg-start">Start scan</button></div>'
-      : '<div class="row"><input id="xg-path" placeholder="public_html (leave empty for your website)" style="flex:1;min-width:240px"><button class="btn" id="xg-start">Start scan</button></div>';
-    var render = function () {
-      return call('scan.list').then(function (d) {
-        document.getElementById('xg-scans').innerHTML = scansTable(d.scans);
-        var busy = d.scans.some(function (s) { return s.status === 'running' || s.status === 'queued'; });
-        if (busy && !timer) timer = setInterval(render, 3000);
-        if (!busy && timer) { clearInterval(timer); timer = null; }
-      });
+  var fState = { status: '', q: '', offset: 0 };
+  PAGES.findings = function () {
+    var acts = MODE === 'whm' ? ['quarantine', 'restore', 'disable', 'ignore', 'delete'] : ['quarantine', 'restore', 'delete'];
+    var sts = [['', 'All'], ['detected', 'Detected'], ['quarantined', 'Quarantined']].concat(MODE === 'whm' ? [['disabled', 'Disabled']] : []).concat([['restored', 'Restored'], ['deleted', 'Deleted']]);
+    body.innerHTML = '<div class="card"><div class="head"><h3>Detected files</h3><span class="muted small" id="xg-count"></span><div class="r">' +
+      searchBox('xg-q', fState.q, 'Search file or detection') + '</div></div>' +
+      '<div class="chips" id="xg-st" style="margin-bottom:12px">' + sts.map(function (s) { return '<button class="chip' + (fState.status === s[0] ? ' on' : '') + '" data-st="' + s[0] + '">' + s[1] + '</button>'; }).join('') + '</div>' +
+      '<div class="selbar" id="xg-sel" style="display:none"><span><b id="xg-n">0</b> selected</span>' +
+      acts.map(function (a) { return '<button class="btn sm ' + (a === 'delete' ? 'd' : 'o') + '" data-act="' + a + '">' + a.charAt(0).toUpperCase() + a.slice(1) + '</button>'; }).join('') + '</div>' +
+      '<div id="xg-list"></div></div>';
+    $('xg-st').onclick = function (e) {
+      var b = e.target.closest ? e.target.closest('[data-st]') : null; if (!b) return;
+      fState.status = b.getAttribute('data-st'); fState.offset = 0;
+      body.querySelectorAll('[data-st]').forEach(function (c) { c.className = 'chip' + (c === b ? ' on' : ''); });
+      load().catch(quiet);
     };
-    body.innerHTML = '<div class="card"><h3>Start a scan</h3>' + form + '</div><div class="card"><h3>Scans</h3><div id="xg-scans"></div></div>';
-    document.getElementById('xg-start').onclick = function () {
-      var path = document.getElementById('xg-path').value.trim();
-      if (MODE === 'cpanel') return startUserScan(path);
-      var kind = document.getElementById('xg-kind').value;
-      if (kind === 'quick' && path) kind = 'path';
-      call('scan.start', { kind: kind, path: path, initiator: 'WHM' }).then(function (r) { flash('Scan #' + r.id + ' started', true); render(); })
-        .catch(function (e) { flash(e.message); });
-    };
-    document.getElementById('xg-scans').onclick = function (e) {
-      var id = e.target.getAttribute('data-stop');
-      if (id) call('scan.stop', { ID: Number(id) }).then(render).catch(function (x) { flash(x.message); });
-    };
-    return render();
-  }
-
-  var fState = { status: '', offset: 0 };
-  function findings() {
-    var acts = MODE === 'whm' ? ['quarantine', 'restore', 'disable', 'delete', 'ignore'] : ['quarantine', 'restore', 'delete'];
-    body.innerHTML = '<div class="card"><div class="row"><select id="xg-st"><option value="">All statuses</option><option>detected</option><option>quarantined</option><option>disabled</option><option>restored</option><option>deleted</option></select>' +
-      acts.map(function (a) { return '<button class="btn ' + (a === 'delete' ? 'd' : 'o') + '" data-act="' + a + '">' + a.charAt(0).toUpperCase() + a.slice(1) + '</button>'; }).join('') +
-      '<span class="muted" id="xg-count" style="margin-left:auto"></span></div><div id="xg-list"></div></div>';
-    var st = document.getElementById('xg-st');
-    st.value = fState.status;
-    st.onchange = function () { fState.status = st.value; fState.offset = 0; load(); };
-    body.querySelector('.row').addEventListener('click', function (e) {
-      var act = e.target.getAttribute('data-act'); if (!act) return;
-      var ids = Array.prototype.map.call(body.querySelectorAll('input[data-id]:checked'), function (c) { return Number(c.getAttribute('data-id')); });
-      if (!ids.length) return flash('Select files first');
-      if (act === 'delete' && !confirm('Permanently delete ' + ids.length + ' file(s)?')) return;
-      call('finding.action', { ids: ids, action: act }).then(function (r) {
+    bindSearch('xg-q', function (v) { fState.q = v; fState.offset = 0; load().catch(quiet); });
+    function selected() { return Array.prototype.map.call(body.querySelectorAll('input[data-id]:checked'), function (c) { return Number(c.getAttribute('data-id')); }); }
+    function updSel() { var n = selected().length; var s = $('xg-sel'); if (s) s.style.display = n ? '' : 'none'; text('xg-n', n); }
+    $('xg-sel').onclick = function (e) {
+      var b = e.target.closest ? e.target.closest('[data-act]') : null; if (!b) return;
+      var act = b.getAttribute('data-act'), ids = selected();
+      if (!ids.length) return;
+      if (act === 'delete' && !confirm('Permanently delete ' + ids.length + ' file(s)? This cannot be undone.')) return;
+      b.disabled = true;
+      api('finding.action', { ids: ids, action: act }).then(function (r) {
         var failed = Object.keys(r.failed || {});
-        flash(r.done + ' file(s): ' + act + ' done' + (failed.length ? ', ' + failed.length + ' failed: ' + r.failed[failed[0]] : ''), !failed.length);
-        load();
-      }).catch(function (x) { flash(x.message); });
+        toast(r.done + ' file(s): ' + act + ' done' + (failed.length ? ', ' + failed.length + ' failed: ' + r.failed[failed[0]] : ''), !failed.length);
+        return load();
+      }).catch(quiet).then(function () { b.disabled = false; });
+    };
+    var list = $('xg-list');
+    list.addEventListener('change', function (e) {
+      if (e.target.id === 'xg-all') body.querySelectorAll('input[data-id]').forEach(function (c) { c.checked = e.target.checked; });
+      updSel();
     });
+    onPage(list, function (o) { fState.offset = o; load().catch(quiet); });
     function load() {
-      return call('findings.list', { status: fState.status, limit: 100, offset: fState.offset }).then(function (d) {
-        document.getElementById('xg-count').textContent = d.total + ' file(s)';
-        document.getElementById('xg-list').innerHTML = d.findings.length ? '<table><tr><th><input type="checkbox" id="xg-all"></th><th>File</th><th>Detection</th><th>Status</th>' + (MODE === 'whm' ? '<th>Owner</th>' : '') + '<th>Found</th></tr>' +
-          d.findings.map(function (f) {
-            return '<tr><td><input type="checkbox" data-id="' + f.id + '"></td><td class="mono">' + esc(f.path) + '</td><td>' + badge(f.category) + '<div class="muted mono">' + esc(f.signature) + '</div></td><td>' + badge(f.status) + '</td>' +
-              (MODE === 'whm' ? '<td>' + esc(f.owner) + '</td>' : '') + '<td>' + when(f.created_at) + '</td></tr>';
-          }).join('') + '</table>' : '<div class="empty">No detected files 🎉</div>';
-        var all = document.getElementById('xg-all');
-        if (all) all.onchange = function () { body.querySelectorAll('input[data-id]').forEach(function (c) { c.checked = all.checked; }); };
+      return call('findings.list', { status: fState.status, q: fState.q, limit: PAGE, offset: fState.offset }).then(function (d) {
+        var fs = d.findings || [];
+        text('xg-count', num(d.total) + ' file(s)');
+        set('xg-list', fs.length ? '<div class="tw"><table><tr><th style="width:28px"><input type="checkbox" id="xg-all"></th><th>File</th><th>Detection</th><th>Status</th>' + (MODE === 'whm' ? '<th>Owner</th>' : '') + '<th>Found</th></tr>' +
+          fs.map(function (f) {
+            return '<tr><td><input type="checkbox" data-id="' + f.id + '"></td><td class="mono path">' + esc(f.path) + '</td><td>' + badge(f.category) + '<div class="muted mono small" style="margin-top:3px">' + esc(f.signature) + '</div></td><td>' + badge(f.status) + '</td>' +
+              (MODE === 'whm' ? '<td>' + esc(f.owner) + '</td>' : '') + '<td class="nw" title="' + esc(when(f.created_at)) + '">' + ago(f.created_at) + '</td></tr>';
+          }).join('') + '</table></div>' + pager(d.total, fState.offset, PAGE)
+          : empty(fState.status || fState.q ? 'No files match this filter' : 'No detected files. Your account is clean.', 'check'));
+        updSel();
+      });
+    }
+    return load();
+  };
+
+  /* ---------------- scanner logs ---------------- */
+
+  var lState = { q: '', offset: 0 };
+  PAGES.logs = function () {
+    body.innerHTML = '<div class="card"><div class="head"><h3>Background scanner logs</h3><span class="muted small">Realtime and scheduled scans</span><div class="r">' +
+      searchBox('xg-q', lState.q, 'Search name, category or description') + '</div></div><div id="xg-list"></div></div>';
+    bindSearch('xg-q', function (v) { lState.q = v; lState.offset = 0; load().catch(quiet); });
+    onPage($('xg-list'), function (o) { lState.offset = o; load().catch(quiet); });
+    function load() {
+      return call('findings.list', { source: 'background', q: lState.q, limit: PAGE, offset: lState.offset }).then(function (d) {
+        var fs = d.findings || [];
+        set('xg-list', fs.length ? '<div class="tw"><table><tr><th>File</th><th>Category</th><th>Virus description</th><th>Status</th><th>Time</th></tr>' +
+          fs.map(function (f) {
+            return '<tr><td class="mono path">' + esc(f.path) + '</td><td>' + badge(f.category) + '</td><td class="mono">' + esc(f.signature) + '</td><td>' + badge(f.status) + '</td><td class="nw">' + when(f.created_at) + '</td></tr>';
+          }).join('') + '</table></div>' + pager(d.total, lState.offset, PAGE) : empty('Nothing found by the background scanner', 'check'));
+      });
+    }
+    return load();
+  };
+
+  /* ---------------- CMS ---------------- */
+
+  PAGES.cms = function () {
+    return call('cms.list', { limit: 200 }).then(function (d) {
+      var sites = d.sites || [];
+      body.innerHTML = '<div class="card"><div class="head"><h3>CMS threats</h3><span class="muted small">WordPress, Joomla and OpenCart sites of your account</span></div>' +
+        (sites.length ? '<div class="tw"><table><tr><th>Website</th><th>CMS</th><th>Version</th><th>Core files</th><th>Database</th><th>Vulnerable</th><th>Outdated</th><th>Risk</th></tr>' +
+        sites.map(function (s) {
+          var cell = function (n) { return '<td class="' + (n ? 'red' : 'green') + '"><b>' + num(n) + '</b></td>'; };
+          return '<tr><td><b>' + esc(s.domain || s.path) + '</b><div class="muted mono small">' + esc(s.path) + '</div></td><td>' + esc(s.type) + '</td><td class="nw">' + esc(s.version) +
+            (s.latest && s.latest !== s.version ? '<div class="amber small">latest ' + esc(s.latest) + '</div>' : '') + '</td>' + cell(s.core_issues) + cell(s.db_issues) + cell(s.vulnerable) +
+            '<td>' + num((s.outdated_plugins || 0) + (s.outdated_themes || 0)) + '</td><td>' + badge(s.risk || 'ok') + '</td></tr>';
+        }).join('') + '</table></div>' : empty('No WordPress, Joomla or OpenCart sites found yet', 'cms')) + '</div>';
+    });
+  };
+
+  /* ---------------- WAF and bots ---------------- */
+
+  var wState = { waf: { q: '', offset: 0 }, bot: { q: '', offset: 0 } };
+  function wafPage(cat) {
+    var st = wState[cat];
+    var title = cat === 'bot' ? 'Bot attacks' : 'WAF logs', sub = cat === 'bot' ? 'Bad bots and crawlers stopped on your websites' : 'Web attacks the firewall stopped on your websites';
+    body.innerHTML = '<div class="card"><div class="head"><h3>' + title + '</h3><span class="muted small">' + sub + '</span><div class="r">' +
+      searchBox('xg-q', st.q, 'Search IP, domain, URI…') + '</div></div><div id="xg-list"></div></div>';
+    bindSearch('xg-q', function (v) { st.q = v; st.offset = 0; load().catch(quiet); });
+    onPage($('xg-list'), function (o) { st.offset = o; load().catch(quiet); });
+    function load() {
+      return call('waf.events', { category: cat, q: st.q, limit: PAGE, offset: st.offset }).then(function (d) {
+        var ev = d.events || [];
+        set('xg-list', ev.length ? '<div class="tw"><table><tr><th>Time</th><th>IP address</th><th>Website</th><th>Reason</th><th>Action</th></tr>' +
+          ev.map(function (e) {
+            return '<tr><td class="nw">' + when(e.at) + '</td><td class="mono nw">' + esc(e.ip) + '</td><td class="path"><b>' + esc(e.host) + '</b><div class="muted mono small">' + esc(e.method) + ' ' + esc(e.uri) + '</div></td><td>' + esc(e.msg) +
+              '</td><td title="' + esc(e.action) + '">' + actionBadge(e.action) + '</td></tr>';
+          }).join('') + '</table></div>' + pager(d.total, st.offset, PAGE) : empty(st.q ? 'No events match your search' : 'No attacks recorded. Nice and quiet.', 'shield'));
       });
     }
     return load();
   }
+  // actionBadge shortens ModSecurity's "Access denied with code 403".
+  function actionBadge(a) {
+    var m = /code (\d+)/i.exec(a || '');
+    if (/denied|block/i.test(a || '')) return badge('Blocked' + (m ? ' ' + m[1] : ''), 'denied');
+    return badge(a || 'logged', 'x');
+  }
+  PAGES.waf = function () { return wafPage('waf'); };
+  PAGES.bots = function () { return wafPage('bot'); };
 
-  function firewall() {
-    body.innerHTML = '<div class="card"><h3>Block or allow an IP</h3><div class="row">' +
-      '<input id="xg-ip" placeholder="IP or CIDR"><select id="xg-kind"><option value="deny">Block permanently</option><option value="tempban">Block temporarily</option><option value="allow">Allow (whitelist)</option><option value="ignore">Ignore (never auto-block)</option></select>' +
-      '<input id="xg-min" type="number" value="60" style="width:90px" title="minutes (temporary blocks)"><input id="xg-note" placeholder="comment" style="flex:1">' +
-      '<button class="btn" id="xg-add">Apply</button><button class="btn o" id="xg-chk">Check IP</button><button class="btn o" id="xg-unb">Unblock IP</button></div><div id="xg-res"></div></div>' +
-      '<div class="card"><h3>Recent blocks</h3><div id="xg-ev"></div></div>';
-    var ip = function () { return document.getElementById('xg-ip').value.trim(); };
+  /* ---------------- WHM ---------------- */
+
+  PAGES.overview = function () {
+    return call('overview').then(function (d) {
+      header(d);
+      var s = d.summary.scanner, fw = d.summary.firewall, ip = d.ipdb;
+      text('xg-sub', 'Connected to ' + d.portal);
+      badgeCount = s.open_findings || 0; nav('overview');
+      state(s.open_findings ? 'bad' : 'ok', s.open_findings ? 'Action needed' : 'Protected');
+      var row = function (name, ok, label, extra) {
+        return '<div class="li"><div class="ic ' + (ok ? 'green' : 'red') + '" style="width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center">' + ic(ok ? 'ok' : 'x') + '</div><div class="p"><b>' + esc(name) + '</b><div class="muted small">' + extra + '</div></div>' + badge(label, ok ? 'ok' : 'failed') + '</div>';
+      };
+      body.innerHTML = '<div class="grid">' +
+        stat('file', s.open_findings ? 'red' : 'green', num(s.open_findings), 'Open detections') +
+        stat('lock', 'violet', num(s.quarantined), 'Quarantined files') +
+        stat('shield', 'blue', num(s.threats_30d), 'Threats (30 days)') +
+        stat('wall', 'orange', num(fw.active_blocks), 'Blocked IPs') +
+        stat('globe', 'slate', num(ip.entries), 'IPDB addresses') +
+        stat('target', 'red', num(ip.hits_today), 'IPDB drops today') + '</div>' +
+        '<div class="card"><div class="head"><h3>Status</h3></div>' +
+        row('Virus scanner', d.scanner, d.scanner ? 'running' : 'disabled', d.realtime ? 'Realtime protection on' : 'Realtime protection off') +
+        row('Firewall', d.firewall.healthy, d.firewall.healthy ? 'active' : 'inactive', esc(d.firewall.provider) + (d.firewall.error ? ' · ' + esc(d.firewall.error) : '')) +
+        row('IPDB', ip.enabled, ip.enabled ? 'protecting' : 'off', 'List ' + esc(ip.version || 'not received yet')) +
+        '<div class="li"><div class="ic blue" style="width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center">' + ic('globe') + '</div><div class="p"><b>Portal</b><div class="muted small"><a href="' + esc(d.portal) + '" target="_blank" rel="noreferrer">' + esc(d.portal) + '</a> · full dashboard, settings and history</div></div></div></div>';
+    });
+  };
+
+  PAGES.firewall = function () {
+    body.innerHTML = '<div class="card"><div class="head"><h3>Block or allow an IP</h3></div><div class="head" style="margin:0">' +
+      '<input type="text" id="xg-ip" placeholder="IP or CIDR"><select id="xg-kind"><option value="deny">Block permanently</option><option value="tempban">Block temporarily</option><option value="allow">Allow (whitelist)</option><option value="ignore">Ignore (never auto-block)</option></select>' +
+      '<input type="number" id="xg-min" value="60" style="width:90px" title="minutes (temporary blocks)"><input type="text" id="xg-note" placeholder="comment" style="flex:1;min-width:160px">' +
+      '<button class="btn" id="xg-add">Apply</button><button class="btn o" id="xg-chk">Check IP</button><button class="btn o" id="xg-unb">Unblock IP</button></div><div id="xg-res" style="margin-top:10px"></div></div>' +
+      '<div class="card"><div class="head"><h3>Recent blocks</h3></div><div id="xg-ev"></div></div>';
+    var ip = function () { return $('xg-ip').value.trim(); };
     var load = function () {
-      return call('fw.events', { limit: 50 }).then(function (d) {
-        document.getElementById('xg-ev').innerHTML = d.events.length ? '<table><tr><th>IP</th><th>Reason</th><th>Source</th><th>Status</th><th>When</th><th>Expires</th></tr>' + d.events.map(function (e) {
-          return '<tr><td class="mono">' + esc(e.ip) + '</td><td>' + esc(e.reason) + '</td><td>' + esc(e.source) + '</td><td>' + badge(e.status) + '</td><td>' + when(e.created_at) + '</td><td>' + (e.expires_at ? when(e.expires_at) : 'never') + '</td></tr>';
-        }).join('') + '</table>' : '<div class="empty">No blocks yet</div>';
+      return call('fw.events', { limit: 100 }).then(function (d) {
+        var ev = d.events || [];
+        set('xg-ev', ev.length ? '<div class="tw"><table><tr><th>IP</th><th>Reason</th><th>Source</th><th>Status</th><th>When</th><th>Expires</th></tr>' + ev.map(function (e) {
+          return '<tr><td class="mono nw">' + esc(e.ip) + '</td><td>' + esc(e.reason) + '</td><td>' + esc(e.source) + '</td><td>' + badge(e.status) + '</td><td class="nw">' + when(e.created_at) + '</td><td class="nw">' + (e.expires_at ? when(e.expires_at) : 'never') + '</td></tr>';
+        }).join('') + '</table></div>' : empty('No blocks yet', 'wall'));
       });
     };
-    document.getElementById('xg-add').onclick = function () {
-      call('fw.add', { kind: document.getElementById('xg-kind').value, addr: ip(), comment: document.getElementById('xg-note').value, minutes: Number(document.getElementById('xg-min').value) })
-        .then(function () { flash('Saved', true); load(); }).catch(function (e) { flash(e.message); });
+    $('xg-add').onclick = function () {
+      api('fw.add', { kind: $('xg-kind').value, addr: ip(), comment: $('xg-note').value, minutes: Number($('xg-min').value) })
+        .then(function () { toast('Saved', true); return load(); }).catch(quiet);
     };
-    document.getElementById('xg-unb').onclick = function () {
-      call('fw.unblock', { Addr: ip() }).then(function () { flash(ip() + ' unblocked', true); load(); }).catch(function (e) { flash(e.message); });
+    $('xg-unb').onclick = function () {
+      api('fw.unblock', { Addr: ip() }).then(function () { toast(ip() + ' unblocked', true); return load(); }).catch(quiet);
     };
-    document.getElementById('xg-chk').onclick = function () {
-      call('fw.check', { IP: ip() }).then(function (r) {
-        document.getElementById('xg-res').innerHTML = '<p><b class="mono">' + esc(r.ip) + '</b>: ' + badge(r.status) + (r.protected ? ' <span class="muted">(this server / portal — never blocked)</span>' : '') + '</p>';
-      }).catch(function (e) { flash(e.message); });
+    $('xg-chk').onclick = function () {
+      api('fw.check', { IP: ip() }).then(function (r) {
+        set('xg-res', '<b class="mono">' + esc(r.ip) + '</b>: ' + badge(r.status) + (r.protected ? ' <span class="muted">(this server / portal — never blocked)</span>' : ''));
+      }).catch(quiet);
     };
     return load();
-  }
+  };
 
-  function ipdb() {
-    return call('ipdb.status').then(function (d) {
-      var cc = Object.keys(d.countries || {}).sort(function (a, b) { return d.countries[b] - d.countries[a]; }).slice(0, 10);
-      var rows = function (list) {
-        return list.length ? '<table><tr><th>Address</th><th>Country</th><th>Packets</th><th>Last seen</th></tr>' + list.map(function (h) {
-          return '<tr><td class="mono">' + esc(h.entry) + '</td><td>' + esc(h.country || '??') + '</td><td>' + num(h.hits) + '</td><td>' + when(h.last_seen) + '</td></tr>';
-        }).join('') + '</table>' : '<div class="empty">No blocked traffic yet</div>';
-      };
-      body.innerHTML = '<div class="grid">' + stat(d.enabled ? 'On' : 'Off', 'IPDB protection', d.enabled ? 'green' : 'amber') +
-        stat(num(d.entries), 'Addresses in the list') + stat(num(d.hits_today), 'Packets dropped today', 'red') + stat(num(d.hits_total), 'Packets dropped (total)') + '</div>' +
-        '<div class="card"><h3>Top countries (30 days)</h3>' + (cc.length ? '<table>' + cc.map(function (c) { return '<tr><td>' + esc(c || '??') + '</td><td>' + num(d.countries[c]) + '</td></tr>'; }).join('') + '</table>' : '<div class="empty">No data yet</div>') + '</div>' +
-        '<div class="card"><h3>Recently blocked</h3>' + rows(d.recent || []) + '</div>' +
-        '<p class="muted">Live map and list management are in the portal.</p>';
-      if (!timer) timer = setInterval(function () { ipdb().catch(function () {}); }, 15000);
-    });
-  }
+  PAGES.ipdb = function () {
+    var draw = function () {
+      return call('ipdb.status').then(function (d) {
+        var cc = Object.keys(d.countries || {}).sort(function (a, b) { return d.countries[b] - d.countries[a]; }).slice(0, 10);
+        var top = cc.length ? d.countries[cc[0]] : 1;
+        var rows = function (list) {
+          return list.length ? '<div class="tw"><table><tr><th>Address</th><th>Country</th><th>Packets</th><th>Last seen</th></tr>' + list.map(function (h) {
+            return '<tr><td class="mono">' + esc(h.entry) + '</td><td>' + esc(h.country || '??') + '</td><td>' + num(h.hits) + '</td><td class="nw">' + when(h.last_seen) + '</td></tr>';
+          }).join('') + '</table></div>' : empty('No blocked traffic yet', 'globe');
+        };
+        body.innerHTML = '<div class="grid">' + stat('globe', d.enabled ? 'green' : 'orange', d.enabled ? 'On' : 'Off', 'IPDB protection') +
+          stat('logs', 'blue', num(d.entries), 'Addresses in the list') + stat('target', 'red', num(d.hits_today), 'Packets dropped today') + stat('wall', 'slate', num(d.hits_total), 'Packets dropped (total)') + '</div>' +
+          '<div class="two"><div class="card"><div class="head"><h3>Top countries</h3><span class="r muted small">30 days</span></div>' + (cc.length ? cc.map(function (c) {
+            return '<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:13px"><b>' + esc(c || '??') + '</b><span class="muted">' + num(d.countries[c]) + '</span></div><div class="bar" style="margin:4px 0 0;height:6px"><i style="width:' + Math.max(2, Math.round(d.countries[c] * 100 / top)) + '%"></i></div></div>';
+          }).join('') : empty('No data yet', 'globe')) + '</div>' +
+          '<div class="card"><div class="head"><h3>Recently blocked</h3><span class="r muted small">refreshes every 15 s</span></div>' + rows(d.recent || []) + '</div></div>' +
+          '<p class="muted small">The live map and list management are in the portal.</p>';
+      });
+    };
+    every(15000, function () { draw().catch(quiet); });
+    return draw();
+  };
 
-  show(MODE === 'cpanel' ? 'home' : 'overview');
+  window.addEventListener('hashchange', function () {
+    var n = location.hash.replace(/^#\/?/, '');
+    if (PAGES[n] && n !== current) show(n);
+  });
+  var first = location.hash.replace(/^#\/?/, '');
+  var allowed = TABS.some(function (t) { return t[0] === first; });
+  show(allowed ? first : TABS[0][0]);
 })();
 </script>
