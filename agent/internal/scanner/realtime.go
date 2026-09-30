@@ -87,8 +87,36 @@ func (r *Realtime) roots() []string {
 	return FullRoots()
 }
 
-// Run watches until ctx ends. Roots are refreshed every 10 minutes so new
-// accounts are picked up; enable/disable follows the scanner settings.
+// RootsRefresh is how often new hosting accounts are looked for.
+var RootsRefresh = time.Minute
+
+// addNewRoots watches hosting accounts created since the last look. Their
+// files are scanned too: a new account is often filled at once (a
+// WordPress install), before any watch on it exists.
+func (r *Realtime) addNewRoots() {
+	homes := map[string]bool{}
+	if r.Roots == nil {
+		for _, u := range Users() {
+			homes[u.Home] = true
+		}
+	}
+	r.mu.Lock()
+	for h := range homes {
+		r.homes[h] = true
+	}
+	r.mu.Unlock()
+	for _, root := range r.roots() {
+		r.mu.Lock()
+		_, known := r.byPath[root]
+		r.mu.Unlock()
+		if !known {
+			r.addTree(root, true)
+		}
+	}
+}
+
+// Run watches until ctx ends. New accounts are picked up within
+// RootsRefresh; enable/disable follows the scanner settings.
 func (r *Realtime) Run(ctx context.Context) {
 	ensureLimits()
 	for ctx.Err() == nil {
@@ -169,7 +197,7 @@ func (r *Realtime) loop(ctx context.Context) {
 		r.watches = 0
 		r.mu.Unlock()
 	}()
-	refresh := time.NewTicker(10 * time.Minute)
+	refresh := time.NewTicker(RootsRefresh)
 	defer refresh.Stop()
 	buf := make([]byte, 256*1024)
 	lastFlush := time.Now()
@@ -184,14 +212,7 @@ func (r *Realtime) loop(ctx context.Context) {
 			if !cfg.Enabled || !cfg.Realtime {
 				return
 			}
-			for _, root := range r.roots() {
-				r.mu.Lock()
-				_, known := r.byPath[root]
-				r.mu.Unlock()
-				if !known {
-					r.addTree(root, false)
-				}
-			}
+			r.addNewRoots()
 		default:
 		}
 		// Wait up to 200 ms for events, then read everything queued.

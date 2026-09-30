@@ -46,6 +46,8 @@ var ScriptExts = map[string]bool{
 	// Web shells stored under harmless-looking names (seen in real cPanel scans:
 	// crontrol-82.dat in hidden cache folders, newsLib.class, main.css, *.flv).
 	".dat": true, ".class": true, ".css": true, ".flv": true, ".haxor": true, ".tmp": true,
+	// eicar.com, the name admins test antivirus with.
+	".com": true,
 }
 
 // CodeExts are code files the AI scanner's "all files" mode checks.

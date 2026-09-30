@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 func j(parts ...string) string { return strings.Join(parts, "") }
 
 var malicious = map[string]string{
+	"eicar.com":    j(`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR`, `-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`),
 	"eicar.txt":    j(`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR`, `-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`),
 	"exec.php":     j("<?php sys", "tem($_GET['cmd']); ?>"),
 	"eval.php":     j("<?php @ev", "al($_POST['x']); ?>"),
@@ -430,4 +432,44 @@ func TestRecordSkipsClearedContent(t *testing.T) {
 	if _, err := os.Stat(p); err != nil {
 		t.Fatal("cleared file was moved")
 	}
+}
+
+// A hosting account created while the agent runs is watched within a
+// minute, and the files put into it before that are scanned too.
+func TestRealtimeWatchesNewAccounts(t *testing.T) {
+	s := newScanner(t)
+	base := t.TempDir()
+	first := filepath.Join(base, "old")
+	os.MkdirAll(first, 0o755)
+	roots := []string{first}
+	var mu sync.Mutex
+	rt := &Realtime{S: s, Roots: func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), roots...) }}
+	old := RootsRefresh
+	RootsRefresh = 200 * time.Millisecond
+	defer func() { RootsRefresh = old }()
+	if err := rt.init(rt.roots()); err != nil {
+		t.Skip("inotify unavailable:", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go rt.loop(ctx)
+	// The new account is filled before anyone watches it...
+	acct := filepath.Join(base, "new")
+	os.MkdirAll(filepath.Join(acct, "public_html"), 0o755)
+	os.WriteFile(filepath.Join(acct, "public_html", "early.php"), []byte(malicious["exec.php"]), 0o644)
+	mu.Lock()
+	roots = append(roots, acct)
+	mu.Unlock()
+	// ...and written to after.
+	time.Sleep(time.Second)
+	os.WriteFile(filepath.Join(acct, "public_html", "late.php"), []byte(malicious["eval.php"]), 0o644)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, n, _ := s.ListFindings(FindingFilter{Limit: 10}); n == 2 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	fs, _, _ := s.ListFindings(FindingFilter{Limit: 10})
+	t.Fatalf("new account: %d of 2 files found (%v)", len(fs), fs)
 }
