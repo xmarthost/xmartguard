@@ -187,7 +187,7 @@ export default function ServerIPDB() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)]">
         <div className="space-y-5">
-          <Card title="Attacks Blocked - Live" desc="Blocked packets per second, the last 10 seconds">
+          <Card title="Attacks Blocked - Live" desc="Packets the IPDB blocked per second, the last 10 seconds">
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 {/* A new point every second and the curve steps left, without a morphing animation. */}

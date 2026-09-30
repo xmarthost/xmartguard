@@ -164,7 +164,12 @@ func (l *IPDB) Replace(version string, items []string) (int, error) {
 func (l *IPDB) recordHits(db *sql.DB, counters map[string]uint64) int {
 	l.mu.Lock()
 	l.load()
-	if l.last == nil {
+	// The first reading after the agent starts is only the baseline: the
+	// kernel counters still hold what was already counted before the
+	// restart (counting them again doubled the day's hits on every
+	// restart). Entries that appear later are new and count in full.
+	baseline := l.last == nil
+	if baseline {
 		l.last = map[string]uint64{}
 	}
 	type hit struct {
@@ -175,6 +180,9 @@ func (l *IPDB) recordHits(db *sql.DB, counters map[string]uint64) int {
 	for entry, cur := range counters {
 		prev, seen := l.last[entry]
 		l.last[entry] = cur
+		if baseline {
+			continue
+		}
 		d := cur
 		if seen && cur >= prev {
 			d = cur - prev
@@ -385,10 +393,8 @@ func (m *Manager) pollIPDBHits() {
 	if m.IPDB == nil {
 		return
 	}
-	counters := m.Backend().IPDBCounters()
-	if len(counters) > 0 {
-		m.IPDB.recordHits(m.DB, counters)
-	}
+	// Also an empty reading: the first one is the baseline.
+	m.IPDB.recordHits(m.DB, m.Backend().IPDBCounters())
 }
 
 // Collapse drops entries already covered by a broader entry in the list, so

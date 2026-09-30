@@ -446,6 +446,8 @@ func TestIPDBOnKernel(t *testing.T) {
 		defer cancel()
 		go m.RunConnLog(ctx)
 		time.Sleep(300 * time.Millisecond)
+		// The agent's first reading is the baseline (counters survive restarts).
+		m.pollIPDBHits()
 		// Real TCP connection attempts from the listed address (bash /dev/tcp,
 		// so no ping binary is needed); the SYNs are dropped by the IPDB set.
 		for i := 0; i < 3; i++ {
