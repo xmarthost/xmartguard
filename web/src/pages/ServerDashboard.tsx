@@ -15,8 +15,8 @@ import { useUiStyle } from '../useUiStyle';
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div className="flex justify-between gap-4 border-b border-slate-100 py-2 text-sm last:border-0">
-      <span className="text-slate-500">{k}</span>
-      <span className="text-right font-medium text-navy-900">{v || '–'}</span>
+      <span className="shrink-0 text-slate-500">{k}</span>
+      <span className="min-w-0 text-right font-medium text-navy-900">{v || '–'}</span>
     </div>
   );
 }
@@ -152,8 +152,8 @@ export default function ServerDashboard() {
   if (style === 'modern') {
     return (
       <div className="space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex w-full min-w-0 items-start gap-2 sm:w-auto sm:items-center sm:gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-4 lg:flex-nowrap">
+          <div className="flex w-full min-w-0 items-start gap-2 sm:w-auto sm:items-center sm:gap-3 lg:flex-1">
             <Link to="/servers" className="-ml-1 shrink-0 rounded-lg p-1 text-slate-700 hover:bg-white" aria-label="All servers">
               <ChevronLeft className="h-6 w-6" />
             </Link>
@@ -163,7 +163,7 @@ export default function ServerDashboard() {
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 {/* Long hostnames wrap after a dot on phones. */}
-                <h1 className="min-w-0 text-lg leading-snug font-bold [overflow-wrap:anywhere] text-slate-900 sm:text-[26px] sm:leading-tight" title={s.hostname}>
+                <h1 className="min-w-0 text-lg leading-snug font-bold [overflow-wrap:anywhere] text-slate-900 sm:text-xl sm:leading-tight 2xl:text-[26px]" title={s.hostname}>
                   {s.hostname.split('.').map((part, i, all) => (
                     <Fragment key={i}>
                       {part}
@@ -184,8 +184,8 @@ export default function ServerDashboard() {
               </div>
             </div>
           </div>
-          <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3">
-            <span className="hidden text-slate-500 sm:inline">View</span>
+          <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3 lg:shrink-0">
+            <span className="hidden text-slate-500 xl:inline">View</span>
             <select className="input min-w-0 flex-1 sm:w-36 sm:flex-none" value={days} onChange={(e) => setDays(Number(e.target.value))}>
               <option value={7}>7 Days</option>
               <option value={30}>30 Days</option>

@@ -276,7 +276,8 @@ export default function WafIntel() {
         title="Virtual patches from the portal"
         desc="Known vulnerabilities of WordPress plugins, blocked at the WAF before they reach the plugin. They come with portal updates; servers apply them without an agent update (agent 0.14.0 or newer). The agent's own patches are listed under WAF » Virtual patches."
       >
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] text-sm">
           <tbody className="divide-y divide-slate-100">
             {d.patches.map((p) => {
               const on = enabled && !off.includes(p.id);
@@ -302,6 +303,7 @@ export default function WafIntel() {
             })}
           </tbody>
         </table>
+        </div>
       </Card>
     </div>
   );

@@ -245,10 +245,10 @@ export function Tabs<T extends string>({ tabs, value, onChange }: { tabs: { v: T
 export function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className={`card max-h-[90vh] w-full overflow-y-auto p-6 ${wide ? 'max-w-4xl' : 'max-w-2xl'}`} onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-navy-900">{title}</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-navy-800" aria-label="close">
+      <div className={`card max-h-[90vh] w-full min-w-0 overflow-x-hidden overflow-y-auto p-4 sm:p-6 ${wide ? 'max-w-4xl' : 'max-w-2xl'}`} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <h2 className="min-w-0 text-lg font-semibold text-navy-900 sm:text-xl">{title}</h2>
+          <button onClick={onClose} className="shrink-0 text-slate-400 hover:text-navy-800" aria-label="close">
             <X />
           </button>
         </div>

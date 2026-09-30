@@ -136,8 +136,8 @@ export default function IPDBPage() {
           {events.length === 0 ? (
             <Empty text="No blocked traffic in the last day" />
           ) : (
-            <div className="max-h-96 overflow-y-auto">
-              <table className="w-full text-sm">
+            <div className="max-h-96 overflow-auto">
+              <table className="w-full min-w-[520px] text-sm">
                 <thead className="sticky top-0 bg-white text-left text-xs text-slate-500 uppercase">
                   <tr>
                     <th className="py-2">Address</th>

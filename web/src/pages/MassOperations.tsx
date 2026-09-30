@@ -80,8 +80,8 @@ export default function MassOperations() {
           {list.length === 0 ? (
             <Empty text="No servers match" />
           ) : (
-            <div className="max-h-[420px] overflow-y-auto">
-              <table className="w-full text-sm">
+            <div className="max-h-[420px] overflow-auto">
+              <table className="w-full min-w-[480px] text-sm">
                 <tbody className="divide-y divide-slate-100">
                   {list.map((s) => (
                     <tr key={s.id} className="cursor-pointer hover:bg-slate-50" onClick={() => setSel(sel.includes(s.id) ? sel.filter((x) => x !== s.id) : [...sel, s.id])}>

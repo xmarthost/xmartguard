@@ -672,8 +672,8 @@ function SignaturesCard({ admin }: { admin: boolean }) {
         <ul className="space-y-2 text-sm">
           {sig.data.feeds.map((f) => (
             <li key={f.url} className="rounded bg-slate-50 px-3 py-2">
-              <div className="flex justify-between gap-3">
-                <span className="truncate font-medium text-navy-900" title={f.url}>
+              <div className="flex flex-wrap justify-between gap-x-3">
+                <span className="min-w-0 truncate font-medium text-navy-900" title={f.url}>
                   {f.kind === 'lmd' ? 'Linux Malware Detect' : 'YARA'} · {f.url.split('/').pop()}
                 </span>
                 <span className="whitespace-nowrap text-slate-500">

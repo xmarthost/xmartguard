@@ -25,7 +25,12 @@
 
 body {
   @apply bg-page text-slate-700 antialiased;
+  /* Long values (hostnames, IPv6 addresses, paths, URLs) break inside
+     themselves when they do not fit, so nothing runs off a phone screen.
+     Tables keep their width and scroll inside their own box instead. */
+  overflow-wrap: anywhere;
 }
+table { overflow-wrap: break-word; }
 
 @utility card {
   @apply rounded-2xl bg-white shadow-[0_1px_2px_rgba(16,24,64,0.04)];
