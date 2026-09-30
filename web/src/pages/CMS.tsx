@@ -382,6 +382,7 @@ export function DBScanner() {
           <select className="input w-36" value={status} onChange={(e) => (setOffset(0), setSel([]), setStatus(e.target.value))}>
             <option value="detected">Detected</option>
             <option value="cleaned">Cleaned</option>
+            <option value="cleared">False positive</option>
             <option value="archived">Archived</option>
             <option value="">All</option>
           </select>

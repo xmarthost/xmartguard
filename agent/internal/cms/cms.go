@@ -109,6 +109,9 @@ func (m *Manager) Start() error {
 	return nil
 }
 
+// kvDBRules remembers the database rules version of the last full scan.
+const kvDBRules = "db_rules_version"
+
 // Run schedules scans according to settings.
 func (m *Manager) Run(ctx context.Context) {
 	select {
@@ -121,7 +124,9 @@ func (m *Manager) Run(ctx context.Context) {
 	for {
 		cfg := m.Settings.Get().CMS
 		last, _ := strconv.ParseInt(store.GetKV(m.DB, "cms_last_scan"), 10, 64)
-		if cfg.Enabled && time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600 {
+		// New database rules: scan now, so earlier false detections go.
+		newRules := cfg.DBScan && store.GetKV(m.DB, kvDBRules) != DBRulesVersion
+		if cfg.Enabled && (newRules || time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600) {
 			_ = m.Start()
 		}
 		select {
@@ -152,6 +157,7 @@ func risk(s *Site) string {
 
 func (m *Manager) scan(ctx context.Context) error {
 	cfg := m.Settings.Get().CMS
+	recheck := store.GetKV(m.DB, kvDBRules) != DBRulesVersion
 	docroots := map[string]string{}
 	if m.Docroots != nil {
 		docroots = m.Docroots()
@@ -199,7 +205,7 @@ func (m *Manager) scan(ctx context.Context) error {
 				s.CoreIssues = len(s.Core.Modified) + len(s.Core.Unknown)
 			}
 			if cfg.DBScan {
-				s.DBIssues = m.scanDB(ctx, s)
+				s.DBIssues = m.scanDB(ctx, s, recheck)
 			}
 		case Joomla:
 			s.Latest = m.Versions.Latest(ctx, "joomla", "")
@@ -234,10 +240,13 @@ func (m *Manager) scan(ctx context.Context) error {
 			}
 		}
 	}
+	if cfg.DBScan {
+		_ = store.SetKV(m.DB, kvDBRules, DBRulesVersion)
+	}
 	return nil
 }
 
-func (m *Manager) scanDB(ctx context.Context, s Site) int {
+func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 	c, err := ReadWPConfig(s.Path)
 	if err != nil {
 		return 0
@@ -275,8 +284,14 @@ func (m *Manager) scanDB(ctx context.Context, s Site) int {
 		}
 		rows.Close()
 	}
-	// Mark previous findings cleaned; the ones still present are re-detected below.
-	_, _ = m.DB.Exec(`UPDATE db_findings SET status = 'cleaned' WHERE site_path = ? AND status = 'detected'`, s.Path)
+	// Mark previous findings cleaned; the ones still present are re-detected
+	// below. After a change of the rules, what they no longer find was a
+	// false positive ("cleared"), not cleaned.
+	gone := "cleaned"
+	if recheck {
+		gone = "cleared"
+	}
+	_, _ = m.DB.Exec(`UPDATE db_findings SET status = ? WHERE site_path = ? AND status = 'detected'`, gone, s.Path)
 	for _, f := range found {
 		key := f.Table + "\x00" + f.Row + "\x00" + f.Signature
 		// Archived findings stay archived (the admin has seen them).

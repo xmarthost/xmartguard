@@ -114,7 +114,26 @@ type DBFinding struct {
 // Hidden iframes these services use legitimately (Google Tag Manager's
 // <noscript> iframe, reCAPTCHA, video embeds kept hidden until opened).
 var benignIframeHosts = []string{"googletagmanager.com", "google.com", "gstatic.com", "youtube.com", "youtube-nocookie.com",
-	"player.vimeo.com", "facebook.com", "doubleclick.net", "hotjar.com", "calendly.com", "hubspot.com"}
+	"player.vimeo.com", "facebook.com", "doubleclick.net", "hotjar.com", "calendly.com", "hubspot.com", "tiktok.com"}
+
+// DBRulesVersion changes when the database rules change in a way that
+// drops earlier detections: the next scan runs at once and marks what is no
+// longer found as a false positive ("cleared"), not as cleaned.
+const DBRulesVersion = "2"
+
+// Options that hold plugin data or documentation, never page output
+// (Freemius keeps the plugins' descriptions, with example HTML, in fs_accounts).
+var skipOptions = map[string]bool{"fs_accounts": true, "fs_api_cache": true, "fs_debug_mode": true}
+
+var (
+	// WordPress core embeds another post (oEmbed): a sandboxed iframe kept
+	// hidden until wp-embed.js has sized it.
+	reWPEmbed = regexp.MustCompile(`(?is)\bclass\s*=\s*["'][^"']*\bwp-embedded-content\b`)
+	reSandbox = regexp.MustCompile(`(?i)\ssandbox\s*=`)
+	reEmbedTo = regexp.MustCompile(`(?i)\bsrc\s*=\s*["']?(?:https?:)?//[^"'\s>]+(?:/embed/?(?:[#?"'\s>]|$)|[?&]embed=true)`)
+	// GiveWP donation forms load hidden and are shown by Give's resizer.
+	reGiveForm = regexp.MustCompile(`(?i)\bname\s*=\s*["']give-embed-form["']`)
+)
 
 var reIframeTag = regexp.MustCompile(`(?is)<iframe\b[^>]*>`)
 var reIframeSrc = regexp.MustCompile(`(?i)\bsrc\s*=\s*["']?(?:https?:)?//([^/"'\s>?#]+)`)
@@ -142,6 +161,12 @@ func snippetAround(v string, loc []int) string {
 }
 
 func benignIframe(tag string) bool {
+	if reWPEmbed.MatchString(tag) && reSandbox.MatchString(tag) && reEmbedTo.MatchString(tag) {
+		return true
+	}
+	if reGiveForm.MatchString(tag) {
+		return true
+	}
 	m := reIframeSrc.FindStringSubmatch(tag)
 	if m == nil {
 		return true // no remote source: nothing is loaded
@@ -156,8 +181,10 @@ func benignIframe(tag string) bool {
 }
 
 var (
-	reScript       = regexp.MustCompile(`(?is)<script\b[^>]*>(.*?)</script>`)
-	reHiddenIframe = regexp.MustCompile(`(?is)<iframe\b[^>]*(?:width\s*=\s*["']?0["'\s>]|height\s*=\s*["']?0["'\s>]|display\s*:\s*none|visibility\s*:\s*hidden)`)
+	reScript = regexp.MustCompile(`(?is)<script\b[^>]*>(.*?)</script>`)
+	// A zero width or height attribute (not marginwidth/marginheight, which
+	// embed codes set to 0) or a hiding style.
+	reHiddenIframe = regexp.MustCompile(`(?is)<iframe\b[^>]*(?:\s(?:width|height)\s*=\s*["']?0(?:px)?["'\s>]|display\s*:\s*none|visibility\s*:\s*hidden)`)
 	rePHPOpen      = regexp.MustCompile(`(?i)<\?php`)
 	reScriptSrc    = regexp.MustCompile(`(?i)<script\b[^>]*\bsrc\s*=\s*["']?(?:https?:)?//([^/"'\s>]+)`)
 )
@@ -231,7 +258,7 @@ func ScanDatabase(ctx context.Context, c DBConfig) ([]DBFinding, error) {
 		for rows.Next() {
 			var key string
 			var val sql.NullString
-			if rows.Scan(&key, &val) != nil {
+			if rows.Scan(&key, &val) != nil || (t.key == "option_name" && skipOptions[key]) {
 				continue
 			}
 			if d := ScanValueDetail(val.String); d.Signature != "" {
