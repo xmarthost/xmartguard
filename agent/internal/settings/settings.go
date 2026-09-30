@@ -266,6 +266,10 @@ type WAF struct {
 	// off for one website or path only, for false positives that should not
 	// turn the rule off everywhere.
 	RuleExclusions []RuleExclusion `json:"rule_exclusions"`
+	// AutoExclusions: false positives learned from the WAF log are switched
+	// off for their website and path ("auto"), only listed ("suggest") or
+	// not looked for ("off").
+	AutoExclusions string `json:"auto_exclusions"`
 }
 
 // RuleExclusion switches rule Rule off for requests to Domain (any website
@@ -283,6 +287,12 @@ var (
 	reExclPath   = regexp.MustCompile(`^/[A-Za-z0-9._~/-]*$`)
 )
 
+// ValidDomain reports a website name usable in an exclusion
+// ("*.example.com" for its subdomains).
+func ValidDomain(d string) bool {
+	return reExclDomain.MatchString(d) && net.ParseIP(strings.TrimPrefix(d, "*.")) == nil
+}
+
 // MaxRuleExclusions keeps the rendered rules small.
 const MaxRuleExclusions = 200
 
@@ -298,7 +308,7 @@ func CleanExclusions(in []RuleExclusion) []RuleExclusion {
 		if len(e.Note) > 200 {
 			e.Note = e.Note[:200]
 		}
-		if e.Rule <= 0 || e.Rule > 99999999 || (e.Domain != "" && !reExclDomain.MatchString(e.Domain)) || len(e.Path) > 200 || (e.Path != "" && !reExclPath.MatchString(e.Path)) {
+		if e.Rule <= 0 || e.Rule > 99999999 || (e.Domain != "" && !ValidDomain(e.Domain)) || len(e.Path) > 200 || (e.Path != "" && !reExclPath.MatchString(e.Path)) {
 			continue
 		}
 		if e.Path == "/" {
@@ -729,6 +739,11 @@ func normalize(s *Settings) {
 		s.Scanner.ScheduleTZ = "Asia/Karachi"
 	}
 	s.WAF.RuleExclusions = CleanExclusions(s.WAF.RuleExclusions)
+	switch s.WAF.AutoExclusions {
+	case "auto", "suggest", "off":
+	default:
+		s.WAF.AutoExclusions = "auto"
+	}
 	switch s.WAF.TorAction {
 	case "off", "captcha", "post", "block":
 	default:

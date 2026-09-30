@@ -27,17 +27,8 @@ type RuleSets struct {
 		// two rule sets).
 		ReplacedBy string `json:"replaced_by,omitempty"`
 	} `json:"xmartguard,omitempty"`
-	CRS struct {
-		Enabled           bool   `json:"enabled"`
-		Version           string `json:"version"` // installed release, e.g. 4.29.0
-		Paranoia          int    `json:"paranoia"`
-		InboundThreshold  int    `json:"inbound_threshold"`
-		OutboundThreshold int    `json:"outbound_threshold"`
-		// ReplacedBy names the rule set used instead on this server
-		// (the portal turns CRS off where Malware.Expert is linked).
-		ReplacedBy string `json:"replaced_by,omitempty"`
-	} `json:"crs"`
-	Vendors []Vendor `json:"vendors"`
+	CRS     CRSConfig `json:"crs"`
+	Vendors []Vendor  `json:"vendors"`
 	// Remote rule feeds loaded with SecRemoteRules (e.g. Malware.Expert
 	// with your own license key), for servers without WHM vendors.
 	Remote []RemoteRules `json:"remote"`
@@ -45,6 +36,23 @@ type RuleSets struct {
 		Enabled bool   `json:"enabled"`
 		Rules   string `json:"rules"`
 	} `json:"custom"`
+}
+
+// CRSConfig is the OWASP Core Rule Set part of the rule sets.
+type CRSConfig struct {
+	Enabled           bool   `json:"enabled"`
+	Version           string `json:"version"` // installed release, e.g. 4.29.0
+	Paranoia          int    `json:"paranoia"`
+	InboundThreshold  int    `json:"inbound_threshold"`
+	OutboundThreshold int    `json:"outbound_threshold"`
+	// SoftBlock: a GET request with a weak signal (score below twice the
+	// threshold) from a visitor with a clean reputation gets the portal's
+	// CAPTCHA page instead of a 403 ("" or "captcha", the default); "off"
+	// blocks it like any other.
+	SoftBlock string `json:"soft_block,omitempty"`
+	// ReplacedBy names the rule set used instead on this server
+	// (the portal turns CRS off where Malware.Expert is linked).
+	ReplacedBy string `json:"replaced_by,omitempty"`
 }
 
 // Vendor is a cPanel ModSecurity vendor, added from its configuration
@@ -256,12 +264,28 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		if strings.HasPrefix(rs.CRS.Version, "3.") {
 			plVar = "paranoia_level"
 		}
-		files[setup] = fmt.Sprintf("# OWASP CRS %s set up by xPGuard (WAF Rule Sets in the portal).\nInclude %s\n"+
+		setupText := fmt.Sprintf("# OWASP CRS %s set up by xPGuard (WAF Rule Sets in the portal).\nInclude %s\n"+
 			"SecAction \"id:900000,phase:1,pass,t:none,nolog,setvar:tx.%s=%d\"\n"+
 			"SecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=%d,setvar:tx.outbound_anomaly_score_threshold=%d\"\n",
 			rs.CRS.Version, filepath.Join(dir, "crs-setup.conf.example"), plVar, pl, in, out)
+		crs.Detail = fmt.Sprintf("paranoia level %d, anomaly threshold %d", pl, in)
+		post := ""
+		if sb, ok := m.softBlock(rs.CRS, in); ok {
+			setupText += sb.setup
+			post = sb.post
+			for k, v := range sb.files {
+				files[k] = v
+			}
+			crs.Detail += "; weak signals from clean visitors get the CAPTCHA page"
+		}
+		files[setup] = setupText
 		fmt.Fprintf(&inc, "\n# OWASP Core Rule Set %s\nInclude %s\nInclude %s\n", rs.CRS.Version, setup, filepath.Join(dir, "rules", "*.conf"))
-		crs.State, crs.Detail = "active", fmt.Sprintf("paranoia level %d, anomaly threshold %d", pl, in)
+		if post != "" {
+			p := filepath.Join(m.RulesDir, "crs-after.conf")
+			files[p] = post
+			fmt.Fprintf(&inc, "Include %s\n", p)
+		}
+		crs.State = "active"
 	}
 	states = append(states, crs)
 

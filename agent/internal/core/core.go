@@ -224,6 +224,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.hostTrustLoop(ctx)
 	go a.proxyListLoop(ctx)
 	go a.torLoop(ctx)
+	go a.wafLearnLoop(ctx)
 	go a.intelLoop(ctx)
 	go a.centralLoop(ctx)
 	// Put back system files that older rules quarantined (root's temp
@@ -917,7 +918,26 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	// ---- WAF
 	h["waf.status"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "packages": a.WAF.PackageStates(), "stats": a.WAF.Stats(),
-			"tor": a.Tor.Status(), "ipdb_addresses": len(a.Firewall.IPDBEntries())}, nil
+			"tor": a.Tor.Status(), "ipdb_addresses": len(a.Firewall.IPDBEntries()),
+			"auto_exclusions": a.WAF.AutoExclusions(), "cpanel_off": waf.CPanelModsecOff()}, nil
+	}
+	// waf.auto_exclusion accepts, rejects or forgets a learned false positive.
+	h["waf.auto_exclusion"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Key    string `json:"key"`
+			Action string `json:"action"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if err := a.WAF.SetAutoExclusion(in.Key, in.Action); err != nil {
+			return nil, err
+		}
+		res := map[string]any{"auto_exclusions": a.WAF.AutoExclusions()}
+		if err := a.WAF.Apply(); err != nil {
+			res["warning"] = err.Error()
+		}
+		return res, nil
 	}
 	// waf.sync pulls the portal's WAF Rule Sets now and applies them.
 	// waf.vendor_rules: where Malware.Expert replaces xPGuard's rules, its

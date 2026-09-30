@@ -120,6 +120,8 @@ export const RuleSetsConfig = z.object({
     paranoia: z.number().int().min(1).max(4),
     inbound_threshold: z.number().int().min(3).max(1000),
     outbound_threshold: z.number().int().min(2).max(1000),
+    /** Weak signals (one rule) in page views of clean visitors: CAPTCHA page instead of 403. */
+    soft_block: z.enum(['captcha', 'off']).default('captcha'),
   }),
   vendors: z.array(Vendor).max(10),
   remote: z.array(Remote).max(10).default([]),
@@ -129,7 +131,7 @@ export type RuleSetsConfig = z.infer<typeof RuleSetsConfig>;
 
 export const DEFAULT_CONFIG: RuleSetsConfig = {
   xmartguard: { enabled: true },
-  crs: { enabled: true, version: 'latest', paranoia: 1, inbound_threshold: 5, outbound_threshold: 4 },
+  crs: { enabled: true, version: 'latest', paranoia: 1, inbound_threshold: 5, outbound_threshold: 4, soft_block: 'captcha' },
   vendors: [],
   remote: [],
   custom: { enabled: false, rules: '' },

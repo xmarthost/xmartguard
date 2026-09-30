@@ -161,7 +161,9 @@ var reIDField = regexp.MustCompile(`\[id "(\d+)"\]`)
 var reMsg = regexp.MustCompile(`\[msg "((?:[^"\\]|\\.)*)"\]`)
 
 // isScoreRule: CRS anomaly-score blocking rules (inbound, outbound).
-func isScoreRule(id int) bool { return id == 949110 || id == 959100 || id == 980130 }
+func isScoreRule(id int) bool {
+	return id == 949110 || id == 959100 || id == 980130 || id == IDSoftDeny
+}
 
 func scoreMsg(attack, score string) string {
 	if attack == "" {

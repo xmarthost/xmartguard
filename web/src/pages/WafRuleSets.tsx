@@ -35,7 +35,7 @@ interface RemotePreset {
 }
 interface Config {
   xmartguard: { enabled: boolean };
-  crs: { enabled: boolean; version: string; paranoia: number; inbound_threshold: number; outbound_threshold: number };
+  crs: { enabled: boolean; version: string; paranoia: number; inbound_threshold: number; outbound_threshold: number; soft_block?: 'captcha' | 'off' };
   vendors: Vendor[];
   remote: Remote[];
   custom: { enabled: boolean; rules: string };
@@ -283,8 +283,23 @@ export default function WafRuleSets() {
               onChange={(e) => set({ ...cfg, crs: { ...cfg.crs, inbound_threshold: +e.target.value || 5 } })}
             />
           </label>
+          <label className="text-sm">
+            <span className="label">One weak signal in a page view</span>
+            <select
+              className="input"
+              disabled={!isAdmin}
+              value={cfg.crs.soft_block ?? 'captcha'}
+              onChange={(e) => set({ ...cfg, crs: { ...cfg.crs, soft_block: e.target.value as 'captcha' | 'off' } })}
+            >
+              <option value="captcha">CAPTCHA page for clean visitors (recommended)</option>
+              <option value="off">Block (403) like every other match</option>
+            </select>
+          </label>
           <div className="text-sm text-slate-500 md:col-span-2">
-            5 blocks a request after one critical match (CRS default). Raise it (10–20) for a gentler start on sites with many false positives.
+            5 blocks a request after one critical match (CRS default). Most false positives are exactly that: one rule in a page view of a real visitor (a
+            cookie or search text that looks like code). With the CAPTCHA option such a GET request from a visitor who is not on the IPDB, Tor or ban lists
+            gets the CAPTCHA page (Overview » CAPTCHA Page) instead of a 403; after solving it the visitor needs twice the score to be blocked. POST requests,
+            real attacks (several rules) and listed addresses are blocked as before.
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">

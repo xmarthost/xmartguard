@@ -261,6 +261,8 @@ type Options struct {
 	// Intel is the portal's fleet intelligence (learned web shell names,
 	// virtual patches); nil = none.
 	Intel *Intel
+	// Dynamic: learned exclusions and cPanel's per-website switches.
+	Dynamic Dynamic
 }
 
 // TorMode is the Tor rule rendered for a setting: "captcha" needs the
@@ -343,7 +345,8 @@ func Render(c settings.WAF, o Options) string {
 	for _, id := range c.DisabledRules {
 		off[id] = true
 	}
-	renderExclusions(w, c, off)
+	renderCPanelOff(w, o.Dynamic)
+	renderExclusions(w, c, off, o.Dynamic)
 	if len(c.WhitelistIPs) > 0 {
 		ips := make([]string, len(c.WhitelistIPs))
 		for i, a := range c.WhitelistIPs {
@@ -660,7 +663,7 @@ func Render(c settings.WAF, o Options) string {
 // RenderLoginWatch is what stays of xPGuard's rules where another rule set
 // (Malware.Expert) replaces them: only the failed-login detectors, which
 // pass every request and let the agent ban brute-force attackers.
-func RenderLoginWatch(c settings.WAF, replacedBy string) string {
+func RenderLoginWatch(c settings.WAF, replacedBy string, dyn Dynamic) string {
 	var b strings.Builder
 	b.WriteString("# xPGuard's own blocking rules are off on this server: " + replacedBy + "'s rules are used instead.\n")
 	b.WriteString("# Kept: the portal's whitelists and switched-off rules (applied to " + replacedBy + "'s rules),\n")
@@ -669,7 +672,9 @@ func RenderLoginWatch(c settings.WAF, replacedBy string) string {
 	for _, id := range c.DisabledRules {
 		off[id] = true
 	}
-	renderExclusions(func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }, c, off)
+	lw := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+	renderCPanelOff(lw, dyn)
+	renderExclusions(lw, c, off, dyn)
 	// Whitelisted addresses and domains skip the vendor's rules too.
 	if len(c.WhitelistIPs) > 0 {
 		ips := make([]string, len(c.WhitelistIPs))

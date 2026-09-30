@@ -6,7 +6,7 @@ import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
 import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
-import { RuleExclusionsEditor, type RuleExclusion } from '../components/RuleExclusions';
+import { LearnedExclusions, RuleExclusionsEditor, type LearnedExclusion, type RuleExclusion } from '../components/RuleExclusions';
 
 interface ScannerS {
   enabled: boolean;
@@ -113,6 +113,7 @@ interface WAFS {
   ipdb_post: boolean;
   tor_action: 'off' | 'captcha' | 'post' | 'block';
   rule_exclusions?: RuleExclusion[];
+  auto_exclusions?: 'auto' | 'suggest' | 'off';
 }
 interface CMSS {
   enabled: boolean;
@@ -845,6 +846,8 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
     packages?: WafPackage[];
     tor?: { addresses: number; updated: number; error: string };
     ipdb_addresses?: number;
+    auto_exclusions?: LearnedExclusion[];
+    cpanel_off?: string[];
   }>(serverId, 'waf.status');
   const doms = useAgent<{ domains: { domain: string; user: string }[] }>(serverId, 'domains.list');
   const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
@@ -1000,6 +1003,18 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         empty="No whitelisted rules"
         validate={(v) => (/^\d{1,8}$/.test(v) ? null : 'Enter a numeric rule id')}
         onChange={(v) => onSave({ disabled_rules: v.map(Number) })}
+      />
+      <LearnedExclusions
+        mode={s.auto_exclusions ?? 'auto'}
+        items={info.data?.auto_exclusions ?? []}
+        cpanelOff={info.data?.cpanel_off ?? []}
+        disabled={dis}
+        onMode={(m) => onSave({ auto_exclusions: m as WAFS['auto_exclusions'] })}
+        onAction={async (key, action) => {
+          const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.auto_exclusion', { key, action }), 'Saved');
+          if (res?.warning) alert(res.warning);
+          info.reload();
+        }}
       />
       <RuleExclusionsEditor
         items={s.rule_exclusions ?? []}

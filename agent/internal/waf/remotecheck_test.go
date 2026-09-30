@@ -133,7 +133,7 @@ func TestVendorLoginCaptcha(t *testing.T) {
 func TestRenderLoginWatch(t *testing.T) {
 	c := settings.Defaults().WAF
 	c.LoginURLs = []string{"/wp-login.php", "/my-login"}
-	out := RenderLoginWatch(c, "Malware.Expert")
+	out := RenderLoginWatch(c, "Malware.Expert", Dynamic{})
 	if strings.Contains(out, "deny") || strings.Contains(out, "redirect:") || strings.Contains(out, "@pmFromFile") || strings.Contains(out, "@inspectFile") {
 		t.Fatalf("blocking rule kept:\n%s", out)
 	}
@@ -143,7 +143,7 @@ func TestRenderLoginWatch(t *testing.T) {
 		}
 	}
 	c.BruteForce = false
-	if strings.Contains(RenderLoginWatch(c, "Malware.Expert"), "xpguard/login") {
+	if strings.Contains(RenderLoginWatch(c, "Malware.Expert", Dynamic{}), "xpguard/login") {
 		t.Fatal("login rules with brute force off")
 	}
 	m := &Manager{}
@@ -203,7 +203,7 @@ func TestVendorRulesList(t *testing.T) {
 	if v.Rules[2].Enabled || !v.Rules[1].Enabled {
 		t.Fatal("disabled rule shown on")
 	}
-	out := RenderLoginWatch(st.Get().WAF, "Malware.Expert")
+	out := RenderLoginWatch(st.Get().WAF, "Malware.Expert", Dynamic{})
 	if !strings.Contains(out, "ctl:ruleRemoveById=1000050") {
 		t.Fatalf("disabled vendor rule not removed:\n%s", out)
 	}

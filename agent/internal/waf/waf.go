@@ -251,6 +251,19 @@ func (m *Manager) BlockedListChanged() bool {
 	if cfg.ProxyIPCheck && m.BlockedIPs != nil {
 		want[FileBlockedIPs] = ProxyFiles(m.BlockedIPs())[FileBlockedIPs]
 	}
+	if want == nil {
+		want = map[string]string{}
+	}
+	m.mu.Lock()
+	crs, tg := m.ruleSets.CRS, m.target
+	m.mu.Unlock()
+	if crs.Enabled && crs.ReplacedBy == "" && systemCRS(tg) == "" && m.CRSInstalled(crs.Version) {
+		if sb, ok := m.softBlock(crs, clampInt(crs.InboundThreshold, 3, 1000, 5)); ok {
+			for k, v := range sb.files {
+				want[strings.TrimPrefix(k, m.RulesDir+"/")] = v
+			}
+		}
+	}
 	for name, body := range want {
 		cur, err := os.ReadFile(filepath.Join(m.RulesDir, name))
 		if err != nil || string(cur) != body {
@@ -331,7 +344,7 @@ func (m *Manager) Apply() error {
 		if by := m.OwnRulesReplacedBy(); cfg.Enabled && by != "" {
 			// Only the vendor's rules block here. The failed-login detectors
 			// stay: they block nothing and feed the brute-force bans.
-			rules = RenderLoginWatch(cfg, by)
+			rules = RenderLoginWatch(cfg, by, m.dynamic())
 		} else if cfg.Enabled {
 			opts := Options{Dir: m.RulesDir, UploadScan: true, Trusted: len(m.trustedList()) > 0}
 			// A vendor's own login CAPTCHA (Malware.Expert recaptcha) wins.
@@ -348,12 +361,13 @@ func (m *Manager) Apply() error {
 			if m.VerifiedBots != nil && opts.Trusted {
 				opts.VerifiedBots = m.VerifiedBots()
 			}
+			opts.Dynamic = m.dynamic()
 			if cfg.UploadScan {
 				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
 			}
 			rules = Render(cfg, opts)
 		} else {
-			rules = RenderExclusionsOnly(cfg)
+			rules = RenderExclusionsOnly(cfg, m.dynamic())
 		}
 		rules = selfTestRule + "\n" + rules
 		bots := m.listFiles(cfg)

@@ -31,9 +31,24 @@ const (
 	// PHP-injection rules skip it; addresses and order notes trip them, and
 	// the data is stored, never run as code.
 	IDWCStoreExcl = 7700014
-	// IDRuleExcl is the first id of the portal's per-site rule exclusions.
-	IDRuleExcl = 7700020
+	// IDCPanelOff: websites whose ModSecurity the account switched off in
+	// cPanel » ModSecurity. Apache already honours that for its virtual host;
+	// this makes it certain for every rule set and on LiteSpeed.
+	IDCPanelOff = 7700005
+	// IDRuleExcl is the first id of the portal's per-site rule exclusions
+	// (7704000-7704499) and IDAutoExcl of the learned ones (7704500-7704999).
+	IDRuleExcl = 7704000
+	IDAutoExcl = 7704500
+	// maxAutoExcl is how many learned exclusions a server renders.
+	maxAutoExcl = 500
 )
+
+// Dynamic are the exclusions this server finds itself rather than the
+// portal's settings: learned false positives and cPanel's switches.
+type Dynamic struct {
+	Auto      []settings.RuleExclusion
+	CPanelOff []string
+}
 
 // injectionTags are the CRS tags of rules that inspect request content for
 // injected code; false positives on real content come from these.
@@ -65,7 +80,7 @@ func removeTags() string {
 
 // renderExclusions writes the WordPress exclusions (unless switched off)
 // and the portal's per-site rule exclusions.
-func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool) {
+func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, dyn Dynamic) {
 	tags := removeTags()
 	w("# Content that is code by design: kept away from injection rules.")
 	if !off[IDWPAdminExcl] {
@@ -88,8 +103,7 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool) 
 	if !off[IDWCStoreExcl] {
 		w(`SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wc/store/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveByTag=attack-injection-php"`, IDWCStoreExcl)
 	}
-	id := IDRuleExcl
-	for _, e := range settings.CleanExclusions(c.RuleExclusions) {
+	writeExcl := func(id int, e settings.RuleExclusion) {
 		ctl := fmt.Sprintf("ctl:ruleRemoveById=%d", e.Rule)
 		switch {
 		case e.Domain != "" && e.Path != "":
@@ -102,8 +116,40 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool) 
 		default:
 			w(`SecAction "id:%d,phase:1,pass,nolog,%s"`, id, ctl)
 		}
-		id++
 	}
+	for i, e := range settings.CleanExclusions(c.RuleExclusions) {
+		writeExcl(IDRuleExcl+i, e)
+	}
+	if !off[IDAutoExcl] {
+		auto := settings.CleanExclusions(dyn.Auto)
+		if len(auto) > 0 {
+			w("# False positives learned on this server (xPGuard portal » Settings » WAF).")
+		}
+		for i, e := range auto {
+			if i >= maxAutoExcl {
+				break
+			}
+			writeExcl(IDAutoExcl+i, e)
+		}
+	}
+	w("")
+}
+
+// renderCPanelOff switches the rule engine off for the websites whose
+// ModSecurity is off in cPanel; it is the first rule of the file.
+func renderCPanelOff(w func(string, ...any), dyn Dynamic) {
+	var alt []string
+	for _, d := range dyn.CPanelOff {
+		d = strings.ToLower(strings.TrimPrefix(d, "www."))
+		if settings.ValidDomain(d) && !strings.HasPrefix(d, "*.") {
+			alt = append(alt, regexp.QuoteMeta(d))
+		}
+	}
+	if len(alt) == 0 {
+		return
+	}
+	w("# ModSecurity switched off for these websites in cPanel » ModSecurity.")
+	w(`SecRule SERVER_NAME "@rx ^(?:www\.)?(?:%s)$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleEngine=Off"`, strings.Join(alt, "|"), IDCPanelOff)
 	w("")
 }
 
@@ -118,13 +164,15 @@ func domainRx(d string) string {
 
 // RenderExclusionsOnly is the rules file when xPGuard's own rules are off
 // but other rule sets (OWASP CRS, custom rules) are loaded after it.
-func RenderExclusionsOnly(c settings.WAF) string {
+func RenderExclusionsOnly(c settings.WAF, dyn Dynamic) string {
 	var b strings.Builder
 	off := map[int]bool{}
 	for _, id := range c.DisabledRules {
 		off[id] = true
 	}
+	w := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
 	b.WriteString("# xPGuard's own rules are turned off; rule sets from the portal follow.\n")
-	renderExclusions(func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }, c, off)
+	renderCPanelOff(w, dyn)
+	renderExclusions(w, c, off, dyn)
 	return b.String()
 }

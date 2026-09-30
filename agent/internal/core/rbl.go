@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
@@ -59,6 +60,41 @@ func (a *Agent) torLoop(ctx context.Context) {
 			a.central.applyMu.Lock()
 			if err := a.WAF.Apply(); err != nil {
 				a.Log.Warn("WAF reload after the Tor list update failed", "err", err)
+			}
+			a.central.applyMu.Unlock()
+		}
+	}
+}
+
+// wafLearnLoop learns WAF false positives hourly and follows cPanel's
+// per-website ModSecurity switches (checked every two minutes); the rules
+// are reloaded when either changed.
+func (a *Agent) wafLearnLoop(ctx context.Context) {
+	lastOff := strings.Join(waf.CPanelModsecOff(), ",")
+	var lastLearn time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Minute):
+		}
+		reload := false
+		if off := strings.Join(waf.CPanelModsecOff(), ","); off != lastOff {
+			lastOff = off
+			reload = true
+		}
+		if time.Since(lastLearn) >= time.Hour {
+			lastLearn = time.Now()
+			changed, err := a.WAF.Learn(time.Now().Unix())
+			if err != nil {
+				a.Log.Warn("WAF false-positive learning failed", "err", err)
+			}
+			reload = reload || changed
+		}
+		if reload {
+			a.central.applyMu.Lock()
+			if err := a.WAF.Apply(); err != nil {
+				a.Log.Warn("WAF reload failed", "err", err)
 			}
 			a.central.applyMu.Unlock()
 		}
