@@ -109,6 +109,8 @@ interface WAFS {
   proxy_ip_check: boolean;
   generic: boolean;
   virtual_patches: boolean;
+  ipdb_post: boolean;
+  tor_action: 'off' | 'captcha' | 'post' | 'block';
 }
 interface CMSS {
   enabled: boolean;
@@ -807,7 +809,10 @@ function PackageCards({ packages, meExtras, disabled, onSave }: { packages: WafP
               <Toggle
                 on={p.enabled}
                 disabled={disabled}
-                onChange={(v) => onSave(Object.fromEntries((v ? p.on : p.categories).map((c) => [c, v])) as Partial<WAFS>)}
+                onChange={(v) =>
+                  // Tor has a choice of actions, not a switch.
+                  onSave(Object.fromEntries((v ? p.on : p.categories).map((c) => (c === 'tor' ? ['tor_action', v ? 'post' : 'off'] : [c, v]))) as Partial<WAFS>)
+                }
               />
             </div>
             <p className="mt-1 flex-1 text-xs text-slate-500">{p.desc}</p>
@@ -832,7 +837,13 @@ function PackageCards({ packages, meExtras, disabled, onSave }: { packages: WafP
 
 function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }: { serverId: string; s: WAFS; all: AllSettings; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void; saveAll: (p: Partial<Record<keyof AllSettings, any>>, msg?: string) => Promise<unknown>; onReload: () => void }) {
   const { run } = useAction();
-  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string; enabled_since: number; replaced_by?: string }; rules: WafRule[]; packages?: WafPackage[] }>(serverId, 'waf.status');
+  const info = useAgent<{
+    status: { available: boolean; web_server: string; error: string; warning: string; enabled_since: number; replaced_by?: string };
+    rules: WafRule[];
+    packages?: WafPackage[];
+    tor?: { addresses: number; updated: number; error: string };
+    ipdb_addresses?: number;
+  }>(serverId, 'waf.status');
   const doms = useAgent<{ domains: { domain: string; user: string }[] }>(serverId, 'domains.list');
   const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
   useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
@@ -912,6 +923,18 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {!replaced && (
         <>
           {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
+          {row('ipdb_post', 'IPDB POST protection', `Addresses on the xPGuard IPDB${info.data?.ipdb_addresses ? ` (${info.data.ipdb_addresses.toLocaleString()} here)` : ''} can read the websites but not log in, send forms or upload, also behind Cloudflare, where the firewall only sees Cloudflare. Allowed addresses and solved CAPTCHAs are exempt.`)}
+          <SettingRow
+            title="Tor exit nodes"
+            desc={`Visitors from the Tor network (list published by the Tor Project${info.data?.tor?.addresses ? `: ${info.data.tor.addresses.toLocaleString()} addresses, updated ${new Date(info.data.tor.updated * 1000).toLocaleString()}` : ', downloaded every 6 hours while this is on'}${info.data?.tor?.error ? `; last download failed: ${info.data.tor.error}` : ''}). Behind Cloudflare its Tor marker is used too. CAPTCHA sends them to the CAPTCHA page on the login pages (needs Overview » CAPTCHA Page; otherwise POST is blocked).`}
+          >
+            <select className="input w-56" value={s.tor_action ?? 'post'} disabled={dis || !s.enabled} onChange={(e) => onSave({ tor_action: e.target.value as WAFS['tor_action'] })}>
+              <option value="off">Allow</option>
+              <option value="captcha">CAPTCHA on login pages</option>
+              <option value="post">Block POST (read only)</option>
+              <option value="block">Block every request</option>
+            </select>
+          </SettingRow>
         </>
       )}
       <div className="mt-2 border-t border-slate-200" />

@@ -39,6 +39,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
+	"github.com/xmarthost/xmartguard/agent/internal/tor"
 	"github.com/xmarthost/xmartguard/agent/internal/trusted"
 	"github.com/xmarthost/xmartguard/agent/internal/updater"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
@@ -83,6 +84,7 @@ type Agent struct {
 	HostFW *hostfw.Host
 	// Trusted holds search engine, monitor, CDN and payment addresses.
 	Trusted   *trusted.Store
+	Tor       *tor.List
 	clam      clamState
 	hostMu    sync.Mutex
 	hostTrust []hostfw.Result
@@ -120,6 +122,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		Protected: a.protectedIPs,
 	}
 	a.Trusted = trusted.New(filepath.Join(store.StateDir(), "trusted-services.json"))
+	a.Tor = tor.New(filepath.Join(store.StateDir(), "tor-exits.json"))
 	a.Trusted.SetCustom(st.Get().Firewall.TrustedCustom)
 	a.Firewall.Trusted = a.trustedCIDRs
 	a.Firewall.TrustedMatch = func(ip string) string {
@@ -157,6 +160,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
 		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, VerifiedBots: a.wafVerifiedBots,
+		IPDBIPs: a.Firewall.IPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, Intel: a.wafIntel,
 		Gate: func() *waf.Gate {
 			cur := a.Settings.Get()
 			// While the portal's CAPTCHA page is on, it serves the login
@@ -219,6 +223,8 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.reportLoop(ctx)
 	go a.hostTrustLoop(ctx)
 	go a.proxyListLoop(ctx)
+	go a.torLoop(ctx)
+	go a.intelLoop(ctx)
 	go a.centralLoop(ctx)
 	// Put back system files that older rules quarantined (root's temp
 	// files, SpamAssassin's compiled rules).
@@ -694,6 +700,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return a.clamStatus(), nil
 	}
 	a.centralHandlers(h)
+	a.intelHandlers(h)
 	h["trusted.status"] = func(context.Context, json.RawMessage) (any, error) {
 		fw := a.Settings.Get().Firewall
 		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil
@@ -909,7 +916,8 @@ func (a *Agent) Handlers() map[string]client.Handler {
 
 	// ---- WAF
 	h["waf.status"] = func(context.Context, json.RawMessage) (any, error) {
-		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "packages": a.WAF.PackageStates(), "stats": a.WAF.Stats()}, nil
+		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "packages": a.WAF.PackageStates(), "stats": a.WAF.Stats(),
+			"tor": a.Tor.Status(), "ipdb_addresses": len(a.Firewall.IPDBEntries())}, nil
 	}
 	// waf.sync pulls the portal's WAF Rule Sets now and applies them.
 	// waf.vendor_rules: where Malware.Expert replaces xPGuard's rules, its

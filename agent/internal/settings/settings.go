@@ -241,6 +241,14 @@ type WAF struct {
 	Generic bool `json:"generic"`
 	// VirtualPatches block known vulnerabilities of popular plugins.
 	VirtualPatches bool `json:"virtual_patches"`
+	// IPDBPost blocks POST requests (logins, forms, uploads) from
+	// addresses on the IPDB, also when the firewall lets them through
+	// (behind a CDN, or with the IPDB off in the firewall).
+	IPDBPost bool `json:"ipdb_post"`
+	// TorAction handles visitors from Tor exit nodes: "off", "captcha"
+	// (login pages ask the CAPTCHA page), "post" (POST requests blocked)
+	// or "block" (every request blocked).
+	TorAction string `json:"tor_action"`
 	// BlockPHPUpload rejects any uploaded file with a PHP extension.
 	BlockPHPUpload bool `json:"block_php_upload"`
 	// WhitelistDomains are websites our rules never inspect.
@@ -429,7 +437,7 @@ func Defaults() Settings {
 		DomainRep:   DomainReputation{Enabled: true, IntervalHours: 12},
 		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
 			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{},
-			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, Generic: true, VirtualPatches: true, WhitelistDomains: []string{},
+			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, Generic: true, VirtualPatches: true, IPDBPost: true, TorAction: "post", WhitelistDomains: []string{},
 			BotBlocker: true, BotList: append([]string{}, DefaultBotList...)},
 		Notifications: Notifications{
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
@@ -668,6 +676,11 @@ func normalize(s *Settings) {
 	}
 	if _, err := time.LoadLocation(s.Scanner.ScheduleTZ); err != nil || s.Scanner.ScheduleTZ == "" {
 		s.Scanner.ScheduleTZ = "Asia/Karachi"
+	}
+	switch s.WAF.TorAction {
+	case "off", "captcha", "post", "block":
+	default:
+		s.WAF.TorAction = "post"
 	}
 	// "normal" (a quarter of the CPUs) was replaced by "auto".
 	switch s.Scanner.ScanSpeed {

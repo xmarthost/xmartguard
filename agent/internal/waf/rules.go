@@ -61,6 +61,11 @@ const (
 	IDExploitProbe  = 7700603
 	IDMalwareExt    = 7700604
 	IDProxyBlocked  = 7700701
+	// IPDB and Tor: id+1000 checks the real address behind Cloudflare or a
+	// local proxy, id+2000 Cloudflare's Tor marker.
+	IDIPDBPost = 7700711
+	IDTorPost  = 7700712
+	IDTorBlock = 7700713
 	// Virtual patches: known plugin vulnerabilities blocked at the WAF.
 	IDVPGravitySMTP = 7701001
 	IDVPFileManager = 7701002
@@ -106,6 +111,7 @@ var Catalog = []RuleInfo{
 	{IDWebshell, "webshell", "Block requests to well-known web shell files", "block"},
 	{IDWebshellDir, "webshell", "Block requests into web shell working folders", "block"},
 	{IDExploitProbe, "webshell", "Block probes for well-known exploits (PHPUnit eval-stdin RCE, Laravel Ignition RCE, leaked cloud credentials)", "block"},
+	{IDFleetNames, "webshell", "Block web shell file names the scanners of your servers found (learned by the portal)", "block"},
 	{IDMalwareExt, "webshell", "Block requests into plugin and theme folders that only malware creates (fake plugins, seotheme)", "block"},
 	{IDStaticPHP, "generic", "Block running PHP files inside images, img, fonts and css folders of any website", "block"},
 	{IDRepeatDirPHP, "generic", "Block PHP requests through repeated folders (/images/images/cache.php), a backdoor search pattern", "block"},
@@ -119,6 +125,9 @@ var Catalog = []RuleInfo{
 	{IDAIBots, "ai_bots", "Block AI training crawlers", "block"},
 	{IDCustomBots, "bot_blocker", "Bad Bot blocker: block the User-Agents in the list", "block"},
 	{IDProxyBlocked, "proxy_ip_check", "Block blacklisted visitors behind Cloudflare or a local proxy (real IP from CF-Connecting-IP / X-Forwarded-For)", "block"},
+	{IDIPDBPost, "ipdb_post", "Block POST requests (logins, forms, uploads) from IPDB-listed addresses, also behind Cloudflare", "block"},
+	{IDTorPost, "tor", "Tor exit nodes: block POST requests (Tor action \"post\")", "block"},
+	{IDTorBlock, "tor", "Tor exit nodes: block every request (Tor action \"block\")", "block"},
 	{IDVPGravitySMTP, "virtual_patches", "Gravity SMTP: block its REST API for visitors who are not logged in (unauthenticated system report exposure)", "block"},
 	{IDVPFileManager, "virtual_patches", "WP File Manager: block direct requests to the elFinder connector (CVE-2020-25213, unauthenticated upload)", "block"},
 	{IDVPRevSlider, "virtual_patches", "Slider Revolution: block the revslider_show_image file download with ../ (arbitrary file read)", "block"},
@@ -143,7 +152,7 @@ var Packages = []Package{
 		[]string{"generic", "sensitive_files"}, []string{"generic", "sensitive_files"}},
 	{"wordpress", "WordPress", "PHP in uploads, cache and core folders, fake core files, user enumeration, XML-RPC abuse, folder listings",
 		[]string{"wordpress"}, []string{"wordpress"}},
-	{"webshell", "Web shells", "Well-known web shell names and folders, malware plugin folders, exploit probes",
+	{"webshell", "Web shells", "Well-known web shell names and folders, names learned from the scanners of all servers, malware plugin folders, exploit probes",
 		[]string{"webshell"}, []string{"webshell"}},
 	{"scanner", "Scanners", "Vulnerability scanners and attack tools, PHP probes without User-Agent and Referer, fake browser User-Agents",
 		[]string{"bad_bots"}, []string{"bad_bots"}},
@@ -151,6 +160,8 @@ var Packages = []Package{
 		[]string{"bot_blocker", "ai_bots", "seo_bots"}, []string{"bot_blocker"}},
 	{"virtual_patches", "Virtual patches", "Known vulnerabilities of popular WordPress plugins blocked before they reach the plugin",
 		[]string{"virtual_patches"}, []string{"virtual_patches"}},
+	{"rbl", "IPDB & Tor", "POST requests from addresses on the xPGuard IPDB and visitors from Tor exit nodes (Tor Project list), also behind Cloudflare",
+		[]string{"ipdb_post", "tor"}, []string{"ipdb_post"}},
 	{"upload", "Uploads", "Uploaded files are scanned for malware; PHP uploads can be refused",
 		[]string{"upload_scan", "block_php_upload"}, []string{"upload_scan"}},
 	{"proxy", "Proxy IP check", "Blacklisted visitors behind Cloudflare or a local proxy (real address from CF-Connecting-IP / X-Forwarded-For)",
@@ -204,6 +215,11 @@ const (
 	FileProxyRanges = "proxy-ranges.txt"
 	FileBlockedIPs  = "blocked-ips.txt"
 	FileTrustedIPs  = "trusted-ips.txt"
+	// IPDB POST block and Tor rules: the addresses, and those never
+	// blocked by them (allowed, temporarily allowed, CAPTCHA solved).
+	FileIPDBIPs   = "ipdb-ips.txt"
+	FileTorIPs    = "tor-exits.txt"
+	FileRBLExempt = "rbl-exempt.txt"
 )
 
 // ProxyRanges are Cloudflare's published networks plus local reverse
@@ -237,6 +253,24 @@ type Options struct {
 	// "googlebot") whose official address lists are in trusted-ips.txt:
 	// others claiming to be them are fake.
 	VerifiedBots []string
+	// Intel is the portal's fleet intelligence (learned web shell names,
+	// virtual patches); nil = none.
+	Intel *Intel
+}
+
+// TorMode is the Tor rule rendered for a setting: "captcha" needs the
+// portal's CAPTCHA page (suspects), otherwise POST requests are blocked.
+func TorMode(action string, centralOn bool) string {
+	switch action {
+	case "post", "block":
+		return action
+	case "captcha":
+		if centralOn {
+			return "captcha"
+		}
+		return "post"
+	}
+	return "off"
 }
 
 // Central is the portal's CAPTCHA page for suspicious visitors: the
@@ -437,6 +471,13 @@ func Render(c settings.WAF, o Options) string {
 			w(`SecRule ARGS:action "@streq duplicator_download" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Virtual patch: Duplicator file download (CVE-2020-11738)',tag:'xpguard/vpatch',chain"`, IDVPDuplicator)
 			w(`  SecRule ARGS:file "@contains .." "t:none,t:urlDecodeUni"`)
 		}
+		if o.Intel != nil {
+			for _, p := range o.Intel.Patches {
+				if !off[p.ID] && p.Valid() == nil {
+					renderPatch(w, p)
+				}
+			}
+		}
 		rule(IDVPLiteSpeed, `SecRule REQUEST_FILENAME "@rx /wp-content/+litespeed/+debug/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Virtual patch: LiteSpeed Cache debug log (CVE-2024-44000)',tag:'xpguard/vpatch'"`, IDVPLiteSpeed)
 	}
 	if c.BruteForce {
@@ -519,6 +560,9 @@ func Render(c settings.WAF, o Options) string {
 		rule(IDWebshellDir, `SecRule REQUEST_FILENAME "@rx /(?:alfa_data|alfacgiapi|wso_data)/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell folder request blocked',tag:'xpguard/webshell'"`, IDWebshellDir)
 		// Paths only exploit scanners request: PHPUnit's eval-stdin.php
 		// (CVE-2017-9841), Laravel Ignition (CVE-2021-3129), leaked credentials.
+		if in := o.Intel; in != nil && len(in.Names) > 0 && !off[IDFleetNames] {
+			rule(IDFleetNames, `SecRule REQUEST_FILENAME "@rx /(?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell name learned by the fleet blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(in.Names), "|"), IDFleetNames)
+		}
 		rule(IDMalwareExt, `SecRule REQUEST_FILENAME "@rx /wp-content/+(?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Malware plugin or theme folder blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(MalwareExtDirs), "|"), IDMalwareExt)
 		rule(IDExploitProbe, `SecRule REQUEST_FILENAME "@rx /(?:vendor/phpunit/phpunit/src/util/php/eval-stdin\.php|_ignition/execute-solution|\.aws/credentials|\.vscode/sftp\.json|sftp-config\.json|\.git-credentials)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Exploit probe blocked',tag:'xpguard/webshell'"`, IDExploitProbe)
 	}
@@ -553,6 +597,43 @@ func Render(c settings.WAF, o Options) string {
 		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileTrustedIPs)
 		w(`  SecRule &REQUEST_HEADERS:X-Forwarded-For "@eq 0" "t:none,chain"`)
 		w(`  SecRule &REQUEST_HEADERS:CF-Connecting-IP "@eq 0" "t:none"`)
+	}
+	// rblRule blocks addresses on a list, directly and behind a proxy (real
+	// address from the forwarded-for headers; id+1000), except exempt
+	// addresses. viaCF also blocks visitors Cloudflare marks with that
+	// country code (id+2000; T1 is Tor).
+	rblRule := func(id int, post bool, list, msg string, viaCF string) {
+		head := func(id int, what, first string) {
+			if post {
+				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, id, msg, what)
+				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, first)
+			} else {
+				w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, o.Dir, first, id, msg, what)
+			}
+		}
+		head(id, "", list)
+		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
+		head(id+1000, " (behind a proxy)", FileProxyRanges)
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
+		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, list)
+		w(`    SecRule TX:1 "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
+		if viaCF != "" {
+			head(id+2000, " (Cloudflare)", FileProxyRanges)
+			w(`  SecRule REQUEST_HEADERS:CF-IPCountry "@streq %s" "t:none"`, viaCF)
+		}
+	}
+	if c.IPDBPost && !off[IDIPDBPost] {
+		rblRule(IDIPDBPost, true, FileIPDBIPs, "POST from an IPDB-listed address blocked", "")
+	}
+	switch TorMode(c.TorAction, o.Central != nil && o.Gate == nil) {
+	case "post":
+		if !off[IDTorPost] {
+			rblRule(IDTorPost, true, FileTorIPs, "POST from a Tor exit node blocked", "T1")
+		}
+	case "block":
+		if !off[IDTorBlock] {
+			rblRule(IDTorBlock, false, FileTorIPs, "Tor exit node blocked", "T1")
+		}
 	}
 	if c.ProxyIPCheck && !off[IDProxyBlocked] {
 		// Disruptive action and metadata sit on the chain's first rule
@@ -624,6 +705,24 @@ func BotFiles(c settings.WAF) map[string]string {
 		FileAIBots:     join(AIBots),
 		FileCustomBots: join(c.BotList),
 	}
+}
+
+// AddrFile writes addresses the way @ipMatchFromFile reads them: valid,
+// unique, sorted, never empty.
+func AddrFile(list []string) string {
+	var ok []string
+	seen := map[string]bool{}
+	for _, a := range list {
+		if a = modsecAddr(strings.TrimSpace(a)); validAddr(a) && !seen[a] {
+			seen[a] = true
+			ok = append(ok, a)
+		}
+	}
+	if len(ok) == 0 {
+		ok = []string{placeholderIP}
+	}
+	sort.Strings(ok)
+	return strings.Join(ok, "\n") + "\n"
 }
 
 // ProxyFiles returns the proxy IP check lists (blocked: the firewall's

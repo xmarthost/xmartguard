@@ -95,6 +95,12 @@ func (a *Agent) centralSuspects() []string {
 		}
 		rows.Close()
 	}
+	// Tor exit nodes when their visitors are to solve the CAPTCHA.
+	if a.Tor != nil && a.torMode() == "captcha" {
+		for _, ip := range a.Tor.Addrs() {
+			set[ip] = true
+		}
+	}
 	// Never the server itself, the portal, allowed addresses or trusted services.
 	skip := map[string]bool{}
 	if a.Firewall != nil {

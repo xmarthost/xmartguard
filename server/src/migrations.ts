@@ -355,4 +355,36 @@ CREATE TABLE captcha_events (
 CREATE INDEX captcha_events_account_at ON captcha_events (account_id, at DESC);
 `,
   },
+  {
+    version: '010_waf_intel',
+    sql: `
+-- WAF fleet intelligence: web shell file names the agents' scanners found
+-- (clean = a finding restored as a false positive), the administrator's
+-- decisions on names, and the account's settings (Overview » WAF Intelligence).
+CREATE TABLE waf_name_reports (
+  account_id  uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  server_id   uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  clean       boolean NOT NULL DEFAULT false,
+  tail        text NOT NULL DEFAULT '',
+  signature   text NOT NULL DEFAULT '',
+  reports     integer NOT NULL DEFAULT 1,
+  first_seen  timestamptz NOT NULL DEFAULT now(),
+  last_seen   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, server_id, name, clean)
+);
+CREATE TABLE waf_name_overrides (
+  account_id  uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  status      text NOT NULL CHECK (status IN ('approved','ignored','added')),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, name)
+);
+CREATE TABLE waf_intel_config (
+  account_id  uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  config      jsonb NOT NULL,
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

@@ -29,6 +29,7 @@ import { wafRulesetRoutes } from './routes/waf-rulesets.js';
 import { appearanceRoutes } from './routes/appearance.js';
 import { trustedRoutes } from './routes/trusted.js';
 import { captchaRoutes } from './routes/captcha.js';
+import { wafIntelRoutes } from './routes/waf-intel.js';
 import { CRSService } from './waf/rulesets.js';
 
 export interface App {
@@ -92,6 +93,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   appearanceRoutes(app, pool);
   trustedRoutes(app, pool, hub);
   captchaRoutes(app, pool, cfg, hub);
+  wafIntelRoutes(app, pool, hub);
   // API answers are live data: never stored by browsers or proxies/CDNs.
   app.addHook('onSend', async (req, reply, payload) => {
     if (req.url.startsWith('/api/') && !reply.hasHeader('Cache-Control')) reply.header('Cache-Control', 'no-store');

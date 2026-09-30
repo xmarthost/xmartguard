@@ -40,6 +40,12 @@ type Manager struct {
 	TrustedIPs func() []string
 	// VerifiedBots are the search crawlers whose official lists are loaded.
 	VerifiedBots func() []string
+	// IPDBIPs, TorIPs and RBLExempt feed the IPDB POST block and Tor rules.
+	IPDBIPs   func() []string
+	TorIPs    func() []string
+	RBLExempt func() []string
+	// Intel is the portal's fleet intelligence (nil or returning nil = none).
+	Intel func() *Intel
 	// Gate is the login-page CAPTCHA for the rules (nil or returning nil = off).
 	Gate func() *Gate
 	// Central is the portal's CAPTCHA page for suspicious visitors (nil or
@@ -135,6 +141,10 @@ func categoryEnabled(c settings.WAF, cat string) bool {
 		return c.Generic
 	case "virtual_patches":
 		return c.VirtualPatches
+	case "ipdb_post":
+		return c.IPDBPost
+	case "tor":
+		return c.TorAction != "off" && c.TorAction != ""
 	case "block_php_upload":
 		return c.BlockPHPUpload
 	}
@@ -173,14 +183,40 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 	if l := m.trustedList(); len(l) > 0 {
 		files[FileTrustedIPs] = strings.Join(l, "\n") + "\n"
 	}
-	if cfg.ProxyIPCheck {
-		var blocked []string
-		if m.BlockedIPs != nil {
-			blocked = m.BlockedIPs()
-		}
-		for k, v := range ProxyFiles(blocked) {
+	var blocked []string
+	if cfg.ProxyIPCheck && m.BlockedIPs != nil {
+		blocked = m.BlockedIPs()
+	}
+	// The proxy networks are also used by the IPDB and Tor rules.
+	for k, v := range ProxyFiles(blocked) {
+		if k == FileProxyRanges || cfg.ProxyIPCheck {
 			files[k] = v
 		}
+	}
+	for k, v := range m.rblFiles(cfg) {
+		files[k] = v
+	}
+	return files
+}
+
+// rblFiles are the address lists of the IPDB POST block and Tor rules.
+func (m *Manager) rblFiles(cfg settings.WAF) map[string]string {
+	tor := cfg.TorAction == "post" || cfg.TorAction == "block" || cfg.TorAction == "captcha"
+	if !cfg.IPDBPost && !tor {
+		return nil
+	}
+	get := func(f func() []string) []string {
+		if f == nil {
+			return nil
+		}
+		return f()
+	}
+	files := map[string]string{FileRBLExempt: AddrFile(get(m.RBLExempt))}
+	if cfg.IPDBPost {
+		files[FileIPDBIPs] = AddrFile(get(m.IPDBIPs))
+	}
+	if tor {
+		files[FileTorIPs] = AddrFile(get(m.TorIPs))
 	}
 	return files
 }
@@ -204,17 +240,22 @@ func (m *Manager) CentralChanged() bool {
 	return false
 }
 
-// BlockedListChanged reports whether the proxy IP check's blocked list on
-// disk differs from the firewall's current list (so a reload is due).
+// BlockedListChanged reports whether the address lists on disk (proxy IP
+// check, IPDB POST block, Tor) differ from the current ones (so a reload
+// is due).
 func (m *Manager) BlockedListChanged() bool {
-	if !m.Settings.Get().WAF.ProxyIPCheck || m.BlockedIPs == nil {
-		return false
+	cfg := m.Settings.Get().WAF
+	want := m.rblFiles(cfg)
+	if cfg.ProxyIPCheck && m.BlockedIPs != nil {
+		want[FileBlockedIPs] = ProxyFiles(m.BlockedIPs())[FileBlockedIPs]
 	}
-	cur, err := os.ReadFile(filepath.Join(m.RulesDir, FileBlockedIPs))
-	if err != nil {
-		return true
+	for name, body := range want {
+		cur, err := os.ReadFile(filepath.Join(m.RulesDir, name))
+		if err != nil || string(cur) != body {
+			return true
+		}
 	}
-	return string(cur) != ProxyFiles(m.BlockedIPs())[FileBlockedIPs]
+	return false
 }
 
 // ToggleRule returns the settings change that switches one of our rules on
@@ -226,6 +267,9 @@ func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
 		if Catalog[i].ID == id {
 			rule = &Catalog[i]
 		}
+	}
+	if rule == nil && id >= IDPortalPatchMin && id <= IDPortalPatchMax {
+		rule = &RuleInfo{ID: id, Category: "virtual_patches"}
 	}
 	if rule == nil {
 		return nil, fmt.Errorf("unknown xPGuard rule %d", id)
@@ -296,6 +340,9 @@ func (m *Manager) Apply() error {
 				opts.Central = m.Central()
 			}
 			central = opts.Central
+			if m.Intel != nil {
+				opts.Intel = m.Intel().Clean()
+			}
 			if m.VerifiedBots != nil && opts.Trusted {
 				opts.VerifiedBots = m.VerifiedBots()
 			}
@@ -404,9 +451,29 @@ func (m *Manager) RuleCatalog() []CatalogRule {
 	}
 	now := store.Now()
 	day, week := m.ruleHits(now-86400), m.ruleHits(now-7*86400)
-	out := make([]CatalogRule, 0, len(Catalog))
-	for _, r := range Catalog {
-		out = append(out, CatalogRule{r, categoryEnabled(cfg, r.Category) && !disabled[r.ID], day[r.ID], week[r.ID]})
+	rules := append([]RuleInfo(nil), Catalog...)
+	if m.Intel != nil {
+		if in := m.Intel().Clean(); in != nil {
+			for _, p := range in.Patches {
+				t := "Portal patch: " + p.Title
+				if p.CVE != "" {
+					t += " (" + p.CVE + ")"
+				}
+				rules = append(rules, RuleInfo{p.ID, "virtual_patches", t, "block"})
+			}
+		}
+	}
+	out := make([]CatalogRule, 0, len(rules))
+	for _, r := range rules {
+		on := categoryEnabled(cfg, r.Category) && !disabled[r.ID]
+		// Only the Tor rule of the chosen action is used.
+		switch r.ID {
+		case IDTorPost:
+			on = on && (cfg.TorAction == "post" || cfg.TorAction == "captcha")
+		case IDTorBlock:
+			on = on && cfg.TorAction == "block"
+		}
+		out = append(out, CatalogRule{r, on, day[r.ID], week[r.ID]})
 	}
 	return out
 }
@@ -423,7 +490,9 @@ type PackageState struct {
 }
 
 // pairRules are second rules (id+1000) that count for the first.
-var pairRules = map[int]int{IDEmptyUAWP + 1000: IDEmptyUAWP, IDRootProbe + 1000: IDRootProbe}
+var pairRules = map[int]int{IDEmptyUAWP + 1000: IDEmptyUAWP, IDRootProbe + 1000: IDRootProbe,
+	IDIPDBPost + 1000: IDIPDBPost, IDTorPost + 1000: IDTorPost, IDTorBlock + 1000: IDTorBlock,
+	IDTorPost + 2000: IDTorPost, IDTorBlock + 2000: IDTorBlock}
 
 // ruleHits counts each catalog rule's logged events since a time.
 func (m *Manager) ruleHits(since int64) map[int]int {
