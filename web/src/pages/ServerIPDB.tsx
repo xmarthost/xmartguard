@@ -32,8 +32,9 @@ interface Live {
   now?: number;
 }
 
-/** Points of the rolling live chart (one per refresh, ~1.5 s). */
-const LIVE_POINTS = 40;
+/** The live chart: one point a second, the last 10 seconds (like cPGuard). */
+const LIVE_POINTS = 10;
+const LIVE_MS = 1000;
 
 interface Status {
   enabled: boolean;
@@ -49,6 +50,16 @@ const fmtClock = (ts: number) => {
   return `${two(d.day)}-${two(d.month)}-${d.year} ${two(d.hour)}:${two(d.minute)}:${two(d.second)}`;
 };
 
+/** Y axis ticks in round steps (2, 5, 10, 20 …) with room above the highest point. */
+function evenTicks(max: number): number[] {
+  const top = Math.max(4, max * 1.1);
+  // Smallest step of 1, 2 or 5 × 10^n that keeps about a dozen ticks.
+  let step = 1;
+  for (let e = 1; top / step > 13; e *= 10) step = [1, 2, 5].map((m) => m * e).find((c) => top / c <= 13) ?? 10 * e;
+  const end = Math.ceil(top / step) * step;
+  return Array.from({ length: end / step + 1 }, (_, i) => i * step);
+}
+
 /** Per-server IPDB blocklist stats with a live log of blocked connections. */
 export default function ServerIPDB() {
   const { id } = useParams();
@@ -63,7 +74,11 @@ export default function ServerIPDB() {
   // Rows that arrived in the latest refresh slide in and flash green.
   const [fresh, setFresh] = useState<Set<number>>(new Set());
   // Rolling live series: packets dropped between refreshes.
-  const [series, setSeries] = useState<{ k: number; t: string; v: number }[]>([]);
+  const [series, setSeries] = useState<{ k: number; t: number; v: number }[]>([]);
+  // Seconds since the page opened: the chart's x axis.
+  const second = useRef(0);
+  // Bumped on every refresh that reached the agent: restarts the green light.
+  const [beat, setBeat] = useState(0);
   const prev = useRef<{ packets: number; at: number } | null>(null);
 
   useEffect(() => {
@@ -72,6 +87,7 @@ export default function ServerIPDB() {
     let tick = 0;
     lastId.current = 0;
     prev.current = null;
+    second.current = 0;
     setEvents([]);
     setSeries([]);
     const load = async () => {
@@ -94,18 +110,23 @@ export default function ServerIPDB() {
         } else {
           setFresh(new Set());
         }
-        // Live chart: growth of the IPDB drop counter since the last refresh
-        // (sampled log rows as a fallback when counters are unavailable).
+        // Live chart: packets the IPDB dropped per second since the last
+        // refresh (sampled log rows as a fallback without counters). A slow
+        // refresh is spread over the seconds it took.
         const now = Date.now();
         let v = l.events.length && !first ? l.events.length : 0;
-        if (l.packets !== undefined && prev.current) v = Math.max(0, l.packets - prev.current.packets);
+        if (l.packets !== undefined && prev.current) {
+          const secs = Math.max(1, (now - prev.current.at) / 1000);
+          v = Math.round(Math.max(0, l.packets - prev.current.packets) / secs);
+        }
         if (l.packets !== undefined) prev.current = { packets: l.packets, at: now };
-        const d = zoned(now);
-        const label = `${two(d.hour)}:${two(d.minute)}:${two(d.second)}`;
+        const t = ++second.current;
         setSeries((cur) => {
-          const base = cur.length ? cur : Array.from({ length: LIVE_POINTS - 1 }, (_, i) => ({ k: now - (LIVE_POINTS - i) * 1500, t: '', v: 0 }));
-          return [...base, { k: now, t: label, v }].slice(-LIVE_POINTS);
+          // Starts full, with the seconds before the page opened at zero.
+          const base = cur.length ? cur : Array.from({ length: LIVE_POINTS - 1 }, (_, i) => ({ k: now - (LIVE_POINTS - 1 - i) * LIVE_MS, t: t - (LIVE_POINTS - 1 - i), v: 0 }));
+          return [...base, { k: now, t, v }].slice(-LIVE_POINTS);
         });
+        setBeat((b) => b + 1);
         setReloaded(new Date());
         setError(null);
       } catch (e: any) {
@@ -115,7 +136,7 @@ export default function ServerIPDB() {
       }
     };
     load();
-    const t = setInterval(load, 1500);
+    const t = setInterval(load, LIVE_MS);
     return () => {
       alive = false;
       clearInterval(t);
@@ -125,6 +146,7 @@ export default function ServerIPDB() {
   if (!live && error) return <ErrorBox message={error} />;
   if (!live || !status) return <PageLoader />;
 
+  const liveTicks = evenTicks(Math.max(0, ...series.map((p) => p.v)));
   const minutes = live.minutes.map((p) => ({ t: zoned(p.at * 1000).minute, v: p.packets }));
   const hourly = live.hourly.map((p) => ({ t: two(zoned(p.at * 1000).hour), v: p.packets }));
   const countries = Object.entries(live.countries)
@@ -165,21 +187,16 @@ export default function ServerIPDB() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.35fr)]">
         <div className="space-y-5">
-          <Card title="Attacks Blocked - Live" desc="Blocked packets, updated every 1.5 seconds">
+          <Card title="Attacks Blocked - Live" desc="Blocked packets per second, the last 10 seconds">
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={series}>
-                  <defs>
-                    <linearGradient id="liveFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#1e2a5a" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="#1e2a5a" stopOpacity={0.04} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="t" fontSize={11} interval="preserveEnd" minTickGap={40} tickLine={false} />
-                  <YAxis fontSize={11} width={40} allowDecimals={false} />
-                  <Tooltip formatter={(v) => [Number(v).toLocaleString(), 'Packets']} labelFormatter={(l) => l || ''} />
-                  <Area type="monotone" dataKey="v" name="Packets" stroke="#1e2a5a" fill="url(#liveFill)" strokeWidth={2} isAnimationActive animationDuration={600} dot={false} />
+                {/* A new point every second and the curve steps left, without a morphing animation. */}
+                <AreaChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid horizontal={false} stroke="#e8eaf0" />
+                  <XAxis dataKey="t" fontSize={11} interval={0} tickLine={false} axisLine={false} />
+                  <YAxis fontSize={11} width={36} allowDecimals={false} tickLine={false} axisLine={false} domain={[0, liveTicks.at(-1)!]} ticks={liveTicks} interval={0} />
+                  <Tooltip formatter={(v) => [Number(v).toLocaleString(), 'Packets / second']} labelFormatter={() => ''} />
+                  <Area type="monotone" dataKey="v" name="Packets" stroke="#1e2a5a" strokeWidth={2} fill="#1e2a5a" fillOpacity={0.38} isAnimationActive={false} dot={false} activeDot={{ r: 3 }} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -205,7 +222,18 @@ export default function ServerIPDB() {
             </div>
           </Card>
         </div>
-        <Card title="IPDB Live monitor" desc="Live log of connections from blacklisted IPs being blocked.">
+        <Card
+          title="IPDB Live monitor"
+          desc="Live log of connections from blacklisted IPs being blocked."
+          right={
+            <span
+              key={beat}
+              className={`mt-1.5 inline-block h-3 w-3 shrink-0 rounded-full ${error ? 'bg-slate-300' : 'xg-live-light bg-green-500'}`}
+              title={error ? 'Not receiving live data' : 'Receiving live data'}
+              aria-label={error ? 'offline' : 'live'}
+            />
+          }
+        >
           {!live.logging && (
             <p className="mb-2 rounded bg-amber-50 p-2 text-xs text-amber-700">
               Connection logging is off (Firewall » Log blocked connections). Counts and charts still work.
