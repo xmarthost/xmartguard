@@ -52,7 +52,7 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c' });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
@@ -120,6 +120,24 @@ describe('CAPTCHA page for suspicious visitors', () => {
     const g = await admin.req('GET', '/api/captcha');
     expect(g.body.last24h).toMatchObject({ passed: 2, failed: 1, rejected: 2, offline: 1 });
     expect(g.body.recent[0]).toMatchObject({ server: 'web-captcha' });
+  });
+
+  it('previews: tests only the check, asks no server, records nothing', async () => {
+    const before = passes.length;
+    const page = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&preview=1`, headers: { 'cf-connecting-ip': '198.51.100.20' } });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain('Preview of the page visitors see');
+    expect(page.body).toContain('"preview":true');
+    const p = { s: serverId, ip: '198.51.100.20', h: 'example.com', u: '/wp-login.php', preview: true };
+    const r = await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'cf-connecting-ip': '198.51.100.20' }, payload: { ...p, token: 'good-token' } });
+    expect(r.json()).toEqual({ ok: true, preview: true });
+    expect((await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'cf-connecting-ip': '198.51.100.20' }, payload: { ...p, token: 'bad' } })).statusCode).toBe(403);
+    expect(passes.length).toBe(before);
+    const g = await admin.req('GET', '/api/captcha');
+    expect(g.body.recent.some((x: { host: string }) => x.host === 'example.com')).toBe(false);
+    // Clearing the list.
+    expect((await admin.req('DELETE', '/api/captcha/events')).body.deleted).toBeGreaterThan(0);
+    expect((await admin.req('GET', '/api/captcha')).body.recent).toHaveLength(0);
   });
 
   it('shows only the service page on the CAPTCHA host', async () => {

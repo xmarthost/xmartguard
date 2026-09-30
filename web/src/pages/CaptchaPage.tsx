@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink, Save, ShieldQuestion } from 'lucide-react';
+import { ExternalLink, Save, ShieldQuestion, Trash2 } from 'lucide-react';
 import { api } from '../api';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, ErrorBox, PageLoader } from '../components/ui';
@@ -56,7 +56,7 @@ export default function CaptchaPage() {
   const d = res.data;
   const dirty = enabled !== d.config.enabled || siteKey !== d.config.site_key || minutes !== d.config.minutes || secret !== '';
   const online = d.servers.filter((s) => s.online).length;
-  const preview = d.servers[0] ? `${d.url}?s=${d.servers[0].id}&ip=192.0.2.10&h=example.com&u=/wp-login.php` : '';
+  const preview = d.servers[0] ? `${d.url}?s=${d.servers[0].id}&preview=1` : '';
   const save = () =>
     run(
       () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes }).then((r) => (res.reload(), r)),
@@ -147,7 +147,21 @@ export default function CaptchaPage() {
         </div>
       </Card>
 
-      <Card title="Recent checks" desc="The last 50 visitors sent to the page (kept 30 days).">
+      <Card
+        title="Recent checks"
+        desc="The last 50 visitors sent to the page (kept 30 days)."
+        right={
+          admin && d.recent.length > 0 ? (
+            <button
+              className="btn-outline"
+              disabled={busy}
+              onClick={() => confirm('Clear the list of checks?') && run(() => api('DELETE', '/api/captcha/events').then(res.reload), 'List cleared')}
+            >
+              <Trash2 className="h-4 w-4" /> Clear list
+            </button>
+          ) : undefined
+        }
+      >
         {d.recent.length === 0 ? (
           <p className="text-sm text-slate-500">No checks yet.</p>
         ) : (

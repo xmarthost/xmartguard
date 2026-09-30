@@ -82,7 +82,7 @@ export function parseParams(rawUrl: string) {
   const head = new URLSearchParams(at >= 0 ? query.slice(0, at) : query);
   let u = at >= 0 ? query.slice(at + 3) : (head.get('u') ?? '/');
   if (!u.startsWith('/') && /^%2f/i.test(u)) u = decodeURIComponent(u);
-  return { s: head.get('s') ?? '', ip: head.get('ip') ?? '', h: (head.get('h') ?? '').toLowerCase(), u };
+  return { s: head.get('s') ?? '', ip: head.get('ip') ?? '', h: (head.get('h') ?? '').toLowerCase(), u, preview: head.get('preview') === '1' };
 }
 
 function validParams(p: { s: string; ip: string; h: string; u: string }): string | null {
@@ -142,6 +142,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
   app.get('/v', { config: { rateLimit: { max: 60, timeWindow: '10 minutes' } } }, async (req, reply) => {
     const p = parseParams(req.raw.url ?? '');
     const ip = visitorIP(req, cfg.trustProxy);
+    // Preview from Overview » CAPTCHA Page: only the check itself is tried.
+    if (p.preview) Object.assign(p, { ip, h: 'example.com', u: '/wp-login.php' });
     const bad = validParams(p);
     if (bad) return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: bad }), 400);
     const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
@@ -150,10 +152,11 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!config.enabled || !config.site_key || !config.secret_key) {
       return html(reply, renderPage({ host: p.h, visitorIp: ip, params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
     }
-    return html(reply, renderPage({ host: p.h, visitorIp: ip, params: p, siteKey: config.site_key }));
+    const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
+    return html(reply, renderPage({ host: p.h, visitorIp: ip, params, siteKey: config.site_key }));
   });
 
-  const Verify = z.object({ s: z.string(), ip: z.string(), h: z.string(), u: z.string(), token: z.string().min(1).max(4096) });
+  const Verify = z.object({ s: z.string(), ip: z.string(), h: z.string(), u: z.string(), token: z.string().min(1).max(4096), preview: z.boolean().optional() });
   app.post(
     '/v/verify',
     { bodyLimit: 16 * 1024, config: { rateLimit: { max: 20, timeWindow: '10 minutes', keyGenerator: (req: FastifyRequest) => visitorIP(req, cfg.trustProxy) } } },
@@ -168,6 +171,11 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       const { config } = await load(pool, accountId);
       if (!config.enabled || !config.secret_key) return reply.code(503).send({ error: 'The check is not available right now.' });
       const ip = visitorIP(req, cfg.trustProxy);
+      // A preview only tests the check: no server is asked, nothing is recorded.
+      if (b.data.preview) {
+        if (!(await turnstile.verify(config.secret_key, b.data.token, ip))) return reply.code(403).send({ error: 'The check failed. Please try again.' });
+        return { ok: true, preview: true };
+      }
       // The link is for one address; another address of the same family may
       // not use it (a dual-stack visitor can reach this page over the other
       // family, so that case is allowed).
@@ -257,6 +265,14 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       void hub.command(s.id, 'captcha.central', { version, enabled: c.enabled, url: pageUrl, minutes: c.minutes }, 120_000).catch(() => undefined);
     }
     return { version, pushed, offline };
+  });
+
+  // Clear the list of checks (e.g. after trying the page out).
+  app.delete('/api/captcha/events', admin, async (req) => {
+    const acc = req.user!.accountId;
+    const r = await pool.query('DELETE FROM captcha_events WHERE account_id = $1', [acc]);
+    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.events_cleared', detail: { count: r.rowCount }, ip: req.ip });
+    return { deleted: r.rowCount };
   });
 
   // Agents fetch the setting when it changed (servers that were offline).

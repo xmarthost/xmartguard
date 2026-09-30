@@ -12,7 +12,7 @@ export interface PageData {
   /** Address the visitor is seen with here. */
   visitorIp: string;
   /** Request parameters, sent back with the solved check. */
-  params: { s: string; ip: string; h: string; u: string } | null;
+  params: { s: string; ip: string; h: string; u: string; preview?: boolean } | null;
   /** Cloudflare Turnstile site key ('' = not set up). */
   siteKey: string;
   /** Error shown instead of the check. */
@@ -37,6 +37,9 @@ body{min-height:100vh;display:flex;flex-direction:column;align-items:center;just
 .widget{min-height:70px;display:flex;justify-content:center;align-items:center}
 .status{min-height:24px;margin:16px 0 0;font-size:15px;font-weight:600;color:#1d4f96}
 .status.err{color:#c0392b}.status.ok{color:#15803d}
+.again{margin-top:12px;border:1px solid #c9d6ea;background:#fff;color:#1d4f96;font:600 14px inherit;font-family:inherit;border-radius:10px;padding:9px 18px;cursor:pointer}
+.again:hover{background:#f1f5fb}
+.preview{background:#fff7e6;border:1px solid #f6d9a8;color:#8a5a00;border-radius:12px;padding:10px 14px;font-size:14px;margin:0 0 16px}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid #cfd9ea;border-top-color:#1d4f96;border-radius:50%;animation:s 1s linear infinite;vertical-align:-3px;margin-right:8px}
 @keyframes s{to{transform:rotate(360deg)}}
 .box{background:#fff5f2;border:1px solid #f6d3c8;border-radius:14px;padding:14px 16px;color:#8a2d14;font-size:15px;line-height:1.5}
@@ -55,22 +58,28 @@ export function renderPage(d: PageData): string {
     ? `<div class="box">${esc(d.error)}</div>`
     : `<p class="label">Human verification</p>
 <div class="widget"><div id="ts"></div></div>
-<p class="status" id="status" role="status" aria-live="polite"><span class="spin"></span>Loading the check…</p>`;
+<p class="status" id="status" role="status" aria-live="polite"><span class="spin"></span>Loading the check…</p>
+<button type="button" class="again" id="again" hidden>Try again</button>`;
   const script =
     d.error || !d.params
       ? ''
       : `<script>
-var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},st=document.getElementById('status');
+var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},st=document.getElementById('status'),ag=document.getElementById('again');
 function show(t,c){st.className='status'+(c?' '+c:'');st.innerHTML=t}
+// After an error the widget is not reset by itself (it would solve again
+// and repeat the same error): the visitor chooses to try again.
+function fail(t){show(t,'err');ag.hidden=false}
+ag.onclick=function(){ag.hidden=true;show('Please confirm you are not a robot.');if(window.turnstile)turnstile.reset()};
 function done(token){
   show('<span class="spin"></span>Checking…');
   fetch('/v/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({token:token},P))})
   .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
   .then(function(x){
-    if(!x.ok){show(x.j.error||'The check failed. Please try again.','err');if(window.turnstile)turnstile.reset();return}
+    if(!x.ok){fail(x.j.error||'The check failed. Please try again.');return}
+    if(x.j.preview){show('Preview: the check works. A real visitor would now go back to the website.','ok');return}
     show('Verified. Taking you back to ${host}…','ok');
     setTimeout(function(){location.replace(x.j.redirect)},${1200});
-  }).catch(function(){show('Network error. Please try again.','err');if(window.turnstile)turnstile.reset()});
+  }).catch(function(){fail('Network error. Please try again.')});
 }
 window.onTs=function(){
   show('Please confirm you are not a robot.');
@@ -89,6 +98,7 @@ window.onTs=function(){
 </head><body>
 <main class="card">
 <img class="shield" src="/xpguard-shield.png" alt="">
+${d.params?.preview ? '<p class="preview">Preview of the page visitors see. Solving it here only tests the check; no website is changed.</p>' : ''}
 <h1 class="site">${host}</h1>
 <p class="by">is protected by <b>xPGuard</b></p>
 <p class="ip">Your IP address is <b>${esc(d.visitorIp)}</b></p>
