@@ -1319,7 +1319,7 @@ func cliLFD(c *cli) error {
 var wafModules = map[string]string{
 	"scanner": "upload_scan", "upload-scan": "upload_scan", "webshell": "webshell", "bots": "bad_bots", "crawler": "bad_bots",
 	"seo-bots": "seo_bots", "ai-bots": "ai_bots", "wordpress": "wordpress", "sensitive": "sensitive_files", "bruteforce": "bruteforce",
-	"php-upload": "block_php_upload",
+	"php-upload": "block_php_upload", "generic": "generic", "virtual-patches": "virtual_patches",
 }
 
 func cliWAF(c *cli) error {
@@ -1779,7 +1779,7 @@ Usage:  xgcli COMMAND [--options]      (run as root)
      --temp-allow|--temp-ban IP [--expiry 30m|2h|7d] [--reason TEXT] | --remove IP | --list
      --allow-source|--deny-source FILE|URL      --ddns NAME | --ddns --remove NAME | --ddns --list
   lfd [--enable|--disable|--status|--restart|--list-jails] [--ignore JAIL | --ignore --remove JAIL | --ignore --list]
-  waf [--enable|--disable [scanner,webshell,bots,seo-bots,ai-bots,wordpress,sensitive,bruteforce,php-upload]]
+  waf [--enable|--disable [scanner,webshell,bots,seo-bots,ai-bots,wordpress,sensitive,bruteforce,php-upload,generic,virtual-patches]]
       [--whitelist --add RULE_ID | --remove RULE_ID] [--whitelist-domain --add DOMAIN] [--whitelist-ip --add IP]
   bot-check [--enable|--disable]
   account-suspend [--enable|--disable [virus,domain]]

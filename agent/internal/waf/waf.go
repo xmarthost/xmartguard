@@ -38,6 +38,8 @@ type Manager struct {
 	BlockedIPs func() []string
 	// TrustedIPs returns trusted services' addresses (bot rules skip them).
 	TrustedIPs func() []string
+	// VerifiedBots are the search crawlers whose official lists are loaded.
+	VerifiedBots func() []string
 	// Gate is the login-page CAPTCHA for the rules (nil or returning nil = off).
 	Gate func() *Gate
 	// Central is the portal's CAPTCHA page for suspicious visitors (nil or
@@ -129,6 +131,10 @@ func categoryEnabled(c settings.WAF, cat string) bool {
 		return c.ProxyIPCheck
 	case "webshell":
 		return c.Webshell
+	case "generic":
+		return c.Generic
+	case "virtual_patches":
+		return c.VirtualPatches
 	case "block_php_upload":
 		return c.BlockPHPUpload
 	}
@@ -290,6 +296,9 @@ func (m *Manager) Apply() error {
 				opts.Central = m.Central()
 			}
 			central = opts.Central
+			if m.VerifiedBots != nil && opts.Trusted {
+				opts.VerifiedBots = m.VerifiedBots()
+			}
 			if cfg.UploadScan {
 				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
 			}
@@ -383,6 +392,8 @@ func (m *Manager) RuleSetStates() []RuleSetState {
 type CatalogRule struct {
 	RuleInfo
 	Enabled bool `json:"enabled"`
+	Hits24h int  `json:"hits_24h"`
+	Hits7d  int  `json:"hits_7d"`
 }
 
 func (m *Manager) RuleCatalog() []CatalogRule {
@@ -391,9 +402,72 @@ func (m *Manager) RuleCatalog() []CatalogRule {
 	for _, id := range cfg.DisabledRules {
 		disabled[id] = true
 	}
+	now := store.Now()
+	day, week := m.ruleHits(now-86400), m.ruleHits(now-7*86400)
 	out := make([]CatalogRule, 0, len(Catalog))
 	for _, r := range Catalog {
-		out = append(out, CatalogRule{r, categoryEnabled(cfg, r.Category) && !disabled[r.ID]})
+		out = append(out, CatalogRule{r, categoryEnabled(cfg, r.Category) && !disabled[r.ID], day[r.ID], week[r.ID]})
+	}
+	return out
+}
+
+// PackageState is a rule package with its state on this server and how
+// often its rules blocked something.
+type PackageState struct {
+	Package
+	Enabled bool `json:"enabled"`
+	Rules   int  `json:"rules"`
+	Active  int  `json:"active"`
+	Hits24h int  `json:"hits_24h"`
+	Hits7d  int  `json:"hits_7d"`
+}
+
+// pairRules are second rules (id+1000) that count for the first.
+var pairRules = map[int]int{IDEmptyUAWP + 1000: IDEmptyUAWP, IDRootProbe + 1000: IDRootProbe}
+
+// ruleHits counts each catalog rule's logged events since a time.
+func (m *Manager) ruleHits(since int64) map[int]int {
+	out := map[int]int{}
+	rows, err := m.DB.Query(`SELECT rule_id, count(*) FROM waf_events WHERE at >= ? AND rule_id BETWEEN 7700000 AND 7709999 GROUP BY rule_id`, since)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, n int
+		if rows.Scan(&id, &n) != nil {
+			continue
+		}
+		if first, ok := pairRules[id]; ok {
+			id = first
+		}
+		out[id] += n
+	}
+	return out
+}
+
+// PackageStates lists the rule packages for the portal's cards.
+func (m *Manager) PackageStates() []PackageState {
+	cat := m.RuleCatalog()
+	var out []PackageState
+	for _, p := range Packages {
+		ps := PackageState{Package: p}
+		in := map[string]bool{}
+		for _, c := range p.Categories {
+			in[c] = true
+		}
+		for _, r := range cat {
+			if in[r.Category] {
+				ps.Rules++
+				ps.Hits24h += r.Hits24h
+				ps.Hits7d += r.Hits7d
+				if r.Enabled {
+					ps.Active++
+				}
+			}
+		}
+		ps.Enabled = ps.Active > 0
+		out = append(out, ps)
 	}
 	return out
 }

@@ -156,7 +156,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
-		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs,
+		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, VerifiedBots: a.wafVerifiedBots,
 		Gate: func() *waf.Gate {
 			cur := a.Settings.Get()
 			// While the portal's CAPTCHA page is on, it serves the login
@@ -909,7 +909,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 
 	// ---- WAF
 	h["waf.status"] = func(context.Context, json.RawMessage) (any, error) {
-		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "stats": a.WAF.Stats()}, nil
+		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "packages": a.WAF.PackageStates(), "stats": a.WAF.Stats()}, nil
 	}
 	// waf.sync pulls the portal's WAF Rule Sets now and applies them.
 	// waf.vendor_rules: where Malware.Expert replaces xPGuard's rules, its

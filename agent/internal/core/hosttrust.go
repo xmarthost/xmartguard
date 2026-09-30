@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"time"
 
@@ -151,6 +152,27 @@ func (a *Agent) wafTrustedCIDRs() []string {
 		return nil
 	}
 	return a.Trusted.WAFCIDRs(fw.TrustedDisabled)
+}
+
+// wafVerifiedBots are the search crawlers whose official address lists are
+// loaded here (and not switched off), so the WAF can tell fakes apart.
+func (a *Agent) wafVerifiedBots() []string {
+	fw := a.Settings.Get().Firewall
+	if !fw.TrustedServices || a.Trusted == nil {
+		return nil
+	}
+	off := map[string]bool{}
+	for _, d := range fw.TrustedDisabled {
+		off[d] = true
+	}
+	var out []string
+	for id, ua := range map[string]string{"googlebot": "googlebot", "bingbot": "bingbot"} {
+		if !off[id] && a.Trusted.Official(id) {
+			out = append(out, ua)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // applyTrustedConfig makes the portal's list this server's list, through

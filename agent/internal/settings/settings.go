@@ -236,6 +236,11 @@ type WAF struct {
 	LoginURLs []string `json:"login_urls"`
 	// Webshell blocks requests to known web shell file names and parameters.
 	Webshell bool `json:"webshell"`
+	// Generic blocks attacks on any website: PHP in static, hidden and
+	// repeated folders, double-encoded path traversal.
+	Generic bool `json:"generic"`
+	// VirtualPatches block known vulnerabilities of popular plugins.
+	VirtualPatches bool `json:"virtual_patches"`
 	// BlockPHPUpload rejects any uploaded file with a PHP extension.
 	BlockPHPUpload bool `json:"block_php_upload"`
 	// WhitelistDomains are websites our rules never inspect.
@@ -424,7 +429,7 @@ func Defaults() Settings {
 		DomainRep:   DomainReputation{Enabled: true, IntervalHours: 12},
 		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
 			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{},
-			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, WhitelistDomains: []string{},
+			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, Generic: true, VirtualPatches: true, WhitelistDomains: []string{},
 			BotBlocker: true, BotList: append([]string{}, DefaultBotList...)},
 		Notifications: Notifications{
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,

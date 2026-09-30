@@ -107,6 +107,8 @@ interface WAFS {
   bot_blocker: boolean;
   bot_list: string[];
   proxy_ip_check: boolean;
+  generic: boolean;
+  virtual_patches: boolean;
 }
 interface CMSS {
   enabled: boolean;
@@ -768,11 +770,69 @@ interface WafRule {
   title: string;
   action: string;
   enabled: boolean;
+  hits_24h?: number;
+  hits_7d?: number;
+}
+
+interface WafPackage {
+  id: string;
+  title: string;
+  desc: string;
+  categories: string[];
+  on: string[];
+  enabled: boolean;
+  rules: number;
+  active: number;
+  hits_24h: number;
+  hits_7d: number;
+}
+
+/** xPGuard's rule packages as cards (like a vendor's packages): each can be
+ *  switched on or off and shows how often its rules blocked something here. */
+function PackageCards({ packages, meExtras, disabled, onSave }: { packages: WafPackage[]; meExtras: string[]; disabled: boolean; onSave: (p: Partial<WAFS>) => void }) {
+  // Malware.Expert extra modules covering the same attacks.
+  const me: Record<string, string> = { generic: 'generic', scanner: 'scanner', webshell: 'webshell', crawler: 'crawler', proxy: 'proxy' };
+  return (
+    <div className="my-4">
+      <h3 className="text-base font-semibold text-navy-900">Rule packages</h3>
+      <p className="mb-3 text-sm text-slate-500">xPGuard's own ModSecurity rules, grouped by the attacks they stop. Blocks are counted from this server's WAF log.</p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {packages.map((p) => (
+          <div key={p.id} className={`flex flex-col rounded-xl border p-3 ${p.enabled ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-white'}`}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2 font-medium text-navy-900">
+                <Shield className={`h-4 w-4 ${p.enabled ? 'text-emerald-600' : 'text-slate-400'}`} />
+                {p.title}
+              </div>
+              <Toggle
+                on={p.enabled}
+                disabled={disabled}
+                onChange={(v) => onSave(Object.fromEntries((v ? p.on : p.categories).map((c) => [c, v])) as Partial<WAFS>)}
+              />
+            </div>
+            <p className="mt-1 flex-1 text-xs text-slate-500">{p.desc}</p>
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <span className="text-slate-500">
+                {p.active}/{p.rules} rules on
+              </span>
+              <span className={p.hits_24h ? 'font-medium text-red-600' : 'text-slate-400'}>{p.hits_24h.toLocaleString()} blocked 24h</span>
+              <span className="text-slate-400">{p.hits_7d.toLocaleString()} in 7 days</span>
+              {me[p.id] && meExtras.includes(me[p.id]) && (
+                <span className="rounded-full bg-sky-50 px-2 py-0.5 text-sky-700" title="The Malware.Expert rules on this server cover this too; both can stay on.">
+                  + Malware.Expert
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }: { serverId: string; s: WAFS; all: AllSettings; admin: boolean; busy: boolean; onSave: (p: Partial<WAFS>) => void; saveAll: (p: Partial<Record<keyof AllSettings, any>>, msg?: string) => Promise<unknown>; onReload: () => void }) {
   const { run } = useAction();
-  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string; enabled_since: number; replaced_by?: string }; rules: WafRule[] }>(serverId, 'waf.status');
+  const info = useAgent<{ status: { available: boolean; web_server: string; error: string; warning: string; enabled_since: number; replaced_by?: string }; rules: WafRule[]; packages?: WafPackage[] }>(serverId, 'waf.status');
   const doms = useAgent<{ domains: { domain: string; user: string }[] }>(serverId, 'domains.list');
   const [bf, setBf] = useState({ t: s.bf_threshold, w: s.bf_window_minutes });
   useEffect(() => setBf({ t: s.bf_threshold, w: s.bf_window_minutes }), [s.bf_threshold, s.bf_window_minutes]);
@@ -824,7 +884,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>
-      {!replaced && row('bad_bots', 'SCANNER protection', 'Prevent bad User-Agents and crawlers: vulnerability scanners and attack tools (sqlmap, nikto, wpscan, nuclei…)', true)}
+      {!replaced && info.data?.packages && <PackageCards packages={info.data.packages} meExtras={meExtras} disabled={dis || !s.enabled} onSave={(p) => { onSave(p); setTimeout(info.reload, 1500); }} />}
       <SettingRow title="Captcha protection" desc="Blocked visitors can unblock their address by solving a CAPTCHA. Switched on and set up (built-in, Cloudflare Turnstile or Google reCAPTCHA) on the Firewall page, together with the temporary bans it belongs to.">
         <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${captchaOn ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
           {captchaOn ? `On (${{ builtin: 'built-in', turnstile: 'Turnstile', recaptcha: 'reCAPTCHA' }[all.captcha?.provider ?? 'builtin'] ?? 'built-in'})` : 'Off'}
@@ -851,9 +911,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {replaced && <VendorRulesCard serverId={serverId} name={replaced} admin={admin} onChanged={onReload} />}
       {!replaced && (
         <>
-          {row('webshell', 'WEBSHELL protection', 'Web shell attack protection: block requests to well-known web shell files, their folders and exploit probes', true)}
           {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
-          {row('proxy_ip_check', 'Proxy IP check', 'Enables IP blacklist checks using the real client IP behind Cloudflare or a local proxy (blocked, banned and IPDB addresses)')}
         </>
       )}
       <div className="mt-2 border-t border-slate-200" />
@@ -933,8 +991,6 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {!replaced && (<>
       <h3 className="mt-6 text-base font-semibold text-navy-900">More xPGuard protections</h3>
       {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the xPGuard engine before it is saved; malware is refused.', true)}
-      {row('sensitive_files', 'Protect sensitive files', 'Block web access to .env, .git, config backups, logs and SQL dumps', true)}
-      {row('wordpress', 'WordPress hardening', 'Block running PHP inside wp-content/uploads and XML-RPC multicall', true)}
       {s.seo_bots && row('seo_bots', 'Block SEO crawlers (older option)', 'Now part of the Bad Bot blocker list above: turn the Bad Bot blocker on and this switch is merged into it.')}
       {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
       <ListEditor title="WAF whitelist" desc="These IPs are never inspected by xPGuard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
@@ -948,7 +1004,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
               Malware.Expert's rule ids.
             </p>
           )}
-          <p className="mb-2 text-sm text-slate-500">Switch single rules on or off. Switching on a rule of a group that is off turns on only that rule.</p>
+          <p className="mb-2 text-sm text-slate-500">Switch single rules on or off. Switching on a rule of a group that is off turns on only that rule. The numbers are blocks in the last 24 hours / 7 days.</p>
           <table className="w-full text-sm">
             <tbody className="divide-y divide-slate-100">
               {info.data.rules.map((r) => (
@@ -956,6 +1012,10 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
                   <td className="w-20 py-2 pr-3 font-mono text-xs text-slate-500">{r.id}</td>
                   <td className="py-2 pr-3">{r.title}</td>
                   <td className="py-2 pr-3 text-xs text-slate-500">{r.action}</td>
+                  <td className="whitespace-nowrap py-2 pr-3 text-right text-xs" title="Blocked in the last 24 hours / 7 days">
+                    <span className={r.hits_24h ? 'font-medium text-red-600' : 'text-slate-400'}>{r.hits_24h ?? 0}</span>
+                    <span className="text-slate-400"> / {r.hits_7d ?? 0}</span>
+                  </td>
                   <td className="py-2 pr-3 text-right text-xs">{r.enabled ? <span className="text-green-600">active</span> : <span className="text-slate-400">off</span>}</td>
                   <td className="w-20 py-2 text-right">
                     <Toggle

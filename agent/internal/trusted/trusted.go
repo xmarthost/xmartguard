@@ -544,6 +544,14 @@ func (s *Store) Match(ip string, disabled []string) string {
 	return ""
 }
 
+// Official reports whether a service's list came from its provider (not
+// the built-in copy).
+func (s *Store) Official(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state[id].Source == "official" && len(s.state[id].CIDRs) > 0
+}
+
 // Status lists every service with its current list size.
 func (s *Store) Status(disabled []string) []map[string]any {
 	off := map[string]bool{}

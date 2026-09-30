@@ -72,13 +72,13 @@ func TestInstallIntoRealApache(t *testing.T) {
 		return res.StatusCode
 	}
 	get := func(ua string) int { return getPath("/xg-ok.html", ua) }
-	if c := get("Mozilla/5.0"); c != 200 {
+	if c := get(browserUA); c != 200 {
 		t.Fatalf("normal request %d", c)
 	}
 	if c := get("sqlmap/1.7"); c != 403 {
 		t.Fatalf("bad bot not blocked: %d", c)
 	}
-	if c := getPath("/wp-content/wso.php", "Mozilla/5.0"); c != 403 {
+	if c := getPath("/wp-content/wso.php", browserUA); c != 403 {
 		t.Fatalf("web shell request not blocked: %d", c)
 	}
 	// A rule that makes the config invalid must be rolled back.
@@ -89,7 +89,7 @@ func TestInstallIntoRealApache(t *testing.T) {
 		t.Fatalf("broken config not rolled back: %v", err)
 	}
 	m.RulesDir = orig
-	if c := get("Mozilla/5.0"); c != 200 {
+	if c := get(browserUA); c != 200 {
 		t.Fatalf("site down after rollback: %d", c)
 	}
 	// Deleting the rules (e.g. /etc/xpguard removed by hand) must not
