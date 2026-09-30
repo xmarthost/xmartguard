@@ -1,31 +1,42 @@
-import AIScanner from './pages/AIScanner';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { lazy, Suspense, type ReactNode } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, can, useAuth } from './auth';
 import Layout from './components/Layout';
 import { ComingSoon, PageLoader } from './components/ui';
 import Login from './pages/Login';
-import Overview from './pages/Overview';
-import ServerList from './pages/ServerList';
-import AddServer from './pages/AddServer';
-import ServerDashboard from './pages/ServerDashboard';
-import Monitoring from './pages/Monitoring';
-import { AccountPage, SecurityLogPage, SupportPage, UsersPage } from './pages/Admin';
-import { ManualScans, ScannerLogs } from './pages/Scanner';
-import { FirewallLogs, FirewallPage, IPReputation } from './pages/Firewall';
-import TrustedServices from './pages/TrustedServices';
-import CaptchaPage from './pages/CaptchaPage';
-import WafIntel from './pages/WafIntel';
-import SecurityMonitor from './pages/SecurityMonitor';
-import SettingsPage from './pages/Settings';
-import { BotAttacks, WafLogs } from './pages/WAF';
-import { CMSThreats, DBScanner } from './pages/CMS';
-import { DomainReputation, OutgoingSpam } from './pages/Mail';
-import MassOperations from './pages/MassOperations';
-import KnowledgeBase from './pages/KnowledgeBase';
-import AIConnector from './pages/AIConnector';
-import WafRuleSets from './pages/WafRuleSets';
-import AppearancePage from './pages/AppearancePage';
+
+// Pages load on first use (smaller first download).
+const AIScanner = lazy(() => import('./pages/AIScanner'));
+const Overview = lazy(() => import('./pages/Overview'));
+const ServerList = lazy(() => import('./pages/ServerList'));
+const AddServer = lazy(() => import('./pages/AddServer'));
+const ServerDashboard = lazy(() => import('./pages/ServerDashboard'));
+const Monitoring = lazy(() => import('./pages/Monitoring'));
+const AccountPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.AccountPage })));
+const SecurityLogPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.SecurityLogPage })));
+const SupportPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.SupportPage })));
+const UsersPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.UsersPage })));
+const ManualScans = lazy(() => import('./pages/Scanner').then((m) => ({ default: m.ManualScans })));
+const ScannerLogs = lazy(() => import('./pages/Scanner').then((m) => ({ default: m.ScannerLogs })));
+const FirewallLogs = lazy(() => import('./pages/Firewall').then((m) => ({ default: m.FirewallLogs })));
+const FirewallPage = lazy(() => import('./pages/Firewall').then((m) => ({ default: m.FirewallPage })));
+const IPReputation = lazy(() => import('./pages/Firewall').then((m) => ({ default: m.IPReputation })));
+const TrustedServices = lazy(() => import('./pages/TrustedServices'));
+const CaptchaPage = lazy(() => import('./pages/CaptchaPage'));
+const WafIntel = lazy(() => import('./pages/WafIntel'));
+const SecurityMonitor = lazy(() => import('./pages/SecurityMonitor'));
+const SettingsPage = lazy(() => import('./pages/Settings'));
+const BotAttacks = lazy(() => import('./pages/WAF').then((m) => ({ default: m.BotAttacks })));
+const WafLogs = lazy(() => import('./pages/WAF').then((m) => ({ default: m.WafLogs })));
+const CMSThreats = lazy(() => import('./pages/CMS').then((m) => ({ default: m.CMSThreats })));
+const DBScanner = lazy(() => import('./pages/CMS').then((m) => ({ default: m.DBScanner })));
+const DomainReputation = lazy(() => import('./pages/Mail').then((m) => ({ default: m.DomainReputation })));
+const OutgoingSpam = lazy(() => import('./pages/Mail').then((m) => ({ default: m.OutgoingSpam })));
+const MassOperations = lazy(() => import('./pages/MassOperations'));
+const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'));
+const AIConnector = lazy(() => import('./pages/AIConnector'));
+const WafRuleSets = lazy(() => import('./pages/WafRuleSets'));
+const AppearancePage = lazy(() => import('./pages/AppearancePage'));
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
@@ -35,7 +46,12 @@ function Protected({ children, role }: { children: ReactNode; role?: 'owner' | '
   if (loading) return <PageLoader />;
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
   if (role && !can(user, role)) return <Layout><ComingSoon title="Not allowed" milestone="your administrator's permission" /></Layout>;
-  return <Layout>{children}</Layout>;
+  // Pages load on first use; the menu stays while one loads.
+  return (
+    <Layout>
+      <Suspense fallback={<PageLoader />}>{children}</Suspense>
+    </Layout>
+  );
 }
 
 export default function App() {
@@ -59,11 +75,11 @@ export default function App() {
         <Route path="/servers/:id/db-scanner" element={<Protected><DBScanner /></Protected>} />
         <Route path="/servers/:id/waf-logs" element={<Protected><WafLogs /></Protected>} />
         <Route path="/servers/:id/bot-attacks" element={<Protected><BotAttacks /></Protected>} />
-        <Route path="/servers/:id/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><ServerIPDB /></Suspense></Protected>} />
+        <Route path="/servers/:id/ipdb" element={<Protected><ServerIPDB /></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/servers/:id/security-monitor" element={<Protected><SecurityMonitor /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
-        <Route path="/ipdb" element={<Protected><Suspense fallback={<PageLoader />}><IPDBPage /></Suspense></Protected>} />
+        <Route path="/ipdb" element={<Protected><IPDBPage /></Protected>} />
         <Route path="/ai" element={<Protected><AIScanner /></Protected>} />
         <Route path="/waf-rulesets" element={<Protected><WafRuleSets /></Protected>} />
         <Route path="/trusted-services" element={<Protected><TrustedServices /></Protected>} />

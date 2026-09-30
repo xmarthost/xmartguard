@@ -5,6 +5,8 @@ import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
+import compress from '@fastify/compress';
+import { constants as zlib } from 'node:zlib';
 import type { Config } from './config.js';
 import type { Pool } from './db.js';
 import { AgentHub } from './agents/hub.js';
@@ -68,6 +70,15 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
 
   await app.register(cookie);
   await app.register(rateLimit, { global: false });
+  // API answers (agent data can be large) are compressed; quick settings,
+  // since they are made for every request. Web files come precompressed.
+  await app.register(compress, {
+    global: true,
+    threshold: 1024,
+    encodings: ['br', 'gzip'],
+    brotliOptions: { params: { [zlib.BROTLI_PARAM_QUALITY]: 4 } },
+    zlibOptions: { level: 6 },
+  });
   await app.register(websocket, { options: { maxPayload: 4 * 1024 * 1024 } });
 
   app.addHook('onSend', async (_req, reply) => {
@@ -108,6 +119,8 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
       root: cfg.webDir,
       wildcard: false,
       cacheControl: false,
+      // Brotli/gzip copies made at build time (web/scripts/compress.mjs).
+      preCompressed: true,
       setHeaders: (res, file) => {
         res.header('Cache-Control', file.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache');
       },

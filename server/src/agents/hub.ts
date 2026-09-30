@@ -17,6 +17,7 @@ export interface AgentConn {
   pending: Map<string, Pending>;
   lastMetrics?: MetricsSample;
   lastMetricsPersistedAt: number;
+  lastMetricsSavedAt: number;
 }
 
 export interface MetricsSample {
@@ -37,6 +38,12 @@ export interface MetricsSample {
 }
 
 export class CommandError extends Error {}
+
+/** Agent commands slower than this are logged. */
+const SLOW_COMMAND_MS = 3000;
+
+/** servers.last_metrics is saved at most this often (pages read the live copy in memory). */
+const SAVE_LAST_METRICS_MS = 30_000;
 
 /** Tracks live agent connections and routes commands/results. */
 export class AgentHub {
@@ -73,6 +80,7 @@ export class AgentHub {
       connectedAt: new Date(),
       pending: new Map(),
       lastMetricsPersistedAt: 0,
+      lastMetricsSavedAt: 0,
     };
     this.conns.set(serverId, conn);
     await this.pool.query(
@@ -107,7 +115,8 @@ export class AgentHub {
     const conn = this.conns.get(serverId);
     if (!conn) return Promise.reject(new CommandError('server is offline'));
     const id = crypto.randomUUID();
-    return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const p = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         conn.pending.delete(id);
         reject(new CommandError('command timed out'));
@@ -115,6 +124,13 @@ export class AgentHub {
       conn.pending.set(id, { resolve, reject, timer });
       conn.socket.send(JSON.stringify({ type: 'command', id, action, params }));
     });
+    // Slow answers make portal pages slow: log them to find the cause.
+    const done = () => {
+      const ms = Date.now() - started;
+      if (ms >= SLOW_COMMAND_MS) this.log.warn({ server: serverId, action, ms }, 'slow agent command');
+    };
+    p.then(done, done);
+    return p;
   }
 
   handleResult(conn: AgentConn, msg: { id?: string; ok?: boolean; data?: unknown; error?: string }): void {
@@ -153,10 +169,15 @@ export class AgentHub {
     conn.lastMetrics = m;
     const now = Date.now();
     const persist = now - conn.lastMetricsPersistedAt >= persistEveryMs;
-    await this.pool.query('UPDATE servers SET last_metrics = $2, last_seen_at = now() WHERE id = $1', [
-      conn.serverId,
-      JSON.stringify(m),
-    ]);
+    // Live mode sends every 5 s: with hundreds of servers, writing each
+    // sample only churns the servers table.
+    if (now - conn.lastMetricsSavedAt >= SAVE_LAST_METRICS_MS || persist) {
+      conn.lastMetricsSavedAt = now;
+      await this.pool.query('UPDATE servers SET last_metrics = $2, last_seen_at = now() WHERE id = $1', [
+        conn.serverId,
+        JSON.stringify(m),
+      ]);
+    }
     if (!persist) return;
     conn.lastMetricsPersistedAt = now;
     await this.pool.query(

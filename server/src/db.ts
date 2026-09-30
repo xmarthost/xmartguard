@@ -5,7 +5,7 @@ export type Pool = pg.Pool;
 export type Queryable = pg.Pool | pg.PoolClient;
 
 export function createPool(databaseUrl: string): pg.Pool {
-  return new pg.Pool({ connectionString: databaseUrl, max: 10 });
+  return new pg.Pool({ connectionString: databaseUrl, max: 20 });
 }
 
 /** Applies pending migrations inside an advisory lock. Returns applied versions. */

@@ -110,7 +110,8 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
         ORDER BY hostname, created_at`,
       [req.user!.accountId, filter],
     );
-    return { servers: rows.map((r) => shape(r, hub.isOnline(r.id))) };
+    // Online servers: the latest sample from memory (the table is saved every 30 s).
+    return { servers: rows.map((r) => shape({ ...r, last_metrics: hub.get(r.id)?.lastMetrics ?? r.last_metrics }, hub.isOnline(r.id))) };
   });
 
   app.get('/api/servers/:id', viewer, async (req, reply) => {
