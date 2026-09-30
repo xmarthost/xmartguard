@@ -195,7 +195,7 @@ const SCHEDULE_TZS: [string, string][] = [
 ];
 const tzLabel = (tz?: string) => (SCHEDULE_TZS.find(([v]) => v === (tz || 'Asia/Karachi'))?.[1] ?? tz ?? 'PKT');
 
-type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'ipdb' | 'additional' | 'notifications' | 'about';
+type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'additional' | 'notifications' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
@@ -279,11 +279,6 @@ export default function SettingsPage() {
         {section === 'cms' && st.cms && <CMSSection s={st.cms} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
         {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
         {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
-        {section === 'ipdb' && (
-          <p className="text-sm text-slate-600">
-            IPDB protection moved to the <Link className="text-blue-600 hover:underline" to={`/servers/${id}/firewall`}>Firewall page</Link> (IPDB distributed firewall).
-          </p>
-        )}
         {section === 'notifications' && <NotificationsSection serverId={id!} s={st.notifications} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
         {section === 'about' && <About serverId={id!} />}
       </div>
@@ -406,7 +401,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
           <input className="input w-24" type="number" min={1} max={100} defaultValue={s.max_file_size_mb} disabled={dis} onBlur={(e) => Number(e.target.value) !== s.max_file_size_mb && onSave({ max_file_size_mb: Number(e.target.value) })} />
         </SettingRow>
         <ListEditor
-          title="Whitelist Users"
+          title="Accounts not scanned"
           desc="Files owned by these users are not scanned"
           items={s.whitelist_users}
           options={meta.users.map((u) => u.name)}
@@ -609,7 +604,7 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         <SettingRow title="Kill malicious processes" desc="Miners and reverse shells are killed at once. Programs that only run from an unusual place (temporary or hidden folder, deleted program) are killed only when they have run for 30 minutes and keep at least half a CPU core busy (like a miner); a short load spike never gets a process killed. Everything else is only alerted.">
           <Toggle on={st.processes.kill} disabled={dis || !st.processes.enabled} onChange={(v) => save({ processes: { kill: v } })} />
         </SettingRow>
-        <ListEditor title="Whitelist Users" desc="Processes running under these users will not be monitored or terminated" items={st.processes.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ processes: { whitelist_users: v } })} />
+        <ListEditor title="Accounts the process monitor skips" desc="Processes running under these users will not be monitored or terminated" items={st.processes.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ processes: { whitelist_users: v } })} />
         <ListEditor title="Whitelist Strings" desc="Skip processes whose path or command line contains these strings" items={st.processes.whitelist_strings} disabled={dis} onChange={(v) => void save({ processes: { whitelist_strings: v } })} />
       </div>
       <div className="my-3 rounded-xl border border-slate-200 p-4">
@@ -619,7 +614,7 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         <SettingRow title="Disable malicious cron jobs" desc="Comment out malicious lines in the user's crontab (the rest is kept): downloaded and run scripts, miners, backdoors, programs in temporary folders, files the scanner found. Lines that only start a program from a hidden folder are alerted, not switched off, and developer tools (PM2 or Node.js from nvm at boot) are not flagged. Re-enable a line from Process & Cron Monitor. Off: alert only">
           <Toggle on={st.cron.disable ?? true} disabled={dis || !st.cron.enabled} onChange={(v) => save({ cron: { disable: v } })} />
         </SettingRow>
-        <ListEditor title="Whitelist Users" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />
+        <ListEditor title="Accounts whose cron jobs are not checked" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />
       </div>
       <SettingRow title="Keep logs for" desc="How long to keep xPGuard logs and quarantined files on the server">
         <select className="input w-40" value={st.scanner.keep_days} disabled={dis} onChange={(e) => save({ scanner: { keep_days: Number(e.target.value) } })}>
@@ -901,14 +896,6 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>
       {!replaced && info.data?.packages && <PackageCards packages={info.data.packages} meExtras={meExtras} disabled={dis || !s.enabled} onSave={(p) => { onSave(p); setTimeout(info.reload, 1500); }} />}
-      <SettingRow title="Captcha protection" desc="Blocked visitors can unblock their address by solving a CAPTCHA. Switched on and set up (built-in, Cloudflare Turnstile or Google reCAPTCHA) on the Firewall page, together with the temporary bans it belongs to.">
-        <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${captchaOn ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-          {captchaOn ? `On (${{ builtin: 'built-in', turnstile: 'Turnstile', recaptcha: 'reCAPTCHA' }[all.captcha?.provider ?? 'builtin'] ?? 'built-in'})` : 'Off'}
-        </span>
-        <Link to={`/servers/${serverId}/firewall`} className="text-sm text-blue-700 hover:underline">
-          Firewall » CAPTCHA
-        </Link>
-      </SettingRow>
       {meFeed && (
         <SettingRow
           title="Malware.Expert on this server"
@@ -927,8 +914,8 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {replaced && <VendorRulesCard serverId={serverId} name={replaced} admin={admin} onChanged={onReload} />}
       {!replaced && (
         <>
+          <h3 className="mt-4 text-base font-semibold text-navy-900">Package options</h3>
           {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
-          {row('ipdb_post', 'IPDB POST protection', `Addresses on the xPGuard IPDB${info.data?.ipdb_addresses ? ` (${info.data.ipdb_addresses.toLocaleString()} here)` : ''} can read the websites but not log in, send forms or upload, also behind Cloudflare, where the firewall only sees Cloudflare. Allowed addresses and solved CAPTCHAs are exempt.`)}
           <SettingRow
             title="Tor exit nodes"
             desc={`Visitors from the Tor network (list published by the Tor Project${info.data?.tor?.addresses ? `: ${info.data.tor.addresses.toLocaleString()} addresses, updated ${new Date(info.data.tor.updated * 1000).toLocaleString()}` : ', downloaded every 6 hours while this is on'}${info.data?.tor?.error ? `; last download failed: ${info.data.tor.error}` : ''}). Behind Cloudflare its Tor marker is used too. CAPTCHA sends them to the CAPTCHA page on the login pages (needs Overview » CAPTCHA Page; otherwise POST is blocked).`}
@@ -958,12 +945,10 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         </button>
       </div>
       <ListEditor
-        title="Captcha Protected URLs"
+        title="Protected login URLs"
         desc={meExtras.includes('recaptcha')
           ? 'Login pages protected by the WAF brute-force module. On this server Malware.Expert protects them with its own CAPTCHA: visitors whose address is on its blacklist (blacklist.recaptcha.cloud) are sent to recaptcha.cloud; other visitors log in normally. xPGuard\'s login-page CAPTCHA is off here. Banned addresses still get xPGuard\'s CAPTCHA on the whole site (Firewall » CAPTCHA).'
-          : all.captcha?.central
-            ? `Login pages protected by the WAF brute-force module. xPGuard's CAPTCHA page (Overview » CAPTCHA Page, ${all.captcha.central_url ?? ''}) is on: suspicious visitors are sent there; with the switch on, every visitor is. Banned addresses get the same page (Firewall » CAPTCHA).`
-            : `Login pages protected by the WAF brute-force module. With the switch on, every visitor must solve the CAPTCHA before these pages open (once per ${all.captcha?.allow_minutes ?? 60} minutes); the rest of the website never shows it. Banned addresses still get the CAPTCHA on the whole site (Firewall » CAPTCHA). Visitors reach the CAPTCHA on ports ${all.captcha?.http_port ?? 7780}/${all.captcha?.https_port ?? 7743}, which the agent opens (also in CSF). Turn on Overview » CAPTCHA Page to use xPGuard's CAPTCHA page instead.`}
+          : 'Login pages whose failed logins count towards the brute-force bans above. Whether they ask for a CAPTCHA (suspicious visitors only or every visitor) is set in Firewall » CAPTCHA, with the other CAPTCHA options.'}
         header={
           replaced && !meExtras.includes('recaptcha') ? (
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600" title={`xPGuard's login-page CAPTCHA is one of its own rules, which are off on this server. Add the recaptcha extra to the ${replaced} feed for a login CAPTCHA.`}>
@@ -974,7 +959,9 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
               Captcha by Malware.Expert
             </span>
           ) : (
-            <Toggle on={Boolean(all.captcha?.login_gate)} disabled={dis || !s.enabled} onChange={(v) => saveAll({ captcha: { login_gate: v } } as any, v ? 'CAPTCHA on the login pages' : 'Login page CAPTCHA off')} />
+            <Link to={`/servers/${serverId}/firewall`} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200" title="Whether these pages ask for a CAPTCHA is set with the other CAPTCHA options">
+              CAPTCHA: {all.captcha?.login_gate ? 'every visitor' : all.captcha?.central ? 'suspicious visitors' : 'off'} · Firewall » CAPTCHA
+            </Link>
           )
         }
         items={s.login_urls ?? []}
@@ -1037,7 +1024,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {replaced && <ListEditor title="WAF whitelist" desc={`These IPs are never inspected by ${replaced}'s rules`} items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />}
       {!replaced && (<>
       <h3 className="mt-6 text-base font-semibold text-navy-900">More xPGuard protections</h3>
-      {row('upload_scan', 'Scan uploads for malware', 'Every file uploaded through a website is scanned by the xPGuard engine before it is saved; malware is refused.', true)}
+      <p className="text-sm text-slate-500">Upload malware scanning is the Uploads package above; here only its stricter option.</p>
       {s.seo_bots && row('seo_bots', 'Block SEO crawlers (older option)', 'Now part of the Bad Bot blocker list above: turn the Bad Bot blocker on and this switch is merged into it.')}
       {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
       <ListEditor title="WAF whitelist" desc="These IPs are never inspected by xPGuard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />

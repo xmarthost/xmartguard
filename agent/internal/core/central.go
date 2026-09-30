@@ -207,7 +207,13 @@ func (a *Agent) centralLiftBan(ip string) {
 	if !banned {
 		return
 	}
-	if err := a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute); err != nil {
+	// The portal's page says how long a solved check counts.
+	c := a.Settings.Get().Captcha
+	minutes := c.AllowMinutes
+	if c.CentralMinutes > 0 {
+		minutes = c.CentralMinutes
+	}
+	if err := a.Firewall.CaptchaSolved(ip, time.Duration(minutes)*time.Minute); err != nil {
 		a.Log.Info("CAPTCHA solved but the address stays blocked", "ip", ip, "err", err)
 	}
 }

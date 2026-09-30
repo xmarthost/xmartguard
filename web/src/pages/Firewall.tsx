@@ -74,6 +74,11 @@ interface CaptchaSettings {
   allow_minutes: number;
   http_port: number;
   https_port: number;
+  login_gate?: boolean;
+  // Set fleet-wide on Overview » CAPTCHA Page.
+  central?: boolean;
+  central_url?: string;
+  central_minutes?: number;
 }
 
 interface FwMeta {
@@ -375,9 +380,6 @@ export function FirewallPage() {
       <Section title="Temporary ban" desc="Manage temporarily blocked IP addresses">
         <AddRemove serverId={id!} kind="tempban" label="Block IP" removeLabel="Unblock IP" withDuration withComment />
         <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'tempban', title: 'Temporarily blocked' })}>View temporary list</button></div>
-        <SettingRow title="Show CAPTCHA for blocked IPs" desc="Temporarily blocked visitors see a CAPTCHA page on the websites instead of a dead connection; solving it lifts the ban for their address">
-          <Toggle on={fw.captcha} disabled={!isAdmin || busy} onChange={(v) => save({ captcha: v }, v ? 'CAPTCHA enabled' : 'CAPTCHA disabled')} />
-        </SettingRow>
         <SettingRow title="WAF Temporary IP Ban" desc={`Temporarily block addresses that the Web Application Firewall blocks ${fw.waf_ban_threshold} times within ${fw.bf_window_minutes} minutes`}>
           <input className="input w-20" type="number" min={3} value={fw.waf_ban_threshold} disabled={!isAdmin} onChange={(e) => setFw({ ...fw, waf_ban_threshold: Number(e.target.value) })} onBlur={() => fw.waf_ban_threshold !== all.firewall.waf_ban_threshold && save({ waf_ban_threshold: fw.waf_ban_threshold })} />
           <Toggle on={fw.waf_ban} disabled={!isAdmin || busy} onChange={(v) => save({ waf_ban: v })} />
@@ -438,9 +440,6 @@ export function FirewallPage() {
         </SettingRow>
         <SettingRow title="IPDB Log Switch" desc="Enable or disable logging for the IPDB firewall (the live monitor)">
           <Toggle on={all.ipdb.log} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { log: v } })} />
-        </SettingRow>
-        <SettingRow title="IPDB CAPTCHA" desc="Show a CAPTCHA challenge for IPDB-blocked IP addresses on the websites">
-          <Toggle on={all.ipdb.captcha} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { captcha: v } })} />
         </SettingRow>
         <SettingRow title="Share bans" desc="Report this server's automatic bans to the IPDB">
           <Toggle on={all.ipdb.report} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { report: v } })} />
@@ -624,27 +623,76 @@ export function FirewallPage() {
       </Section>
 
       {cap && (
-        <Section title="CAPTCHA page" desc="The page banned visitors see when CAPTCHA is on. The built-in challenge needs no third-party service.">
-          <Row title="Provider" desc="Built-in image challenge, Cloudflare Turnstile or Google reCAPTCHA v2">
-            <select className="input" value={cap.provider} disabled={!isAdmin} onChange={(e) => setCap({ ...cap, provider: e.target.value as CaptchaSettings['provider'] })}>
-              <option value="builtin">Built-in (no third party)</option>
-              <option value="turnstile">Cloudflare Turnstile</option>
-              <option value="recaptcha">Google reCAPTCHA v2</option>
+        <Section
+          title="CAPTCHA"
+          desc="Where visitors get a CAPTCHA on this server instead of a refused connection. Solving it lets a person in; bots stay out."
+        >
+          <SettingRow title="Temporarily banned visitors" desc="Addresses banned for a while (brute force, WAF, DoS) see the CAPTCHA on the websites; solving it lifts their ban">
+            <Toggle on={fw.captcha} disabled={!isAdmin || busy} onChange={(v) => save({ captcha: v }, v ? 'CAPTCHA for banned visitors on' : 'CAPTCHA for banned visitors off')} />
+          </SettingRow>
+          <SettingRow title="IPDB-listed visitors" desc="Addresses on the IPDB see the CAPTCHA instead of being dropped; solving it lets them in">
+            <Toggle on={all.ipdb.captcha} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { captcha: v } }, v ? 'CAPTCHA for IPDB-listed visitors on' : 'CAPTCHA for IPDB-listed visitors off')} />
+          </SettingRow>
+          <SettingRow
+            title="Login pages"
+            desc={
+              cap.central
+                ? 'Suspicious visitors (IPDB, recent bans, repeated WAF blocks) of the protected login URLs always get the CAPTCHA page. Choose whether every visitor must solve it too.'
+                : 'Every visitor of the protected login URLs (Settings » WAF » Protected login URLs) solves the CAPTCHA before the login page opens.'
+            }
+          >
+            <select
+              className="input w-60"
+              value={cap.login_gate ? 'all' : 'default'}
+              disabled={!isAdmin || busy}
+              onChange={(e) => saveAny({ captcha: { login_gate: e.target.value === 'all' } }, 'Login page CAPTCHA saved')}
+            >
+              <option value="default">{cap.central ? 'Suspicious visitors only' : 'Off'}</option>
+              <option value="all">Every visitor</option>
             </select>
-            {cap.provider !== 'builtin' && (
-              <>
-                <input className="input" placeholder="Site key" value={cap.site_key} onChange={(e) => setCap({ ...cap, site_key: e.target.value })} />
-                <input className="input" placeholder="Secret key" value={cap.secret_key} onChange={(e) => setCap({ ...cap, secret_key: e.target.value })} />
-              </>
-            )}
-          </Row>
-          <Row title="Allow after solving" desc="How long an address stays allowed after solving the CAPTCHA (minutes)">
-            <input className="input w-28" type="number" min={5} value={cap.allow_minutes} onChange={(e) => setCap({ ...cap, allow_minutes: Number(e.target.value) })} />
-          </Row>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-slate-500">{meta.data?.captcha ? `CAPTCHA server running on ports ${cap.http_port}/${cap.https_port}` : 'CAPTCHA server is off (no CAPTCHA option enabled)'}</span>
-            <button className="btn-primary" disabled={!isAdmin || busy} onClick={() => saveAny({ captcha: cap }, 'CAPTCHA settings saved')}>Save</button>
-          </div>
+          </SettingRow>
+          {cap.central ? (
+            <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
+              The CAPTCHA is the portal's page{cap.central_url ? ` (${cap.central_url})` : ''}, the same for all servers: its check, keys and how long a solved
+              check lets a visitor in ({cap.central_minutes ?? 60} minutes) are set in{' '}
+              <Link to="/captcha-page" className="font-medium underline">
+                Overview » CAPTCHA Page
+              </Link>
+              .
+            </p>
+          ) : (
+            <>
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                The portal's CAPTCHA page (Overview » CAPTCHA Page) is off, so this server shows its own page, set up below.
+              </p>
+              <Row title="Check" desc="Built-in image challenge, Cloudflare Turnstile or Google reCAPTCHA v2">
+                <select className="input" value={cap.provider} disabled={!isAdmin} onChange={(e) => setCap({ ...cap, provider: e.target.value as CaptchaSettings['provider'] })}>
+                  <option value="builtin">Built-in (no third party)</option>
+                  <option value="turnstile">Cloudflare Turnstile</option>
+                  <option value="recaptcha">Google reCAPTCHA v2</option>
+                </select>
+                {cap.provider !== 'builtin' && (
+                  <>
+                    <input className="input" placeholder="Site key" value={cap.site_key} onChange={(e) => setCap({ ...cap, site_key: e.target.value })} />
+                    <input className="input" placeholder="Secret key" value={cap.secret_key} onChange={(e) => setCap({ ...cap, secret_key: e.target.value })} />
+                  </>
+                )}
+              </Row>
+              <Row title="Allow after solving" desc="How long an address stays allowed after solving the CAPTCHA (minutes)">
+                <input className="input w-28" type="number" min={5} value={cap.allow_minutes} onChange={(e) => setCap({ ...cap, allow_minutes: Number(e.target.value) })} />
+              </Row>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-slate-500">{meta.data?.captcha ? `CAPTCHA server running on ports ${cap.http_port}/${cap.https_port}` : 'CAPTCHA server is off (no CAPTCHA option enabled)'}</span>
+                <button
+                  className="btn-primary"
+                  disabled={!isAdmin || busy}
+                  onClick={() => saveAny({ captcha: { provider: cap.provider, site_key: cap.site_key, secret_key: cap.secret_key, allow_minutes: cap.allow_minutes } }, 'CAPTCHA settings saved')}
+                >
+                  Save
+                </button>
+              </div>
+            </>
+          )}
         </Section>
       )}
 

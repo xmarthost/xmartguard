@@ -286,14 +286,26 @@ export default function Layout({ children }: { children: ReactNode }) {
     : [
         { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
-        { label: 'AI Scanner', icon: <BrainCircuit />, to: '/ai' },
-        { label: 'WAF Rule Sets', icon: <ShieldHalf />, to: '/waf-rulesets' },
-        { label: 'Trusted Services', icon: <BadgeCheck />, to: '/trusted-services' },
-        { label: 'CAPTCHA Page', icon: <ShieldQuestion />, to: '/captcha-page' },
-        { label: 'WAF Intelligence', icon: <Brain />, to: '/waf-intel' },
-        { label: 'AI Connector', icon: <Cable />, to: '/ai-connector' },
-        { label: 'Appearance', icon: <Palette />, to: '/appearance' },
+        {
+          label: 'Web Protection',
+          icon: <ShieldHalf />,
+          children: [
+            { to: '/waf-rulesets', label: 'WAF Rule Sets', icon: <ShieldHalf /> },
+            { to: '/waf-intel', label: 'WAF Intelligence', icon: <Brain /> },
+            { to: '/captcha-page', label: 'CAPTCHA Page', icon: <ShieldQuestion /> },
+            { to: '/trusted-services', label: 'Trusted Services', icon: <BadgeCheck /> },
+          ],
+        },
+        {
+          label: 'AI',
+          icon: <BrainCircuit />,
+          children: [
+            { to: '/ai', label: 'AI Scanner', icon: <BrainCircuit /> },
+            { to: '/ai-connector', label: 'AI Connector', icon: <Cable /> },
+          ],
+        },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
+        { label: 'Appearance', icon: <Palette />, to: '/appearance' },
       ];
   const bottom: RailEntry[] = [
     { label: 'Security Log', icon: <ShieldCheck />, to: '/security' },

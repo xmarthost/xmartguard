@@ -295,11 +295,11 @@ func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
 	}
 	patch := map[string]any{}
 	if on {
+		if id == IDCustomBots && len(c.BotList) == 0 {
+			return nil, errors.New("add User-Agents to the Bad Bot blocker list first")
+		}
 		delete(disabled, id)
 		if !categoryEnabled(c, rule.Category) {
-			if rule.Category == "custom_bots" {
-				return nil, errors.New("add custom User-Agents first")
-			}
 			patch[rule.Category] = true
 			for _, r := range Catalog {
 				if r.Category == rule.Category && r.ID != id {

@@ -119,7 +119,10 @@ export default function CaptchaPage() {
       </div>
 
       <Card title="Setup" desc="The page runs on this portal. Its address is used by the WAF of every server.">
-        <SettingRow title="Send suspicious visitors of login pages to the CAPTCHA page" desc="On all servers, except where Malware.Expert's own login CAPTCHA is used, or where the login-page CAPTCHA already asks every visitor.">
+        <SettingRow
+          title="Use this CAPTCHA page on all servers"
+          desc="Banned and IPDB-listed visitors, suspicious visitors of login pages and weak WAF signals get this page instead of each server's own built-in one. Where it is used is chosen per server in Firewall » CAPTCHA (Malware.Expert's own login CAPTCHA wins where it is linked)."
+        >
           <Toggle on={enabled} disabled={!admin || busy} onChange={setEnabled} />
         </SettingRow>
         <SettingRow title="Check" desc={PROVIDERS.find((x) => x[0] === provider)?.[2]}>
@@ -163,7 +166,7 @@ export default function CaptchaPage() {
         >
           <Toggle on={strictIP} disabled={!admin || busy} onChange={setStrictIP} />
         </SettingRow>
-        <SettingRow title="Do not ask a verified address again for" desc="How long a solved check lets the address into the login pages of that server.">
+        <SettingRow title="Do not ask a verified address again for" desc="How long a solved check lets the address in on that server: into the login pages, and out of a temporary ban or the IPDB block.">
           <select className="input w-40" value={minutes} disabled={!admin || busy} onChange={(e) => setMinutes(Number(e.target.value))}>
             {DURATIONS.map(([v, l]) => (
               <option key={v} value={v}>
