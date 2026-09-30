@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Activity, ChevronLeft, Cpu, HardDrive, Info, MemoryStick, Network, RefreshCw, Search } from 'lucide-react';
+import { Activity, Check, ChevronLeft, Copy, Cpu, HardDrive, Info, MemoryStick, MoreVertical, Network, RefreshCw, Search } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -8,6 +8,9 @@ import { ago, bytes, duration, panelName, pct } from '../format';
 import { Bar, ErrorBox, PageLoader, StatusDot } from '../components/ui';
 import { Modal, agentCall, useAction } from '../components/controls';
 import AttackOverview from '../components/AttackOverview';
+import ModernOverview from '../components/ModernOverview';
+import { PanelMark, StatusPill } from '../components/ModernBits';
+import { useUiStyle } from '../useUiStyle';
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -105,7 +108,25 @@ function ServerInfo({ s, onClose }: { s: Server; onClose: () => void }) {
   );
 }
 
+function CopyIP({ ip }: { ip: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      className="text-slate-400 hover:text-slate-700"
+      title="Copy the IP address"
+      onClick={() => {
+        void navigator.clipboard?.writeText(ip);
+        setDone(true);
+        setTimeout(() => setDone(false), 1500);
+      }}
+    >
+      {done ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+    </button>
+  );
+}
+
 export default function ServerDashboard() {
+  const style = useUiStyle();
   const { id } = useParams();
   const { user } = useAuth();
   const nav = useNavigate();
@@ -121,6 +142,59 @@ export default function ServerDashboard() {
     const r = await run(() => agentCall<{ id: number }>(s.id, 'scan.start', { kind: 'quick' }), 'Quick scan started');
     if (r) nav('scanner');
   };
+
+  const update = data!.latest_agent_version && s.agent_version !== data!.latest_agent_version && (
+    <Link to="settings?s=about" className="block rounded-lg bg-amber-50 p-3 text-sm text-amber-800 hover:bg-amber-100">
+      This server runs agent {s.agent_version}; version {data!.latest_agent_version} is available (it installs automatically when the agent reconnects, or update it from Settings » About).
+    </Link>
+  );
+
+  if (style === 'modern') {
+    return (
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Link to="/servers" className="shrink-0 rounded-lg p-1 text-slate-700 hover:bg-white" aria-label="All servers">
+              <ChevronLeft className="h-6 w-6" />
+            </Link>
+            <PanelMark panel={s.control_panel} big />
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="min-w-0 text-xl leading-tight font-bold [overflow-wrap:anywhere] text-slate-900 sm:text-[26px]" title={s.hostname}>
+                  {s.hostname}
+                </h1>
+                <StatusPill online={s.online} />
+              </div>
+              <div className="mt-1 flex items-center gap-2 text-sm text-slate-500">
+                <span>{s.primary_ip}</span>
+                <CopyIP ip={s.primary_ip} />
+                {!s.online && <span>· last seen {ago(s.last_seen_at)}</span>}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-slate-500">View</span>
+            <select className="input w-36" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              <option value={7}>7 Days</option>
+              <option value={30}>30 Days</option>
+              <option value={90}>90 Days</option>
+            </select>
+            {can(user, 'operator') && (
+              <button className="btn-primary" disabled={!s.online || busy} onClick={quickScan}>
+                <Search className="h-4 w-4" /> Quick Scan
+              </button>
+            )}
+            <button className="btn-outline px-2.5" title="Server information" onClick={() => setInfo(true)}>
+              <MoreVertical className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+        {update}
+        <ModernOverview serverId={s.id} online={s.online} days={days} setDays={setDays} />
+        {info && <ServerInfo s={s} onClose={() => setInfo(false)} />}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -172,11 +246,7 @@ export default function ServerDashboard() {
         </div>
       </div>
 
-      {data!.latest_agent_version && s.agent_version !== data!.latest_agent_version && (
-        <Link to="settings?s=about" className="block rounded-lg bg-amber-50 p-3 text-sm text-amber-800 hover:bg-amber-100">
-          This server runs agent {s.agent_version}; version {data!.latest_agent_version} is available (it installs automatically when the agent reconnects, or update it from Settings » About).
-        </Link>
-      )}
+      {update}
 
       <AttackOverview serverId={s.id} online={s.online} days={days} />
       {info && <ServerInfo s={s} onClose={() => setInfo(false)} />}

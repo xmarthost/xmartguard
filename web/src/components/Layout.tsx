@@ -9,6 +9,8 @@ import { useAuth, can } from '../auth';
 import { useApi } from '../hooks';
 import type { Server } from '../api';
 import { Logo } from './ui';
+import ModernLayout from './ModernLayout';
+import { useUiStyle } from '../useUiStyle';
 
 interface NavItem {
   to: string;
@@ -238,6 +240,7 @@ function UserMenu() {
 }
 
 export default function Layout({ children }: { children: ReactNode }) {
+  const style = useUiStyle();
   const [mobileOpen, setMobileOpen] = useState(false);
   const serverMatch = useMatch('/servers/:id/*');
   const serverId = serverMatch?.params.id && serverMatch.params.id !== 'add' ? serverMatch.params.id : null;
@@ -312,6 +315,13 @@ export default function Layout({ children }: { children: ReactNode }) {
     { label: 'Knowledge Base', icon: <BookOpen />, to: '/kb' },
     { label: 'Support', icon: <LifeBuoy />, to: '/support' },
   ];
+  if (style === 'modern') {
+    return (
+      <ModernLayout entries={entries} bottom={bottom}>
+        {children}
+      </ModernLayout>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col">

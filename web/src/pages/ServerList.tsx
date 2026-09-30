@@ -7,14 +7,19 @@ import { useApi } from '../hooks';
 import { ago, panelName, pct } from '../format';
 import { Empty, ErrorBox, PageLoader, SectionLoader, StatusDot } from '../components/ui';
 import { compact } from '../components/AttackOverview';
+import { useUiStyle } from '../useUiStyle';
+import ModernServerList from './ServerListModern';
 
-function TagEditor({ server, onSaved }: { server: Server; onSaved: () => void }) {
+export function TagEditor({ server, onSaved, modern }: { server: Server; onSaved: () => void; modern?: boolean }) {
   const [value, setValue] = useState(server.tags.join(', '));
   const [open, setOpen] = useState(false);
   if (!open) {
     return (
-      <button className="flex items-center gap-2 text-slate-400 transition hover:text-navy-700" onClick={() => setOpen(true)}>
-        <Tag className="h-5 w-5" /> {server.tags.length ? 'Edit Tags' : 'Assign Tag'}
+      <button
+        className={modern ? 'btn-outline px-3 py-1.5 text-sm' : 'flex items-center gap-2 text-slate-400 transition hover:text-navy-700'}
+        onClick={() => setOpen(true)}
+      >
+        <Tag className={modern ? 'h-4 w-4' : 'h-5 w-5'} /> {server.tags.length ? 'Edit Tags' : 'Assign Tag'}
       </button>
     );
   }
@@ -170,6 +175,11 @@ function ServerCard({ s, onChange }: { s: Server; onChange: () => void }) {
 }
 
 export default function ServerList() {
+  const style = useUiStyle();
+  return style === 'modern' ? <ModernServerList /> : <ClassicServerList />;
+}
+
+function ClassicServerList() {
   const [q, setQ] = useState('');
   const { user } = useAuth();
   const { data, error, loading, reload } = useApi<{ servers: Server[] }>(`/api/servers?q=${encodeURIComponent(q)}`, 30_000);

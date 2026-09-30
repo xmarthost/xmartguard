@@ -459,7 +459,30 @@ func (a *Agent) serverCard() map[string]any {
 	return map[string]any{
 		"virus_attacks": virus, "web_attacks": web, "ipdb_hourly": hourly,
 		"domains_blacklisted": domSum.Flagged, "domains": domains,
+		// Daily counts of the last 14 days for the cards' small charts.
+		"virus_daily": a.dailyCounts(`SELECT (created_at - ?) / 86400, count(*) FROM findings WHERE created_at >= ? GROUP BY 1`, 14),
+		"web_daily":   a.dailyCounts(`SELECT (at - ?) / 86400, count(*) FROM waf_events WHERE at >= ? AND category IN ('waf','bot') AND action LIKE 'Access denied%' GROUP BY 1`, 14),
 	}
+}
+
+// dailyCounts runs a "day index, count" query over the last n days (oldest
+// first); q takes the start time twice.
+func (a *Agent) dailyCounts(q string, n int) []int64 {
+	now := store.Now()
+	from := now - now%86400 - int64(n-1)*86400
+	out := make([]int64, n)
+	rows, err := a.DB.Query(q, from, from)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d, c int64
+		if rows.Scan(&d, &c) == nil && d >= 0 && d < int64(n) {
+			out[d] = c
+		}
+	}
+	return out
 }
 
 // ------------------------------------------------------------------ reputation

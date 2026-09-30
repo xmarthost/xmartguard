@@ -3,12 +3,21 @@
  * headings) and "page" (background); a theme sets those CSS variables. Dark
  * themes also switch cards, text and borders (see index.css, [data-mode]).
  */
+export type UiStyle = 'classic' | 'modern';
+
 export interface Appearance {
   theme: string;
   mode: 'light' | 'dark';
   sidebar?: string;
   accent?: string;
+  /** Page style: classic (dark sidebar, default) or modern (light sidebar). */
+  style?: UiStyle;
 }
+
+export const STYLES: { id: UiStyle; name: string; desc: string }[] = [
+  { id: 'classic', name: 'Classic', desc: 'Dark sidebar that opens on hover, coloured header (the default).' },
+  { id: 'modern', name: 'Modern', desc: 'Light sidebar with labels, white header with search, tinted icon cards and small charts.' },
+];
 
 export interface ThemePreset {
   id: string;
@@ -57,16 +66,68 @@ export function resolveTheme(a: Appearance): ThemePreset {
 }
 
 const KEY = 'xg-appearance';
+const MODE_KEY = 'xg-mode';
+
+// The style in use, for components that render differently per style.
+let curStyle: UiStyle = 'classic';
+const listeners = new Set<() => void>();
+export function getUiStyle(): UiStyle {
+  return curStyle;
+}
+export function subscribeUiStyle(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+/** This browser's light/dark choice (the Modern header's moon button); ''
+ *  follows the portal's theme. */
+export function getModeOverride(): '' | 'light' | 'dark' {
+  try {
+    const v = localStorage.getItem(MODE_KEY);
+    return v === 'light' || v === 'dark' ? v : '';
+  } catch {
+    return '';
+  }
+}
+export function setModeOverride(m: '' | 'light' | 'dark') {
+  try {
+    if (m) localStorage.setItem(MODE_KEY, m);
+    else localStorage.removeItem(MODE_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+  if (last) applyAppearance(last);
+}
+
+let last: Appearance | null = null;
 
 export function applyAppearance(a: Appearance) {
+  last = a;
   const t = resolveTheme(a);
+  const style: UiStyle = a.style === 'modern' ? 'modern' : 'classic';
   const root = document.documentElement;
   const names = ['950', '900', '800', '700', '600', '100'];
   t.scale.forEach((v, i) => root.style.setProperty(`--color-navy-${names[i]}`, v));
-  root.style.setProperty('--color-page', t.page);
+  const override = style === 'modern' ? getModeOverride() : '';
+  const mode = override || t.mode;
+  let page = t.page;
+  if (style === 'modern') {
+    // Modern: a cool light grey page, or the theme's dark page; its buttons
+    // and links use a bright primary (blue on the default theme).
+    page = mode === 'dark' ? (t.mode === 'dark' ? t.page : '#0b1120') : t.mode === 'dark' ? '#f5f7fb' : t.id === 'navy' ? '#f5f7fb' : t.page;
+    root.style.setProperty('--xg-primary', t.id === 'navy' ? '#2563eb' : t.mode === 'dark' ? t.scale[4] : t.scale[3]);
+  } else {
+    root.style.removeProperty('--xg-primary');
+  }
+  root.style.setProperty('--color-page', page);
   root.style.setProperty('--xg-accent', t.accent);
-  root.dataset.mode = t.mode;
-  root.style.colorScheme = t.mode;
+  root.dataset.mode = mode;
+  root.dataset.style = style;
+  root.style.colorScheme = mode;
+  if (style !== curStyle) {
+    curStyle = style;
+    listeners.forEach((fn) => fn());
+  }
   try {
     localStorage.setItem(KEY, JSON.stringify(a));
   } catch {

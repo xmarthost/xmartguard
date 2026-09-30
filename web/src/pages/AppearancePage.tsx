@@ -4,7 +4,7 @@ import { api } from '../api';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, PageLoader } from '../components/ui';
 import { Card, useAction } from '../components/controls';
-import { THEMES, applyAppearance, resolveTheme, type Appearance, type ThemePreset } from '../theme';
+import { STYLES, THEMES, applyAppearance, resolveTheme, type Appearance, type ThemePreset, type UiStyle } from '../theme';
 
 /** A small picture of the portal in a theme: header, sidebar, a card. */
 function Preview({ t }: { t: ThemePreset }) {
@@ -40,6 +40,69 @@ function Preview({ t }: { t: ThemePreset }) {
   );
 }
 
+/** A small picture of a page style: the sidebar and header layout. */
+function StylePreview({ id }: { id: UiStyle }) {
+  if (id === 'classic') {
+    return (
+      <div className="overflow-hidden rounded-lg bg-[#f3f4f7] ring-1 ring-black/10">
+        <div className="flex h-6 items-center gap-1 bg-gradient-to-r from-[#172155] to-[#26377a] px-2">
+          <span className="h-2.5 w-2.5 rounded-sm bg-orange-400" />
+          <span className="h-1.5 w-10 rounded bg-white/70" />
+          <span className="ml-auto h-2 w-12 rounded bg-white/15" />
+        </div>
+        <div className="flex h-24">
+          <div className="flex w-7 flex-col items-center gap-2 bg-gradient-to-b from-[#172155] to-[#26377a] pt-2">
+            <span className="h-1.5 w-3 rounded bg-white/80" />
+            <span className="h-1.5 w-3 rounded bg-white/40" />
+            <span className="h-1.5 w-3 rounded bg-white/40" />
+          </div>
+          <div className="flex-1 space-y-1.5 p-2">
+            <div className="grid grid-cols-3 gap-1">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-6 rounded bg-white" />
+              ))}
+            </div>
+            <div className="h-9 rounded bg-white" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded-lg bg-[#f5f7fb] ring-1 ring-black/10">
+      <div className="flex h-[120px]">
+        <div className="flex w-14 flex-col gap-1.5 border-r border-slate-200 bg-white p-1.5">
+          <span className="mb-1 flex items-center gap-0.5">
+            <span className="h-2.5 w-2.5 rounded-sm bg-orange-400" />
+            <span className="h-1.5 w-6 rounded bg-slate-700" />
+          </span>
+          <span className="h-2 rounded bg-blue-100" />
+          {[0, 1, 2, 3].map((i) => (
+            <span key={i} className="h-1.5 w-9 rounded bg-slate-200" />
+          ))}
+        </div>
+        <div className="flex-1">
+          <div className="flex h-6 items-center gap-1 border-b border-slate-200 bg-white px-2">
+            <span className="h-2.5 w-16 rounded bg-slate-100" />
+            <span className="ml-auto h-2.5 w-2.5 rounded-full bg-green-500" />
+          </div>
+          <div className="space-y-1.5 p-2">
+            <div className="grid grid-cols-3 gap-1">
+              {['bg-red-100', 'bg-blue-100', 'bg-orange-100'].map((c) => (
+                <div key={c} className="flex h-7 items-center gap-1 rounded bg-white px-1">
+                  <span className={`h-3.5 w-3.5 rounded ${c}`} />
+                  <span className="h-1.5 w-5 rounded bg-slate-300" />
+                </div>
+              ))}
+            </div>
+            <div className="h-9 rounded bg-white" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AppearancePage() {
   const { user } = useAuth();
   const admin = can(user, 'admin');
@@ -64,7 +127,8 @@ export default function AppearancePage() {
   useEffect(() => () => void (savedRef.current && applyAppearance(savedRef.current)), []);
 
   if (!cur) return <PageLoader />;
-  const pick = (t: ThemePreset) => setCur({ theme: t.id, mode: t.mode });
+  const pick = (t: ThemePreset) => setCur({ theme: t.id, mode: t.mode, style: cur.style });
+  const curStyle: UiStyle = cur.style === 'modern' ? 'modern' : 'classic';
   const custom = cur.theme === 'custom';
   const dirty = saved && JSON.stringify(saved) !== JSON.stringify(cur);
   const save = async () => {
@@ -79,8 +143,31 @@ export default function AppearancePage() {
         <h1 className="h-title flex items-center gap-2">
           <Palette className="h-6 w-6" /> Appearance
         </h1>
-        <p className="mt-1 text-sm text-slate-500">Ready-made colour and sidebar combinations, light and dark. The theme you save applies to every user of this portal.</p>
+        <p className="mt-1 text-sm text-slate-500">A page style and a colour theme, light or dark. What you save applies to every user of this portal.</p>
       </div>
+
+      <Card title="Style" desc="The layout of every page: the sidebar, the header and the cards. Themes below colour either style.">
+        <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {STYLES.map((st) => {
+            const on = curStyle === st.id;
+            return (
+              <button
+                key={st.id}
+                type="button"
+                onClick={() => setCur({ ...cur, style: st.id })}
+                className={`rounded-xl border p-3 text-left transition hover:shadow-md ${on ? 'border-navy-600 ring-2 ring-navy-600' : 'border-slate-200'}`}
+              >
+                <StylePreview id={st.id} />
+                <div className="mt-2 flex items-center justify-between text-sm">
+                  <span className="font-medium text-navy-900">{st.name}</span>
+                  {on && <Check className="h-4 w-4 text-emerald-600" />}
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">{st.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
 
       <Card title="Themes" desc="Click a theme to preview it on this page.">
         <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -115,7 +202,7 @@ export default function AppearancePage() {
               type="color"
               className="h-10 w-20 cursor-pointer rounded border border-slate-300"
               value={cur.sidebar ?? '#172155'}
-              onChange={(e) => setCur({ theme: 'custom', mode: cur.mode, sidebar: e.target.value, accent: cur.accent ?? '#22c55e' })}
+              onChange={(e) => setCur({ theme: 'custom', mode: cur.mode, sidebar: e.target.value, accent: cur.accent ?? '#22c55e', style: cur.style })}
             />
           </label>
           <label className="text-sm">
@@ -124,7 +211,7 @@ export default function AppearancePage() {
               type="color"
               className="h-10 w-20 cursor-pointer rounded border border-slate-300"
               value={cur.accent ?? '#22c55e'}
-              onChange={(e) => setCur({ theme: 'custom', mode: cur.mode, sidebar: cur.sidebar ?? '#172155', accent: e.target.value })}
+              onChange={(e) => setCur({ theme: 'custom', mode: cur.mode, sidebar: cur.sidebar ?? '#172155', accent: e.target.value, style: cur.style })}
             />
           </label>
           <div className="text-sm">
@@ -135,7 +222,7 @@ export default function AppearancePage() {
                   key={m}
                   type="button"
                   className={`flex items-center gap-1 px-3 py-2 ${cur.mode === m ? 'bg-navy-800 text-white' : 'text-slate-600'}`}
-                  onClick={() => setCur({ theme: 'custom', mode: m, sidebar: cur.sidebar ?? resolveTheme(cur).scale[1], accent: cur.accent ?? resolveTheme(cur).accent })}
+                  onClick={() => setCur({ theme: 'custom', mode: m, sidebar: cur.sidebar ?? resolveTheme(cur).scale[1], accent: cur.accent ?? resolveTheme(cur).accent, style: cur.style })}
                 >
                   {m === 'dark' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />} {m}
                 </button>

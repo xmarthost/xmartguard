@@ -14,6 +14,9 @@ export const Appearance = z.object({
   // Only for theme "custom".
   sidebar: Hex.optional(),
   accent: Hex.optional(),
+  // The page style: "classic" (dark sidebar, the default) or "modern"
+  // (light sidebar with labels, white header, tinted icon cards).
+  style: z.enum(['classic', 'modern']).optional(),
 });
 export type Appearance = z.infer<typeof Appearance>;
 

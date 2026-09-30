@@ -15,7 +15,7 @@ interface DayPoint {
   day: string;
   n: number;
 }
-interface Alert {
+export interface Alert {
   level: 'danger' | 'warning' | 'info';
   text: string;
   link: string;
@@ -42,7 +42,7 @@ interface Service {
 }
 
 /** One chip per protection: green running, red stopped, grey switched off. */
-function ServiceStrip({ services }: { services: Service[] }) {
+export function ServiceStrip({ services }: { services: Service[] }) {
   return (
     <div className="card flex flex-wrap items-center gap-2 px-5 py-3">
       <span className="mr-2 text-sm font-semibold text-navy-900">Protection status</span>
@@ -69,7 +69,7 @@ export function compact(n: number): string {
   return String(n);
 }
 
-function change(cur: number, prev: number): { pct: number; up: boolean } {
+export function change(cur: number, prev: number): { pct: number; up: boolean } {
   if (prev === 0) return { pct: cur > 0 ? 100 : 0, up: cur > 0 };
   const d = ((cur - prev) / prev) * 100;
   return { pct: Math.round(Math.abs(d)), up: d >= 0 };

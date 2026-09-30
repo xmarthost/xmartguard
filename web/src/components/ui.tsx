@@ -4,7 +4,7 @@ import { Check, Copy, Inbox, Loader2 } from 'lucide-react';
 /** xPGuard wordmark: the XP icon with "xPGuard" set in text, so it stays
  *  readable on the dark header (light) and on white pages. `full` shows the
  *  complete logo artwork with its tagline (login page). */
-export function Logo({ light = false, full = false }: { light?: boolean; full?: boolean }) {
+export function Logo({ light = false, full = false, tight = false }: { light?: boolean; full?: boolean; tight?: boolean }) {
   if (full) return <img src="/xpguard-logo.png" alt="xPGuard — Proactive Server Security" className="h-28 w-auto" />;
   return (
     <div className="flex items-center gap-2.5">
@@ -13,7 +13,7 @@ export function Logo({ light = false, full = false }: { light?: boolean; full?: 
         <span className={`text-[21px] font-extrabold tracking-tight ${light ? 'text-white' : 'text-navy-900'}`}>
           <span className="bg-gradient-to-r from-amber-400 via-orange-500 to-red-500 bg-clip-text text-transparent">xP</span>Guard
         </span>
-        <span className={`mt-1 text-[8.5px] font-semibold tracking-[0.24em] uppercase ${light ? 'text-white/70' : 'text-slate-400'}`}>Proactive Server Security</span>
+        <span className={`mt-1 font-semibold whitespace-nowrap uppercase ${tight ? 'text-[7.5px] tracking-[0.12em]' : 'text-[8.5px] tracking-[0.24em]'} ${light ? 'text-white/70' : 'text-slate-400'}`}>Proactive Server Security</span>
       </span>
     </div>
   );
@@ -23,10 +23,6 @@ export function Spinner({ className = '' }: { className?: string }) {
   return <Loader2 className={`h-5 w-5 animate-spin text-navy-600 ${className}`} />;
 }
 
-/**
- * Full-page loader: the xPGuard logo with a light sweeping through it,
- * shown only while a page loads its data.
- */
 /** The page loader: always in the middle of the screen (fixed), whether the
  *  app is starting (no menu yet) or a page inside the menu is loading, so
  *  the logo never jumps. index.html shows the same markup before the
@@ -122,7 +118,12 @@ export function Breadcrumb({ items }: { items: string[] }) {
 export function StatCard({ icon, value, label, accent = 'text-navy-900' }: { icon: ReactNode; value: ReactNode; label: string; accent?: string }) {
   return (
     <div className="card flex items-center gap-4 p-5">
-      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-navy-100 text-navy-800">{icon}</div>
+      <div
+        className="xg-stat-ico flex h-12 w-12 items-center justify-center rounded-xl bg-navy-100 text-navy-800"
+        data-tone={accent.includes('red') ? 'red' : accent.includes('green') ? 'green' : 'blue'}
+      >
+        {icon}
+      </div>
       <div>
         <div className={`text-3xl font-semibold ${accent}`}>{value}</div>
         <div className="text-sm text-slate-500">{label}</div>

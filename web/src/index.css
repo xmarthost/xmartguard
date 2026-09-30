@@ -197,3 +197,80 @@ html[data-mode="dark"] .xg-loader-word {
     animation: none;
   }
 }
+
+/* ---- Modern style (Appearance » Style = Modern) ------------------------
+   Light sidebar and header (ModernLayout), soft bordered cards, a bright
+   primary for buttons and links, tinted icon tiles. Classic is unchanged:
+   everything here is scoped to html[data-style="modern"]. */
+html[data-style="modern"] {
+  --xg-primary: #2563eb;
+  --xg-m-border: #e9edf5;
+}
+html[data-style="modern"] body { color: #334155; }
+html[data-style="modern"] .card {
+  border-radius: 1rem;
+  border: 1px solid var(--xg-m-border);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px -16px rgba(16, 24, 40, 0.12);
+}
+html[data-style="modern"] .btn { border-radius: 0.75rem; }
+html[data-style="modern"] .btn-primary {
+  background-color: var(--xg-primary);
+  color: #fff;
+  box-shadow: 0 8px 18px -10px color-mix(in srgb, var(--xg-primary) 80%, transparent);
+}
+html[data-style="modern"] .btn-primary:hover:not(:disabled) { background-color: color-mix(in srgb, var(--xg-primary) 86%, #000); }
+html[data-style="modern"] .btn-outline { border-color: #dbe2ec; color: #1e293b; background-color: #fff; }
+html[data-style="modern"] .btn-outline:hover:not(:disabled) { background-color: #f8fafc; border-color: #cbd5e1; }
+html[data-style="modern"] .input { border-color: #e2e8f0; border-radius: 0.75rem; padding-top: 0.55rem; padding-bottom: 0.55rem; }
+html[data-style="modern"] .input:focus { border-color: var(--xg-primary); box-shadow: 0 0 0 4px color-mix(in srgb, var(--xg-primary) 14%, transparent); }
+html[data-style="modern"] .h-title { font-size: 1.625rem; font-weight: 700; color: #0f172a; letter-spacing: -0.01em; }
+html[data-style="modern"] .label { color: #0f172a; }
+/* Headings and dark text: a neutral near-black instead of the theme navy. */
+html[data-style="modern"]:not([data-mode="dark"]) .text-navy-900,
+html[data-style="modern"]:not([data-mode="dark"]) .text-navy-800 { color: #0f172a; }
+html[data-style="modern"]:not([data-mode="dark"]) .text-navy-700 { color: var(--xg-primary); }
+html[data-style="modern"] .bg-navy-800,
+html[data-style="modern"] .bg-navy-900 { background-color: var(--xg-primary); }
+html[data-style="modern"] .ring-navy-600,
+html[data-style="modern"] .border-navy-600 { --tw-ring-color: var(--xg-primary); border-color: var(--xg-primary); }
+html[data-style="modern"] .bg-navy-100 { background-color: color-mix(in srgb, var(--xg-primary) 10%, #fff); }
+/* Tables: light header band, softer row lines. */
+html[data-style="modern"] table thead tr { background-color: #f8fafc; }
+html[data-style="modern"] table thead th { color: #64748b; }
+html[data-style="modern"] .border-slate-100 { border-color: #eef1f6; }
+/* Tabs and toggle groups that used the navy fill. */
+html[data-style="modern"] .xg-m-nav-on { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--xg-primary) 12%, transparent); }
+
+/* Modern + dark (the header's moon button, or a dark theme). */
+html[data-style="modern"][data-mode="dark"] { --xg-m-border: var(--xg-line); }
+html[data-style="modern"][data-mode="dark"] body { color: var(--xg-text); }
+html[data-style="modern"][data-mode="dark"] .card { box-shadow: none; }
+html[data-style="modern"][data-mode="dark"] .xg-m-side,
+html[data-style="modern"][data-mode="dark"] .xg-m-head { background-color: var(--xg-card); border-color: var(--xg-line); }
+html[data-style="modern"][data-mode="dark"] .xg-m-search { background-color: var(--xg-card-2); color: var(--xg-head); }
+html[data-style="modern"][data-mode="dark"] .btn-outline,
+html[data-style="modern"][data-mode="dark"] .xg-m-range,
+html[data-style="modern"][data-mode="dark"] .xg-m-seg,
+html[data-style="modern"][data-mode="dark"] .xg-m-add { background-color: var(--xg-card); border-color: var(--xg-line); color: var(--xg-head); }
+html[data-style="modern"][data-mode="dark"] .xg-m-stat { background-color: var(--xg-card-2); border-color: var(--xg-line); }
+html[data-style="modern"][data-mode="dark"] .bg-blue-50,
+html[data-style="modern"][data-mode="dark"] .bg-blue-50\/70 { background-color: color-mix(in srgb, var(--xg-primary) 18%, var(--xg-card)); }
+html[data-style="modern"][data-mode="dark"] .bg-red-50,
+html[data-style="modern"][data-mode="dark"] .bg-red-50\/80 { background-color: rgba(239, 68, 68, 0.14); }
+html[data-style="modern"][data-mode="dark"] .bg-green-50 { background-color: rgba(34, 197, 94, 0.14); }
+html[data-style="modern"][data-mode="dark"] .bg-orange-50,
+html[data-style="modern"][data-mode="dark"] .bg-amber-50,
+html[data-style="modern"][data-mode="dark"] .bg-amber-50\/80 { background-color: rgba(245, 158, 11, 0.14); }
+html[data-style="modern"][data-mode="dark"] .bg-violet-50 { background-color: rgba(139, 92, 246, 0.16); }
+html[data-style="modern"][data-mode="dark"] .bg-sky-50 { background-color: rgba(14, 165, 233, 0.14); }
+html[data-style="modern"][data-mode="dark"] table thead tr { background-color: var(--xg-card-2); }
+html[data-style="modern"][data-mode="dark"] .h-title,
+html[data-style="modern"][data-mode="dark"] .label { color: var(--xg-head); }
+html[data-style="modern"][data-mode="dark"] .xg-map-dot { fill: #334155; }
+html[data-style="modern"][data-mode="dark"] .xg-ring-bg { stroke: var(--xg-line); }
+html[data-style="modern"][data-mode="dark"] .fill-slate-900 { fill: var(--xg-head); }
+/* Stat cards (Overview and others): tinted icon tiles. */
+html[data-style="modern"] .xg-stat-ico[data-tone="blue"] { background-color: #eff6ff; color: #2563eb; }
+html[data-style="modern"] .xg-stat-ico[data-tone="green"] { background-color: #f0fdf4; color: #16a34a; }
+html[data-style="modern"] .xg-stat-ico[data-tone="red"] { background-color: #fef2f2; color: #ef4444; }
+html[data-style="modern"][data-mode="dark"] .xg-stat-ico { background-color: var(--xg-card-2); }

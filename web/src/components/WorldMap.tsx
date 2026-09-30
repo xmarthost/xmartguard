@@ -48,6 +48,78 @@ function useFeatures() {
 }
 
 /**
+ * A dotted world map with threat markers (the Modern style's "Global Threat
+ * Overview"): countries are drawn as dots, the busiest attack origins get a
+ * coloured marker by tier.
+ */
+export function ThreatDotMap({ values }: { values: Record<string, number> }) {
+  const { feats, path, projection } = useFeatures();
+  const [hover, setHover] = useState<{ cc: string; x: number; y: number } | null>(null);
+  const max = Math.max(1, ...Object.values(values));
+  const markers = useMemo(
+    () =>
+      Object.entries(values)
+        .filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 24)
+        .map(([cc, n]) => {
+          const f = feats.find((x) => x.cc === cc);
+          const p = f ? projection(geoCentroid(f)) : null;
+          return p ? { cc, n, p, tier: threatTier(n, max) } : null;
+        })
+        .filter((m): m is { cc: string; n: number; p: [number, number]; tier: 'high' | 'medium' | 'low' } => !!m)
+        .reverse(),
+    [values, feats, projection, max],
+  );
+  const col = { high: '#ef4444', medium: '#f59e0b', low: '#22c55e' };
+  return (
+    <div className="relative">
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Attack origins by country">
+        <defs>
+          <pattern id="xg-dots" width="7" height="7" patternUnits="userSpaceOnUse">
+            <circle cx="3.5" cy="3.5" r="1.7" className="xg-map-dot" fill="#b9cfe8" />
+          </pattern>
+        </defs>
+        {feats.map((f, i) => (
+          <path key={i} d={path(f) ?? ''} fill="url(#xg-dots)" />
+        ))}
+        {markers.map((m) => (
+          <g
+            key={m.cc}
+            transform={`translate(${m.p[0]},${m.p[1]})`}
+            onMouseMove={(e) => {
+              const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
+              setHover({ cc: m.cc, x: e.clientX - box.left, y: e.clientY - box.top });
+            }}
+            onMouseLeave={() => setHover(null)}
+            className="cursor-pointer"
+          >
+            <circle r={m.tier === 'high' ? 26 : m.tier === 'medium' ? 16 : 10} fill={col[m.tier]} opacity={0.14} />
+            <circle r={m.tier === 'high' ? 14 : m.tier === 'medium' ? 9 : 6} fill={col[m.tier]} opacity={0.22} />
+            <circle r={m.tier === 'high' ? 7 : m.tier === 'medium' ? 5 : 4} fill={col[m.tier]} />
+          </g>
+        ))}
+      </svg>
+      {hover && (
+        <div className="pointer-events-none absolute z-10 rounded-md bg-slate-900 px-3 py-2 text-xs text-white shadow-lg" style={{ left: hover.x + 12, top: hover.y + 12 }}>
+          <div className="font-semibold">
+            {flag(hover.cc)} {countryName(hover.cc)}
+          </div>
+          <div>{(values[hover.cc] ?? 0).toLocaleString()} blocked (30 days)</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A country's threat tier from its share of the busiest one. */
+export function threatTier(n: number, max: number): 'high' | 'medium' | 'low' {
+  if (n >= max * 0.4) return 'high';
+  if (n >= max * 0.08) return 'medium';
+  return 'low';
+}
+
+/**
  * Choropleth of blocked traffic per country, with pulsing markers for the
  * countries that were active in the last minute.
  */

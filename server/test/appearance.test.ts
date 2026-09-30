@@ -24,4 +24,11 @@ describe('appearance', () => {
     const anon = await new Client(h.url).req('GET', '/api/appearance');
     expect(anon.body.appearance).toEqual({ theme: 'custom', mode: 'dark', sidebar: '#123456', accent: '#ff8800' });
   });
+
+  it('saves the page style (classic or modern)', async () => {
+    expect((await c.req('PUT', '/api/appearance', { theme: 'navy', mode: 'light', style: 'fancy' })).status).toBe(400);
+    expect((await c.req('PUT', '/api/appearance', { theme: 'navy', mode: 'light', style: 'modern' })).status).toBe(200);
+    const r = await new Client(h.url).req('GET', '/api/appearance');
+    expect(r.body.appearance).toEqual({ theme: 'navy', mode: 'light', style: 'modern' });
+  });
 });
