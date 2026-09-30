@@ -58,12 +58,12 @@ describe('CAPTCHA page for suspicious visitors', () => {
 
   it('is off until the Turnstile keys are saved', async () => {
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720 });
+    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false });
     expect(g.body.url).toBe('https://captcha.example.org/v');
     const page = await h.app.inject({ method: 'GET', url: link() });
     expect(page.statusCode).toBe(503);
     expect(page.body).toContain('not available right now');
-    const noKeys = await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '', secret_key: '', minutes: 720 });
+    const noKeys = await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '', secret_key: '', minutes: 720, provider: 'turnstile' });
     expect(noKeys.status).toBe(400);
     expect((await agent('/api/agent/captcha/config', { version: 0 })).body.unchanged).toBe(true);
   });
@@ -73,7 +73,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(put.status).toBe(200);
     expect(put.body.version).toBe(1);
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60 });
+    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false });
     expect(JSON.stringify(g.body)).not.toContain('0x4AAAAAAAsecret');
     // Saving without a secret keeps the saved one.
     expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 })).status).toBe(200);
@@ -100,6 +100,8 @@ describe('CAPTCHA page for suspicious visitors', () => {
 
   it('passes a solved check to the server and sends the visitor back', async () => {
     const p = { s: serverId, ip: '203.0.113.5', h: 'shop.example.com', u: '/wp-login.php?redirect_to=/wp-admin/&reauth=1' };
+    // Strict: only the address the website saw may solve the check.
+    await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, strict_ip: true });
     expect((await verify({ ...p, token: 'bad-token' })).status).toBe(403);
     // Another IPv4 address may not use the link.
     expect((await verify({ ...p, token: 'good-token' }, '198.51.100.9')).status).toBe(403);
@@ -160,4 +162,58 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(r.headers['content-type']).toContain('text/html');
     expect(r.body).toContain('xPGuard verification service');
   });
+});
+
+describe('CAPTCHA page: other addresses and ALTCHA', () => {
+  const p = () => ({ s: serverId, ip: '203.0.113.77', h: 'shop.example.com', u: '/wp-login.php' });
+
+  it('lets a visitor on a network with changing addresses pass, a few addresses per hour', async () => {
+    await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, provider: 'auto', strict_ip: false });
+    passes.length = 0;
+    // The website saw 203.0.113.7x, the portal sees 198.51.100.44 (mobile NAT).
+    for (const ip of ['203.0.113.77', '203.0.113.78', '203.0.113.79']) {
+      expect((await verify({ ...p(), ip, token: 'good-token' }, '198.51.100.44')).status).toBe(200);
+    }
+    expect(passes.map((x) => (x as { ip: string }).ip)).toEqual(['203.0.113.77', '203.0.113.78', '203.0.113.79']);
+    // The same address again is fine; a fourth one in the hour is not.
+    expect((await verify({ ...p(), token: 'good-token' }, '198.51.100.44')).status).toBe(200);
+    const fourth = await verify({ ...p(), ip: '203.0.113.80', token: 'good-token' }, '198.51.100.44');
+    expect(fourth.status).toBe(403);
+    expect(fourth.body.error).toContain('Too many checks');
+  });
+
+  it('checks ALTCHA solutions itself: once, and only where ALTCHA is allowed', async () => {
+    const { solveChallenge } = await import('altcha-lib');
+    const { deriveKey } = await import('altcha-lib/algorithms/pbkdf2');
+    const solve = async () => {
+      const c = await h.app.inject({ method: 'GET', url: '/v/altcha/challenge' });
+      expect(c.statusCode).toBe(200);
+      const challenge = c.json();
+      const solution = await solveChallenge({ challenge, deriveKey } as never);
+      return Buffer.from(JSON.stringify({ challenge, solution })).toString('base64');
+    };
+    const js = await h.app.inject({ method: 'GET', url: '/v/altcha.js' });
+    expect(js.statusCode).toBe(200);
+    expect(js.headers['content-type']).toContain('javascript');
+    passes.length = 0;
+    const a = await solve();
+    expect((await verify({ ...p(), altcha: a }, '203.0.113.77')).status).toBe(200);
+    expect(passes).toHaveLength(1);
+    // A solution works once.
+    expect((await verify({ ...p(), altcha: a }, '203.0.113.77')).status).toBe(403);
+    expect((await verify({ ...p(), altcha: 'eyJ4IjoxfQ==' }, '203.0.113.77')).status).toBe(403);
+    // Turnstile only: ALTCHA is not accepted, the page shows Turnstile.
+    await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, provider: 'turnstile' });
+    expect((await verify({ ...p(), altcha: await solve() }, '203.0.113.77')).status).toBe(403);
+    let page = await h.app.inject({ method: 'GET', url: link() });
+    expect(page.body).toContain('MODE="turnstile"');
+    // ALTCHA only: works without Turnstile keys; no Cloudflare on the page.
+    await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '', secret_key: '', minutes: 60, provider: 'altcha' });
+    page = await h.app.inject({ method: 'GET', url: link() });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain('MODE="altcha"');
+    expect(page.headers['content-security-policy']).toContain("worker-src 'self' blob:");
+    expect((await verify({ ...p(), token: 'good-token' }, '203.0.113.77')).status).toBe(403);
+    expect((await verify({ ...p(), altcha: await solve() }, '203.0.113.77')).status).toBe(200);
+  }, 60_000);
 });

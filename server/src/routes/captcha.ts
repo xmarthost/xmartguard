@@ -7,6 +7,7 @@ import type { AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
 import { renderInfo, renderPage } from '../captcha/page.js';
+import { altchaChallenge, altchaScript, altchaVerify } from '../captcha/altcha.js';
 
 /**
  * CAPTCHA page for suspicious visitors of the websites' login pages
@@ -15,7 +16,9 @@ import { renderInfo, renderPage } from '../captcha/page.js';
  * The WAF on a server redirects a suspicious address (IPDB, recent bans,
  * repeated WAF blocks) that asks for a protected login URL to
  * /v?s=<server>&ip=<address>&h=<host>&u=<page>. The visitor solves
- * Cloudflare Turnstile; the portal checks it and tells that server's agent
+ * Cloudflare Turnstile or ALTCHA (proof of work, run by this portal; also
+ * the fallback when Turnstile cannot load); the portal checks it and tells
+ * that server's agent
  * (captcha.pass), which lets the address through its WAF and confirms the
  * website is one of its own before the visitor is sent back.
  */
@@ -25,10 +28,52 @@ export const CaptchaConfig = z.object({
   site_key: z.string().trim().max(200),
   secret_key: z.string().trim().max(200),
   minutes: z.number().int().min(10).max(7 * 24 * 60),
+  // auto: Turnstile, and ALTCHA when Turnstile cannot load for a visitor
+  // (or when no Turnstile keys are set); turnstile or altcha: only that one.
+  provider: z.enum(['auto', 'turnstile', 'altcha']).default('auto'),
+  // strict_ip: the check must be solved from the address the website saw.
+  // Off: another address may solve it (mobile networks and ISPs often use
+  // different addresses for different sites), a few per hour.
+  strict_ip: z.boolean().default(false),
 });
 export type CaptchaConfig = z.infer<typeof CaptchaConfig>;
 
-const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720 };
+const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false };
+
+/** The check the page shows ('' = not usable: Turnstile chosen without keys). */
+export function effectiveProvider(c: CaptchaConfig): 'turnstile' | 'altcha' | 'auto' | '' {
+  const keys = c.site_key !== '' && c.secret_key !== '';
+  switch (c.provider) {
+    case 'turnstile':
+      return keys ? 'turnstile' : '';
+    case 'altcha':
+      return 'altcha';
+    default:
+      return keys ? 'auto' : 'altcha';
+  }
+}
+
+/**
+ * Addresses a visitor solved checks for other than its own, per hour: a
+ * visitor on a network with changing addresses needs one or two; solving
+ * checks for many addresses is someone passing bots through.
+ */
+const MAX_OTHER_ADDRESSES = 3;
+const otherAddresses = new Map<string, Map<string, number>>();
+
+export function allowOtherAddress(visitor: string, target: string, now = Date.now()): boolean {
+  const hour = now - 3600_000;
+  let m = otherAddresses.get(visitor);
+  if (!m) {
+    if (otherAddresses.size > 50_000) otherAddresses.clear();
+    m = new Map();
+    otherAddresses.set(visitor, m);
+  }
+  for (const [ip, at] of m) if (at < hour) m.delete(ip);
+  if (!m.has(target) && m.size >= MAX_OTHER_ADDRESSES) return false;
+  m.set(target, now);
+  return true;
+}
 
 /** Turnstile's verification endpoint (tests replace it). */
 export const turnstile = {
@@ -126,7 +171,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       .header('Cache-Control', 'no-store')
       .header(
         'Content-Security-Policy',
-        "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
       )
       .send(body);
 
@@ -135,7 +180,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!captchaHost || captchaHost === new URL(cfg.publicUrl).host.toLowerCase()) return;
     if ((req.headers.host ?? '').toLowerCase() !== captchaHost) return;
     const path = req.url.split('?')[0];
-    if (path === '/v' || path === '/v/verify' || /^\/(?:xpguard-shield|xpguard-wordmark|favicon-32)\.png$/.test(path)) return;
+    if (path === '/v' || path === '/v/verify' || path === '/v/altcha.js' || path === '/v/altcha/challenge' || /^\/(?:xpguard-shield|xpguard-wordmark|favicon-32)\.png$/.test(path)) return;
     return html(reply, renderInfo());
   });
 
@@ -149,14 +194,31 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
     if (!rows[0]) return html(reply, renderPage({ host: p.h, visitorIp: ip, params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
     const { config } = await load(pool, rows[0].account_id);
-    if (!config.enabled || !config.site_key || !config.secret_key) {
+    const provider = effectiveProvider(config);
+    if (!config.enabled || !provider) {
       return html(reply, renderPage({ host: p.h, visitorIp: ip, params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
     }
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
-    return html(reply, renderPage({ host: p.h, visitorIp: ip, params, siteKey: config.site_key }));
+    return html(reply, renderPage({ host: p.h, visitorIp: ip, params, siteKey: provider === 'altcha' ? '' : config.site_key, provider }));
   });
 
-  const Verify = z.object({ s: z.string(), ip: z.string(), h: z.string(), u: z.string(), token: z.string().min(1).max(4096), preview: z.boolean().optional() });
+  // ALTCHA: the widget (from this portal, not a CDN) and its checks.
+  app.get('/v/altcha.js', async (_req, reply) =>
+    reply.type('application/javascript; charset=utf-8').header('Cache-Control', 'public, max-age=86400').send(altchaScript),
+  );
+  app.get('/v/altcha/challenge', { config: { rateLimit: { max: 60, timeWindow: '10 minutes', keyGenerator: (req: FastifyRequest) => visitorIP(req, cfg.trustProxy) } } }, async (_req, reply) =>
+    reply.header('Cache-Control', 'no-store').send(await altchaChallenge()),
+  );
+
+  const Verify = z.object({
+    s: z.string(),
+    ip: z.string(),
+    h: z.string(),
+    u: z.string(),
+    token: z.string().min(1).max(4096).optional(),
+    altcha: z.string().min(1).max(8192).optional(),
+    preview: z.boolean().optional(),
+  });
   app.post(
     '/v/verify',
     { bodyLimit: 16 * 1024, config: { rateLimit: { max: 20, timeWindow: '10 minutes', keyGenerator: (req: FastifyRequest) => visitorIP(req, cfg.trustProxy) } } },
@@ -169,21 +231,34 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       if (!rows[0]) return reply.code(404).send({ error: 'This check link is not valid.' });
       const accountId = String(rows[0].account_id);
       const { config } = await load(pool, accountId);
-      if (!config.enabled || !config.secret_key) return reply.code(503).send({ error: 'The check is not available right now.' });
+      const provider = effectiveProvider(config);
+      if (!config.enabled || !provider) return reply.code(503).send({ error: 'The check is not available right now.' });
       const ip = visitorIP(req, cfg.trustProxy);
+      // Turnstile's token, or ALTCHA's solution where ALTCHA is allowed.
+      const solved = async () => {
+        if (b.data.altcha) return provider !== 'turnstile' && (await altchaVerify(b.data.altcha));
+        if (b.data.token) return provider !== 'altcha' && (await turnstile.verify(config.secret_key, b.data.token, ip));
+        return false;
+      };
       // A preview only tests the check: no server is asked, nothing is recorded.
       if (b.data.preview) {
-        if (!(await turnstile.verify(config.secret_key, b.data.token, ip))) return reply.code(403).send({ error: 'The check failed. Please try again.' });
+        if (!(await solved())) return reply.code(403).send({ error: 'The check failed. Please try again.' });
         return { ok: true, preview: true };
       }
-      // The link is for one address; another address of the same family may
-      // not use it (a dual-stack visitor can reach this page over the other
-      // family, so that case is allowed).
-      if (isIP(ip) === isIP(p.ip) && !sameIP(ip, p.ip)) {
+      // The link is for the address the website saw. Mobile networks and
+      // ISPs often reach different sites from different addresses, so
+      // another address may solve it (a few per hour), unless the strict
+      // setting is on. A dual-stack visitor can reach this page over the
+      // other family: always allowed.
+      if (isIP(ip) === isIP(p.ip) && !sameIP(ip, p.ip) && (config.strict_ip || !allowOtherAddress(ip, p.ip))) {
         await record(accountId, p.s, ip, p.h, 'rejected');
-        return reply.code(403).send({ error: 'This check was opened for another address. Please go back to the website and try again.' });
+        return reply.code(403).send({
+          error: config.strict_ip
+            ? 'This check was opened for another address. Please go back to the website and try again.'
+            : 'Too many checks from this address. Please try again in an hour.',
+        });
       }
-      if (!(await turnstile.verify(config.secret_key, b.data.token, ip))) {
+      if (!(await solved())) {
         await record(accountId, p.s, p.ip, p.h, 'failed');
         return reply.code(403).send({ error: 'The check failed. Please try again.' });
       }
@@ -214,7 +289,14 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const last24h: Record<string, number> = { passed: 0, failed: 0, rejected: 0, offline: 0 };
     for (const r of rows) last24h[r.result] = r.n;
     return {
-      config: { enabled: cur.config.enabled, site_key: cur.config.site_key, secret_set: cur.config.secret_key !== '', minutes: cur.config.minutes },
+      config: {
+        enabled: cur.config.enabled,
+        site_key: cur.config.site_key,
+        secret_set: cur.config.secret_key !== '',
+        minutes: cur.config.minutes,
+        provider: cur.config.provider,
+        strict_ip: cur.config.strict_ip,
+      },
       version: cur.version,
       updated_at: cur.updated_at,
       url: pageUrl,
@@ -229,6 +311,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // Empty keeps the saved secret.
     secret_key: z.string().trim().max(200),
     minutes: z.number().int().min(10).max(7 * 24 * 60),
+    provider: z.enum(['auto', 'turnstile', 'altcha']).default('auto'),
+    strict_ip: z.boolean().default(false),
   });
   app.put('/api/captcha', admin, async (req, reply) => {
     const b = Save.safeParse(req.body);
@@ -236,8 +320,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const acc = req.user!.accountId;
     const cur = await load(pool, acc);
     const c: CaptchaConfig = { ...b.data, secret_key: b.data.secret_key || cur.config.secret_key };
-    if (c.enabled && (!c.site_key || !c.secret_key)) {
-      return reply.code(400).send({ error: 'Add the Cloudflare Turnstile site key and secret key before turning the CAPTCHA page on.' });
+    if (c.enabled && c.provider === 'turnstile' && (!c.site_key || !c.secret_key)) {
+      return reply.code(400).send({ error: 'Add the Cloudflare Turnstile site key and secret key, or choose ALTCHA, before turning the CAPTCHA page on.' });
     }
     if (c.site_key && !/^[0-9A-Za-z_-]{10,100}$/.test(c.site_key)) return reply.code(400).send({ error: 'The site key does not look like a Turnstile site key.' });
     const { rows } = await pool.query(
@@ -247,7 +331,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       [acc, JSON.stringify(c)],
     );
     const version = Number(rows[0].version);
-    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes }, ip: req.ip });
+    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes, provider: c.provider, strict_ip: c.strict_ip }, ip: req.ip });
     let pushed = 0;
     let offline = 0;
     for (const s of await servers(acc)) {

@@ -15,6 +15,8 @@ export interface PageData {
   params: { s: string; ip: string; h: string; u: string; preview?: boolean } | null;
   /** Cloudflare Turnstile site key ('' = not set up). */
   siteKey: string;
+  /** The check: Turnstile, ALTCHA, or Turnstile with ALTCHA when it cannot load. */
+  provider?: 'turnstile' | 'altcha' | 'auto';
   /** Error shown instead of the check. */
   error?: string;
 }
@@ -40,6 +42,7 @@ body{min-height:100vh;display:flex;flex-direction:column;align-items:center;just
 .again{margin-top:12px;border:1px solid #c9d6ea;background:#fff;color:#1d4f96;font:600 14px inherit;font-family:inherit;border-radius:10px;padding:9px 18px;cursor:pointer}
 .again:hover{background:#f1f5fb}
 .preview{background:#fff7e6;border:1px solid #f6d9a8;color:#8a5a00;border-radius:12px;padding:10px 14px;font-size:14px;margin:0 0 16px}
+.widget altcha-widget{width:100%;max-width:300px;--altcha-max-width:300px}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid #cfd9ea;border-top-color:#1d4f96;border-radius:50%;animation:s 1s linear infinite;vertical-align:-3px;margin-right:8px}
 @keyframes s{to{transform:rotate(360deg)}}
 .box{background:#fff5f2;border:1px solid #f6d3c8;border-radius:14px;padding:14px 16px;color:#8a2d14;font-size:15px;line-height:1.5}
@@ -60,19 +63,20 @@ export function renderPage(d: PageData): string {
 <div class="widget"><div id="ts"></div></div>
 <p class="status" id="status" role="status" aria-live="polite"><span class="spin"></span>Loading the check…</p>
 <button type="button" class="again" id="again" hidden>Try again</button>`;
+  const provider = d.provider ?? 'turnstile';
   const script =
     d.error || !d.params
       ? ''
       : `<script>
-var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},st=document.getElementById('status'),ag=document.getElementById('again');
+var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
 function show(t,c){st.className='status'+(c?' '+c:'');st.innerHTML=t}
-// After an error the widget is not reset by itself (it would solve again
+// After an error the check is not restarted by itself (it would solve again
 // and repeat the same error): the visitor chooses to try again.
 function fail(t){show(t,'err');ag.hidden=false}
-ag.onclick=function(){ag.hidden=true;show('Please confirm you are not a robot.');if(window.turnstile)turnstile.reset()};
-function done(token){
+ag.onclick=function(){ag.hidden=true;if(usingAltcha){startAltcha()}else{show('Please confirm you are not a robot.');if(window.turnstile)turnstile.reset()}};
+function done(sol){
   show('<span class="spin"></span>Checking…');
-  fetch('/v/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({token:token},P))})
+  fetch('/v/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({},sol,P))})
   .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
   .then(function(x){
     if(!x.ok){fail(x.j.error||'The check failed. Please try again.');return}
@@ -81,12 +85,42 @@ function done(token){
     setTimeout(function(){location.replace(x.j.redirect)},${1200});
   }).catch(function(){fail('Network error. Please try again.')});
 }
-window.onTs=function(){
-  show('Please confirm you are not a robot.');
-  turnstile.render('#ts',{sitekey:${JSON.stringify(d.siteKey)},callback:done,'error-callback':function(){show('The check could not load. Please reload the page.','err')},'expired-callback':function(){show('The check expired. Please try again.','err')}});
-};
-</script>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTs&render=explicit" async defer></script>`;
+// ALTCHA: the browser solves a small puzzle by itself (no third party).
+function startAltcha(){
+  usingAltcha=true;ag.hidden=true;
+  show('<span class="spin"></span>Checking your browser…');
+  var go=function(){
+    box.innerHTML='';
+    altcha=document.createElement('altcha-widget');
+    altcha.setAttribute('challenge','/v/altcha/challenge');
+    altcha.setAttribute('auto','onload');
+    altcha.setAttribute('configuration',JSON.stringify({hideFooter:true,hideLogo:true,minDuration:600}));
+    altcha.addEventListener('verified',function(e){done({altcha:e.detail.payload})});
+    altcha.addEventListener('statechange',function(e){if(e.detail&&e.detail.state==='error')fail('The check could not finish. Please try again.')});
+    box.appendChild(altcha);
+  };
+  if(customElements.get('altcha-widget')){go();return}
+  var s=document.createElement('script');s.type='module';s.src='/v/altcha.js';
+  s.onload=go;s.onerror=function(){fail('The check could not load. Please reload the page.')};
+  document.head.appendChild(s);
+}
+// Turnstile; in auto mode ALTCHA takes over when it cannot load or run.
+function startTurnstile(){
+  var started=false;
+  window.onTs=function(){
+    started=true;
+    show('Please confirm you are not a robot.');
+    turnstile.render('#ts',{sitekey:KEY,callback:function(t){done({token:t})},
+      'error-callback':function(){if(MODE==='auto'&&!usingAltcha){startAltcha();return true}show('The check could not load. Please reload the page.','err')},
+      'expired-callback':function(){show('The check expired. Please try again.','err')}});
+  };
+  var s=document.createElement('script');s.src='https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTs&render=explicit';s.async=true;
+  s.onerror=function(){if(MODE==='auto')startAltcha();else show('The check could not load. Please reload the page.','err')};
+  document.head.appendChild(s);
+  if(MODE==='auto')setTimeout(function(){if(!started&&!usingAltcha)startAltcha()},8000);
+}
+if(MODE==='altcha')startAltcha();else startTurnstile();
+</script>`;
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -106,7 +140,7 @@ ${body}
 <noscript><div class="box">Please enable JavaScript to continue.</div></noscript>
 <details><summary>Why am I seeing this?</summary>
 <p>${host} uses xPGuard to keep attackers away. Your address was recently seen sending suspicious requests, or it is on a list of addresses used for attacks, or this page is only open to people, so we ask you to confirm that you are a person.</p>
-<p>After the check you go straight back to the page you asked for, and this address is not asked again for a while. The check is run by Cloudflare Turnstile; no account or personal details are needed.</p>
+<p>After the check you go straight back to the page you asked for, and this address is not asked again for a while. ${provider === 'altcha' ? 'Your browser solves a small puzzle by itself' : 'The check is run by Cloudflare Turnstile'}; no account or personal details are needed.</p>
 </details>
 <div class="foot"><span>Powered by <img src="/xpguard-wordmark.png" alt="xPGuard"></span></div>
 </main>

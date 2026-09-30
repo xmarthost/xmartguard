@@ -7,13 +7,21 @@ import { Card, Pager, SettingRow, Toggle, useAction } from '../components/contro
 import { useApi } from '../hooks';
 
 interface Resp {
-  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number };
+  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean };
   version: number;
   updated_at: string | null;
   url: string;
   last24h: { passed: number; failed: number; rejected: number; offline: number };
   servers: { id: string; hostname: string; online: boolean }[];
 }
+
+type Provider = 'auto' | 'turnstile' | 'altcha';
+
+const PROVIDERS: [Provider, string, string][] = [
+  ['auto', 'Turnstile, ALTCHA as fallback', "Turnstile for everyone; when it cannot load or fails in a visitor's browser (privacy add-ons, VPNs, old browsers), the page switches to ALTCHA by itself. Without Turnstile keys: ALTCHA only."],
+  ['turnstile', 'Turnstile only', 'Strongest against bots, but some visitors see "Verification failed" and cannot pass.'],
+  ['altcha', 'ALTCHA only (no Cloudflare)', 'Open source, run by this portal: the browser solves a small puzzle by itself in about a second. No keys and no third party.'],
+];
 
 const DURATIONS: [number, string][] = [
   [60, '1 hour'],
@@ -41,24 +49,34 @@ export default function CaptchaPage() {
   const [siteKey, setSiteKey] = useState('');
   const [secret, setSecret] = useState('');
   const [minutes, setMinutes] = useState(720);
+  const [provider, setProvider] = useState<Provider>('auto');
+  const [strictIP, setStrictIP] = useState(false);
 
   useEffect(() => {
     if (!res.data) return;
     setEnabled(res.data.config.enabled);
     setSiteKey(res.data.config.site_key);
     setMinutes(res.data.config.minutes);
+    setProvider(res.data.config.provider ?? 'auto');
+    setStrictIP(Boolean(res.data.config.strict_ip));
     setSecret('');
   }, [res.data]);
 
   if (res.error && !res.data) return <ErrorBox message={res.error} />;
   if (!res.data) return <PageLoader />;
   const d = res.data;
-  const dirty = enabled !== d.config.enabled || siteKey !== d.config.site_key || minutes !== d.config.minutes || secret !== '';
+  const dirty =
+    enabled !== d.config.enabled ||
+    siteKey !== d.config.site_key ||
+    minutes !== d.config.minutes ||
+    secret !== '' ||
+    provider !== (d.config.provider ?? 'auto') ||
+    strictIP !== Boolean(d.config.strict_ip);
   const online = d.servers.filter((s) => s.online).length;
   const preview = d.servers[0] ? `${d.url}?s=${d.servers[0].id}&preview=1` : '';
   const save = () =>
     run(
-      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes }).then((r) => (res.reload(), r)),
+      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP }).then((r) => (res.reload(), r)),
       (r) => `Saved: applied on ${r.pushed} online server${r.pushed === 1 ? '' : 's'}${r.offline ? `; ${r.offline} offline will follow when they reconnect` : ''}`,
     );
 
@@ -72,7 +90,7 @@ export default function CaptchaPage() {
           </h1>
           <p className="max-w-3xl text-sm text-slate-500">
             Suspicious visitors of the websites' login pages (addresses on the IPDB, banned in the last 7 days, or blocked by the WAF 3 times in 24 hours) are sent to
-            xPGuard's own verification page. After a Cloudflare Turnstile check they go straight back to the login page, and the address is not asked again for the time
+            xPGuard's own verification page. After the check (Cloudflare Turnstile or ALTCHA) they go straight back to the login page, and the address is not asked again for the time
             below. Everyone else logs in as usual. While this page is on it also replaces each server's own CAPTCHA: the login-page CAPTCHA for every
             visitor (WAF settings) and the CAPTCHA for banned addresses (Firewall » CAPTCHA) send visitors here, and solving it lifts a temporary ban.
           </p>
@@ -104,6 +122,17 @@ export default function CaptchaPage() {
         <SettingRow title="Send suspicious visitors of login pages to the CAPTCHA page" desc="On all servers, except where Malware.Expert's own login CAPTCHA is used, or where the login-page CAPTCHA already asks every visitor.">
           <Toggle on={enabled} disabled={!admin || busy} onChange={setEnabled} />
         </SettingRow>
+        <SettingRow title="Check" desc={PROVIDERS.find((x) => x[0] === provider)?.[2]}>
+          <select className="input w-72" value={provider} disabled={!admin || busy} onChange={(e) => setProvider(e.target.value as Provider)} aria-label="Check">
+            {PROVIDERS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+        {provider !== 'altcha' && (
+        <>
         <div className="grid gap-4 py-4 md:grid-cols-2">
           <label className="block">
             <span className="text-sm font-medium text-navy-900">Turnstile site key</span>
@@ -126,6 +155,14 @@ export default function CaptchaPage() {
           <span className="font-mono">{(() => { try { return new URL(d.url).host; } catch { return d.url; } })()}</span>, widget mode "Managed". The secret key stays on the portal;
           it is never shown again or sent to the servers.
         </p>
+        </>
+        )}
+        <SettingRow
+          title="Only the address the website saw may solve the check"
+          desc='Off (recommended): mobile networks and many ISPs reach different sites from different addresses, so the visitor may solve the check from another address, up to 3 addresses an hour. On: such visitors see "This check was opened for another address".'
+        >
+          <Toggle on={strictIP} disabled={!admin || busy} onChange={setStrictIP} />
+        </SettingRow>
         <SettingRow title="Do not ask a verified address again for" desc="How long a solved check lets the address into the login pages of that server.">
           <select className="input w-40" value={minutes} disabled={!admin || busy} onChange={(e) => setMinutes(Number(e.target.value))}>
             {DURATIONS.map(([v, l]) => (
