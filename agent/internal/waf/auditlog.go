@@ -201,7 +201,21 @@ func attackRank(id int) int {
 type reason struct {
 	msg  string
 	rank int
-	ids  []int // the rules that added to the score
+	ids  []int          // the rules that added to the score
+	locs map[int]string // where each of them matched (ARGS:q, REQUEST_COOKIES:x)
+}
+
+// reMatchVar finds where a rule matched in its log text: "against
+// variable `ARGS:q'" (ModSecurity 2.9) or "… at REQUEST_COOKIES:x.".
+var reMatchVar = regexp.MustCompile("(?:against variable `| at )([A-Z_]+(?::[^ '`]{1,80})?)")
+
+// matchVar returns the variable a rule matched, "" if the text has none.
+func matchVar(detail string) string {
+	m := reMatchVar.FindStringSubmatch(detail)
+	if m == nil {
+		return ""
+	}
+	return strings.TrimRight(m[1], ".:")
 }
 
 // ScoredPrefix starts the detail of a CRS score block: the rules that
@@ -221,10 +235,13 @@ func addScored(ids []int, id int) []int {
 	return append(ids, id)
 }
 
-func scoredDetail(ids []int) string {
+func scoredDetail(ids []int, locs map[int]string) string {
 	s := make([]string, len(ids))
 	for i, id := range ids {
 		s[i] = strconv.Itoa(id)
+		if l := locs[id]; l != "" {
+			s[i] += " (" + l + ")"
+		}
 	}
 	return ScoredPrefix + strings.Join(s, ", ")
 }
@@ -240,7 +257,7 @@ func (r *reasons) apply(e Event) Event {
 			e.Msg = scoreMsg(m.msg, e.Msg)
 			e.Category = classify(e.RuleID, e.Msg)
 			if len(m.ids) > 0 {
-				e.Detail = scoredDetail(m.ids)
+				e.Detail = scoredDetail(m.ids, m.locs)
 			}
 		}
 		return e
@@ -251,6 +268,9 @@ func (r *reasons) apply(e Event) Event {
 	rank := attackRank(e.RuleID)
 	if old, ok := r.msg[e.UID]; ok {
 		old.ids = addScored(old.ids, e.RuleID)
+		if v := matchVar(e.Detail); v != "" && old.locs[e.RuleID] == "" {
+			old.locs[e.RuleID] = v
+		}
 		if rank > old.rank {
 			old.msg, old.rank = e.Msg, rank
 		}
@@ -262,7 +282,11 @@ func (r *reasons) apply(e Event) Event {
 	}
 	r.ring[r.pos] = e.UID
 	r.pos = (r.pos + 1) % len(r.ring)
-	r.msg[e.UID] = reason{e.Msg, rank, addScored(nil, e.RuleID)}
+	locs := map[int]string{}
+	if v := matchVar(e.Detail); v != "" {
+		locs[e.RuleID] = v
+	}
+	r.msg[e.UID] = reason{e.Msg, rank, addScored(nil, e.RuleID), locs}
 	return e
 }
 

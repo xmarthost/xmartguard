@@ -283,9 +283,13 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
 /** The rules to allow for a blocked request: for an OWASP CRS score block
  *  (949110), the rules that added to the score, recorded by the agent. */
 function rulesOf(e: WafEvent): number[] {
-  const m = e.detail?.match(/^Matched rules: ([\d, ]+)/);
-  if (m) {
-    const ids = m[1].split(',').map((x) => Number(x.trim())).filter((n) => n > 0);
+  // "Matched rules: 942550 (REQUEST_COOKIES:consent), 941100 (ARGS:q)"
+  if (e.detail?.startsWith('Matched rules: ')) {
+    const ids = e.detail
+      .slice(15)
+      .split(/,\s*(?=\d)/)
+      .map((x) => Number(x.match(/^\d+/)?.[0]))
+      .filter((n) => n > 0);
     if (ids.length) return ids;
   }
   return [e.rule_id];
@@ -344,7 +348,9 @@ function AllowDialog({ serverId, ev, onClose }: { serverId: string; ev: WafEvent
             </label>
           ))}
           {candidates[0] !== ev.rule_id && (
-            <p className="mt-1 text-xs text-slate-500">The OWASP Core Rule Set blocked this request by score (rule {ev.rule_id}); these are the rules that scored.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              The OWASP Core Rule Set blocked this request by score (rule {ev.rule_id}); these are the rules that scored{ev.detail?.includes('(') ? ` and where: ${ev.detail.slice(15)}` : ''}.
+            </p>
           )}
         </div>
         <div className="mb-4">

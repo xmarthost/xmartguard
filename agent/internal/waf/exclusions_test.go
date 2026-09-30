@@ -63,7 +63,7 @@ func TestExclusionsWithCRS(t *testing.T) {
 	if src == "" {
 		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
 	}
-	m, _ := apacheWith(t, `{"waf":{"enabled":true,"wordpress":true,"rule_exclusions":[{"rule":949110,"domain":"allowed.example.com","path":"/form/"}]}}`)
+	m, _ := apacheWith(t, `{"waf":{"enabled":true,"wordpress":true,"generic":true,"bad_bots":true,"rule_exclusions":[{"rule":949110,"domain":"allowed.example.com","path":"/form/"}]}}`)
 	files := map[string]string{}
 	b, err := os.ReadFile(filepath.Join(src, "crs-setup.conf.example"))
 	if err != nil {
@@ -109,6 +109,18 @@ func TestExclusionsWithCRS(t *testing.T) {
 		{"REST page update, rest_route form", "shop.example.com", "POST", "/?rest_route=/wp/v2/pages/12", json, page, nil, 200},
 		{"Plugin REST route stays inspected", "shop.example.com", "POST", "/wp-json/someplugin/v1/save", json, page, nil, 403},
 		{"Comments route stays inspected", "shop.example.com", "POST", "/wp-json/wp/v2/comments", json, page, nil, 403},
+		// From the WAF log of a live server.
+		{"WooCommerce block checkout (method override)", "shop.example.com", "POST", "/wp-json/wc/store/v1/checkout?__experimental_calc_totals=true&_locale=site", json, `{"payment_method":"stripe"}`, []string{"X-HTTP-Method-Override: PUT", "Nonce: abc"}, 200},
+		{"WooCommerce checkout note with PHP words", "shop.example.com", "POST", "/wp-json/wc/store/v1/checkout?_locale=site", json, `{"customer_note":"Please passthru the parcel to reception, phpinfo desk"}`, nil, 200},
+		{"Elementor saves with PUT", "shop.example.com", "PUT", "/solar/wp-json/elementor/v1/global-classes?context=preview", json, `{"items":{}}`, nil, 200},
+		{"Elementor saves with DELETE", "shop.example.com", "DELETE", "/wp-json/elementor/v1/global-classes?context=frontend", json, `{}`, nil, 200},
+		{"PUT outside the REST API stays refused", "shop.example.com", "PUT", "/upload.php", json, `{}`, nil, 403},
+		{"Method override outside the REST API stays refused", "shop.example.com", "POST", "/contact/", form, "a=1", []string{"X-HTTP-Method-Override: PUT"}, 403},
+		{"ViserLab colour stylesheet", "shop.example.com", "GET", "/assets/templates/metro_hyip/css/color.php?base_color=f60233&secondary_color=000000", "", "", nil, 200},
+		{"PHP in a css folder stays blocked", "shop.example.com", "GET", "/assets/templates/metro_hyip/css/shell.php", "", "", nil, 403},
+		{"Bare Mozilla/5.0 is still a bot", "shop.example.com", "GET", "/", "", "", []string{"User-Agent: Mozilla/5.0"}, 403},
+		{"Bare Mozilla/5.0 with WordPress login", "shop.example.com", "GET", "/wp-admin/", "", "", []string{"User-Agent: Mozilla/5.0", cookie}, 200},
+		{"Bare Mozilla/5.0 API client with credentials", "shop.example.com", "GET", "/wp-json/wp/v2/pages", "", "", []string{"User-Agent: Mozilla/5.0", "Authorization: Basic YWRtaW46eHh4eCB4eHh4"}, 200},
 	}
 	for _, c := range cases {
 		// Allowed requests reach Apache (404 here: no WordPress behind it).
@@ -128,13 +140,27 @@ func TestExclusionsWithCRS(t *testing.T) {
 		t.Fatal("per-site exclusion applied outside its path")
 	}
 	// Control: without the exclusion the ticket's request is blocked.
-	m.Settings.Patch([]byte(`{"waf":{"disabled_rules":[7700010]}}`))
+	m.Settings.Patch([]byte(`{"waf":{"disabled_rules":[7700010,7700013,7700014]}}`))
 	if err := m.Apply(); err != nil {
 		t.Fatal(err)
 	}
 	waitApache()
 	if sendBody(t, "shop.example.com", "POST", "/wp-admin/admin.php?page=wpcode-headers-footers", form, wpcode, cookie) != 403 {
 		t.Fatal("WPCode save passes even without the exclusion: the test proves nothing")
+	}
+	for _, c := range []struct {
+		uri, ctype, body string
+		hdr              []string
+	}{
+		{"/wp-json/wc/store/v1/checkout?_locale=site", json, `{"customer_note":"Please passthru the parcel to reception, phpinfo desk"}`, nil},
+		{"/wp-json/wc/store/v1/checkout?__experimental_calc_totals=true", json, `{"payment_method":"stripe"}`, []string{"X-HTTP-Method-Override: PUT"}},
+	} {
+		if sendBody(t, "shop.example.com", "POST", c.uri, c.ctype, c.body, c.hdr...) != 403 {
+			t.Fatalf("%s passes even without the exclusion", c.uri)
+		}
+	}
+	if sendBody(t, "shop.example.com", "PUT", "/wp-json/elementor/v1/global-classes", json, `{}`) != 403 {
+		t.Fatal("PUT passes even without the exclusion")
 	}
 }
 
@@ -158,7 +184,20 @@ func sendBody(t *testing.T, host, method, uri, ctype, body string, hdr ...string
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(5 * time.Second))
-	req := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\nContent-Type: %s\r\nContent-Length: %d\r\n", method, uri, host, browserUA, ctype, len(body))
+	ua := browserUA
+	var extra []string
+	for _, h := range hdr {
+		if strings.HasPrefix(h, "User-Agent: ") {
+			ua = strings.TrimPrefix(h, "User-Agent: ")
+		} else {
+			extra = append(extra, h)
+		}
+	}
+	hdr = extra
+	req := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n", method, uri, host, ua)
+	if ctype != "" {
+		req += fmt.Sprintf("Content-Type: %s\r\nContent-Length: %d\r\n", ctype, len(body))
+	}
 	for _, h := range hdr {
 		req += h + "\r\n"
 	}
@@ -168,4 +207,20 @@ func sendBody(t *testing.T, host, method, uri, ctype, body string, hdr ...string
 	var code int
 	fmt.Sscanf(line, "HTTP/1.1 %d", &code)
 	return code
+}
+
+func TestScoredDetailNamesWhereRulesMatched(t *testing.T) {
+	r := newReasons(8)
+	for _, l := range []string{
+		"[client 1.2.3.4:1] ModSecurity: Warning. Matched \"Operator `Rx' with parameter `x' against variable `REQUEST_COOKIES:consent' (Value: `{}' ) [file \"/x\"] [id \"942550\"] [msg \"JSON-Based SQL Injection\"] [uri \"/\"] [unique_id \"U9\"]",
+		`[client 1.2.3.4:1] ModSecurity: Warning. Pattern match "x" at ARGS:q. [file "/x"] [id "941100"] [msg "XSS Attack Detected via libinjection"] [uri "/"] [unique_id "U9"]`,
+	} {
+		e, _ := ParseLine(l)
+		r.apply(e)
+	}
+	d, _ := ParseLine(`[client 1.2.3.4:1] ModSecurity: Access denied with code 403 (phase 2). Operator GE matched 5 at TX:blocking_inbound_anomaly_score. [file "/x"] [id "949110"] [msg "Inbound Anomaly Score Exceeded (Total Score: 10)"] [uri "/"] [unique_id "U9"]`)
+	d = r.apply(d)
+	if d.Detail != "Matched rules: 942550 (REQUEST_COOKIES:consent), 941100 (ARGS:q)" {
+		t.Fatalf("%q", d.Detail)
+	}
 }

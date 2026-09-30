@@ -90,6 +90,8 @@ var Catalog = []RuleInfo{
 	{IDWPAdminExcl, "exclusions", "Allow code and HTML in WordPress admin screens of logged-in users (WPCode, theme options, page builders): injection rules skip them", "allow"},
 	{IDWPAjaxExcl, "exclusions", "Allow code and HTML in admin-ajax.php / admin-post.php requests of logged-in users sent from the admin screens (editor saves)", "allow"},
 	{IDWPRestExcl, "exclusions", "Allow code and HTML in writes to WordPress core REST routes (posts, pages, blocks, templates, media…; WordPress checks the user's rights)", "allow"},
+	{IDWPRestMethods, "exclusions", "Allow the HTTP methods (PUT, PATCH, DELETE) and method override headers of the WordPress REST API (Elementor, WooCommerce block checkout)", "allow"},
+	{IDWCStoreExcl, "exclusions", "WooCommerce block cart and checkout (Store API): PHP-injection rules skip it (addresses and order notes are stored, never run)", "allow"},
 	{IDUploadMalware, "upload_scan", "Scan uploaded files with the xPGuard malware engine", "block"},
 	{IDUploadPHP, "block_php_upload", "Block uploads of PHP files through web forms", "block"},
 	{IDSensitive, "sensitive_files", "Block access to .env, .git, config backups, logs and SQL dumps", "block"},
@@ -451,7 +453,8 @@ func Render(c settings.WAF, o Options) string {
 		// (/images/images/cache.php) and hidden folders are backdoor hunts.
 		if !off[IDStaticPHP] {
 			w(`SecRule REQUEST_FILENAME "@rx /(?:images?|img|fonts?|css)/+[^/]*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP execution in a static folder blocked',tag:'xpguard/generic',chain"`, IDStaticPHP)
-			w(`  SecRule REQUEST_FILENAME "!@rx /cache/+autoptimize/" "t:none,t:urlDecodeUni,t:lowercase"`)
+			// Also the colour stylesheets of ViserLab scripts (HYIPLAB, PTC…).
+			w(`  SecRule REQUEST_FILENAME "!@rx (?:/cache/+autoptimize/|/assets/+templates/+[^/]+/+css/+color\.php$)" "t:none,t:urlDecodeUni,t:lowercase"`)
 		}
 		rule(IDRepeatDirPHP, `SecRule REQUEST_FILENAME "@rx /([^/]+)/+\1/(?:[^/]*/)*[^/]*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP request through repeated folders blocked',tag:'xpguard/generic'"`, IDRepeatDirPHP)
 		if !off[IDHiddenDirPHP] {
@@ -589,7 +592,12 @@ func Render(c settings.WAF, o Options) string {
 			probe(IDRootProbe, `SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
 			probe(IDRootProbe+1000, `SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
 		}
-		rule(IDBareMozilla, `SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*mozilla/5\.0\s*$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake browser User-Agent blocked',tag:'xpguard/bot'"`, IDBareMozilla)
+		if !off[IDBareMozilla] {
+			// Not for logged-in users and API clients (some site tools send it).
+			w(`SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*mozilla/5\.0\s*$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake browser User-Agent blocked',tag:'xpguard/bot',chain"`, IDBareMozilla)
+			w(`  SecRule &REQUEST_HEADERS:Authorization "@eq 0" "t:none,chain"`)
+			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
+		}
 	}
 	bot(c.SEOBots, FileSEOBots, IDSEOBots, "SEO crawler")
 	bot(c.AIBots, FileAIBots, IDAIBots, "AI crawler")

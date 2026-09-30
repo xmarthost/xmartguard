@@ -64,7 +64,8 @@ const GENERIC = new Set(
   wp-cron wp-blog-header wp-mail wp-signup wp-activate wp-trackback wp-comments-post wp-links-opml functions.inc config.inc
   constants define defines version lang language languages locale redirect proxy feed rss sitemap robots export import backup
   restore payment ipn notify callback webhook webhooks order orders invoice report reports stats status health ping sync
-  process handler handlers action actions include includes lib library vendor module modules block blocks data item items`
+  process handler handlers action actions include includes lib library vendor module modules block blocks data item items
+  color colors sapp-wp-signon`
     .split(/\s+/)
     .filter(Boolean)
     .map((n) => `${n}.php`),
