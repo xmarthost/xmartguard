@@ -153,15 +153,27 @@ export default function ServerDashboard() {
     return (
       <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Link to="/servers" className="shrink-0 rounded-lg p-1 text-slate-700 hover:bg-white" aria-label="All servers">
+          <div className="flex w-full min-w-0 items-start gap-2 sm:w-auto sm:items-center sm:gap-3">
+            <Link to="/servers" className="-ml-1 shrink-0 rounded-lg p-1 text-slate-700 hover:bg-white" aria-label="All servers">
               <ChevronLeft className="h-6 w-6" />
             </Link>
-            <PanelMark panel={s.control_panel} big />
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="min-w-0 text-xl leading-tight font-bold [overflow-wrap:anywhere] text-slate-900 sm:text-[26px]" title={s.hostname}>
-                  {s.hostname}
+            <span className="hidden shrink-0 sm:block">
+              <PanelMark panel={s.control_panel} big />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {/* Long hostnames wrap after a dot on phones. */}
+                <h1 className="min-w-0 text-lg leading-snug font-bold [overflow-wrap:anywhere] text-slate-900 sm:text-[26px] sm:leading-tight" title={s.hostname}>
+                  {s.hostname.split('.').map((part, i, all) => (
+                    <Fragment key={i}>
+                      {part}
+                      {i < all.length - 1 && (
+                        <>
+                          .<wbr />
+                        </>
+                      )}
+                    </Fragment>
+                  ))}
                 </h1>
                 <StatusPill online={s.online} />
               </div>
@@ -172,19 +184,19 @@ export default function ServerDashboard() {
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-slate-500">View</span>
-            <select className="input w-36" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+          <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3">
+            <span className="hidden text-slate-500 sm:inline">View</span>
+            <select className="input min-w-0 flex-1 sm:w-36 sm:flex-none" value={days} onChange={(e) => setDays(Number(e.target.value))}>
               <option value={7}>7 Days</option>
               <option value={30}>30 Days</option>
               <option value={90}>90 Days</option>
             </select>
             {can(user, 'operator') && (
-              <button className="btn-primary" disabled={!s.online || busy} onClick={quickScan}>
+              <button className="btn-primary shrink-0" disabled={!s.online || busy} onClick={quickScan}>
                 <Search className="h-4 w-4" /> Quick Scan
               </button>
             )}
-            <button className="btn-outline px-2.5" title="Server information" onClick={() => setInfo(true)}>
+            <button className="btn-outline shrink-0 px-2.5" title="Server information" onClick={() => setInfo(true)}>
               <MoreVertical className="h-5 w-5" />
             </button>
           </div>

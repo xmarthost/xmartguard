@@ -32,7 +32,7 @@ function Kpi({ tone, icon, p, label, series }: { tone: Tone; icon: ReactNode; p:
             <span className="text-[28px] leading-none font-bold text-slate-900">{compact(p.current)}</span>
             <Trend cur={p.current} prev={p.previous} />
           </div>
-          <div className="mt-1.5 truncate text-sm text-slate-500">{label}</div>
+          <div className="mt-1.5 text-sm leading-tight text-slate-500">{label}</div>
         </div>
         <div className="text-right">
           <div className="flex items-center justify-end gap-1 text-sm font-semibold text-slate-900">
@@ -223,9 +223,9 @@ export default function ModernOverview({ serverId, online, days, setDays }: { se
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(0,1fr)]">
-        <div className="card p-6">
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <h2 className="text-lg font-bold text-slate-900">Attacks Overview</h2>
+        <div className="card p-4 sm:p-6">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-bold whitespace-nowrap text-slate-900">Attacks Overview</h2>
             <RangeSelect days={days} setDays={setDays} />
           </div>
           <div className="grid items-center gap-8 md:grid-cols-[220px_minmax(0,1fr)]">

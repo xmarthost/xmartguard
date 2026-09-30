@@ -104,7 +104,7 @@ export function Bar({ value, className = 'bg-green-500' }: { value: number; clas
 
 export function Breadcrumb({ items }: { items: string[] }) {
   return (
-    <div className="mb-1 text-sm text-slate-400">
+    <div className="mb-1 text-sm [overflow-wrap:anywhere] text-slate-400">
       {items.map((it, i) => (
         <span key={i}>
           {i > 0 && <span className="mx-2">›</span>}

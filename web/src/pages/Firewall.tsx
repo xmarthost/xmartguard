@@ -909,7 +909,8 @@ export function FirewallPage() {
                 {meta.data.csf.testing && <div className="mt-1 text-amber-700">CSF is in TESTING mode: it flushes its rules every few minutes. Set TESTING = "0" in csf.conf when you are done testing.</div>}
               </div>
             )}
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[480px] text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs uppercase text-slate-500">
                   <th className="py-2 pr-3">Firewall</th>
@@ -930,6 +931,7 @@ export function FirewallPage() {
                 ))}
               </tbody>
             </table>
+            </div>
             <div className="flex justify-end">
               <button
                 className="btn-outline"

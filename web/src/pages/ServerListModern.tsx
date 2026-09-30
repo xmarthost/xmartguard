@@ -37,31 +37,35 @@ function info(s: Server): Info_ {
 
 function SummaryTile({ tone, icon, value, label }: { tone: Tone; icon: React.ReactNode; value: string; label: string }) {
   return (
-    <div className="card flex items-center gap-4 p-5">
-      <IconTile tone={tone} size="lg">
-        {icon}
-      </IconTile>
-      <div className="min-w-0 flex-1">
-        <div className="text-2xl font-bold text-slate-900">{value}</div>
-        <div className="text-sm leading-tight text-slate-500">{label}</div>
+    <div className="card @container p-4 sm:p-5">
+      {/* Two tiles per row on phones: the icon sits above the number. */}
+      <div className="flex flex-col items-start gap-3 @[15rem]:flex-row @[15rem]:items-center @[15rem]:gap-4">
+        <IconTile tone={tone} size="lg">
+          {icon}
+        </IconTile>
+        <div className="min-w-0 flex-1">
+          <div className="text-2xl font-bold text-slate-900">{value}</div>
+          <div className="text-sm leading-tight text-slate-500">{label}</div>
+        </div>
+        <span className="hidden @[15rem]:block">
+          <MiniBars tone={tone} />
+        </span>
       </div>
-      <span className="hidden sm:block">
-        <MiniBars tone={tone} />
-      </span>
     </div>
   );
 }
 
 function StatBox({ tone, icon, value, label, spark }: { tone: Tone; icon: React.ReactNode; value: string; label: string; spark?: number[] }) {
   return (
-    <div className="xg-m-stat rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-      <div className="flex items-center gap-2.5">
+    <div className="xg-m-stat @container min-w-0 rounded-xl border border-slate-100 bg-slate-50/60 p-2.5 sm:p-3">
+      {/* Narrow tiles (phones): the icon sits above the number. */}
+      <div className="flex flex-col items-start gap-1.5 @[9.5rem]:flex-row @[9.5rem]:items-center @[9.5rem]:gap-2.5">
         <IconTile tone={tone} size="sm">
           {icon}
         </IconTile>
         <div className="min-w-0">
           <div className="text-[15px] leading-tight font-bold text-slate-900">{value}</div>
-          <div className="text-[11px] leading-tight text-slate-500">{label}</div>
+          <div className="text-[11px] leading-tight [overflow-wrap:anywhere] text-slate-500">{label}</div>
         </div>
       </div>
       {spark && <Sparkline points={spark} tone={tone} className="mt-2 h-8 w-full" />}
@@ -123,7 +127,7 @@ function ServerCard({ x, onChange }: { x: Info_; onChange: () => void }) {
   const { s, card } = x;
   const m = s.last_metrics;
   return (
-    <div className={`card flex flex-col p-5 transition hover:shadow-lg ${s.online ? '' : 'opacity-80'}`}>
+    <div className={`card flex min-w-0 flex-col p-4 transition hover:shadow-lg sm:p-5 ${s.online ? '' : 'opacity-80'}`}>
       <div className="flex items-start gap-3">
         <PanelMark panel={s.control_panel} />
         {s.control_panel !== 'cpanel' && (
@@ -148,12 +152,12 @@ function ServerCard({ x, onChange }: { x: Info_; onChange: () => void }) {
           {x.problems.map((p) => p.name).join(', ')} not working
         </Link>
       )}
-      <div className="mt-4 grid grid-cols-3 gap-2.5">
+      <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-2.5">
         <StatBox tone="red" icon={<ShieldAlert />} value={compact(card.virus_attacks ?? 0)} label="Virus Attacks" spark={card.virus_daily ?? []} />
         <StatBox tone="blue" icon={<Globe />} value={compact(card.web_attacks ?? 0)} label="Web Attacks" spark={card.web_daily ?? []} />
         <StatBox tone="green" icon={<BrickWall />} value={compact((card.ipdb_hourly ?? []).reduce((a, b) => a + b, 0))} label="IPDB Firewall" spark={card.ipdb_hourly ?? []} />
       </div>
-      <div className="mt-2.5 grid grid-cols-3 gap-2.5">
+      <div className="mt-2 grid grid-cols-3 gap-2 sm:mt-2.5 sm:gap-2.5">
         <StatBox tone="orange" icon={<UserX />} value={String(x.blacklisted)} label="IP Blocklist" />
         <StatBox tone="purple" icon={<Users />} value={String(card.domains_blacklisted ?? 0)} label="Domain Blacklist" />
         <StatBox tone="sky" icon={<Database />} value={compact(card.domains ?? 0)} label="Domains" />
@@ -306,7 +310,7 @@ export default function ModernServerList() {
         )}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <SummaryTile tone="blue" icon={<ServerIcon />} value={String(all.length)} label="Total Servers" />
         <SummaryTile tone="green" icon={<ShieldCheck />} value={compact(sum((x) => x.card.virus_attacks ?? 0))} label="Total Virus Attacks" />
         <SummaryTile tone="orange" icon={<Globe />} value={compact(sum((x) => x.card.web_attacks ?? 0))} label="Total Web Attacks" />
@@ -375,18 +379,18 @@ export default function ModernServerList() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative min-w-60 flex-1">
+      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div className="relative w-full sm:w-auto sm:min-w-60 sm:flex-1">
           <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input className="input pl-10" placeholder="Filter by hostname, IP or tag..." value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <select className="input w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select className="input min-w-0 basis-[calc(50%-0.25rem)] sm:w-auto sm:basis-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All Status</option>
           <option value="online">Online</option>
           <option value="offline">Offline</option>
           <option value="attention">Needs attention</option>
         </select>
-        <select className="input w-auto" value={tag} onChange={(e) => setTag(e.target.value)}>
+        <select className="input min-w-0 basis-[calc(50%-0.25rem)] sm:w-auto sm:basis-auto" value={tag} onChange={(e) => setTag(e.target.value)}>
           <option value="">All Tags</option>
           {tags.map((t) => (
             <option key={t} value={t}>
@@ -394,7 +398,7 @@ export default function ModernServerList() {
             </option>
           ))}
         </select>
-        <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)}>
+        <select className="input min-w-0 flex-1 sm:w-auto sm:flex-none" value={sort} onChange={(e) => setSort(e.target.value)}>
           <option value="name">Sort By: Name</option>
           <option value="virus">Sort By: Virus attacks</option>
           <option value="web">Sort By: Web attacks</option>
