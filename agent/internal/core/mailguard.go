@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
@@ -31,7 +32,7 @@ func (a *Agent) mailGuardLoop(ctx context.Context) {
 		}
 		wait = time.Minute
 		r := a.Settings.Get().Reputation
-		key := fmt.Sprint(r.EximRBLs, r.PhishingFilter)
+		key := fmt.Sprint(r.EximRBLs, r.PhishingFilter, r.SpamhausDQSKey)
 		if key == last && time.Since(lastRun) < eximGuardEvery {
 			continue
 		}
@@ -44,7 +45,7 @@ func (a *Agent) runMailGuard(ctx context.Context) mail.EximGuardStatus {
 	r := a.Settings.Get().Reputation
 	var ours []string
 	_ = json.Unmarshal([]byte(store.GetKV(a.DB, kvEximOurs)), &ours)
-	st, ours := mail.ApplyEximGuard(ctx, r.EximRBLs, r.PhishingFilter, ours)
+	st, ours := mail.ApplyEximGuardDQS(ctx, r.EximRBLs, r.PhishingFilter, strings.ToLower(strings.TrimSpace(r.SpamhausDQSKey)), ours)
 	if b, err := json.Marshal(ours); err == nil {
 		_ = store.SetKV(a.DB, kvEximOurs, string(b))
 	}

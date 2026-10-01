@@ -63,6 +63,7 @@ interface ReputationS {
   interval_hours: number;
   exim_rbls?: boolean;
   phishing_filter?: boolean;
+  spamhaus_dqs_key?: string;
 }
 interface NotificationsS {
   email: string;
@@ -699,6 +700,8 @@ interface EximGuard {
 function EximRBLs({ serverId, s, admin, busy, onSave }: { serverId: string; s: ReputationS; admin: boolean; busy: boolean; onSave: (p: Partial<ReputationS>) => void }) {
   const r = useAgent<{ rbls: { name: string; zone: string; defined: boolean; enabled: boolean }[] | null; guard: EximGuard | null }>(serverId, 'exim.rbls');
   const { run, busy: running } = useAction();
+  const [dqs, setDqs] = useState(s.spamhaus_dqs_key ?? '');
+  useEffect(() => setDqs(s.spamhaus_dqs_key ?? ''), [s.spamhaus_dqs_key]);
   if (!r.data?.rbls?.length) return null;
   const g = r.data.guard;
   const dis = !admin || busy;
@@ -739,6 +742,15 @@ function EximRBLs({ serverId, s, admin, busy, onSave }: { serverId: string; s: R
           </span>
         )}
         <Toggle on={s.phishing_filter ?? true} disabled={dis} onChange={(v) => onSave({ phishing_filter: v })} />
+      </SettingRow>
+      <SettingRow
+        title="Spamhaus DQS key"
+        desc="Spamhaus does not answer public DNS resolvers (8.8.8.8, 1.1.1.1), so zen.spamhaus.org stays off on servers that use them. A free key from Spamhaus (spamhaus.com » Data Query Service, free for low volume and non-commercial use; check their terms) works through any resolver, without changing the server's DNS."
+      >
+        <input className="input w-72" placeholder="DQS key" value={dqs} disabled={dis} onChange={(e) => setDqs(e.target.value.trim())} />
+        <button className="btn-outline" disabled={dis || dqs === (s.spamhaus_dqs_key ?? '') || (dqs !== '' && !/^[A-Za-z0-9]{20,40}$/.test(dqs))} onClick={() => onSave({ spamhaus_dqs_key: dqs })}>
+          Save
+        </button>
       </SettingRow>
       {g?.error && <p className="mt-2 text-sm text-red-600">{g.error}</p>}
       <div className="mt-2 overflow-x-auto">

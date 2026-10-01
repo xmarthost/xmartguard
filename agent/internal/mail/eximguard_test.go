@@ -162,3 +162,42 @@ func TestPhishingFilterWithExim(t *testing.T) {
 		}
 	}
 }
+
+// Spamhaus refuses public resolvers; with a DQS key the DQS list is defined
+// and switched on instead, and goes again when the key is removed.
+func TestEximGuardSpamhausDQS(t *testing.T) {
+	root := cpanelRoot(t, "")
+	old := RebuildExim
+	RebuildExim = func() error { return nil }
+	defer func() { RebuildExim = old }()
+	key := "abcdefghijklmnopqrstuvwxyz"
+	fakeDNS(t, map[string]string{"zen.spamhaus.org": "127.255.255.254", key + ".zen.dq.spamhaus.net": "127.0.0.2"})
+	st, ours := ApplyEximGuardDQS(context.Background(), true, false, key, nil)
+	opts, _ := os.ReadFile(filepath.Join(root, eximLocalOpt))
+	y, err := os.ReadFile(filepath.Join(root, rblDir, DQSName+".yaml"))
+	if err != nil || !strings.Contains(string(y), "'"+key+".zen.dq.spamhaus.net'") || optValue(string(opts), "acl_spamhausdqs_rbl") != "1" || optValue(string(opts), "acl_spamhaus_rbl") != "" {
+		t.Fatalf("DQS not on: %v\n%s\n%s", err, y, opts)
+	}
+	for _, r := range st.RBLs {
+		if strings.Contains(r.Zone, key) {
+			t.Fatal("the key is shown in the status")
+		}
+	}
+	// A wrong key: Spamhaus does not answer, the list stays off.
+	_, _ = ApplyEximGuardDQS(context.Background(), true, false, "wrongkeywrongkeywrongkey", ours)
+	opts, _ = os.ReadFile(filepath.Join(root, eximLocalOpt))
+	if optValue(string(opts), "acl_spamhausdqs_rbl") != "0" {
+		t.Fatalf("wrong key switched on:\n%s", opts)
+	}
+	// Key removed: definition and option go.
+	_, ours = ApplyEximGuardDQS(context.Background(), true, false, "", []string{DQSName})
+	opts, _ = os.ReadFile(filepath.Join(root, eximLocalOpt))
+	if _, err := os.Stat(filepath.Join(root, rblDir, DQSName+".yaml")); err == nil || optValue(string(opts), "acl_spamhausdqs_rbl") != "0" {
+		t.Fatalf("DQS left behind:\n%s", opts)
+	}
+	for _, n := range ours {
+		if n == DQSName {
+			t.Fatal("still counted as ours")
+		}
+	}
+}

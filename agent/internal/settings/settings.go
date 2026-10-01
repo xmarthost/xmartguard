@@ -225,6 +225,10 @@ type Reputation struct {
 	// or Webmail and asks the reader to log in or verify ("[PHISHING
 	// WARNING]" in the subject).
 	PhishingFilter bool `json:"phishing_filter"`
+	// SpamhausDQSKey is a free Spamhaus Data Query Service key: Spamhaus
+	// answers it through public resolvers (8.8.8.8), where zen.spamhaus.org
+	// is refused.
+	SpamhausDQSKey string `json:"spamhaus_dqs_key,omitempty"`
 }
 
 // WAF is xPGuard's ModSecurity rule set for Apache/LiteSpeed.
@@ -795,6 +799,9 @@ func normalize(s *Settings) {
 }
 
 func validate(s Settings) error {
+	if k := s.Reputation.SpamhausDQSKey; k != "" && !regexp.MustCompile(`^[A-Za-z0-9]{20,40}$`).MatchString(strings.TrimSpace(k)) {
+		return errors.New("the Spamhaus DQS key is 20-40 letters and digits")
+	}
 	for _, a := range []string{s.Scanner.VirusAction, s.Scanner.SuspiciousAction, s.Scanner.BinaryAction} {
 		switch a {
 		case ActionNotify, ActionQuarantine, ActionDisable:

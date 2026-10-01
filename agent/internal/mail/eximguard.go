@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -140,6 +141,40 @@ type EximGuardStatus struct {
 // ApplyEximGuard brings Exim in line with the settings. ours are the lists
 // xPGuard switched on before; the new list is returned.
 func ApplyEximGuard(ctx context.Context, rbls, phishing bool, ours []string) (EximGuardStatus, []string) {
+	return ApplyEximGuardDQS(ctx, rbls, phishing, "", ours)
+}
+
+// DQSName is the cPanel RBL name of Spamhaus DQS.
+const DQSName = "spamhausdqs"
+
+var reDQSKey = regexp.MustCompile(`^[a-z0-9]{20,40}$`)
+
+// ValidDQSKey reports a Spamhaus Data Query Service key.
+func ValidDQSKey(k string) bool { return reDQSKey.MatchString(k) }
+
+// ensureDQS defines (key set) or removes (key empty) the Spamhaus DQS
+// list in WHM; it reports a change of the definition.
+func ensureDQS(key string) (AutoRBL, bool) {
+	r := EximRBL{Name: DQSName, Zone: key + ".zen.dq.spamhaus.net", URL: "https://check.spamhaus.org/"}
+	p := eximPath(filepath.Join(rblDir, DQSName+".yaml"))
+	b, err := os.ReadFile(p)
+	if key == "" {
+		if err == nil && ownRBLFile(b) {
+			return AutoRBL{}, os.Remove(p) == nil
+		}
+		return AutoRBL{}, false
+	}
+	if err == nil && string(b) == rblYAML(r) {
+		return AutoRBL{r.Name, r.Zone}, false
+	}
+	_ = os.MkdirAll(filepath.Dir(p), 0o755)
+	return AutoRBL{r.Name, r.Zone}, os.WriteFile(p, []byte(rblYAML(r)), 0o644) == nil
+}
+
+// ApplyEximGuardDQS also uses Spamhaus DQS when dqsKey is set: Spamhaus
+// answers it through any resolver, Google and Cloudflare included, so it
+// works where zen.spamhaus.org is refused.
+func ApplyEximGuardDQS(ctx context.Context, rbls, phishing bool, dqsKey string, ours []string) (EximGuardStatus, []string) {
 	st := EximGuardStatus{At: time.Now().Unix()}
 	if !cpanelExim() {
 		return st, ours
@@ -151,10 +186,24 @@ func ApplyEximGuard(ctx context.Context, rbls, phishing bool, ours []string) (Ex
 	for _, n := range ours {
 		mine[n] = true
 	}
-	for _, r := range AutoRBLs {
+	if !ValidDQSKey(dqsKey) {
+		dqsKey = ""
+	}
+	dqs, dqsChanged := ensureDQS(dqsKey)
+	cands := append([]AutoRBL(nil), AutoRBLs...)
+	if dqsKey != "" {
+		cands = append(cands, dqs)
+	} else if mine[DQSName] || optValue(opts, "acl_"+DQSName+"_rbl") == "1" {
+		opts = setOpt(opts, "acl_"+DQSName+"_rbl", "0")
+		delete(mine, DQSName)
+	}
+	for _, r := range cands {
 		key := "acl_" + r.Name + "_rbl"
 		on := optValue(opts, key) == "1"
 		e := EximGuardRBL{Name: r.Name, Zone: r.Zone, Enabled: on}
+		if r.Name == DQSName {
+			e.Zone = "<key>.zen.dq.spamhaus.net" // the key stays out of the portal
+		}
 		switch {
 		case on && !mine[r.Name]:
 			e.By = "admin"
@@ -182,7 +231,7 @@ func ApplyEximGuard(ctx context.Context, rbls, phishing bool, ours []string) (Ex
 		}
 		st.RBLs = append(st.RBLs, e)
 	}
-	changed := opts != string(raw)
+	changed := opts != string(raw) || dqsChanged
 	// The phishing filter option.
 	fpath := eximPath(filepath.Join(sysfilterDir, phishFilterName))
 	fkey := "filter_" + phishFilterName
