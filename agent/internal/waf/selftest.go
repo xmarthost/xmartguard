@@ -77,6 +77,19 @@ func probeLoc(path string) (int, string, error) {
 	return 0, "", last
 }
 
+// crsProbeQuery is an obvious attack in several classes at once (XSS,
+// SQL injection, path traversal, command injection), so it is blocked at
+// every WAF level (anomaly threshold up to 20) and by every engine, also
+// where some CRS rules do not fire (LiteSpeed has no libinjection).
+func crsProbeQuery() string {
+	return url.Values{
+		"q":    {"<script>alert(document.cookie)</script>"},
+		"id":   {"1' UNION SELECT user,password FROM users-- -"},
+		"file": {"../../../../etc/passwd"},
+		"cmd":  {";cat /etc/passwd"},
+	}.Encode()
+}
+
 // runSelfTest checks the rules are enforced. LiteSpeed and Apache may take a
 // few seconds to reload, so a pass is retried for up to wait.
 // captchaURL is the central CAPTCHA page: with soft blocking on, OWASP
@@ -104,7 +117,7 @@ func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 		time.Sleep(3 * time.Second)
 	}
 	if st.OK && crs {
-		q := url.Values{"q": {"<script>alert(document.cookie)</script>"}}.Encode()
+		q := crsProbeQuery()
 		code, loc, err := probeLoc(crsTestPath + "?" + q)
 		switch {
 		case err != nil:

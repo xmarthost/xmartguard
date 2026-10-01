@@ -390,3 +390,27 @@ func TestLevelsWithCRS(t *testing.T) {
 	waitApache()
 	check("strict")
 }
+
+// The CRS self-test is blocked at every level, also without the
+// libinjection rules (941100, 942100), which LiteSpeed's engine lacks.
+func TestCRSSelfTestEveryLevel(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	m := crsManager(t, src, `{"waf":{"enabled":true,"level":"low","disabled_rules":[941100,942100]}}`, "off", nil)
+	for _, level := range []string{"low", "normal", "strict"} {
+		m.Settings.Patch([]byte(`{"waf":{"level":"` + level + `"}}`))
+		if err := m.Apply(); err != nil {
+			t.Fatal(err)
+		}
+		waitApache()
+		old := SelfTestURLs
+		SelfTestURLs = []string{"http://127.0.0.1"}
+		st := runSelfTest(true, "", 0)
+		SelfTestURLs = old
+		if st.CRS != "blocked" {
+			t.Errorf("%s: %+v", level, st)
+		}
+	}
+}
