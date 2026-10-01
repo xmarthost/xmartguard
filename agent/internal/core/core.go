@@ -51,24 +51,25 @@ import (
 
 // Agent holds every module.
 type Agent struct {
-	mailGuard atomic.Pointer[mail.EximGuardStatus]
-	Cfg       *config.Config
-	central   central
-	Log       *slog.Logger
-	DB        *sql.DB
-	Settings  *settings.Store
-	Scanner   *scanner.Scanner
-	Realtime  *scanner.Realtime
-	Firewall  *firewall.Manager
-	WAF       *waf.Manager
-	CMS       *cms.Manager
-	OSM       *mail.Monitor
-	Captcha   *captcha.Server
-	AI        *ai.Analyzer
-	Monitor   *monitor.Monitor
-	Mailer    *notify.Mailer
-	Session   *client.Session
-	started   time.Time // when Start ran (zero in tests)
+	mailGuard   atomic.Pointer[mail.EximGuardStatus]
+	mailGuardMu sync.Mutex
+	Cfg         *config.Config
+	central     central
+	Log         *slog.Logger
+	DB          *sql.DB
+	Settings    *settings.Store
+	Scanner     *scanner.Scanner
+	Realtime    *scanner.Realtime
+	Firewall    *firewall.Manager
+	WAF         *waf.Manager
+	CMS         *cms.Manager
+	OSM         *mail.Monitor
+	Captcha     *captcha.Server
+	AI          *ai.Analyzer
+	Monitor     *monitor.Monitor
+	Mailer      *notify.Mailer
+	Session     *client.Session
+	started     time.Time // when Start ran (zero in tests)
 
 	// WPSource and WPPlugins override where official WordPress files and
 	// plugin checksums come from (tests).
@@ -857,6 +858,16 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	}
 	h["exim.rbls"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{"rbls": mail.EximRBLStatus(), "guard": a.mailGuard.Load()}, nil
+	}
+	h["mail.global"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		var g MailGlobal
+		if err := json.Unmarshal(p, &g); err != nil {
+			return nil, err
+		}
+		if err := a.setMailGlobal(g); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
 	}
 	h["exim.guard"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
 		st := a.runMailGuard(ctx)

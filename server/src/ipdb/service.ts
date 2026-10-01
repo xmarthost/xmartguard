@@ -6,6 +6,7 @@ import type { Config } from '../config.js';
 import type { AgentHub } from '../agents/hub.js';
 import { versionLess } from '../agents/release.js';
 import type { GeoDB } from './geo.js';
+import { MAIL_MIN_AGENT, syncMail } from '../routes/mail.js';
 
 /** Agents older than this do not implement the ipdb.* commands. */
 export const IPDB_MIN_AGENT = '0.3.0';
@@ -107,6 +108,13 @@ export class IPDBService {
 
   /** Called when an agent connects so it gets the list quickly. */
   onConnect(serverId: string, agentVersion: string): void {
+    if (!versionLess(agentVersion, MAIL_MIN_AGENT)) {
+      this.timers.push(
+        setTimeout(() => {
+          syncMail(this.pool, this.hub, serverId).catch((err) => this.log.warn({ serverId, err: (err as Error).message }, 'mail settings sync failed'));
+        }, 4_000),
+      );
+    }
     if (!versionLess(agentVersion, FLEET_MIN_AGENT)) {
       const f = setTimeout(() => {
         this.syncFleet(serverId).catch((err) => this.log.warn({ serverId, err: (err as Error).message }, 'fleet sync failed'));
@@ -227,7 +235,12 @@ export class IPDBService {
   private async syncFleetAll(): Promise<void> {
     const conns = this.hub.connections().filter((c) => !versionLess(c.version, FLEET_MIN_AGENT));
     for (let i = 0; i < conns.length; i += 10) {
-      await Promise.all(conns.slice(i, i + 10).map((c) => this.syncFleet(c.serverId).catch(() => undefined)));
+      await Promise.all(
+        conns.slice(i, i + 10).map(async (c) => {
+          await this.syncFleet(c.serverId).catch(() => undefined);
+          if (!versionLess(c.version, MAIL_MIN_AGENT)) await syncMail(this.pool, this.hub, c.serverId).catch(() => undefined);
+        }),
+      );
     }
   }
 

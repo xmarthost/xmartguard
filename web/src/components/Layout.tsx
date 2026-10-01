@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-
 import {
   BookOpen, BadgeCheck, ShieldQuestion, Brain,
   Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
-  LogOut, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
+  LogOut, Mail, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { useApi } from '../hooks';
@@ -297,6 +297,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             { to: '/waf-intel', label: 'WAF Intelligence', icon: <Brain /> },
             { to: '/captcha-page', label: 'CAPTCHA Page', icon: <ShieldQuestion /> },
             { to: '/trusted-services', label: 'Trusted Services', icon: <BadgeCheck /> },
+            { to: '/mail-protection', label: 'Mail Protection', icon: <Mail /> },
           ],
         },
         {

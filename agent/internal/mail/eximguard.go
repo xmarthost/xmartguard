@@ -136,6 +136,8 @@ type EximGuardStatus struct {
 	Rebuilt   bool           `json:"rebuilt"`
 	Error     string         `json:"error,omitempty"`
 	At        int64          `json:"at"`
+	// DQSSource: where the Spamhaus DQS key came from (server | portal).
+	DQSSource string `json:"dqs_source,omitempty"`
 }
 
 // ApplyEximGuard brings Exim in line with the settings. ours are the lists

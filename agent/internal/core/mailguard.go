@@ -15,6 +15,49 @@ import (
 // switches those off again).
 const kvEximOurs = "exim_guard_ours"
 
+// kvMailGlobal: the portal's account-wide mail settings (Spamhaus DQS key),
+// used where the server has no key of its own.
+const kvMailGlobal = "mail_global"
+
+// MailGlobal is what the portal sends with mail.global.
+type MailGlobal struct {
+	DQSKey string `json:"dqs_key"`
+}
+
+func (a *Agent) mailGlobal() MailGlobal {
+	var g MailGlobal
+	_ = json.Unmarshal([]byte(store.GetKV(a.DB, kvMailGlobal)), &g)
+	return g
+}
+
+// setMailGlobal stores the portal's settings and applies them at once.
+func (a *Agent) setMailGlobal(g MailGlobal) error {
+	g.DQSKey = strings.ToLower(strings.TrimSpace(g.DQSKey))
+	if g.DQSKey != "" && !mail.ValidDQSKey(g.DQSKey) {
+		return fmt.Errorf("invalid Spamhaus DQS key")
+	}
+	if g == a.mailGlobal() {
+		return nil
+	}
+	b, _ := json.Marshal(g)
+	if err := store.SetKV(a.DB, kvMailGlobal, string(b)); err != nil {
+		return err
+	}
+	go a.runMailGuard(context.Background())
+	return nil
+}
+
+// dqsKey: the server's own key, else the portal's.
+func (a *Agent) dqsKey() (key, source string) {
+	if k := strings.ToLower(strings.TrimSpace(a.Settings.Get().Reputation.SpamhausDQSKey)); k != "" {
+		return k, "server"
+	}
+	if k := a.mailGlobal().DQSKey; k != "" {
+		return k, "portal"
+	}
+	return "", ""
+}
+
 // eximGuardEvery: blocklists are re-tested this often (a resolver change
 // can make a list refuse every message).
 const eximGuardEvery = 6 * time.Hour
@@ -32,7 +75,8 @@ func (a *Agent) mailGuardLoop(ctx context.Context) {
 		}
 		wait = time.Minute
 		r := a.Settings.Get().Reputation
-		key := fmt.Sprint(r.EximRBLs, r.PhishingFilter, r.SpamhausDQSKey)
+		dqs, _ := a.dqsKey()
+		key := fmt.Sprint(r.EximRBLs, r.PhishingFilter, dqs)
 		if key == last && time.Since(lastRun) < eximGuardEvery {
 			continue
 		}
@@ -45,7 +89,11 @@ func (a *Agent) runMailGuard(ctx context.Context) mail.EximGuardStatus {
 	r := a.Settings.Get().Reputation
 	var ours []string
 	_ = json.Unmarshal([]byte(store.GetKV(a.DB, kvEximOurs)), &ours)
-	st, ours := mail.ApplyEximGuardDQS(ctx, r.EximRBLs, r.PhishingFilter, strings.ToLower(strings.TrimSpace(r.SpamhausDQSKey)), ours)
+	dqs, src := a.dqsKey()
+	a.mailGuardMu.Lock()
+	defer a.mailGuardMu.Unlock()
+	st, ours := mail.ApplyEximGuardDQS(ctx, r.EximRBLs, r.PhishingFilter, dqs, ours)
+	st.DQSSource = src
 	if b, err := json.Marshal(ours); err == nil {
 		_ = store.SetKV(a.DB, kvEximOurs, string(b))
 	}

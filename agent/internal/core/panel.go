@@ -20,7 +20,7 @@ import (
 )
 
 // portalOnly commands are never exposed on the local socket.
-var portalOnly = map[string]bool{"agent.update": true, "fleet.set": true, "ipdb.sync": true, "ipdb.apply": true, "waf.intel": true}
+var portalOnly = map[string]bool{"agent.update": true, "fleet.set": true, "mail.global": true, "ipdb.sync": true, "ipdb.apply": true, "waf.intel": true}
 
 // LocalServer builds the Unix-socket API used by the WHM/cPanel plugins.
 func (a *Agent) LocalServer() *local.Server {

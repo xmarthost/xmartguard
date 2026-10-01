@@ -387,4 +387,16 @@ CREATE TABLE waf_intel_config (
 );
 `,
   },
+  {
+    version: '011_account_mail',
+    sql: `
+-- Mail protection for all servers (Overview » Mail Protection): the
+-- Spamhaus DQS key every server's Exim uses unless it has its own.
+CREATE TABLE account_mail (
+  account_id  uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  dqs_key     text NOT NULL DEFAULT '',
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];
