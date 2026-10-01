@@ -17,7 +17,8 @@ import (
 
 // MaxWatches caps inotify watches so huge servers stay responsive; 0 sizes
 // it from the server's memory (about 1 KB of kernel memory per watch, at
-// most 3% of RAM, between 500,000 and 2,000,000).
+// most 2% of RAM, between 500,000 and 1,000,000) and from the kernel's
+// max_user_watches when that could not be raised.
 var MaxWatches = 0
 
 // WatchReserve watches are kept free at start for folders made later (new
@@ -37,8 +38,14 @@ func maxWatches() int {
 		for _, l := range strings.Split(string(raw), "\n") {
 			if f := strings.Fields(l); len(f) >= 2 && f[0] == "MemTotal:" {
 				kb, _ := strconv.Atoi(f[1])
-				n = max(n, min(kb*3/100, 2000000)) // kB / 1 KB per watch
+				n = max(n, min(kb*2/100, 1000000)) // kB / 1 KB per watch
 			}
+		}
+	}
+	// Other programs (cPanel, LiteSpeed, backups) use watches too.
+	if raw, err := os.ReadFile("/proc/sys/fs/inotify/max_user_watches"); err == nil {
+		if k, _ := strconv.Atoi(strings.TrimSpace(string(raw))); k > 0 {
+			n = min(n, max(k-50000, k/2))
 		}
 	}
 	return n
@@ -67,6 +74,7 @@ type Realtime struct {
 	watches int
 	homes   map[string]bool
 	limit   int
+	setting atomic.Bool // the watches are still being set up
 	// unwatched are folders beyond the watch limit (each with everything
 	// below it); they are swept for new files every SweepEvery.
 	unwatched map[string]bool
@@ -91,6 +99,11 @@ func (r *Realtime) Watches() int {
 	defer r.mu.Unlock()
 	return r.watches
 }
+
+// SettingUp reports that the folders are still being watched (on servers
+// with millions of folders this takes minutes; new files are scanned
+// meanwhile in the folders watched so far).
+func (r *Realtime) SettingUp() bool { return r.setting.Load() }
 
 // Unwatched is the number of folders left to the periodic sweep because
 // the watch limit was reached.
@@ -173,7 +186,9 @@ func (r *Realtime) Run(ctx context.Context) {
 }
 
 func (r *Realtime) session(ctx context.Context) {
-	if err := r.init(r.roots()); err != nil {
+	// Events are read from the first watch on: setting up every watch of a
+	// very large server takes minutes and must not keep the scanner idle.
+	if err := r.init(nil); err != nil {
 		r.lastErr.Store(err.Error())
 		r.S.Log.Warn("realtime scanning unavailable", "err", err)
 		select {
@@ -182,10 +197,20 @@ func (r *Realtime) session(ctx context.Context) {
 		}
 		return
 	}
-	r.S.Log.Info("realtime scanning active", "watches", r.Watches())
 	r.lastErr.Store("")
 	r.active.Store(true)
+	sctx, stop := context.WithCancel(ctx)
+	r.setting.Store(true)
+	go func() {
+		defer r.setting.Store(false)
+		start := time.Now()
+		r.addLevelsCtx(sctx, r.roots())
+		if sctx.Err() == nil {
+			r.S.Log.Info("realtime scanning active", "watches", r.Watches(), "swept_folders", r.Unwatched(), "setup", time.Since(start).Round(time.Second).String())
+		}
+	}()
 	r.loop(ctx)
+	stop()
 	r.active.Store(false)
 }
 
@@ -211,16 +236,23 @@ func (r *Realtime) init(roots []string) error {
 // addLevels watches the roots breadth first: every account's top folders
 // (where File Manager uploads and new folders land) are watched before any
 // deep folder, so the watch limit only ever leaves deep folders to the sweep.
-func (r *Realtime) addLevels(roots []string) {
+func (r *Realtime) addLevels(roots []string) { r.addLevelsCtx(context.Background(), roots) }
+
+func (r *Realtime) addLevelsCtx(ctx context.Context, roots []string) {
 	level := append([]string(nil), roots...)
 	reserve := WatchReserve
 	if reserve < 0 {
+		r.mu.Lock()
 		reserve = r.limit / 20
+		r.mu.Unlock()
 	}
 	for len(level) > 0 {
 		var next []string
 		for i, dir := range level {
-			if !r.addWatchUpTo(dir, r.limit-reserve) {
+			if ctx.Err() != nil {
+				return
+			}
+			if !r.addWatchKeeping(dir, reserve) {
 				r.leave(level[i:]...)
 				r.leave(next...)
 				return
@@ -370,18 +402,28 @@ func (r *Realtime) loop(ctx context.Context) {
 	}
 }
 
-func (r *Realtime) addWatch(dir string) bool { return r.addWatchUpTo(dir, r.limit) }
+func (r *Realtime) addWatch(dir string) bool { return r.addWatchKeeping(dir, 0) }
 
-func (r *Realtime) addWatchUpTo(dir string, limit int) bool {
+// addWatchKeeping watches dir unless fewer than reserve watches are left.
+func (r *Realtime) addWatchKeeping(dir string, reserve int) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.watches >= limit {
+	if r.watches >= r.limit-reserve {
 		return false
 	}
 	if _, ok := r.byPath[dir]; ok {
 		return true
 	}
 	wd, err := unix.InotifyAddWatch(r.fd, dir, watchMask)
+	if err == unix.ENOSPC || err == unix.ENOMEM {
+		// The kernel's limit is lower than ours: this is the limit now,
+		// and the remaining folders go to the sweep.
+		if r.limit > r.watches {
+			r.limit = r.watches
+			r.S.Log.Warn("inotify watch limit of the kernel reached; remaining folders are swept", "watches", r.watches)
+		}
+		return false
+	}
 	if err != nil {
 		return true // unreadable dir: skip but keep walking
 	}

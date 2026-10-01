@@ -536,3 +536,49 @@ func TestRealtimeWatchLimit(t *testing.T) {
 	_, n, _ := s.ListFindings(FindingFilter{Limit: 10})
 	t.Fatalf("found %d of 2 files", n)
 }
+
+// On a server with millions of folders, setting up the watches takes
+// minutes; the scanner is active (and catches new files in the folders
+// watched so far) from the start, not only when every watch is set.
+func TestRealtimeActiveWhileSettingUp(t *testing.T) {
+	s := newScanner(t)
+	base := t.TempDir()
+	var homes []string
+	for u := 0; u < 40; u++ {
+		h := filepath.Join(base, fmt.Sprint("user", u))
+		for i := 0; i < 50; i++ {
+			os.MkdirAll(filepath.Join(h, "public_html", "wp-content", "plugins", fmt.Sprint("p", i), "inc", "lib"), 0o755)
+		}
+		homes = append(homes, h)
+	}
+	rt := &Realtime{S: s, Roots: func() []string { return homes }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go rt.session(ctx)
+	deadline := time.Now().Add(2 * time.Second)
+	for !rt.active.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !rt.active.Load() {
+		if e, _ := rt.lastErr.Load().(string); e != "" {
+			t.Skip("inotify unavailable:", e)
+		}
+		t.Fatal("not active while setting up")
+	}
+	for setup := time.Now().Add(20 * time.Second); rt.SettingUp() && time.Now().Before(setup); {
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Per account: home, public_html, wp-content, plugins, 50 × (plugin, inc, lib).
+	if rt.Watches() != 40*(4+50*3) {
+		t.Fatalf("only %d watches", rt.Watches())
+	}
+	os.WriteFile(filepath.Join(homes[39], "public_html", "wp-content", "plugins", "p49", "inc", "lib", "x.php"), []byte(malicious["exec.php"]), 0o644)
+	end := time.Now().Add(10 * time.Second)
+	for time.Now().Before(end) {
+		if _, n, _ := s.ListFindings(FindingFilter{Limit: 10}); n == 1 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("file not detected")
+}
