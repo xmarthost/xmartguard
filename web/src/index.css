@@ -33,6 +33,8 @@ body {
 table { overflow-wrap: break-word; }
 /* Buttons, pills and toggles keep their words whole ("Add", not "Ad d"). */
 button, select, label, .btn-primary, .btn-outline { overflow-wrap: normal; }
+/* Pills and badges ("Online", "active") never split a word. */
+[class*="rounded-full"] { overflow-wrap: normal; }
 
 @utility card {
   @apply rounded-2xl bg-white shadow-[0_1px_2px_rgba(16,24,64,0.04)];
