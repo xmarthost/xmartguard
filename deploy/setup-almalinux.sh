@@ -35,6 +35,7 @@ while [ $# -gt 0 ]; do
     --branch) BRANCH="$2"; shift 2 ;;
     --token)  TOKEN="$2"; shift 2 ;;
     --captcha-domain) CAPTCHA_DOMAIN="$2"; shift 2 ;;
+    --force) FORCE=1; shift ;;
     --ai|--ai-url|--ai-model) echo "note: $1 is no longer used (AI keys are set in the portal)"; shift 2 ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
@@ -70,6 +71,14 @@ MYIP=$(curl -4 -fsS --max-time 10 https://api.ipify.org || true)
 DNSIP=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}' || true)
 echo "    this server: ${MYIP:-unknown}   $DOMAIN -> ${DNSIP:-not resolving}"
 if [ -z "$DNSIP" ] || [ "$DNSIP" != "$MYIP" ]; then
+  # A server that only runs the agent: the portal is installed elsewhere.
+  # Running this here by mistake would create a cPanel account for the
+  # portal's domain (and Docker); refuse unless asked explicitly.
+  if [ ! -d "$DIR" ] && [ "${FORCE:-0}" != 1 ] && { [ -n "$DNSIP" ] || [ -x /opt/xpguard/bin/xpguard-agent ]; }; then
+    die "$DOMAIN points at ${DNSIP:-another server}, not this server (${MYIP:-unknown}), and the portal is not installed here.
+       This looks like a server that only runs the xPGuard agent: update agents from the portal instead
+       (Servers » Update agent). To install the portal on this server anyway, add --force."
+  fi
   warn "$DOMAIN does not point at this server yet; HTTPS will not work until the A record is $MYIP."
 fi
 
