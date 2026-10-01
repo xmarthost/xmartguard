@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -118,6 +119,15 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return plugins.Known(path, sum)
 	}
 	a.Realtime = &scanner.Realtime{S: a.Scanner}
+	// Scans run in their own low-priority process (the agent's program
+	// with "scan-engine"), named xpguard-scan in the process list.
+	if exe, err := os.Executable(); err == nil && !strings.HasSuffix(exe, ".test") {
+		scanner.EngineCommand = func() *exec.Cmd {
+			cmd := exec.Command(exe, "scan-engine")
+			cmd.Args[0] = "xpguard-scan"
+			return cmd
+		}
+	}
 	a.HostFW = hostfw.New(filepath.Join(store.StateDir(), "host-trust.json"))
 	a.Firewall = &firewall.Manager{
 		DB: db, Settings: st, Log: log, NFT: firewall.FindNFT(), IPT: firewall.FindIPTables(),

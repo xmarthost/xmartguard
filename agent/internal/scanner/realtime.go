@@ -342,6 +342,9 @@ func (r *Realtime) loop(ctx context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Checking new files waits for the websites: lowest CPU and
+			// disk priority.
+			lowPriorityThread()
 			for {
 				select {
 				case <-wctx.Done():

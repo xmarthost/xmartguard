@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,13 @@ import (
 // Tests run as root: their files are root's, so the scanner must look at them.
 func TestMain(m *testing.M) {
 	ScanRootFiles = true
+	// The test binary doubles as the scan engine process (engine_test.go).
+	if os.Getenv("XG_TEST_SCAN_ENGINE") == "1" {
+		if err := RunEngine(context.Background(), NewOffline(), os.Stdin, os.Stdout); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 

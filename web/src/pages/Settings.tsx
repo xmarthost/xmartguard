@@ -351,7 +351,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         </SettingRow>
         <SettingRow
           title="Scan speed"
-          desc="Auto (recommended): the agent watches the server and uses only the CPU the websites, PHP, MySQL and mail leave free: more threads on a quiet or large server (up to half of the CPUs), one thread as soon as the server gets busy or short of memory. Low: always one thread. Fast: always half of the CPUs. Scan threads always run at the lowest CPU and disk priority."
+          desc="Scans run in their own process (xpguard-scan in the process list) at the lowest CPU and disk priority, so the websites always come first. Low: one CPU core, like other server scanners. Auto (recommended): up to a quarter of the cores while the server is quiet, one as soon as it gets busy or short of memory. Fast: up to half of the cores."
         >
           <select className="input w-56" value={s.scan_speed === 'low' || s.scan_speed === 'fast' ? s.scan_speed : 'auto'} disabled={dis} onChange={(e) => onSave({ scan_speed: e.target.value as ScannerS['scan_speed'] })}>
             <option value="auto">Auto (recommended)</option>

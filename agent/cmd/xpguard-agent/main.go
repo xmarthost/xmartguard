@@ -72,6 +72,10 @@ func main() {
 		err = printJSON(sysinfo.Collect())
 	case "check":
 		err = cmdCheck(os.Args[2:])
+	case "scan-engine":
+		// A scan, started by the agent in its own low-priority process
+		// ("xpguard-scan" in the process list).
+		err = cmdScanEngine()
 	case "scan-upload":
 		// Used by the WAF upload approver: exit 1 if the file is malware.
 		os.Exit(cmdScanUpload(os.Args[2:]))
@@ -530,4 +534,30 @@ func dropOldPaths(ctx context.Context, log *slog.Logger) {
 			log.Info("layout: old paths kept while still referenced", "files", strings.Join(layout.References(), ", "))
 		}
 	}
+}
+
+// cmdScanEngine runs one scan for the agent: the request comes on stdin,
+// what it finds goes to stdout (see scanner.RunEngine).
+func cmdScanEngine() error {
+	sc := scanner.NewOffline()
+	if cfg := settingsScanner(); cfg.ClamAV {
+		srcs := append(clamdb.FindLocal(clamdb.LocalDirs), clamdb.FindLocal([]string{filepath.Join(store.StateDir(), "clamav")})...)
+		for i := range srcs {
+			if strings.HasPrefix(srcs[i].Path, store.StateDir()) {
+				srcs[i].Unofficial = true
+			}
+		}
+		if e := clamdb.Load(srcs); !e.Empty() {
+			scanner.SetClamDB(e)
+		}
+	}
+	return scanner.RunEngine(context.Background(), sc, os.Stdin, os.Stdout)
+}
+
+// settingsScanner reads the scanner settings (defaults when unreadable).
+func settingsScanner() settings.Scanner {
+	if st, err := settings.Load(); err == nil {
+		return st.Get().Scanner
+	}
+	return settings.Defaults().Scanner
 }

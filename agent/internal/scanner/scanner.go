@@ -673,8 +673,46 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	_, _ = s.DB.Exec(`UPDATE scans SET status='running', started_at=? WHERE id=?`, store.Now(), id)
 
 	cfg := s.Settings.Get().Scanner
-	var files int64
 	var infected atomic.Int64
+	hooks := treeHooks{
+		total: func(n int64) { _, _ = s.DB.Exec(`UPDATE scans SET total = ? WHERE id = ?`, n, id) },
+		progress: func(files int64, current string) {
+			_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=?, current=? WHERE id=?`, files, infected.Load(), current, id)
+		},
+		hit: func(path string, info fs.FileInfo, d Detection) {
+			if _, err := s.Record(id, "manual", path, info, d); err == nil {
+				infected.Add(1)
+			}
+		},
+	}
+	var files int64
+	var walkErr error
+	if EngineCommand != nil {
+		files, walkErr = s.runEngine(ctx, roots, since, cfg, hooks)
+	} else {
+		files, walkErr = s.scanTree(ctx, roots, since, cfg, hooks)
+	}
+	status, errText := "completed", ""
+	if errors.Is(walkErr, context.Canceled) || ctx.Err() != nil {
+		status = "stopped"
+	} else if walkErr != nil {
+		status, errText = "failed", walkErr.Error()
+	}
+	_, _ = s.DB.Exec(`UPDATE scans SET status=?, files=?, infected=?, finished_at=?, error=?, current='', total=CASE WHEN ? = 'completed' THEN ? ELSE total END WHERE id=?`, status, files, infected.Load(), store.Now(), errText, status, files, id)
+	s.Log.Info("scan finished", "id", id, "status", status, "files", files, "infected", infected.Load())
+}
+
+// treeHooks receive what a scan of a tree finds.
+type treeHooks struct {
+	total    func(n int64)
+	progress func(files int64, current string) // at most once a second
+	hit      func(path string, info fs.FileInfo, d Detection)
+}
+
+// scanTree walks the roots and checks every file (changed since since,
+// when set): the work of a scan, in this process or in the scan engine.
+func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time, cfg settings.Scanner, h treeHooks) (int64, error) {
+	var files int64
 	qdir := QuarantineDir()
 	homeMap := homes()
 	skipDir := func(root, path string, d fs.DirEntry) bool {
@@ -708,8 +746,8 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				return nil
 			})
 		}
-		if ctx.Err() == nil {
-			_, _ = s.DB.Exec(`UPDATE scans SET total = ? WHERE id = ?`, total, id)
+		if ctx.Err() == nil && h.total != nil {
+			h.total(total)
 		}
 	}()
 	lastProgress := time.Now()
@@ -718,7 +756,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	maxSize := int64(cfg.MaxFileSizeMB) << 20
 
 	// Files are checked by a worker pool sized by the scan speed setting,
-	// at the lowest priority (see throttle.go); one collector records
+	// at the lowest priority (see throttle.go); one collector reports
 	// results, so the YARA batch needs no locking.
 	type job struct {
 		path string
@@ -729,7 +767,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 		det *Detection
 		err error
 	}
-	gov, workers := newGovernor(ctx, cfg.ScanSpeed, runtime.NumCPU())
+	gov, workers := newGovernor(ctx, cfg.ScanSpeed, runtime.GOMAXPROCS(0))
 	jobs := make(chan job, 256)
 	results := make(chan result, 256)
 	var wg sync.WaitGroup
@@ -763,9 +801,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 			if r.err != nil || r.det == nil {
 				continue
 			}
-			if _, err := s.Record(id, "manual", r.path, r.info, *r.det); err == nil {
-				infected.Add(1)
-			}
+			h.hit(r.path, r.info, *r.det)
 		}
 	}()
 
@@ -787,9 +823,7 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 			if d.Type()&fs.ModeSymlink != 0 {
 				if target, bad := InsecureSymlink(path, homeMap); bad {
 					if info, err := os.Lstat(path); err == nil {
-						if _, err := s.Record(id, "manual", path, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + target}); err == nil {
-							infected.Add(1)
-						}
+						h.hit(path, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + target})
 					}
 				}
 				return nil
@@ -807,7 +841,9 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 			files++
 			if time.Since(lastProgress) >= time.Second {
 				lastProgress = time.Now()
-				_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=?, current=? WHERE id=?`, files, infected.Load(), path, id)
+				if h.progress != nil {
+					h.progress(files, path)
+				}
 			}
 			select {
 			case jobs <- job{path, info}:
@@ -835,20 +871,11 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 				}
 			}
 			if info, err := os.Lstat(path); err == nil {
-				if _, err := s.Record(id, "manual", path, info, Detection{cat, "YARA." + rule}); err == nil {
-					infected.Add(1)
-				}
+				h.hit(path, info, Detection{cat, "YARA." + rule})
 			}
 		}
 	}
-	status, errText := "completed", ""
-	if errors.Is(walkErr, context.Canceled) {
-		status = "stopped"
-	} else if walkErr != nil {
-		status, errText = "failed", walkErr.Error()
-	}
-	_, _ = s.DB.Exec(`UPDATE scans SET status=?, files=?, infected=?, finished_at=?, error=?, current='', total=CASE WHEN ? = 'completed' THEN ? ELSE total END WHERE id=?`, status, files, infected.Load(), store.Now(), errText, status, files, id)
-	s.Log.Info("scan finished", "id", id, "status", status, "files", files, "infected", infected.Load())
+	return files, walkErr
 }
 
 // ScanFile checks a single file (realtime protection).
