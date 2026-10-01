@@ -218,6 +218,48 @@ func ScanValueDetail(v string) Detail {
 
 // ScanDatabase scans a WordPress database for injected code in options,
 // posts and widgets. It only reads.
+// DBChangedSince reports whether the tables the scan reads (options,
+// posts, postmeta) changed since unix time t. ok is false when MySQL cannot
+// tell: then scan.
+func DBChangedSince(ctx context.Context, c DBConfig, t int64) (changed, ok bool) {
+	db, err := c.Open()
+	if err != nil {
+		return false, false
+	}
+	defer db.Close()
+	p := c.Prefix
+	var last, started sql.NullInt64
+	var tables, known int
+	err = db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(UPDATE_TIME), CAST(UNIX_TIMESTAMP(MAX(UPDATE_TIME)) AS SIGNED),
+		CAST(UNIX_TIMESTAMP() - (SELECT VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME = 'UPTIME') AS SIGNED)
+		FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?, ?)`,
+		p+"options", p+"posts", p+"postmeta").Scan(&tables, &known, &last, &started)
+	if err != nil {
+		return false, false
+	}
+	return changedSince(t, tables, known, last, started)
+}
+
+// changedSince decides from information_schema: InnoDB keeps a table's
+// update time in memory only, so it is empty for tables not changed since
+// MySQL started. Empty times are "unchanged" only when MySQL was already
+// running at the last check.
+func changedSince(t int64, tables, known int, last, started sql.NullInt64) (changed, ok bool) {
+	if tables == 0 {
+		return false, false
+	}
+	if known > 0 && last.Valid && last.Int64 >= t {
+		return true, true
+	}
+	if known == tables && last.Valid {
+		return false, true // every table has an update time before t
+	}
+	if started.Valid && started.Int64 > 0 && started.Int64 < t {
+		return false, true // the rest did not change since MySQL started
+	}
+	return false, false
+}
+
 func ScanDatabase(ctx context.Context, c DBConfig) ([]DBFinding, error) {
 	db, err := c.Open()
 	if err != nil {

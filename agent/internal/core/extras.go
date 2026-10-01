@@ -145,6 +145,13 @@ func (a *Agent) liftSuspension(id int64) error {
 
 // ------------------------------------------------------------------ domain reputation
 
+// nightNow: background checks (CMS, domain reputation, signature reloads)
+// run between 3:00 and 6:00 in the scan schedule's time zone.
+func (a *Agent) nightNow() bool {
+	h := time.Now().In(scanner.ScheduleZone(a.Settings.Get().Scanner.ScheduleTZ)).Hour()
+	return h >= 3 && h < 6
+}
+
 func (a *Agent) domainRepLoop(ctx context.Context) {
 	select {
 	case <-ctx.Done():
@@ -154,7 +161,8 @@ func (a *Agent) domainRepLoop(ctx context.Context) {
 	for {
 		cfg := a.Settings.Get().DomainRep
 		last, _ := strconv.ParseInt(store.GetKV(a.DB, "last_domainrep"), 10, 64)
-		if cfg.Enabled && time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600 {
+		// Thousands of DNS lookups: at night, once per interval.
+		if cfg.Enabled && time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600-3*3600 && (last == 0 || a.nightNow()) {
 			a.checkDomains(ctx)
 		}
 		select {

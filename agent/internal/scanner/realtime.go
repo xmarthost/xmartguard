@@ -203,6 +203,8 @@ func (r *Realtime) session(ctx context.Context) {
 	r.setting.Store(true)
 	go func() {
 		defer r.setting.Store(false)
+		// Walking millions of folders after a restart: lowest priority.
+		lowPriorityThread()
 		start := time.Now()
 		r.addLevelsCtx(sctx, r.roots())
 		if sctx.Err() == nil {

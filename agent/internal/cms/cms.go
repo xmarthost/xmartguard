@@ -15,12 +15,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/prio"
+
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
 // Manager scans CMS installations on a schedule and on demand.
 type Manager struct {
+	// Zone is the time zone of the nightly schedule (nil: the server's).
+	Zone     func() *time.Location
 	DB       *sql.DB
 	Settings *settings.Store
 	Log      *slog.Logger
@@ -95,7 +99,10 @@ func (m *Manager) Start() error {
 	m.running = true
 	m.mu.Unlock()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Hour)
+		// Checking hundreds of sites (core file checksums, databases) waits
+		// for the websites: lowest CPU and disk priority.
+		prio.LowThread()
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
 		defer cancel()
 		err := m.scan(ctx)
 		m.mu.Lock()
@@ -126,7 +133,11 @@ func (m *Manager) Run(ctx context.Context) {
 		last, _ := strconv.ParseInt(store.GetKV(m.DB, "cms_last_scan"), 10, 64)
 		// New database rules: scan now, so earlier false detections go.
 		newRules := cfg.DBScan && store.GetKV(m.DB, kvDBRules) != DBRulesVersion
-		if cfg.Enabled && (newRules || time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600) {
+		// Scheduled checks run at night only (3:00-6:00 in the scan schedule's
+		// time zone), at most once per interval (every 3 days by default);
+		// "Scan now" in the portal runs at once.
+		due := newRules || time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600-3*3600
+		if cfg.Enabled && due && nightHour(time.Now().In(m.zone())) {
 			_ = m.Start()
 		}
 		select {
@@ -135,6 +146,18 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// nightHour: scheduled checks start between 3:00 and 6:00.
+func nightHour(t time.Time) bool { return t.Hour() >= 3 && t.Hour() < 6 }
+
+// zone is the time zone of the night window (Settings » Virus Scanner »
+// schedule time zone; the server's own zone when unset).
+func (m *Manager) zone() *time.Location {
+	if m.Zone != nil {
+		return m.Zone()
+	}
+	return time.Local
 }
 
 func risk(s *Site) string {
@@ -169,6 +192,8 @@ func (m *Manager) scan(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// A busy server (websites, MySQL) comes first.
+		prio.WaitIdle(ctx, 1.0, time.Minute)
 		seen[in.Path] = true
 		s := Site{Type: in.Type, Path: in.Path, User: in.User, Domain: in.Domain, Version: Version(in),
 			Plugins: []Component{}, Themes: []Component{}, MUPlugins: []string{}, Core: CoreReport{Modified: []string{}, Unknown: []string{}}}
@@ -253,7 +278,24 @@ func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 	}
 	dctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+	// A database that did not change since the last check keeps its result:
+	// searching posts and postmeta of hundreds of sites every day is the
+	// heaviest part of the check for MySQL.
+	var prevAt int64
+	prevIssues := -1
+	_ = m.DB.QueryRow(`SELECT scanned_at, db_issues FROM cms_sites WHERE path = ?`, s.Path).Scan(&prevAt, &prevIssues)
+	if !recheck && prevAt > 0 && prevIssues >= 0 {
+		if changed, ok := DBChangedSince(dctx, c, prevAt); ok && !changed {
+			return prevIssues
+		}
+	}
+	start := time.Now()
 	found, err := ScanDatabase(dctx, c)
+	// Give MySQL a rest as long as the search took (at most 5 seconds).
+	select {
+	case <-ctx.Done():
+	case <-time.After(min(time.Since(start), 5*time.Second)):
+	}
 	if err != nil {
 		m.Log.Info("database scan skipped", "site", s.Path, "err", err)
 		return 0

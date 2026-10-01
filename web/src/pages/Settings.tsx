@@ -1385,11 +1385,11 @@ function CMSSection({ s, meta, admin, busy, onSave }: { s: CMSS; meta: Meta; adm
       </div>
       <ListEditor title="Blacklisted WordPress plugins" desc="Automatically deactivate these plugins (slug) during CMS checks" items={s.blacklist_plugins ?? []} disabled={dis} placeholder="plugin-slug" onChange={(v) => onSave({ blacklist_plugins: v.map((x) => x.toLowerCase()) })} />
       <ListEditor title="Exclude users from auto patches" desc="CMSs of these users won't be updated, patched or have plugins auto-disabled" items={s.exclude_users ?? []} options={meta.users.map((u) => u.name)} disabled={dis} onChange={(v) => onSave({ exclude_users: v })} />
-      <SettingRow title="Scan interval" desc="How often all websites are re-checked">
+      <SettingRow title="Scan interval" desc="How often all websites are re-checked. Scheduled checks run at night (3:00–6:00, scan schedule time zone) at the lowest priority, and a database that did not change since the last check is not searched again. Scan now runs at once.">
         <select className="input w-40" value={s.interval_hours} disabled={dis || !s.enabled} onChange={(e) => onSave({ interval_hours: Number(e.target.value) })}>
-          {[6, 12, 24, 48, 168].map((h) => (
+          {[24, 48, 72, 168].map((h) => (
             <option key={h} value={h}>
-              {h < 24 ? `${h} hours` : h === 168 ? 'weekly' : `${h / 24} day${h > 24 ? 's' : ''}`}
+              {h === 168 ? 'weekly' : h === 72 ? 'every 3 days (recommended)' : h === 24 ? 'daily' : `every ${h / 24} days`}
             </option>
           ))}
         </select>
@@ -1526,7 +1526,7 @@ function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: bo
     <div className="mt-6 border-t border-slate-200 pt-6">
       <h2 className="text-lg font-semibold text-navy-900">Domain Reputation</h2>
       <p className="mb-2 text-sm text-slate-500">Check every hosted domain against Spamhaus DBL, SURBL and URIBL.</p>
-      <SettingRow title="Domain reputation monitoring" desc={`Checked every ${s.interval_hours} hours; alerts when a domain becomes listed`} recommended>
+      <SettingRow title="Domain reputation monitoring" desc="Checked once a night (3:00–6:00); alerts when a domain becomes listed" recommended>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </SettingRow>
       <SettingRow title="Google Safe Browsing API key" desc="Optional. Adds malware and phishing (SOCIAL_ENGINEERING) checks from Google.">

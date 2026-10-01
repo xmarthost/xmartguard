@@ -379,6 +379,9 @@ type CMS struct {
 	CoreCheck     bool `json:"core_check"` // verify WordPress core files against official checksums
 	DBScan        bool `json:"db_scan"`    // scan WordPress databases for injected code
 	IntervalHours int  `json:"interval_hours"`
+	// ScheduleVersion: 1 = scheduled checks run at night (3:00-6:00) every
+	// IntervalHours (72 = every 3 days by default).
+	ScheduleVersion int `json:"schedule_version"`
 	// Vulns looks plugins, themes and core up in a public vulnerability
 	// database (wpvulnerability.net, no key needed).
 	Vulns bool `json:"vulns"`
@@ -491,6 +494,9 @@ var (
 
 const scannerListDefaultsVersion = 1
 
+// cmsScheduleVersion: CMS checks every 3 days at night instead of daily.
+const cmsScheduleVersion = 1
+
 func Defaults() Settings {
 	return Settings{
 		Scanner: Scanner{
@@ -508,7 +514,7 @@ func Defaults() Settings {
 		},
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12, EximRBLs: true, PhishingFilter: true},
 		IPDB:       IPDB{Enabled: true, Report: true, Log: true},
-		CMS: CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 24, Vulns: true,
+		CMS: CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 72, ScheduleVersion: cmsScheduleVersion, Vulns: true,
 			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 1},
 		OSM: OSM{Enabled: true, PerMinute: 50, PerHour: 300, Action: "notify", CheckSubjects: true,
 			SpamPatterns: []string{}, WhitelistSenders: []string{}, WhitelistIPs: []string{}, WhitelistPaths: []string{}},
@@ -619,6 +625,14 @@ func normalize(s *Settings) {
 		s.WAF.Level = "normal"
 	}
 	s.Scanner.WhitelistUsers = clean(s.Scanner.WhitelistUsers, false)
+	if s.CMS.ScheduleVersion < cmsScheduleVersion {
+		// The old default (daily, at any hour) loaded busy servers: every
+		// 3 days, at night. Other intervals the admin chose stay.
+		if s.CMS.IntervalHours == 24 || s.CMS.IntervalHours == 0 {
+			s.CMS.IntervalHours = 72
+		}
+		s.CMS.ScheduleVersion = cmsScheduleVersion
+	}
 	if s.Scanner.ListDefaults < scannerListDefaultsVersion {
 		// Like cPGuard: MySQL's socket is never a threat; two names are
 		// known malware droppers (a shell loader and a cryptominer library).

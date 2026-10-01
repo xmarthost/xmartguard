@@ -670,6 +670,9 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 		return
 	}
 	defer func() { <-s.sem }()
+	// This goroutine reads the engine's results and checks its hits again:
+	// lowest priority too.
+	lowPriorityThread()
 	_, _ = s.DB.Exec(`UPDATE scans SET status='running', started_at=? WHERE id=?`, store.Now(), id)
 
 	cfg := s.Settings.Get().Scanner

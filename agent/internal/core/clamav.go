@@ -1,6 +1,8 @@
 package core
 
 import (
+	"github.com/xmarthost/xmartguard/agent/internal/prio"
+
 	"context"
 	"net/http"
 	"path/filepath"
@@ -97,12 +99,20 @@ func (a *Agent) clamLoop(ctx context.Context) {
 		return
 	case <-time.After(30 * time.Second):
 	}
+	// Building the signature engine takes a CPU core for a while: the first
+	// load happens at once, later updates at night (checked hourly).
+	prio.LowThread()
 	for {
-		a.reloadClam(ctx, false)
+		a.clam.mu.Lock()
+		loaded := a.clam.loadedAt != 0
+		a.clam.mu.Unlock()
+		if !loaded || a.nightNow() {
+			a.reloadClam(ctx, false)
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(6 * time.Hour):
+		case <-time.After(time.Hour):
 		}
 	}
 }
