@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -50,23 +51,24 @@ import (
 
 // Agent holds every module.
 type Agent struct {
-	Cfg      *config.Config
-	central  central
-	Log      *slog.Logger
-	DB       *sql.DB
-	Settings *settings.Store
-	Scanner  *scanner.Scanner
-	Realtime *scanner.Realtime
-	Firewall *firewall.Manager
-	WAF      *waf.Manager
-	CMS      *cms.Manager
-	OSM      *mail.Monitor
-	Captcha  *captcha.Server
-	AI       *ai.Analyzer
-	Monitor  *monitor.Monitor
-	Mailer   *notify.Mailer
-	Session  *client.Session
-	started  time.Time // when Start ran (zero in tests)
+	mailGuard atomic.Pointer[mail.EximGuardStatus]
+	Cfg       *config.Config
+	central   central
+	Log       *slog.Logger
+	DB        *sql.DB
+	Settings  *settings.Store
+	Scanner   *scanner.Scanner
+	Realtime  *scanner.Realtime
+	Firewall  *firewall.Manager
+	WAF       *waf.Manager
+	CMS       *cms.Manager
+	OSM       *mail.Monitor
+	Captcha   *captcha.Server
+	AI        *ai.Analyzer
+	Monitor   *monitor.Monitor
+	Mailer    *notify.Mailer
+	Session   *client.Session
+	started   time.Time // when Start ran (zero in tests)
 
 	// WPSource and WPPlugins override where official WordPress files and
 	// plugin checksums come from (tests).
@@ -245,6 +247,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.hostTrustLoop(ctx)
 	go a.proxyListLoop(ctx)
 	go a.torLoop(ctx)
+	go a.mailGuardLoop(ctx)
 	go a.wafLearnLoop(ctx)
 	go a.intelLoop(ctx)
 	go a.centralLoop(ctx)
@@ -853,7 +856,11 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil
 	}
 	h["exim.rbls"] = func(context.Context, json.RawMessage) (any, error) {
-		return map[string]any{"rbls": mail.EximRBLStatus()}, nil
+		return map[string]any{"rbls": mail.EximRBLStatus(), "guard": a.mailGuard.Load()}, nil
+	}
+	h["exim.guard"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		st := a.runMailGuard(ctx)
+		return map[string]any{"rbls": mail.EximRBLStatus(), "guard": &st}, nil
 	}
 	h["fw.host_sync"] = func(context.Context, json.RawMessage) (any, error) {
 		return a.syncHostTrust(), nil

@@ -217,6 +217,14 @@ type Reputation struct {
 	IPs           []string `json:"ips"` // empty = all server IPs
 	RBLs          []string `json:"rbls"`
 	IntervalHours int      `json:"interval_hours"`
+	// EximRBLs switches on the inbound mail blocklists in cPanel's Exim
+	// (Spamhaus ZEN, SpamCop and the extra ones xPGuard adds) that answer
+	// correctly from this server's DNS resolver.
+	EximRBLs bool `json:"exim_rbls"`
+	// PhishingFilter tags incoming mail that pretends to come from cPanel
+	// or Webmail and asks the reader to log in or verify ("[PHISHING
+	// WARNING]" in the subject).
+	PhishingFilter bool `json:"phishing_filter"`
 }
 
 // WAF is xPGuard's ModSecurity rule set for Apache/LiteSpeed.
@@ -489,7 +497,7 @@ func Defaults() Settings {
 			IgnoredCountries: []string{}, DDNS: []string{}, ExcludedJails: []string{}, WAFBan: true, WAFBanThreshold: 15,
 			Captcha: false, TrustedServices: true, TrustedDisabled: []string{}, TCPIn: DefaultTCPIn, UDPIn: DefaultUDPIn, TCPOut: DefaultTCPOut, UDPOut: DefaultUDPOut,
 		},
-		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12},
+		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12, EximRBLs: true, PhishingFilter: true},
 		IPDB:       IPDB{Enabled: true, Report: true, Log: true},
 		CMS: CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 24, Vulns: true,
 			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 1},

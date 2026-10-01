@@ -61,6 +61,8 @@ interface ReputationS {
   ips: string[];
   rbls: string[];
   interval_hours: number;
+  exim_rbls?: boolean;
+  phishing_filter?: boolean;
 }
 interface NotificationsS {
   email: string;
@@ -271,7 +273,7 @@ export default function SettingsPage() {
         {section === 'rbl' && (
           <>
             <RBLSection s={st.reputation} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />
-            <EximRBLs serverId={id!} />
+            <EximRBLs serverId={id!} s={st.reputation} admin={admin} busy={busy} onSave={(p) => save({ reputation: p })} />
           </>
         )}
         {section === 'rbl' && st.domain_reputation && <DomainRepSection s={st.domain_reputation} admin={admin} busy={busy} onSave={(p) => save({ domain_reputation: p })} />}
@@ -683,30 +685,84 @@ function ClamAVSection({ serverId, s, admin, busy, onSave }: { serverId: string;
   );
 }
 
-/** Extra blocklists added to Exim on cPanel (switched on in WHM). */
-function EximRBLs({ serverId }: { serverId: string }) {
-  const r = useAgent<{ rbls: { name: string; zone: string; defined: boolean; enabled: boolean }[] | null }>(serverId, 'exim.rbls');
+interface EximGuard {
+  supported: boolean;
+  rbls: { name: string; zone: string; enabled: boolean; by?: string; problem?: string }[];
+  phishing: 'off' | 'active' | 'added';
+  rebuilt: boolean;
+  error?: string;
+  at: number;
+}
+
+/** Incoming mail protection in cPanel's Exim: blocklists that answer
+ *  correctly from this server, and the phishing filter. */
+function EximRBLs({ serverId, s, admin, busy, onSave }: { serverId: string; s: ReputationS; admin: boolean; busy: boolean; onSave: (p: Partial<ReputationS>) => void }) {
+  const r = useAgent<{ rbls: { name: string; zone: string; defined: boolean; enabled: boolean }[] | null; guard: EximGuard | null }>(serverId, 'exim.rbls');
+  const { run, busy: running } = useAction();
   if (!r.data?.rbls?.length) return null;
+  const g = r.data.guard;
+  const dis = !admin || busy;
+  const rows = g?.rbls?.length ? g.rbls : r.data.rbls.map((x) => ({ name: x.name, zone: x.zone, enabled: x.enabled, by: undefined, problem: undefined }));
   return (
     <div className="mt-6 border-t border-slate-200 pt-4">
-      <div className="font-medium text-navy-900">Exim RBLs (cPanel)</div>
-      <p className="mb-2 text-sm text-slate-500">
-        Extra blocklists added to WHM » Exim Configuration Manager » RBLs, switched off. Turn on the ones you want there; Exim then refuses mail from listed
-        addresses. Spamhaus ZEN and SpamCop are built into cPanel.
-      </p>
-      <table className="w-full text-sm">
-        <tbody className="divide-y divide-slate-100">
-          {r.data.rbls.map((x) => (
-            <tr key={x.name}>
-              <td className="py-2 pr-3 font-medium">{x.name}</td>
-              <td className="py-2 pr-3 font-mono text-xs text-slate-500">{x.zone}</td>
-              <td className="py-2 text-right text-xs">
-                {!x.defined ? <span className="text-slate-400">not added</span> : x.enabled ? <span className="text-green-600">on in Exim</span> : <span className="text-slate-500">added, off</span>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h2 className="text-lg font-semibold text-navy-900">Incoming mail protection (cPanel Exim)</h2>
+          <p className="text-sm text-slate-500">Applied by xPGuard in WHM » Exim Configuration Manager; checked again every 6 hours.</p>
+        </div>
+        <button
+          className="btn-outline"
+          disabled={!admin || running}
+          onClick={async () => {
+            await run(() => agentCall(serverId, 'exim.guard', {}), 'Exim checked');
+            r.reload();
+          }}
+        >
+          Check now
+        </button>
+      </div>
+      <SettingRow
+        title="Turn on mail blocklists automatically"
+        desc="Spamhaus ZEN, SpamCop, PSBL, Mailspike and Barracuda are switched on when they answer correctly from this server's DNS resolver; a list that refuses the resolver (Spamhaus with Google or Cloudflare DNS) stays off, so no mail is refused by mistake. Lists you switched on yourself are left alone."
+        recommended
+      >
+        <Toggle on={s.exim_rbls ?? true} disabled={dis} onChange={(v) => onSave({ exim_rbls: v })} />
+      </SettingRow>
+      <SettingRow
+        title="Phishing filter"
+        desc='Mail from outside whose sender name claims to be cPanel, Webmail or the mail administrator and asks to verify, log in, or warns of deletion or a full mailbox gets "[PHISHING WARNING]" in its subject. It is still delivered.'
+        recommended
+      >
+        {g && g.phishing !== 'off' && (
+          <span className={`rounded-full px-2 py-0.5 text-xs ${g.phishing === 'active' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+            {g.phishing === 'active' ? 'active in Exim' : 'added; switch it on in WHM » Exim » Filters'}
+          </span>
+        )}
+        <Toggle on={s.phishing_filter ?? true} disabled={dis} onChange={(v) => onSave({ phishing_filter: v })} />
+      </SettingRow>
+      {g?.error && <p className="mt-2 text-sm text-red-600">{g.error}</p>}
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full min-w-[520px] text-sm">
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((x) => (
+              <tr key={x.name}>
+                <td className="py-2 pr-3 font-medium">{x.name}</td>
+                <td className="py-2 pr-3 font-mono text-xs text-slate-500">{x.zone}</td>
+                <td className="py-2 text-right text-xs">
+                  {x.enabled ? (
+                    <span className="text-green-600">on{x.by === 'admin' ? ' (by you)' : x.by === 'xpguard' ? ' (by xPGuard)' : ''}</span>
+                  ) : x.problem ? (
+                    <span className="text-amber-700" title={x.problem}>off: {x.problem}</span>
+                  ) : (
+                    <span className="text-slate-500">off</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {g?.at ? <p className="mt-1 text-xs text-slate-400">Last check {fmtTime(g.at)}</p> : null}
     </div>
   );
 }

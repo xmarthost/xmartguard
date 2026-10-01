@@ -62,6 +62,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'fw.apply': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'fw.host_sync': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'exim.rbls': { role: 'viewer', mutates: false },
+  'exim.guard': { role: 'admin', mutates: true, timeoutMs: 300_000 },
   'domains.list': { role: 'viewer', mutates: false },
   'trusted.status': { role: 'viewer', mutates: false },
   'trusted.refresh': { role: 'admin', mutates: true, timeoutMs: 360_000 },
