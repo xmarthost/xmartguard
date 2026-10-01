@@ -161,6 +161,10 @@ func TestExclusionsWithCRS(t *testing.T) {
 func crsManager(t *testing.T, src, patch, soft string, setup func(*Manager)) *Manager {
 	t.Helper()
 	m, _ := apacheWith(t, patch)
+	if !strings.Contains(patch, `"level"`) {
+		// These tests check single rules at the CRS's own threshold.
+		m.Settings.Patch([]byte(`{"waf":{"level":"strict"}}`))
+	}
 	if setup != nil {
 		setup(m)
 	}
@@ -331,4 +335,58 @@ func TestScoredDetailNamesWhereRulesMatched(t *testing.T) {
 	if d.Detail != "Matched rules: 942550 (REQUEST_COOKIES:consent), 941100 (ARGS:q)" {
 		t.Fatalf("%q", d.Detail)
 	}
+}
+
+// TestLevelsWithCRS: the WAF levels on a real CRS. Normal lets one weak
+// signal through and never blocks a logged-in WordPress user saving their
+// site (digitalcaps.uk, xenovasolutions.com), also where rule removal by tag
+// is not supported (it works by the anomaly threshold); attacks from
+// visitors are still blocked. Strict blocks the single signal.
+func TestLevelsWithCRS(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	// Our WordPress exclusions are switched off here: the level alone must do it.
+	m := crsManager(t, src, `{"waf":{"enabled":true,"wordpress":true,"level":"normal","disabled_rules":[7700010,7700011,7700012,7700013,7700014,7700015]}}`, "off", nil)
+	form, json := "application/x-www-form-urlencoded", "application/json"
+	editor := "Cookie: wordpress_logged_in_0123456789abcdef0123456789abcdef=admin%7C1700000000%7Ctok%7Chmac"
+	fake := "Cookie: wordpress_logged_in_x=1"
+	post := `{"content":"<!-- wp:paragraph --><p>Offer</p><!-- /wp:paragraph --><script>document.write(document.cookie)</script> $(cat /etc/passwd)","status":"publish"}`
+	// One CRS rule (941310, score 5) with the hosting defaults off.
+	weak := "comment=" + urlEncode("<b>بہت</b> اچھا پروڈکٹ")
+	attack := "q=" + urlEncode(`<script>document.write(document.cookie)</script> $(cat /etc/passwd)`)
+	cases := []struct {
+		name, method, uri, ctype, body string
+		hdr                            []string
+		want                           int
+	}{
+		{"editor saves a post (REST)", "POST", "/wp-json/wp/v2/posts/2368", json, post, []string{editor}, 200},
+		{"editor saves through RankMath", "POST", "/wp-json/rankmath/v1/updateMeta", json, post, []string{editor}, 200},
+		{"editor saves through admin-ajax", "POST", "/wp-admin/admin-ajax.php", form, "action=elementor_ajax&data=" + urlEncode(post), []string{editor}, 200},
+		{"application password on REST", "POST", "/wp-json/wp/v2/pages/85", json, post, []string{"Authorization: Basic YWRtaW46eHh4eCB4eHh4IHh4eHg="}, 200},
+		{"fake cookie stays blocked", "POST", "/wp-json/wp/v2/posts/2368", json, post, []string{fake}, 403},
+		{"anonymous REST write stays blocked", "POST", "/wp-json/wp/v2/posts/2368", json, post, nil, 403},
+		{"editor cookie on a front-end form stays inspected", "POST", "/contact/", form, attack, []string{editor}, 403},
+		{"one weak signal in a form passes", "POST", "/contact/", form, weak, nil, 200},
+		{"attack in a form is blocked", "POST", "/contact/", form, attack, nil, 403},
+	}
+	check := func(level string) {
+		for _, c := range cases {
+			want := c.want
+			if level == "strict" && (c.name == "one weak signal in a form passes" || strings.HasPrefix(c.name, "editor saves") || c.name == "application password on REST") {
+				want = 403
+			}
+			if got := sendBody(t, "shop.example.com", c.method, c.uri, c.ctype, c.body, c.hdr...); (got == 403) != (want == 403) || got == 0 {
+				t.Errorf("%s: %s: got %d, want %d", level, c.name, got, want)
+			}
+		}
+	}
+	check("normal")
+	m.Settings.Patch([]byte(`{"waf":{"level":"strict"}}`))
+	if err := m.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	waitApache()
+	check("strict")
 }

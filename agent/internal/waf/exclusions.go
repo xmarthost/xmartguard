@@ -171,6 +171,9 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		}
 	}
 	for i, e := range settings.CleanExclusions(c.RuleExclusions) {
+		if allowRule(e.Rule) {
+			continue // switching off an allow rule only blocks more
+		}
 		writeExcl(IDRuleExcl+i, e)
 	}
 	if !off[IDAutoExcl] {
@@ -213,6 +216,11 @@ func domainRx(d string) string {
 		return `^(?:[^.]+\.)*` + regexp.QuoteMeta(d[2:]) + `$`
 	}
 	return `^(?:www\.)?` + regexp.QuoteMeta(d) + `$`
+}
+
+// allowRule reports xPGuard's exclusion rules (they let requests through).
+func allowRule(id int) bool {
+	return (id >= IDWPAdminExcl && id <= IDAdminPanel) || id == IDEditorCookie || id == IDEditorAuth
 }
 
 // RenderExclusionsOnly is the rules file when xPGuard's own rules are off

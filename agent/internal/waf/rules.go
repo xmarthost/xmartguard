@@ -340,6 +340,10 @@ func isGateRule(id int) bool { return id >= 7700900 && id <= 7700909 }
 
 // Render builds the rules file for the given settings.
 func Render(c settings.WAF, o Options) string {
+	if c.Level == "low" {
+		// Low: no blocks by reputation alone.
+		c.IPDBPost, c.TorAction = false, "off"
+	}
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	w("# xPGuard WAF rules. Managed by the xPGuard agent: changes here are overwritten.")

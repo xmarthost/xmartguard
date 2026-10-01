@@ -114,7 +114,8 @@ func TestExtrasRenderCRSAndCustom(t *testing.T) {
 		t.Fatalf("includes: %s", inc)
 	}
 	setup := extra[filepath.Join(dir, "crs-setup.conf")]
-	if !strings.Contains(setup, "blocking_paranoia_level=2") || !strings.Contains(setup, "inbound_anomaly_score_threshold=5") {
+	// WAF level normal (the default): threshold at least 10, editors exempt.
+	if !strings.Contains(setup, "blocking_paranoia_level=2") || !strings.Contains(setup, "inbound_anomaly_score_threshold=10,") || !strings.Contains(setup, "id:7700040,") {
 		t.Fatalf("setup: %s", setup)
 	}
 	if states[0].State != "active" || states[1].State != "active" {

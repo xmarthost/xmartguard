@@ -258,7 +258,7 @@ func (m *Manager) BlockedListChanged() bool {
 	crs, tg := m.ruleSets.CRS, m.target
 	m.mu.Unlock()
 	if crs.Enabled && crs.ReplacedBy == "" && systemCRS(tg) == "" && m.CRSInstalled(crs.Version) {
-		if sb, ok := m.softBlock(crs, clampInt(crs.InboundThreshold, 3, 1000, 5)); ok {
+		if sb, ok := m.softBlock(crs, m.crsThreshold(crs)); ok {
 			for k, v := range sb.files {
 				want[strings.TrimPrefix(k, m.RulesDir+"/")] = v
 			}

@@ -256,7 +256,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		crs.State, crs.Detail = "error", "the rule files have not been downloaded from the portal yet"
 	default:
 		pl := clampInt(rs.CRS.Paranoia, 1, 4, 1)
-		in := clampInt(rs.CRS.InboundThreshold, 3, 1000, 5)
+		in := m.crsThreshold(rs.CRS)
 		out := clampInt(rs.CRS.OutboundThreshold, 2, 1000, 4)
 		dir := m.crsDir(rs.CRS.Version)
 		setup := filepath.Join(m.RulesDir, "crs-setup.conf")
@@ -277,6 +277,10 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 				files[k] = v
 			}
 			crs.Detail += "; weak signals from clean visitors get the CAPTCHA page"
+		}
+		if lv := m.level(); lv != "strict" {
+			setupText += editorSetup()
+			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing"
 		}
 		files[setup] = setupText
 		fmt.Fprintf(&inc, "\n# OWASP Core Rule Set %s\nInclude %s\nInclude %s\n", rs.CRS.Version, setup, filepath.Join(dir, "rules", "*.conf"))

@@ -92,6 +92,7 @@ interface NotificationsS {
 }
 interface WAFS {
   enabled: boolean;
+  level?: 'low' | 'normal' | 'strict';
   upload_scan: boolean;
   sensitive_files: boolean;
   wordpress: boolean;
@@ -963,6 +964,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>
+      {!replaced && <WafLevel level={s.level ?? 'normal'} disabled={dis || !s.enabled} onChange={(level) => onSave({ level })} />}
       {!replaced && info.data?.packages && <PackageCards packages={info.data.packages} meExtras={meExtras} disabled={dis || !s.enabled} onSave={(p) => { onSave(p); setTimeout(info.reload, 1500); }} />}
       {meFeed && (
         <SettingRow
@@ -1141,6 +1143,39 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
           </>
         )}
       </Advanced>
+    </div>
+  );
+}
+
+const LEVELS: { v: 'low' | 'normal' | 'strict'; title: string; desc: string }[] = [
+  { v: 'low', title: 'Low', desc: 'Only clear attacks are blocked (OWASP CRS score 20). No blocks by IP reputation (IPDB, Tor). Logged-in WordPress users are never blocked while editing.' },
+  { v: 'normal', title: 'Normal', desc: 'Like most hosting companies: one weak signal never blocks (CRS score 10). Logged-in WordPress users are never blocked while editing; visitors with attacks are.' },
+  { v: 'strict', title: 'Strict', desc: 'Most protection: one CRS rule blocks (score from WAF Rule Sets, usually 5). More false positives on forms and page builders.' },
+];
+
+/** How strict the WAF is: low, normal (default) or strict. */
+function WafLevel({ level, disabled, onChange }: { level: 'low' | 'normal' | 'strict'; disabled: boolean; onChange: (l: 'low' | 'normal' | 'strict') => void }) {
+  return (
+    <div className="border-b border-slate-100 py-4">
+      <div className="font-medium text-navy-900">Protection level</div>
+      <div className="mb-3 text-sm text-slate-500">How much ModSecurity may block on this server. Normal is recommended for shared hosting.</div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {LEVELS.map((l) => (
+          <button
+            key={l.v}
+            type="button"
+            disabled={disabled}
+            onClick={() => l.v !== level && onChange(l.v)}
+            className={`rounded-xl border p-3 text-left transition ${l.v === level ? 'border-[var(--xg-primary,#2563eb)] bg-blue-50 ring-1 ring-[var(--xg-primary,#2563eb)]' : 'border-slate-200 hover:bg-slate-50'} disabled:opacity-60`}
+          >
+            <div className="flex items-center justify-between font-medium text-navy-900">
+              {l.title}
+              {l.v === 'normal' && <span className="text-xs font-normal text-amber-600">recommended</span>}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">{l.desc}</div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

@@ -283,6 +283,11 @@ type WAF struct {
 	// off for their website and path ("auto"), only listed ("suggest") or
 	// not looked for ("off").
 	AutoExclusions string `json:"auto_exclusions"`
+	// Level is how strict the WAF is: "low" (only clear attacks: OWASP CRS
+	// threshold 20, no IPDB/Tor POST blocks), "normal" (threshold 10;
+	// logged-in WordPress users saving their site are never blocked by the
+	// CRS) or "strict" (threshold from WAF Rule Sets, usually 5).
+	Level string `json:"level"`
 }
 
 // RuleExclusion switches rule Rule off for requests to Domain (any website
@@ -512,7 +517,7 @@ func Defaults() Settings {
 		WAF: WAF{Enabled: true, UploadScan: true, SensitiveFiles: true, WordPress: true, BadBots: true,
 			CustomBots: []string{}, BruteForce: true, BFThreshold: 10, BFWindowMin: 10, DisabledRules: []int{}, WhitelistIPs: []string{},
 			LoginURLs: []string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php"}, Webshell: true, Generic: true, VirtualPatches: true, IPDBPost: true, TorAction: "post", WhitelistDomains: []string{},
-			BotBlocker: true, BotList: append([]string{}, DefaultBotList...)},
+			BotBlocker: true, BotList: append([]string{}, DefaultBotList...), Level: "normal"},
 		Notifications: Notifications{
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
 			UserOutdated: "never", ExcludeUsers: []string{},
@@ -608,6 +613,11 @@ func clean(list []string, upper bool) []string {
 }
 
 func normalize(s *Settings) {
+	switch s.WAF.Level {
+	case "low", "normal", "strict":
+	default:
+		s.WAF.Level = "normal"
+	}
 	s.Scanner.WhitelistUsers = clean(s.Scanner.WhitelistUsers, false)
 	if s.Scanner.ListDefaults < scannerListDefaultsVersion {
 		// Like cPGuard: MySQL's socket is never a threat; two names are
