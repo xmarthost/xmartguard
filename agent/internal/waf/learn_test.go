@@ -1,10 +1,12 @@
 package waf
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -43,7 +45,7 @@ func TestLearnFalsePositives(t *testing.T) {
 	// Real shoppers of one shop, different networks: product images blocked.
 	for _, ip := range []string{"39.45.1.10", "39.45.1.11", "119.73.4.2", "175.29.8.9"} {
 		addEvent(t, m, now-600, ip, "www.hapetsupplies.com", "/wp-content/uploads/2026/09/brush-variation-1-100x100.png", 949110, sqli)
-		addEvent(t, m, now-500, ip, "hapetsupplies.com", "/wp-content/uploads/2026/09/scoop-variation-2.png", 949110, sqli)
+		addEvent(t, m, now-5000, ip, "hapetsupplies.com", "/wp-content/uploads/2026/09/scoop-variation-2.png", 949110, sqli)
 	}
 	// An attack campaign: the same rule, but the addresses hit many sites
 	// and other rules.
@@ -59,9 +61,26 @@ func TestLearnFalsePositives(t *testing.T) {
 	for _, ip := range []string{"91.1.1.1", "92.2.2.2", "93.3.3.3"} {
 		addEvent(t, m, now-300, ip, "blog.example.net", "/.env", 949110, sqli)
 	}
-	// The home page (a whole-site exclusion) needs five visitors: four here.
-	for _, ip := range []string{"61.1.1.1", "62.2.2.2", "63.3.3.3", "64.4.4.4"} {
-		addEvent(t, m, now-300, ip, "toys.example.com", "/?utm_source=x", 949110, sqli)
+	// The home page would be a whole-website exclusion: never for an
+	// attack rule, however many visitors.
+	for i := 0; i < 12; i++ {
+		addEvent(t, m, now-300-int64(i)*3000, fmt.Sprintf("%d.1.1.%d", 60+i, i), "toys.example.com", "/?utm_source=x", 949110, sqli)
+	}
+	// A "does not exist" probe from rotating clean addresses.
+	for i := 0; i < 12; i++ {
+		addEvent(t, m, now-300-int64(i)*3000, fmt.Sprintf("%d.2.2.%d", 100+i, i), "hawk.example.com", "/_probe-does-not-exist-9f3c", 949110, "Matched rules: 942550")
+	}
+	// A path that ends in a domain name.
+	for i := 0; i < 12; i++ {
+		addEvent(t, m, now-300-int64(i)*3000, fmt.Sprintf("%d.3.3.%d", 120+i, i), "quad.example.com", "/shop/page/3ymarketers.com", 949110, "Matched rules: 920440")
+	}
+	// A burst: five clean addresses within minutes is a scan, not visitors.
+	for i := 0; i < 5; i++ {
+		addEvent(t, m, now-300-int64(i)*60, fmt.Sprintf("%d.4.4.%d", 140+i, i), "burst.example.com", "/contact/", 949110, sqli)
+	}
+	// High-risk (PHP injection) needs six visitors from three networks: five here.
+	for i := 0; i < 5; i++ {
+		addEvent(t, m, now-300-int64(i)*3000, fmt.Sprintf("%d.5.5.%d", 160+i, i), "php.example.com", "/order/", 949110, "Matched rules: 933150")
 	}
 	// Three visitors from one network only.
 	for _, ip := range []string{"10.9.0.1", "10.9.0.2", "10.9.0.3"} {
@@ -115,11 +134,41 @@ func TestLearnFalsePositives(t *testing.T) {
 	}
 }
 
+// Exclusions learned under the old limits that the new ones refuse are
+// dropped on the next run; good ones stay.
+func TestLearnDropsLooseExclusions(t *testing.T) {
+	m := learnManager(t)
+	now := int64(1_800_000_000)
+	ex := func(rule int, domain, path string, ips int) AutoExclusion {
+		return AutoExclusion{RuleExclusion: settings.RuleExclusion{Rule: rule, Domain: domain, Path: path}, Key: fmt.Sprintf("%d|%s|%s", rule, domain, path), IPs: ips, Learned: now - 86400, Expires: now + 86400, State: "active"}
+	}
+	m.saveAuto([]AutoExclusion{
+		ex(934100, "hawkdevops.net", "", 6),
+		ex(942550, "hawkdevops.net", "/_probe-does-not-exist-9f3c", 5),
+		ex(920420, "meetap.net", "", 5),
+		ex(920440, "quadaxisglobal.com", "/shop/page/3ymarketers.com", 4),
+		ex(920420, "pakluck.com", "", 9),
+		ex(942290, "webco.pk", "/solar/wp-admin/admin-ajax.php", 3),
+	})
+	changed, err := m.Learn(now)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	var left []string
+	for _, e := range m.AutoExclusions() {
+		left = append(left, e.Key)
+	}
+	sort.Strings(left)
+	if strings.Join(left, ",") != "920420|pakluck.com|,942290|webco.pk|/solar/wp-admin/admin-ajax.php" {
+		t.Fatalf("left %v", left)
+	}
+}
+
 func TestLearnModes(t *testing.T) {
 	m := learnManager(t)
 	now := int64(1_800_000_000)
-	for _, ip := range []string{"39.45.1.10", "119.73.4.2", "175.29.8.9"} {
-		addEvent(t, m, now-60, ip, "exflow.example.com", "/edit-transfer", 949110, "Matched rules: 942100 (ARGS:note), 949999")
+	for i, ip := range []string{"39.45.1.10", "119.73.4.2", "175.29.8.9"} {
+		addEvent(t, m, now-60-int64(i)*3000, ip, "exflow.example.com", "/edit-transfer", 949110, "Matched rules: 942100 (ARGS:note), 949999")
 	}
 	m.Settings.Patch([]byte(`{"waf":{"auto_exclusions":"suggest"}}`))
 	if changed, _ := m.Learn(now); changed {

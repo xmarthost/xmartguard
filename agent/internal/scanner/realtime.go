@@ -15,8 +15,34 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// MaxWatches caps inotify watches so huge servers stay responsive.
-var MaxWatches = 500000
+// MaxWatches caps inotify watches so huge servers stay responsive; 0 sizes
+// it from the server's memory (about 1 KB of kernel memory per watch, at
+// most 3% of RAM, between 500,000 and 2,000,000).
+var MaxWatches = 0
+
+// WatchReserve watches are kept free at start for folders made later (new
+// upload folders, extracted archives); -1 keeps 5% of the limit.
+var WatchReserve = -1
+
+// SweepEvery is how often folders beyond the watch limit are checked for
+// new files, so no folder is left unprotected on very large servers.
+var SweepEvery = 5 * time.Minute
+
+func maxWatches() int {
+	if MaxWatches > 0 {
+		return MaxWatches
+	}
+	n := 500000
+	if raw, err := os.ReadFile("/proc/meminfo"); err == nil {
+		for _, l := range strings.Split(string(raw), "\n") {
+			if f := strings.Fields(l); len(f) >= 2 && f[0] == "MemTotal:" {
+				kb, _ := strconv.Atoi(f[1])
+				n = max(n, min(kb*3/100, 2000000)) // kB / 1 KB per watch
+			}
+		}
+	}
+	return n
+}
 
 // RealtimeWorkers scan changed files in parallel, so reading events never
 // waits for a scan (a stalled reader loses events when the queue fills up).
@@ -33,18 +59,24 @@ type Realtime struct {
 	// Roots overrides the watched directories (tests).
 	Roots func() []string
 
-	mu       sync.Mutex
-	fd       int
-	dirs     map[int]string
-	byPath   map[string]int
-	pending  map[string]time.Time
-	watches  int
-	homes    map[string]bool
-	work     chan string
-	scanned  atomic.Int64
-	overflow atomic.Int64
-	active   atomic.Bool
-	lastErr  atomic.Value // string
+	mu      sync.Mutex
+	fd      int
+	dirs    map[int]string
+	byPath  map[string]int
+	pending map[string]time.Time
+	watches int
+	homes   map[string]bool
+	limit   int
+	// unwatched are folders beyond the watch limit (each with everything
+	// below it); they are swept for new files every SweepEvery.
+	unwatched map[string]bool
+	lastSweep time.Time
+	sweeping  atomic.Bool
+	work      chan string
+	scanned   atomic.Int64
+	overflow  atomic.Int64
+	active    atomic.Bool
+	lastErr   atomic.Value // string
 }
 
 // Health reports whether inotify watching is running and, if not, why.
@@ -58,6 +90,14 @@ func (r *Realtime) Watches() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.watches
+}
+
+// Unwatched is the number of folders left to the periodic sweep because
+// the watch limit was reached.
+func (r *Realtime) Unwatched() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.unwatched)
 }
 
 // Scanned is the number of files the realtime scanner checked since start.
@@ -161,12 +201,104 @@ func (r *Realtime) init(roots []string) error {
 	}
 	r.mu.Lock()
 	r.fd, r.dirs, r.byPath, r.pending, r.watches, r.homes = fd, map[int]string{}, map[string]int{}, map[string]time.Time{}, 0, homes
+	r.limit, r.unwatched, r.lastSweep = maxWatches(), map[string]bool{}, time.Now()
 	r.work = make(chan string, 20000)
 	r.mu.Unlock()
-	for _, root := range roots {
-		r.addTree(root, false)
-	}
+	r.addLevels(roots)
 	return nil
+}
+
+// addLevels watches the roots breadth first: every account's top folders
+// (where File Manager uploads and new folders land) are watched before any
+// deep folder, so the watch limit only ever leaves deep folders to the sweep.
+func (r *Realtime) addLevels(roots []string) {
+	level := append([]string(nil), roots...)
+	reserve := WatchReserve
+	if reserve < 0 {
+		reserve = r.limit / 20
+	}
+	for len(level) > 0 {
+		var next []string
+		for i, dir := range level {
+			if !r.addWatchUpTo(dir, r.limit-reserve) {
+				r.leave(level[i:]...)
+				r.leave(next...)
+				return
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				p := filepath.Join(dir, e.Name())
+				if !r.skip(p, e.Name()) {
+					next = append(next, p)
+				}
+			}
+		}
+		level = next
+	}
+}
+
+// leave hands folders to the periodic sweep.
+func (r *Realtime) leave(dirs ...string) {
+	r.mu.Lock()
+	for _, d := range dirs {
+		r.unwatched[d] = true
+	}
+	r.mu.Unlock()
+}
+
+// sweep scans files changed since the last sweep in the folders beyond the
+// watch limit, and watches them when watches became free.
+func (r *Realtime) sweep() {
+	if !r.sweeping.CompareAndSwap(false, true) {
+		return
+	}
+	defer r.sweeping.Store(false)
+	r.mu.Lock()
+	since := r.lastSweep
+	r.lastSweep = time.Now()
+	dirs := make([]string, 0, len(r.unwatched))
+	for d := range r.unwatched {
+		dirs = append(dirs, d)
+	}
+	r.mu.Unlock()
+	for _, root := range dirs {
+		if _, err := os.Stat(root); err != nil {
+			r.mu.Lock()
+			delete(r.unwatched, root)
+			r.mu.Unlock()
+			continue
+		}
+		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if path != root && r.skip(path, d.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info, err := d.Info(); err == nil && info.Mode().IsRegular() && !info.ModTime().Before(since.Add(-time.Minute)) {
+				r.queue(path)
+			}
+			return nil
+		})
+		r.mu.Lock()
+		free := r.watches < r.limit-1000
+		r.mu.Unlock()
+		if free {
+			r.mu.Lock()
+			delete(r.unwatched, root)
+			r.mu.Unlock()
+			r.addTree(root, false)
+		}
+	}
 }
 
 // loop processes events until ctx ends or realtime is switched off.
@@ -199,6 +331,8 @@ func (r *Realtime) loop(ctx context.Context) {
 	}()
 	refresh := time.NewTicker(RootsRefresh)
 	defer refresh.Stop()
+	sweep := time.NewTicker(SweepEvery)
+	defer sweep.Stop()
 	buf := make([]byte, 256*1024)
 	lastFlush := time.Now()
 	pfd := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
@@ -213,6 +347,10 @@ func (r *Realtime) loop(ctx context.Context) {
 				return
 			}
 			r.addNewRoots()
+		case <-sweep.C:
+			if r.Unwatched() > 0 {
+				go r.sweep()
+			}
 		default:
 		}
 		// Wait up to 200 ms for events, then read everything queued.
@@ -232,10 +370,12 @@ func (r *Realtime) loop(ctx context.Context) {
 	}
 }
 
-func (r *Realtime) addWatch(dir string) bool {
+func (r *Realtime) addWatch(dir string) bool { return r.addWatchUpTo(dir, r.limit) }
+
+func (r *Realtime) addWatchUpTo(dir string, limit int) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.watches >= MaxWatches {
+	if r.watches >= limit {
 		return false
 	}
 	if _, ok := r.byPath[dir]; ok {
@@ -252,15 +392,24 @@ func (r *Realtime) addWatch(dir string) bool {
 
 // skip reports directories never watched: bind mounts and caches anywhere,
 // and mailboxes, logs and panel data directly inside a home directory.
+// Caches that hold thousands of folders (page caches, node_modules, git
+// objects) would use up the watch limit; scheduled scans still cover them.
 func (r *Realtime) skip(path string, name string) bool {
-	if skipAnywhere[name] || path == QuarantineDir() || systemPath(path) {
+	if skipAnywhere[name] || rtSkipAnywhere[name] || path == QuarantineDir() || systemPath(path) {
+		return true
+	}
+	parent := filepath.Dir(path)
+	if name == "cache" && filepath.Base(parent) == "wp-content" {
 		return true
 	}
 	r.mu.Lock()
-	home := r.homes[filepath.Dir(path)]
+	home := r.homes[parent]
 	r.mu.Unlock()
-	return home && (skipInHome[name] || name == "access-logs" || name == ".trash" || name == "ssl" || name == ".htpasswds")
+	return home && (skipInHome[name] || name == "access-logs" || name == ".trash" || name == "ssl" || name == ".htpasswds" || name == "lscache")
 }
+
+// rtSkipAnywhere are folders with many subfolders and no web content.
+var rtSkipAnywhere = map[string]bool{"node_modules": true, ".git": true}
 
 // addTree watches root and every directory below it. With queueFiles, the
 // files already inside are scanned too: a directory that just appeared
@@ -281,7 +430,17 @@ func (r *Realtime) addTree(root string, queueFiles bool) {
 			return filepath.SkipDir
 		}
 		if !r.addWatch(path) {
-			return filepath.SkipAll
+			// Over the limit: the sweep looks after this folder.
+			r.leave(path)
+			if queueFiles {
+				_ = filepath.WalkDir(path, func(p string, e fs.DirEntry, err error) error {
+					if err == nil && e.Type().IsRegular() {
+						r.queue(p)
+					}
+					return nil
+				})
+			}
+			return filepath.SkipDir
 		}
 		return nil
 	})

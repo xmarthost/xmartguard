@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
+import { Bell, Bug, CheckCircle2, ChevronDown, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -916,17 +916,6 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         <>
           <h3 className="mt-4 text-base font-semibold text-navy-900">Package options</h3>
           {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
-          <SettingRow
-            title="Tor exit nodes"
-            desc={`Visitors from the Tor network (list published by the Tor Project${info.data?.tor?.addresses ? `: ${info.data.tor.addresses.toLocaleString()} addresses, updated ${new Date(info.data.tor.updated * 1000).toLocaleString()}` : ', downloaded every 6 hours while this is on'}${info.data?.tor?.error ? `; last download failed: ${info.data.tor.error}` : ''}). Behind Cloudflare its Tor marker is used too. CAPTCHA sends them to the CAPTCHA page on the login pages (needs Overview » CAPTCHA Page; otherwise POST is blocked).`}
-          >
-            <select className="input w-56" value={s.tor_action ?? 'post'} disabled={dis || !s.enabled} onChange={(e) => onSave({ tor_action: e.target.value as WAFS['tor_action'] })}>
-              <option value="off">Allow</option>
-              <option value="captcha">CAPTCHA on login pages</option>
-              <option value="post">Block POST (read only)</option>
-              <option value="block">Block every request</option>
-            </select>
-          </SettingRow>
         </>
       )}
       <div className="mt-2 border-t border-slate-200" />
@@ -991,25 +980,6 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         validate={(v) => (/^\d{1,8}$/.test(v) ? null : 'Enter a numeric rule id')}
         onChange={(v) => onSave({ disabled_rules: v.map(Number) })}
       />
-      <LearnedExclusions
-        mode={s.auto_exclusions ?? 'auto'}
-        items={info.data?.auto_exclusions ?? []}
-        cpanelOff={info.data?.cpanel_off ?? []}
-        disabled={dis}
-        onMode={(m) => onSave({ auto_exclusions: m as WAFS['auto_exclusions'] })}
-        onAction={async (key, action) => {
-          const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.auto_exclusion', { key, action }), 'Saved');
-          if (res?.warning) alert(res.warning);
-          info.reload();
-        }}
-      />
-      <RuleExclusionsEditor
-        items={s.rule_exclusions ?? []}
-        domains={doms.data?.domains?.map((d) => d.domain)}
-        disabled={dis}
-        vendor={replaced}
-        onChange={(v) => onSave({ rule_exclusions: v })}
-      />
       <ListEditor
         title="Whitelisted domains"
         desc={replaced ? `Domains ${replaced}'s rules never inspect` : 'Choose domains that should always be allowed by the WAF and CAPTCHA rules'}
@@ -1021,55 +991,119 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
         onChange={(v) => onSave({ whitelist_domains: v.map((x) => x.toLowerCase()) })}
       />
 
-      {replaced && <ListEditor title="WAF whitelist" desc={`These IPs are never inspected by ${replaced}'s rules`} items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />}
-      {!replaced && (<>
-      <h3 className="mt-6 text-base font-semibold text-navy-900">More xPGuard protections</h3>
-      <p className="text-sm text-slate-500">Upload malware scanning is the Uploads package above; here only its stricter option.</p>
-      {s.seo_bots && row('seo_bots', 'Block SEO crawlers (older option)', 'Now part of the Bad Bot blocker list above: turn the Bad Bot blocker on and this switch is merged into it.')}
-      {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
-      <ListEditor title="WAF whitelist" desc="These IPs are never inspected by xPGuard rules" items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
-      {info.data && (
-        <div className="py-4">
-          <div className="mb-1 font-medium text-navy-900">xPGuard rules</div>
-          {meFeed && (
-            <p className="mb-2 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
-              This list shows xPGuard's own rules only. The Malware.Expert rules on this server are downloaded by the web server straight from Malware.Expert
-              when it starts, so they are not stored here; whether they loaded shows under WAF Rule Sets » Rollout, and their blocks appear in WAF Logs with
-              Malware.Expert's rule ids.
-            </p>
-          )}
-          <p className="mb-2 text-sm text-slate-500">Switch single rules on or off. Switching on a rule of a group that is off turns on only that rule. The numbers are blocks in the last 24 hours / 7 days.</p>
-          <table className="w-full text-sm">
-            <tbody className="divide-y divide-slate-100">
-              {info.data.rules.map((r) => (
-                <tr key={r.id}>
-                  <td className="w-20 py-2 pr-3 font-mono text-xs text-slate-500">{r.id}</td>
-                  <td className="py-2 pr-3">{r.title}</td>
-                  <td className="py-2 pr-3 text-xs text-slate-500">{r.action}</td>
-                  <td className="whitespace-nowrap py-2 pr-3 text-right text-xs" title="Blocked in the last 24 hours / 7 days">
-                    <span className={r.hits_24h ? 'font-medium text-red-600' : 'text-slate-400'}>{r.hits_24h ?? 0}</span>
-                    <span className="text-slate-400"> / {r.hits_7d ?? 0}</span>
-                  </td>
-                  <td className="py-2 pr-3 text-right text-xs">{r.enabled ? <span className="text-green-600">active</span> : <span className="text-slate-400">off</span>}</td>
-                  <td className="w-20 py-2 text-right">
-                    <Toggle
-                      on={r.enabled}
-                      disabled={dis || !s.enabled}
-                      onChange={async (v) => {
-                        const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.rule', { id: r.id, enabled: v }), `Rule ${r.id} ${v ? 'on' : 'off'}`);
-                        if (res?.warning) alert(res.warning);
-                        info.reload();
-                        onReload();
-                      }}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      </>)}
+      <ListEditor title="WAF whitelist" desc={`These IPs are never inspected by ${replaced ? `${replaced}'s` : 'xPGuard'} rules`} items={s.whitelist_ips} disabled={dis} placeholder="IP or CIDR" validate={isIPorCIDR} onChange={(v) => onSave({ whitelist_ips: v })} />
+      <Advanced>
+        {!replaced && (
+          <SettingRow
+            title="Tor exit nodes"
+            desc={`Visitors from the Tor network (list published by the Tor Project${info.data?.tor?.addresses ? `: ${info.data.tor.addresses.toLocaleString()} addresses, updated ${new Date(info.data.tor.updated * 1000).toLocaleString()}` : ', downloaded every 6 hours while this is on'}${info.data?.tor?.error ? `; last download failed: ${info.data.tor.error}` : ''}). Behind Cloudflare its Tor marker is used too. CAPTCHA sends them to the CAPTCHA page on the login pages (needs Overview » CAPTCHA Page; otherwise POST is blocked).`}
+          >
+            <select className="input w-56" value={s.tor_action ?? 'post'} disabled={dis || !s.enabled} onChange={(e) => onSave({ tor_action: e.target.value as WAFS['tor_action'] })}>
+              <option value="off">Allow</option>
+              <option value="captcha">CAPTCHA on login pages</option>
+              <option value="post">Block POST (read only)</option>
+              <option value="block">Block every request</option>
+            </select>
+          </SettingRow>
+        )}
+        <LearnedExclusions
+          mode={s.auto_exclusions ?? 'auto'}
+          items={info.data?.auto_exclusions ?? []}
+          cpanelOff={info.data?.cpanel_off ?? []}
+          disabled={dis}
+          onMode={(m) => onSave({ auto_exclusions: m as WAFS['auto_exclusions'] })}
+          onAction={async (key, action) => {
+            const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.auto_exclusion', { key, action }), 'Saved');
+            if (res?.warning) alert(res.warning);
+            info.reload();
+          }}
+        />
+        <RuleExclusionsEditor
+          items={s.rule_exclusions ?? []}
+          domains={doms.data?.domains?.map((d) => d.domain)}
+          disabled={dis}
+          vendor={replaced}
+          onChange={(v) => onSave({ rule_exclusions: v })}
+        />
+        {!replaced && (
+          <>
+        {s.seo_bots && row('seo_bots', 'Block SEO crawlers (older option)', 'Now part of the Bad Bot blocker list above: turn the Bad Bot blocker on and this switch is merged into it.')}
+        {row('block_php_upload', 'Block PHP file uploads', 'Refuse any uploaded file with a PHP extension')}
+        {info.data && (
+          <div className="py-4">
+            <div className="mb-1 font-medium text-navy-900">xPGuard rules</div>
+            {meFeed && (
+              <p className="mb-2 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                This list shows xPGuard's own rules only. The Malware.Expert rules on this server are downloaded by the web server straight from Malware.Expert
+                when it starts, so they are not stored here; whether they loaded shows under WAF Rule Sets » Rollout, and their blocks appear in WAF Logs with
+                Malware.Expert's rule ids.
+              </p>
+            )}
+            <p className="mb-2 text-sm text-slate-500">Switch single rules on or off. Switching on a rule of a group that is off turns on only that rule. The numbers are blocks in the last 24 hours / 7 days.</p>
+            <table className="w-full text-sm">
+              <tbody className="divide-y divide-slate-100">
+                {info.data.rules.map((r) => (
+                  <tr key={r.id}>
+                    <td className="w-20 py-2 pr-3 font-mono text-xs text-slate-500">{r.id}</td>
+                    <td className="py-2 pr-3">{r.title}</td>
+                    <td className="py-2 pr-3 text-xs text-slate-500">{r.action}</td>
+                    <td className="whitespace-nowrap py-2 pr-3 text-right text-xs" title="Blocked in the last 24 hours / 7 days">
+                      <span className={r.hits_24h ? 'font-medium text-red-600' : 'text-slate-400'}>{r.hits_24h ?? 0}</span>
+                      <span className="text-slate-400"> / {r.hits_7d ?? 0}</span>
+                    </td>
+                    <td className="py-2 pr-3 text-right text-xs">{r.enabled ? <span className="text-green-600">active</span> : <span className="text-slate-400">off</span>}</td>
+                    <td className="w-20 py-2 text-right">
+                      <Toggle
+                        on={r.enabled}
+                        disabled={dis || !s.enabled}
+                        onChange={async (v) => {
+                          const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.rule', { id: r.id, enabled: v }), `Rule ${r.id} ${v ? 'on' : 'off'}`);
+                          if (res?.warning) alert(res.warning);
+                          info.reload();
+                          onReload();
+                        }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+          </>
+        )}
+      </Advanced>
+    </div>
+  );
+}
+
+/** Less used WAF options, closed until opened (remembered per browser). */
+function Advanced({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem('xg-waf-advanced') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    setOpen(!open);
+    try {
+      localStorage.setItem('xg-waf-advanced', open ? '0' : '1');
+    } catch {
+      /* private window */
+    }
+  };
+  return (
+    <div className="mt-4 rounded-xl border border-slate-200">
+      <button type="button" className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left" onClick={toggle} aria-expanded={open}>
+        <span>
+          <span className="font-medium text-navy-900">Advanced options</span>
+          <span className="block text-sm text-slate-500">Tor, false-positive protection, per-site rule exclusions, PHP uploads and single xPGuard rules</span>
+        </span>
+        <ChevronDown className={`h-5 w-5 shrink-0 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && <div className="border-t border-slate-200 px-4">{children}</div>}
     </div>
   );
 }

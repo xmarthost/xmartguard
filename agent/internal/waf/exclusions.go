@@ -31,6 +31,25 @@ const (
 	// PHP-injection rules skip it; addresses and order notes trip them, and
 	// the data is stored, never run as code.
 	IDWCStoreExcl = 7700014
+	// IDHostingBase: CRS rules that misfire on ordinary hosting traffic
+	// and catch no attack the others miss: 941310 (UTF-8 text such as Urdu,
+	// Arabic or emoji in comments, reviews and forms looks like "malformed
+	// US-ASCII"), 920600 (search engines and feed readers send a charset in
+	// Accept) and 942550 on cookies (consent and shop plugins keep JSON there).
+	IDHostingBase = 7700015
+	// IDCPanelPaths: cPanel's own pages (mail autodiscover/autoconfig for
+	// Outlook and Thunderbird, suspended page, AutoSSL checks) are reached by
+	// the server's address, which the CRS numeric-Host rule refuses.
+	IDCPanelPaths = 7700016
+	// IDStaticCookies: images, styles and scripts are files, not code; the
+	// cookies a browser sends with them are not inspected for injections.
+	IDStaticCookies = 7700017
+	// IDAdminPanel: admin areas of other web applications (SMM panels,
+	// Laravel and CodeIgniter back ends, school and shop panels) save HTML,
+	// emoji and scripts on purpose: POSTs from a page of the same admin area,
+	// with a session cookie, skip the injection rules (the application checks
+	// the login itself).
+	IDAdminPanel = 7700018
 	// IDCPanelOff: websites whose ModSecurity the account switched off in
 	// cPanel » ModSecurity. Apache already honours that for its virtual host;
 	// this makes it certain for every rule set and on LiteSpeed.
@@ -78,10 +97,44 @@ func removeTags() string {
 	return strings.Join(ctl, ",")
 }
 
+// removeTagTargets keeps the injection rules away from one collection.
+func removeTagTargets(target string) string {
+	var ctl []string
+	for _, t := range injectionTags {
+		ctl = append(ctl, "ctl:ruleRemoveTargetByTag="+t+";"+target)
+	}
+	return strings.Join(ctl, ",")
+}
+
+// adminSegments name the admin area of a web application (wp-admin has its
+// own exclusions).
+const adminSegments = `(?:admin|administrator|adminpanel|admin-panel|backend|dashboard|panel)`
+
+// staticExts are files a web server sends as they are.
+const staticExts = `(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|css|js|mjs|map|woff2?|ttf|otf|eot|mp4|webm|mp3|ogg|pdf|txt|xml)`
+
 // renderExclusions writes the WordPress exclusions (unless switched off)
 // and the portal's per-site rule exclusions.
 func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, dyn Dynamic) {
 	tags := removeTags()
+	w("# Ordinary hosting traffic the OWASP CRS misreads (xPGuard hosting defaults).")
+	if !off[IDHostingBase] {
+		w(`SecAction "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=941310,ctl:ruleRemoveById=920600,ctl:ruleRemoveTargetById=942550;REQUEST_COOKIES"`, IDHostingBase)
+	}
+	if !off[IDCPanelPaths] {
+		w(`SecRule REQUEST_FILENAME "@rx ^/+(?:cgi-sys/|\.well-known/|autodiscover/autodiscover\.xml$|mail/config-v1\.1\.xml$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920350"`, IDCPanelPaths)
+	}
+	if !off[IDStaticCookies] {
+		w(`SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDStaticCookies)
+		w(`  SecRule REQUEST_FILENAME "@rx \.%s$" "t:none,t:urlDecodeUni,t:lowercase,%s"`, staticExts, removeTagTargets("REQUEST_COOKIES"))
+	}
+	if !off[IDAdminPanel] {
+		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDAdminPanel)
+		w(`  SecRule REQUEST_FILENAME "@rx (?:^|/)%s/" "t:none,t:urlDecodeUni,t:lowercase,chain"`, adminSegments)
+		w(`  SecRule &REQUEST_COOKIES "@gt 0" "t:none,chain"`)
+		w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?%s/" "t:none,t:lowercase,capture,chain"`, adminSegments)
+		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, tags)
+	}
 	w("# Content that is code by design: kept away from injection rules.")
 	if !off[IDWPAdminExcl] {
 		w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:[^/]+\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,chain"`, IDWPAdminExcl)

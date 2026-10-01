@@ -24,6 +24,12 @@ import (
 // rule, the rule is switched off for that website and path only. Attackers
 // hit many websites, trip several rules and are on the lists, so they do
 // not qualify; attack payloads still meet every other rule there.
+//
+// Attackers who rotate residential addresses can look like clean visitors,
+// so the evidence also has to be spread over time (real visitors come over
+// hours, a scan comes in minutes), high-risk rules (code, command and file
+// injection) need more of it, and only protocol rules are ever switched off
+// for a whole website.
 
 // AutoExclusion is a learned (or suggested) false positive.
 type AutoExclusion struct {
@@ -44,15 +50,20 @@ const (
 	// Learning thresholds: distinct clean visitors (more for a whole
 	// website) from at least two networks, over the last day.
 	learnMinIPs     = 3
-	learnMinIPsSite = 5
+	learnMinIPsHigh = 6
+	learnMinIPsSite = 8
 	learnMinNets    = 2
-	learnWindow     = 24 * 3600
-	learnKeep       = 30 * 86400
-	learnPerDomain  = 20
+	learnMinNetsBig = 3
+	// learnMinSpan: first and last block at least an hour apart.
+	learnMinSpan   = 3600
+	learnWindow    = 24 * 3600
+	learnKeep      = 30 * 86400
+	learnPerDomain = 20
 )
 
-// reProbePath: paths only scanners request; never learned.
-var reProbePath = regexp.MustCompile(`(?i)(?:/\.|\.(?:env|git|sql|bak|old|orig|swp|ya?ml|ini|log|conf|cfg|sh|zip|tar|gz|rar|7z)$|wlwmanifest|phpinfo|config|credential|passwd|docker|\.\.|batch/v1|xmlrpc|wp-config|cgi-bin|/vendor/|\.aws|actuator|debug|setup-config|install\.php|eval-stdin|/wp-content/+(?:plugins|themes)/+[^/]+/+[^/]+\.php$)`)
+// reProbePath: paths only scanners request; never learned. Probes for
+// "not found" pages and paths ending in a domain name are scans too.
+var reProbePath = regexp.MustCompile(`(?i)(?:probe|does-?not-?exist|non-?exist|not-?found|\.(?:com|net|org|pk|info|biz|xyz|top|co|uk|io|ru|cn|in|us|de)/*(?:$|\?)|/\.|\.(?:env|git|sql|bak|old|orig|swp|ya?ml|ini|log|conf|cfg|sh|zip|tar|gz|rar|7z)$|wlwmanifest|phpinfo|config|credential|passwd|docker|\.\.|batch/v1|xmlrpc|wp-config|cgi-bin|/vendor/|\.aws|actuator|debug|setup-config|install\.php|eval-stdin|/wp-content/+(?:plugins|themes)/+[^/]+/+[^/]+\.php$)`)
 
 // reVolatile: path segments that differ per request (ids, hashes, dates).
 var reVolatile = regexp.MustCompile(`^(?:\d+|[0-9a-f]{16,}|[0-9a-f-]{32,36})$`)
@@ -96,6 +107,29 @@ func parseScored(detail string) (ids []int, where map[int]string) {
 		}
 	}
 	return ids, where
+}
+
+// highRisk are the CRS rules for injected code, commands and files
+// (LFI, RFI, RCE, PHP, Node.js, Java): a mistake there opens a hole.
+func highRisk(id int) bool {
+	return (id >= 930000 && id < 935000) || (id >= 944000 && id < 945000)
+}
+
+// protocolRule: method and protocol checks (911, 920, 921).
+func protocolRule(id int) bool { return id >= 911000 && id < 922000 }
+
+// learnNeed is how many clean visitors and networks a learned exclusion
+// needs; ok is false when it may never be learned.
+func learnNeed(rule int, path string) (ips, nets int, ok bool) {
+	switch {
+	case reProbePath.MatchString(path):
+		return 0, 0, false
+	case path == "":
+		return learnMinIPsSite, learnMinNetsBig, protocolRule(rule)
+	case highRisk(rule):
+		return learnMinIPsHigh, learnMinNetsBig, true
+	}
+	return learnMinIPs, learnMinNets, true
 }
 
 // learnable are the CRS rules a false positive may be learned for: the
@@ -213,26 +247,43 @@ func (m *Manager) Learn(now int64) (bool, error) {
 		keep = append(keep, e)
 	}
 	list = keep
+	// Learned under older, looser limits: dropped (whole-website attack
+	// rules, probe paths, too few visitors).
+	keep = list[:0]
+	for _, e := range list {
+		if e.State != "rejected" {
+			if ips, _, ok := learnNeed(e.Rule, e.Path); !ok || e.IPs < ips {
+				changed = changed || e.State == "active"
+				if m.Log != nil {
+					m.Log.Info("WAF learned exclusion dropped (stricter limits)", "rule", e.Rule, "domain", e.Domain, "path", e.Path)
+				}
+				continue
+			}
+		}
+		keep = append(keep, e)
+	}
+	list = keep
 	if mode == "off" {
 		if changed {
 			m.saveAuto(list)
 		}
 		return changed, nil
 	}
-	rows, err := m.DB.Query(`SELECT ip, host, uri, rule_id, msg, detail FROM waf_events WHERE at >= ? AND category != 'login'`, now-learnWindow)
+	rows, err := m.DB.Query(`SELECT at, ip, host, uri, rule_id, msg, detail FROM waf_events WHERE at >= ? AND category != 'login'`, now-learnWindow)
 	if err != nil {
 		return changed, err
 	}
 	type ev struct {
 		ip, host, uri, msg, detail string
 		rule                       int
+		at                         int64
 	}
 	var evs []ev
 	hosts := map[string]map[string]bool{}
 	other := map[string]int{}
 	for rows.Next() {
 		var e ev
-		if rows.Scan(&e.ip, &e.host, &e.uri, &e.rule, &e.msg, &e.detail) != nil {
+		if rows.Scan(&e.at, &e.ip, &e.host, &e.uri, &e.rule, &e.msg, &e.detail) != nil {
 			continue
 		}
 		e.host = strings.TrimPrefix(strings.ToLower(e.host), "www.")
@@ -255,6 +306,7 @@ func (m *Manager) Learn(now int64) (bool, error) {
 		where        string
 		domain, path string
 		rule         int
+		first, last  int64
 	}
 	clusters := map[string]*cluster{}
 	cleanIP := map[string]bool{}
@@ -277,10 +329,11 @@ func (m *Manager) Learn(now int64) (bool, error) {
 			k := fmt.Sprintf("%d|%s|%s", id, e.host, path)
 			c := clusters[k]
 			if c == nil {
-				c = &cluster{clean: map[string]bool{}, dirty: map[string]bool{}, nets: map[string]bool{}, domain: e.host, path: path, rule: id, sample: e.uri, msg: e.msg, where: where[id]}
+				c = &cluster{clean: map[string]bool{}, dirty: map[string]bool{}, nets: map[string]bool{}, domain: e.host, path: path, rule: id, sample: e.uri, msg: e.msg, where: where[id], first: e.at, last: e.at}
 				clusters[k] = c
 			}
 			c.hits++
+			c.first, c.last = min(c.first, e.at), max(c.last, e.at)
 			if cleanIP[e.ip] {
 				c.clean[e.ip] = true
 				c.nets[network(e.ip)] = true
@@ -304,11 +357,8 @@ func (m *Manager) Learn(now int64) (bool, error) {
 	sort.Strings(keys)
 	for _, k := range keys {
 		c := clusters[k]
-		need := learnMinIPs
-		if c.path == "" {
-			need = learnMinIPsSite
-		}
-		if have[k] || len(c.clean) < need || len(c.nets) < learnMinNets || len(c.dirty) > len(c.clean) || perDomain[c.domain] >= learnPerDomain || len(list) >= maxAutoExcl {
+		need, nets, ok := learnNeed(c.rule, c.path)
+		if !ok || have[k] || len(c.clean) < need || len(c.nets) < nets || c.last-c.first < learnMinSpan || len(c.dirty) > len(c.clean) || perDomain[c.domain] >= learnPerDomain || len(list) >= maxAutoExcl {
 			continue
 		}
 		state := "suggested"

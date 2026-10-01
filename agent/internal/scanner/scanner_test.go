@@ -473,3 +473,66 @@ func TestRealtimeWatchesNewAccounts(t *testing.T) {
 	fs, _, _ := s.ListFindings(FindingFilter{Limit: 10})
 	t.Fatalf("new account: %d of 2 files found (%v)", len(fs), fs)
 }
+
+// On servers with more folders than the watch limit, every account's top
+// folders are still watched (a File Manager upload into a new folder of the
+// home directory is caught at once), and deep folders beyond the limit are
+// swept for new files.
+func TestRealtimeWatchLimit(t *testing.T) {
+	s := newScanner(t)
+	base := t.TempDir()
+	var homes []string
+	for _, u := range []string{"aaa", "bbb", "cart"} {
+		h := filepath.Join(base, u)
+		for i := 0; i < 4; i++ {
+			os.MkdirAll(filepath.Join(h, "public_html", "wp-content", "plugins", fmt.Sprint("p", i), "inc"), 0o755)
+		}
+		os.MkdirAll(filepath.Join(h, "public_html", "wp-content", "cache", "page"), 0o755)
+		homes = append(homes, h)
+	}
+	oldMax, oldSweep, oldRes := MaxWatches, SweepEvery, WatchReserve
+	MaxWatches, SweepEvery, WatchReserve = 10, 4*time.Second, 1
+	defer func() { MaxWatches, SweepEvery, WatchReserve = oldMax, oldSweep, oldRes }()
+	rt := &Realtime{S: s, Roots: func() []string { return homes }}
+	if err := rt.init(homes); err != nil {
+		t.Skip("inotify unavailable:", err)
+	}
+	if rt.Watches() != 9 || rt.Unwatched() == 0 {
+		t.Fatalf("watches %d, unwatched %d", rt.Watches(), rt.Unwatched())
+	}
+	for _, h := range homes {
+		if _, ok := rt.byPath[h]; !ok {
+			t.Fatalf("home %s not watched", h)
+		}
+	}
+	if rt.unwatched[filepath.Join(homes[0], "public_html", "wp-content", "cache")] {
+		t.Fatal("page cache should be skipped, not swept")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go rt.loop(ctx)
+	time.Sleep(200 * time.Millisecond)
+	// A folder made in the home directory, files uploaded into it.
+	up := filepath.Join(homes[2], "123")
+	os.MkdirAll(up, 0o755)
+	os.WriteFile(filepath.Join(up, "a.php"), []byte(malicious["exec.php"]), 0o644)
+	caught := false
+	for end := time.Now().Add(2 * time.Second); time.Now().Before(end) && !caught; time.Sleep(50 * time.Millisecond) {
+		_, n, _ := s.ListFindings(FindingFilter{Limit: 10})
+		caught = n == 1
+	}
+	if !caught {
+		t.Fatal("upload into a new home folder not caught before the sweep")
+	}
+	// A file written deep below the limit: found by the sweep.
+	os.WriteFile(filepath.Join(homes[2], "public_html", "wp-content", "plugins", "p3", "inc", "b.php"), []byte(malicious["eval.php"]), 0o644)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, n, _ := s.ListFindings(FindingFilter{Limit: 10}); n == 2 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_, n, _ := s.ListFindings(FindingFilter{Limit: 10})
+	t.Fatalf("found %d of 2 files", n)
+}

@@ -97,6 +97,15 @@ func TestExclusionsWithCRS(t *testing.T) {
 		{"PHP in a css folder stays blocked", "shop.example.com", "GET", "/assets/templates/metro_hyip/css/shell.php", "", "", nil, 403},
 		{"Bare Mozilla/5.0 is still a bot", "shop.example.com", "GET", "/", "", "", []string{"User-Agent: Mozilla/5.0"}, 403},
 		{"Bare Mozilla/5.0 with WordPress login", "shop.example.com", "GET", "/wp-admin/", "", "", []string{"User-Agent: Mozilla/5.0", cookie}, 200},
+		// Hosting defaults (WAF log of a live shared server).
+		{"Comment in Urdu with emoji", "shop.example.com", "POST", "/wp-comments-post.php", form, "comment=" + urlEncode("<b>بہت</b> اچھا پروڈکٹ، size ½ 👍 شکریہ") + "&author=Ali&email=a%40b.pk&comment_post_ID=12", nil, 200},
+		{"Script in a comment stays blocked", "shop.example.com", "POST", "/wp-comments-post.php", form, "comment=" + urlEncode(adsense) + "&comment_post_ID=12", nil, 403},
+		{"Outlook autodiscover by the server address", "203.0.113.10", "POST", "/cgi-sys/autodiscover.cgi", "text/xml", "<Autodiscover/>", nil, 200},
+		{"robots.txt with a charset in Accept", "shop.example.com", "GET", "/robots.txt", "", "", []string{"Accept: text/html; charset=us-ascii"}, 200},
+		{"Image with a JSON consent cookie", "shop.example.com", "GET", "/wp-content/uploads/2026/09/toy.png", "", "", []string{`Cookie: consent={"necessary":true,"analytics":false}; cart=1 union select 1`}, 200},
+		{"SMM panel admin imports services", "smm.example.com", "POST", "/admin/api-services/ajax_services_add", form, "name=" + urlEncode("TikTok | Views 🔥 <b>New</b>") + "&desc=" + urlEncode(adsense), []string{"Cookie: PHPSESSID=abc", "Referer: https://smm.example.com/admin/api-services"}, 200},
+		{"Admin POST from another site stays inspected", "smm.example.com", "POST", "/admin/api-services/ajax_services_add", form, "desc=" + urlEncode(adsense), []string{"Cookie: PHPSESSID=abc", "Referer: https://evil.example.net/admin/x"}, 403},
+		{"Admin POST without a session stays inspected", "smm.example.com", "POST", "/admin/api-services/ajax_services_add", form, "desc=" + urlEncode(adsense), []string{"Referer: https://smm.example.com/admin/api-services"}, 403},
 		{"Bare Mozilla/5.0 API client with credentials", "shop.example.com", "GET", "/wp-json/wp/v2/pages", "", "", []string{"User-Agent: Mozilla/5.0", "Authorization: Basic YWRtaW46eHh4eCB4eHh4"}, 200},
 	}
 	for _, c := range cases {
@@ -117,7 +126,7 @@ func TestExclusionsWithCRS(t *testing.T) {
 		t.Fatal("per-site exclusion applied outside its path")
 	}
 	// Control: without the exclusion the ticket's request is blocked.
-	m.Settings.Patch([]byte(`{"waf":{"disabled_rules":[7700010,7700013,7700014]}}`))
+	m.Settings.Patch([]byte(`{"waf":{"disabled_rules":[7700010,7700013,7700014,7700015,7700016,7700017,7700018]}}`))
 	if err := m.Apply(); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +147,13 @@ func TestExclusionsWithCRS(t *testing.T) {
 	}
 	if sendBody(t, "shop.example.com", "PUT", "/wp-json/elementor/v1/global-classes", json, `{}`) != 403 {
 		t.Fatal("PUT passes even without the exclusion")
+	}
+	for _, c := range cases {
+		if strings.Contains(c.name, "Urdu") || strings.Contains(c.name, "consent cookie") || strings.Contains(c.name, "SMM panel") || strings.Contains(c.name, "robots.txt") {
+			if got := sendBody(t, c.host, c.method, c.uri, c.ctype, c.body, c.hdr...); got != 403 {
+				t.Errorf("%s passes even without the hosting defaults (%d)", c.name, got)
+			}
+		}
 	}
 }
 
@@ -274,17 +290,19 @@ func sendBody(t *testing.T, host, method, uri, ctype, body string, hdr ...string
 	}
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(5 * time.Second))
-	ua := browserUA
+	ua, accept := browserUA, "*/*"
 	var extra []string
 	for _, h := range hdr {
 		if strings.HasPrefix(h, "User-Agent: ") {
 			ua = strings.TrimPrefix(h, "User-Agent: ")
+		} else if strings.HasPrefix(h, "Accept: ") {
+			accept = strings.TrimPrefix(h, "Accept: ")
 		} else {
 			extra = append(extra, h)
 		}
 	}
 	hdr = extra
-	req := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: */*\r\n", method, uri, host, ua)
+	req := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\nAccept: %s\r\n", method, uri, host, ua, accept)
 	if ctype != "" {
 		req += fmt.Sprintf("Content-Type: %s\r\nContent-Length: %d\r\n", ctype, len(body))
 	}

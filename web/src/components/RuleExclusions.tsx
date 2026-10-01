@@ -184,7 +184,8 @@ export function LearnedExclusions({
   onMode: (m: string) => void;
   onAction: (key: string, action: 'accept' | 'reject' | 'forget') => void;
 }) {
-  const shown = items;
+  const [all, setAll] = useState(false);
+  const shown = all ? items : items.slice(0, 5);
   const day = (t: number) => (t ? new Date(t * 1000).toLocaleDateString() : '–');
   return (
     <div className="border-b border-slate-100 py-4">
@@ -192,10 +193,8 @@ export function LearnedExclusions({
         <div className="max-w-3xl">
           <div className="font-medium text-navy-900">Automatic false-positive protection</div>
           <p className="text-sm text-slate-500">
-            Every hour the agent looks at the last day's blocks. When one OWASP CRS rule keeps blocking the same path of one website for several visitors with a
-            clean reputation (not on the IPDB, Tor or ban lists, seen on no other website, blocked by no other rule) from different networks, that rule is
-            switched off for that website and path only, for 30 days. Attackers hit many websites and several rules, so they never qualify; every other rule
-            still protects the path.
+            A rule that keeps blocking real visitors on one page of one website is switched off for that page only, for 30 days. Scans, probes and whole-website
+            exclusions of attack rules are never learned.
           </p>
         </div>
         <select className="input w-72" value={mode} disabled={disabled} onChange={(e) => onMode(e.target.value)}>
@@ -281,6 +280,11 @@ export function LearnedExclusions({
               ))}
             </tbody>
           </table>
+          {items.length > 5 && (
+            <button className="mt-2 text-sm text-blue-700 hover:underline" onClick={() => setAll(!all)}>
+              {all ? 'Show less' : `Show all ${items.length}`}
+            </button>
+          )}
         </div>
       )}
       {cpanelOff.length > 0 && (
