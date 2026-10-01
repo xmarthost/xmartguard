@@ -883,6 +883,18 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		st := a.runMailGuard(ctx)
 		return map[string]any{"rbls": mail.EximRBLStatus(), "guard": &st}, nil
 	}
+	// agent.profile samples the agent's own CPU for a few seconds and says
+	// which part of it is busy.
+	h["agent.profile"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		in, _ := decode[struct {
+			Seconds int `json:"seconds"`
+		}](p)
+		sec := min(max(in.Seconds, 5), 120)
+		if in.Seconds == 0 {
+			sec = 30
+		}
+		return a.cpuProfile(ctx, time.Duration(sec)*time.Second)
+	}
 	h["fw.host_sync"] = func(context.Context, json.RawMessage) (any, error) {
 		return a.syncHostTrust(), nil
 	}

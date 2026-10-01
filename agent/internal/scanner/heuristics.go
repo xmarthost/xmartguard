@@ -216,7 +216,8 @@ func analyzePHP(content []byte) *verdict {
 		return v
 	}
 	// ---- weaker signals -> suspicious (report only) ----
-	if longBlob && (decoders >= 1 || evalOrAssert) {
+	// An inline picture decoded without eval (plugin tests, themes) is not one.
+	if longBlob && (evalOrAssert || (decoders >= 1 && hasCodeBlob(s))) {
 		return &verdict{CatSuspicious, "PHP.Suspicious.EncodedPayload"}
 	}
 	if concat >= 40 && evalOrAssert && !library {
@@ -234,6 +235,28 @@ var (
 	reJSHexBlob  = regexp.MustCompile(`(?:\\x[0-9A-Fa-f]{2}){80,}`)
 	reJSDocWrite = regexp.MustCompile(`(?i)document\.write\s*\(\s*unescape\s*\(`)
 )
+
+// imageB64 are the base64 starts of image formats (JPEG, PNG, GIF, WebP,
+// ICO): an inline picture, as in plugin tests and themes, is not a payload.
+var imageB64 = [][]byte{[]byte("/9j/"), []byte("iVBORw0KGgo"), []byte("R0lGOD"), []byte("UklGR"), []byte("AAABAA")}
+
+// hasCodeBlob reports a long quoted base64 string that is not an image.
+func hasCodeBlob(s []byte) bool {
+	for _, loc := range reLongB64.FindAllIndex(s, 64) {
+		blob := s[loc[0]+1 : loc[1]]
+		img := false
+		for _, p := range imageB64 {
+			if bytes.HasPrefix(blob, p) {
+				img = true
+				break
+			}
+		}
+		if !img {
+			return true
+		}
+	}
+	return false
+}
 
 // analyzeJS scores JavaScript.
 func analyzeJS(content []byte) *verdict {

@@ -1707,6 +1707,122 @@ function NotificationsSection({ serverId, s, meta, admin, busy, onSave }: { serv
   );
 }
 
+interface ProfileLine {
+  name: string;
+  percent: number;
+  share: number;
+}
+interface AgentProfile {
+  seconds: number;
+  cpu_percent: number;
+  engine_percent: number;
+  goroutines: number;
+  threads: number;
+  activity: {
+    waf_log_lines: number;
+    realtime_events: number;
+    realtime_files_scanned: number;
+    realtime_files_swept: number;
+    realtime_watches: number;
+    realtime_unwatched_folders: number;
+    realtime_last_sweep_seconds: number;
+    scan_running: boolean;
+  };
+  areas: ProfileLine[];
+  functions: ProfileLine[];
+}
+
+/** Measures where the agent's own CPU goes (100% = one core). */
+function AgentCPU({ serverId, online }: { serverId: string; online: boolean }) {
+  const [rep, setRep] = useState<AgentProfile | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [more, setMore] = useState(false);
+  const measure = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      setRep(await api<AgentProfile>('POST', `/api/servers/${serverId}/agent/agent.profile`, { seconds: 30 }));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const a = rep?.activity;
+  return (
+    <div className="mt-6 rounded-xl border border-slate-200 p-5 text-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="max-w-2xl">
+          <div className="font-medium text-navy-900">Agent CPU usage</div>
+          <p className="text-slate-500">
+            Watches the agent for 30 seconds and shows which part of it uses the CPU. 100% is one CPU core. Scans run in their own process (xpguard-scan) and are
+            shown separately.
+          </p>
+        </div>
+        <button className="btn-outline" disabled={busy || !online} onClick={measure}>
+          {busy ? 'Measuring… (30 s)' : 'Measure now'}
+        </button>
+      </div>
+      {err && <p className="mt-2 text-red-600">{err}</p>}
+      {rep && a && (
+        <div className="mt-4 space-y-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="xpguard-agent" value={`${rep.cpu_percent}%`} />
+            <Stat label="xpguard-scan" value={a.scan_running ? `${rep.engine_percent}%` : 'not running'} />
+            <Stat label="WAF log lines / s" value={a.waf_log_lines} />
+            <Stat label="Realtime files / s" value={`${a.realtime_files_scanned} scanned`} />
+          </div>
+          <div>
+            <div className="mb-1 font-medium text-navy-900">Where the agent's time goes</div>
+            {rep.areas.length === 0 && <p className="text-slate-500">The agent was idle.</p>}
+            {rep.areas.map((x) => (
+              <div key={x.name} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1">
+                <div className="w-full sm:w-80 sm:shrink-0">{x.name}</div>
+                <div className="h-2 min-w-0 flex-1 rounded bg-slate-100">
+                  <div className="h-2 rounded bg-blue-500" style={{ width: `${Math.min(100, x.share)}%` }} />
+                </div>
+                <div className="shrink-0 text-right text-xs whitespace-nowrap text-slate-500">
+                  {x.share}% · {x.percent}% CPU
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="text-xs text-slate-500">
+            Realtime: {a.realtime_watches.toLocaleString()} folders watched, {a.realtime_unwatched_folders.toLocaleString()} checked by the periodic sweep
+            {a.realtime_last_sweep_seconds > 0 && ` (last sweep took ${a.realtime_last_sweep_seconds}s)`}, {a.realtime_events} file events/s. {rep.goroutines} tasks,{' '}
+            {rep.threads} threads.
+          </div>
+          <button className="text-sm text-blue-700 hover:underline" onClick={() => setMore(!more)}>
+            {more ? 'Hide details' : 'Show busiest functions'}
+          </button>
+          {more && (
+            <table className="w-full text-xs">
+              <tbody className="divide-y divide-slate-100">
+                {rep.functions.map((f) => (
+                  <tr key={f.name}>
+                    <td className="py-1 pr-3 font-mono break-all">{f.name}</td>
+                    <td className="text-right whitespace-nowrap">{f.share}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-lg bg-slate-50 px-3 py-2">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="text-lg font-semibold text-navy-900">{value}</div>
+    </div>
+  );
+}
+
 function About({ serverId }: { serverId: string }) {
   const { user } = useAuth();
   const { data, reload } = useApi<{ server: Server; latest_agent_version: string | null }>(`/api/servers/${serverId}`);
@@ -1738,6 +1854,7 @@ function About({ serverId }: { serverId: string }) {
         )}
         {!outdated && <div className="mt-4 text-green-700">The agent is up to date. New versions are installed automatically.</div>}
       </div>
+      {can(user, 'admin') && <AgentCPU serverId={serverId} online={data.server.online} />}
       <p className="mt-6 text-xs text-slate-400">
         Third-party data and software:{' '}
         <Link to="/kb#attributions" className="text-blue-700 hover:underline">licenses and attributions</Link>.

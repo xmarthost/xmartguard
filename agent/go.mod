@@ -5,6 +5,7 @@ go 1.24
 require (
 	github.com/coder/websocket v1.8.15
 	github.com/go-sql-driver/mysql v1.8.1
+	github.com/google/pprof v0.0.0-20240409012703-83162a5b38cd
 	golang.org/x/sys v0.35.0
 	modernc.org/sqlite v1.34.5
 )

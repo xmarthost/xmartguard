@@ -259,6 +259,9 @@ func markupInImage(ext string, content []byte) *Detection {
 // splitName returns a sensitive function name that the source spells as
 // several joined string pieces ('gz'.'in'.'fla'.'te'), or "".
 func splitName(s []byte) string {
+	if !quotedJoins(s) {
+		return ""
+	}
 	for _, m := range reStrPieces.FindAll(s, 200) {
 		var joined strings.Builder
 		pieces := 0

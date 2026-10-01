@@ -83,6 +83,9 @@ type Realtime struct {
 	work      chan string
 	scanned   atomic.Int64
 	overflow  atomic.Int64
+	events    atomic.Int64
+	swept     atomic.Int64 // files looked at by sweeps
+	sweepTook atomic.Int64 // nanoseconds the last sweep took
 	active    atomic.Bool
 	lastErr   atomic.Value // string
 }
@@ -115,6 +118,25 @@ func (r *Realtime) Unwatched() int {
 
 // Scanned is the number of files the realtime scanner checked since start.
 func (r *Realtime) Scanned() int64 { return r.scanned.Load() }
+
+// RealtimeStats are counters for the agent's CPU profile.
+type RealtimeStats struct {
+	Watches   int     `json:"watches"`
+	Unwatched int     `json:"unwatched_folders"`
+	Events    int64   `json:"events"`
+	Scanned   int64   `json:"files_scanned"`
+	Swept     int64   `json:"files_swept"`
+	SweepSecs float64 `json:"last_sweep_seconds"`
+}
+
+// Stats returns the counters (totals since start).
+func (r *Realtime) Stats() RealtimeStats {
+	return RealtimeStats{
+		Watches: r.Watches(), Unwatched: r.Unwatched(),
+		Events: r.events.Load(), Scanned: r.scanned.Load(), Swept: r.swept.Load(),
+		SweepSecs: float64(r.sweepTook.Load()/1e7) / 100,
+	}
+}
 
 // ensureLimits raises the inotify limits (runtime only) when too low.
 func ensureLimits() {
@@ -293,6 +315,13 @@ func (r *Realtime) sweep() {
 		return
 	}
 	defer r.sweeping.Store(false)
+	// Statting every file of the folders beyond the limit is background
+	// work: lowest priority, and the next sweep waits 20 times as long as
+	// this one took (at most 5% of one core on servers with millions of
+	// files).
+	lowPriorityThread()
+	t0 := time.Now()
+	defer func() { r.sweepTook.Store(int64(time.Since(t0))) }()
 	r.mu.Lock()
 	since := r.lastSweep
 	r.lastSweep = time.Now()
@@ -385,7 +414,7 @@ func (r *Realtime) loop(ctx context.Context) {
 			}
 			r.addNewRoots()
 		case <-sweep.C:
-			if r.Unwatched() > 0 {
+			if r.Unwatched() > 0 && r.sweepDue() {
 				go r.sweep()
 			}
 		default:
@@ -405,6 +434,15 @@ func (r *Realtime) loop(ctx context.Context) {
 			lastFlush = time.Now()
 		}
 	}
+}
+
+// sweepDue spaces sweeps 20 times their duration apart, SweepEvery at least.
+func (r *Realtime) sweepDue() bool {
+	r.mu.Lock()
+	last := r.lastSweep
+	r.mu.Unlock()
+	gap := max(SweepEvery, 20*time.Duration(r.sweepTook.Load()))
+	return time.Since(last) >= gap-time.Second
 }
 
 func (r *Realtime) addWatch(dir string) bool { return r.addWatchKeeping(dir, 0) }
@@ -505,6 +543,7 @@ const inOverflow = unix.IN_Q_OVERFLOW
 func (r *Realtime) handle(buf []byte) {
 	for off := 0; off+unix.SizeofInotifyEvent <= len(buf); {
 		ev := (*unix.InotifyEvent)(unsafe.Pointer(&buf[off]))
+		r.events.Add(1)
 		end := off + unix.SizeofInotifyEvent + int(ev.Len)
 		if end > len(buf) {
 			break
@@ -551,6 +590,7 @@ func (r *Realtime) handle(buf []byte) {
 
 // catchUp scans files changed since t after the kernel dropped events.
 func (r *Realtime) catchUp(since time.Time) {
+	lowPriorityThread()
 	r.S.Log.Warn("realtime event queue overflowed; rescanning recently changed files")
 	for _, root := range r.roots() {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

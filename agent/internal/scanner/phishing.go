@@ -21,6 +21,12 @@ var (
 	rePhishAction   = regexp.MustCompile(`(?i)<form[^>]+action\s*=\s*['"]?[^'" >]*\.php`)
 )
 
+// phishMay rules out most files before the collector regexps run.
+func phishMay(content []byte) bool {
+	low := lowerASCII(content)
+	return may(rePhishVisitor, low) && may(rePhishExfil, low)
+}
+
 // phishingKit reports a phishing collector script (virus) or a cloned
 // bank/payment login page (suspicious).
 func phishingKit(ext string, content []byte) *Detection {
@@ -29,7 +35,7 @@ func phishingKit(ext string, content []byte) *Detection {
 	default:
 		return nil
 	}
-	if bytes.Contains(content, []byte("<?")) && rePhishExfil.Match(content) && rePhishVisitor.Match(content) {
+	if bytes.Contains(content, []byte("<?")) && phishMay(content) && rePhishExfil.Match(content) && rePhishVisitor.Match(content) {
 		// Collectors ask for several secrets at once; a contact form never does.
 		if n := len(rePhishFields.FindAll(content, 8)); n >= 3 {
 			return &Detection{CatVirus, "Phishing.Collector"}

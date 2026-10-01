@@ -51,7 +51,9 @@ func TestHeuristicsNoFalsePositives(t *testing.T) {
 		"config":    []byte(php + "define('DB_NAME','wp'); define('DB_USER','root'); $table_prefix='wp_';"),
 		"form":      []byte(php + "$name = sanitize_text_field($_POST['name']); wp_mail('a@b.c', 'Hi', $name);"),
 		"base64ok":  []byte(php + "$logo = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');"),
-		"upload-ok": []byte(php + "$dest = '/uploads/' . md5(uniqid()) . '.jpg'; move_uploaded_file($_FILES['f']['tmp_name'], $dest);"),
+		// Elementor's tests decode an inline JPEG (longer than a blob).
+		"inline-jpeg": []byte(php + "$img = base64_decode('/9j/4AAQSkZJRgABAQEAYABgAAD/2wBD" + strings.Repeat("AQEBAQEBAQEB", 30) + "');"),
+		"upload-ok":   []byte(php + "$dest = '/uploads/' . md5(uniqid()) . '.jpg'; move_uploaded_file($_FILES['f']['tmp_name'], $dest);"),
 	}
 	for name, content := range clean {
 		if d := analyzePHP(content); d != nil {

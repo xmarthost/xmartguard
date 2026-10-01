@@ -34,6 +34,9 @@ func lowerASCII(b []byte) []byte {
 
 // may reports whether re can match the file whose lowercased content is low.
 func may(re *regexp.Regexp, low []byte) bool {
+	if q := quickChecks[re]; q != nil && !q(low) {
+		return false
+	}
 	lits := literalsOf(re)
 	if lits == nil {
 		return true
@@ -60,6 +63,128 @@ func literalsOf(re *regexp.Regexp) [][]byte {
 	}
 	prefilters.Store(re, out)
 	return out
+}
+
+// quickChecks are hand-written necessary conditions for patterns without a
+// useful literal: a cheap pass over the file that is false only when the
+// pattern cannot match.
+var quickChecks map[*regexp.Regexp]func(low []byte) bool
+
+func init() {
+	quickChecks = map[*regexp.Regexp]func([]byte) bool{
+		reLongB64:    func(b []byte) bool { return b64Run(b, 260) },
+		reB64Blob:    func(b []byte) bool { return b64Run(b, 120) },
+		reFuncTable:  numberedCall,
+		reJSHexArray: evalCall,
+		reStrPieces:  quotedJoins,
+	}
+	for i := range Rules {
+		if Rules[i].ID == "XG-JS-FROMCHARCODE-EVAL" {
+			quickChecks[Rules[i].re] = evalCall
+		}
+	}
+}
+
+// evalCall reports "eval" followed by "(" (spaces allowed).
+func evalCall(b []byte) bool {
+	for off := 0; ; {
+		i := bytes.Index(b[off:], []byte("eval"))
+		if i < 0 {
+			return false
+		}
+		k := off + i + 4
+		for k < len(b) && isSpace(b[k]) {
+			k++
+		}
+		if k < len(b) && b[k] == '(' {
+			return true
+		}
+		off += i + 4
+	}
+}
+
+// quotedJoins reports at least two quote-dot-quote joins ('a'.'b'.'c'),
+// which reStrPieces needs.
+func quotedJoins(b []byte) bool {
+	n := 0
+	for off := 0; ; {
+		i := bytes.IndexByte(b[off:], '.')
+		if i < 0 {
+			return false
+		}
+		i += off
+		off = i + 1
+		j := i - 1
+		for j >= 0 && isSpace(b[j]) {
+			j--
+		}
+		k := i + 1
+		for k < len(b) && isSpace(b[k]) {
+			k++
+		}
+		if j >= 0 && k < len(b) && (b[j] == '\'' || b[j] == '"') && (b[k] == '\'' || b[k] == '"') {
+			if n++; n >= 2 {
+				return true
+			}
+		}
+	}
+}
+
+// b64Run reports a run of at least n base64 characters.
+func b64Run(b []byte, n int) bool {
+	run := 0
+	for _, c := range b {
+		if ('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || c == '+' || c == '/' || ('A' <= c && c <= 'Z') {
+			if run++; run >= n {
+				return true
+			}
+		} else {
+			run = 0
+		}
+	}
+	return false
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
+}
+
+// numberedCall reports "( 12 ) (" somewhere: the shape reFuncTable needs
+// after its function name.
+func numberedCall(b []byte) bool {
+	for off := 0; ; {
+		i := bytes.IndexByte(b[off:], ')')
+		if i < 0 {
+			return false
+		}
+		i += off
+		off = i + 1
+		k := i + 1
+		for k < len(b) && isSpace(b[k]) {
+			k++
+		}
+		if k >= len(b) || b[k] != '(' {
+			continue
+		}
+		j := i - 1
+		for j >= 0 && isSpace(b[j]) {
+			j--
+		}
+		d := 0
+		for j >= 0 && b[j] >= '0' && b[j] <= '9' {
+			j--
+			d++
+		}
+		if d == 0 {
+			continue
+		}
+		for j >= 0 && isSpace(b[j]) {
+			j--
+		}
+		if j >= 0 && b[j] == '(' {
+			return true
+		}
+	}
 }
 
 // required returns literals of which every match contains at least one
@@ -113,6 +238,17 @@ func required(re *syntax.Regexp) (set []string, ok bool) {
 				run = append(run, sub.Rune...)
 				continue
 			}
+			// A literal before a choice of literals: "$_" then POST|GET
+			// requires "$_post" or "$_get", far rarer than "get" alone.
+			if alts := literalAlts(sub); len(run) > 0 && alts != nil {
+				joined := make([]string, len(alts))
+				for i, a := range alts {
+					joined[i] = string(run) + a
+				}
+				if set, ok := asciiSet(joined); ok {
+					consider(set)
+				}
+			}
 			flush()
 			if s, ok := required(sub); ok {
 				consider(s)
@@ -135,6 +271,41 @@ func required(re *syntax.Regexp) (set []string, ok bool) {
 		return all, true
 	}
 	return nil, false
+}
+
+// literalAlts returns the choices of an alternation of plain literals.
+func literalAlts(re *syntax.Regexp) []string {
+	if re.Op == syntax.OpCapture {
+		re = re.Sub[0]
+	}
+	if re.Op != syntax.OpAlternate || len(re.Sub) > 32 {
+		return nil
+	}
+	out := make([]string, 0, len(re.Sub))
+	for _, sub := range re.Sub {
+		if sub.Op != syntax.OpLiteral {
+			return nil
+		}
+		out = append(out, string(sub.Rune))
+	}
+	return out
+}
+
+// asciiSet lowercases literals of at least minLit ASCII characters.
+func asciiSet(lits []string) ([]string, bool) {
+	out := make([]string, len(lits))
+	for i, l := range lits {
+		if len(l) < minLit {
+			return nil, false
+		}
+		for _, r := range l {
+			if r >= utf8.RuneSelf {
+				return nil, false
+			}
+		}
+		out[i] = strings.ToLower(l)
+	}
+	return out, true
 }
 
 // score prefers sets whose shortest literal is longest.

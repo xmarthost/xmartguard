@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/logtail"
@@ -599,6 +600,96 @@ type Event struct {
 	UID string `json:"-"`
 }
 
+// Busy servers log thousands of these lines a second, and Go's regexps are
+// slow on long lines: each pattern runs only on the short piece of the line
+// that starts with its literal.
+
+// findAt is re.FindStringSubmatch(line) for a pattern that starts with lit
+// and matches at most span bytes.
+func findAt(line, lit string, re *regexp.Regexp, span int) []string {
+	for off := 0; ; {
+		i := strings.Index(line[off:], lit)
+		if i < 0 {
+			return nil
+		}
+		i += off
+		if m := re.FindStringSubmatch(line[i:min(len(line), i+span)]); m != nil {
+			return m
+		}
+		off = i + len(lit)
+	}
+}
+
+// lsClient is reLSClient on the bracket before LiteSpeed's "#APVH_".
+func lsClient(line string) []string {
+	for off := 0; ; {
+		i := strings.Index(line[off:], "#APVH_")
+		if i < 0 {
+			return nil
+		}
+		i += off
+		if b := strings.LastIndexByte(line[:i], '['); b >= 0 && i-b <= 120 {
+			if m := reLSClient.FindStringSubmatch(line[b:min(len(line), i+300)]); m != nil {
+				return m
+			}
+		}
+		off = i + 6
+	}
+}
+
+// detailMatch is reMatch's group: the text from after the first "Warning."
+// or "Access denied with code N (phase N)." to the "[file" after it.
+func detailMatch(line string) (string, bool) {
+	start := -1
+	for _, lit := range []string{"Warning.", "Access denied with code "} {
+		if i := strings.Index(line, lit); i >= 0 && (start < 0 || i < start) {
+			start = i
+		}
+	}
+	if start < 0 {
+		return "", false
+	}
+	f := strings.Index(line[start:], `[file "`)
+	if f < 0 {
+		return "", false
+	}
+	rest := line[start : start+f]
+	p := deniedPrefix(rest)
+	if strings.HasPrefix(rest, "Warning.") {
+		p = len("Warning.")
+	}
+	if p < 0 || strings.ContainsRune(rest, '\n') {
+		// Unusual layout: let the regexp decide.
+		if m := reMatch.FindStringSubmatch(line); m != nil {
+			return m[1], true
+		}
+		return "", false
+	}
+	return strings.Trim(rest[p:], " \t\r\f"), true
+}
+
+// deniedPrefix is the length of "Access denied with code N (phase N)." at
+// the start of s, or -1.
+func deniedPrefix(s string) int {
+	const lit = "Access denied with code "
+	if !strings.HasPrefix(s, lit) {
+		return -1
+	}
+	i := len(lit)
+	j := i
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		j++
+	}
+	if j == i || !strings.HasPrefix(s[j:], " (phase ") {
+		return -1
+	}
+	j += len(" (phase ")
+	if j+2 >= len(s) || s[j] < '0' || s[j] > '9' || s[j+1:j+3] != ")." {
+		return -1
+	}
+	return j + 3
+}
+
 // ParseLine turns one error-log line into an Event, or false.
 func ParseLine(line string) (Event, bool) {
 	// Apache writes "ModSecurity:"; LiteSpeed's own engine "[Module:mod_security]".
@@ -609,9 +700,9 @@ func ParseLine(line string) (Event, bool) {
 		return Event{}, false // start-up notices, not a rule hit
 	}
 	var e Event
-	if c := reClient.FindStringSubmatch(line); c != nil {
+	if c := findAt(line, "[client ", reClient, 80); c != nil {
 		e = Event{IP: c[1], At: store.Now()}
-	} else if c := reLSClient.FindStringSubmatch(line); c != nil {
+	} else if c := lsClient(line); c != nil {
 		e = Event{IP: c[1], Host: strings.TrimPrefix(c[2], "www."), At: store.Now()}
 	} else {
 		return Event{}, false
@@ -629,14 +720,16 @@ func ParseLine(line string) (Event, bool) {
 			e.URI = val
 		}
 	}
-	if mm := reMethod.FindStringSubmatch(line); mm != nil {
+	if mm := findAt(line, `[method "`, reMethod, 64); mm != nil {
 		e.Method = mm[1]
 	}
-	if u := reUniqueID.FindStringSubmatch(line); u != nil {
+	if u := findAt(line, `[unique_id "`, reUniqueID, 256); u != nil {
 		e.UID = u[1]
 	}
 	e.Detail = matchDetail(line)
-	if d := reDenied.FindStringSubmatch(line); d != nil && d[1] != "" {
+	// (The first of "Access denied" and "denied by server" decides, as one regexp would.)
+	if d := findAt(line, "Access denied with code ", reDenied, 40); d != nil && d[1] != "" &&
+		!strings.Contains(line[:strings.Index(line, "Access denied with code ")], "denied by server") {
 		e.Action = "Access denied with code " + d[1]
 	} else {
 		e.Action = "Logged"
@@ -682,6 +775,10 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 	}
 }
+
+// LogLines counts the web server error-log lines read (for the agent's
+// CPU profile).
+var LogLines atomic.Int64
 
 func (m *Manager) tailLogs(ctx context.Context) {
 	seen := map[string]bool{}
@@ -753,6 +850,7 @@ func (m *Manager) tailLogs(ctx context.Context) {
 		case <-rescan.C:
 			discover()
 		case line := <-lines:
+			LogLines.Add(1)
 			if ev, ok := ParseLine(line); ok {
 				handle(ev)
 			}
@@ -879,12 +977,12 @@ var reMatch = regexp.MustCompile(`(?:Access denied with code \d+ \(phase \d\)\.|
 // matchDetail extracts what the rule matched, e.g.
 // `Pattern match "\.env$" at REQUEST_FILENAME.`
 func matchDetail(line string) string {
-	m := reMatch.FindStringSubmatch(line)
-	if m == nil {
+	m, ok := detailMatch(line)
+	if !ok {
 		return ""
 	}
 	// The log escapes backslashes in patterns ("\\.env" means "\.env").
-	d := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(m[1]), `\\\\`, `\`), `\\`, `\`)
+	d := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(m), `\\\\`, `\`), `\\`, `\`)
 	if len(d) > 300 {
 		d = d[:300] + "…"
 	}
