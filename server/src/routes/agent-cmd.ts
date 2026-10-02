@@ -36,6 +36,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'domainrep.get': { role: 'viewer', mutates: false },
   'suspend.list': { role: 'viewer', mutates: false },
   'dashboard.get': { role: 'viewer', mutates: false },
+  'alerts.get': { role: 'viewer', mutates: false },
   'finding.content': { role: 'operator', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },

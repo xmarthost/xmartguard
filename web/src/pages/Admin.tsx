@@ -5,6 +5,7 @@ import { useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ago } from '../format';
 import { Empty, ErrorBox, PageLoader } from '../components/ui';
+import { Avatar } from '../components/Avatar';
 
 interface UserRow {
   id: string;
@@ -108,18 +109,76 @@ export function UsersPage() {
   );
 }
 
+/** Name and email of the signed-in user; a new email needs the password. */
+function ProfileForm() {
+  const { user, refresh } = useAuth();
+  const [name, setName] = useState(user?.name ?? '');
+  const [email, setEmail] = useState(user?.email ?? '');
+  const [pw, setPw] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (!user) return null;
+  const emailChanged = email.trim().toLowerCase() !== user.email.toLowerCase();
+  const changed = emailChanged || name.trim() !== (user.name ?? '');
+  return (
+    <form
+      className="card space-y-4 p-5"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        try {
+          await api('PUT', '/api/auth/profile', { name: name.trim(), email: email.trim(), ...(emailChanged ? { current_password: pw } : {}) });
+          setPw('');
+          await refresh();
+          setMsg({ ok: true, text: emailChanged ? 'Saved. Sign in with the new email from now on.' : 'Saved.' });
+        } catch (err: any) {
+          setMsg({ ok: false, text: err.message });
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <div className="flex items-center gap-4">
+        <Avatar email={email || user.email} name={name} size={56} className="text-xl" />
+        <div className="text-sm">
+          <div className="font-semibold text-navy-900">{user.name || user.email}</div>
+          <div className="text-slate-500 capitalize">{user.role}</div>
+          <a className="text-xs text-[var(--xg-primary)] hover:underline" href="https://gravatar.com/profile" target="_blank" rel="noreferrer">
+            Change photo at Gravatar
+          </a>
+        </div>
+      </div>
+      <h2 className="text-lg font-semibold text-navy-900">Profile</h2>
+      <div>
+        <label className="label">Name</label>
+        <input className="input" maxLength={100} value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" />
+      </div>
+      <div>
+        <label className="label">Email (used to sign in)</label>
+        <input className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+      </div>
+      {emailChanged && (
+        <div>
+          <label className="label">Current password (needed to change the email)</label>
+          <input className="input" type="password" autoComplete="current-password" required value={pw} onChange={(e) => setPw(e.target.value)} />
+        </div>
+      )}
+      <button className="btn-primary" disabled={busy || !changed}>
+        Save profile
+      </button>
+      {msg && <p className={`text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{msg.text}</p>}
+    </form>
+  );
+}
+
 export function AccountPage() {
-  const { user } = useAuth();
   const [cur, setCur] = useState('');
   const [next, setNext] = useState('');
   const [msg, setMsg] = useState('');
   return (
     <div className="mx-auto max-w-lg space-y-5">
       <h1 className="h-title">Account</h1>
-      <div className="card p-5 text-sm">
-        <div><span className="text-slate-500">Email:</span> {user?.email}</div>
-        <div className="capitalize"><span className="text-slate-500">Role:</span> {user?.role}</div>
-      </div>
+      <ProfileForm />
       <form
         className="card space-y-4 p-5"
         onSubmit={async (e) => {

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Bell, ChevronDown, KeyRound, LogOut, Menu, Moon, Search, Sun, Users, X } from 'lucide-react';
+import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
+import { Bell, ChevronDown, Info, KeyRound, LogOut, Menu, Moon, Search, ShieldAlert, ShieldCheck, Sun, TriangleAlert, Users, X } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { useApi } from '../hooks';
 import type { Server } from '../api';
 import { getModeOverride, setModeOverride } from '../theme';
 import { Logo } from './ui';
+import { Avatar } from './Avatar';
 
 export interface ModernEntry {
   label: string;
@@ -147,15 +148,95 @@ function ServerSearch() {
   );
 }
 
-/** The bell: red dot while a server is offline or has open alerts. */
+interface Note {
+  server_id: string;
+  hostname: string;
+  level: 'danger' | 'warning' | 'info';
+  text: string;
+  link: string;
+  details: string[];
+}
+
+/**
+ * The bell: the alerts the servers' dashboards show, for all servers, or
+ * only the open server's inside a server.
+ */
 function Alerts() {
-  const { data } = useApi<{ servers_offline: number; security: { servers_with_alerts: number } }>('/api/overview', 60_000);
-  const n = (data?.servers_offline ?? 0) + (data?.security?.servers_with_alerts ?? 0);
+  const m = useMatch('/servers/:id/*');
+  const serverId = m?.params.id && m.params.id !== 'new' ? m.params.id : '';
+  const { data, loading } = useApi<{ items: Note[] }>(`/api/notifications${serverId ? `?server=${encodeURIComponent(serverId)}` : ''}`, 60_000);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const { pathname } = useLocation();
+  useEffect(() => setOpen(false), [pathname]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+  const items = data?.items ?? [];
+  const danger = items.some((n) => n.level === 'danger');
   return (
-    <Link to="/servers" className="relative rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800" title={n ? `${n} server(s) need attention` : 'No alerts'}>
-      <Bell className="h-5 w-5" />
-      {n > 0 && <span className="absolute top-1.5 right-1.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />}
-    </Link>
+    <div className="relative" ref={ref}>
+      <button
+        className="relative rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+        title={items.length ? `${items.length} notification(s)` : 'No notifications'}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Bell className="h-5 w-5" />
+        {items.length > 0 && (
+          <span className={`absolute top-0.5 right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white ring-2 ring-white ${danger ? 'bg-red-500' : 'bg-amber-500'}`}>
+            {items.length > 99 ? '99+' : items.length}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute top-12 right-0 z-40 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white text-sm shadow-xl">
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+            <span className="font-semibold text-slate-800">Notifications</span>
+            <span className="text-xs text-slate-500">{serverId ? (items[0]?.hostname ?? 'This server') : 'All servers'}</span>
+          </div>
+          <div className="max-h-[70vh] overflow-y-auto">
+            {loading && !data ? (
+              <div className="px-4 py-6 text-center text-slate-500">Loading…</div>
+            ) : items.length === 0 ? (
+              <div className="flex items-center justify-center gap-2 px-4 py-6 text-emerald-700">
+                <ShieldCheck className="h-5 w-5" /> No active alerts
+              </div>
+            ) : (
+              items.map((n, i) => (
+                <Link
+                  key={i}
+                  to={`/servers/${n.server_id}${n.link ? `/${n.link.replace(/^\//, '')}` : ''}`}
+                  className="flex gap-3 border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50"
+                >
+                  {n.level === 'danger' ? (
+                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                  ) : n.level === 'warning' ? (
+                    <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  ) : (
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-500" />
+                  )}
+                  <span className="min-w-0">
+                    {!serverId && <span className="block text-xs font-medium text-slate-500">{n.hostname}</span>}
+                    <span className={`block ${n.level === 'danger' ? 'text-red-700' : n.level === 'warning' ? 'text-amber-700' : 'text-slate-700'}`}>{n.text}</span>
+                    {n.details.length > 0 && <span className="block truncate text-xs text-slate-400">{n.details[0]}{n.details.length > 1 ? ` (+${n.details.length - 1})` : ''}</span>}
+                  </span>
+                </Link>
+              ))
+            )}
+          </div>
+          {!serverId && (
+            <Link to="/servers" className="block border-t border-slate-100 px-4 py-2 text-center text-xs font-medium text-[var(--xg-primary)] hover:bg-slate-50">
+              All servers →
+            </Link>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -187,7 +268,7 @@ function UserMenu() {
   return (
     <div className="relative">
       <button className="flex items-center gap-2.5 rounded-xl py-1 pr-1 pl-1 text-sm text-slate-800 transition hover:bg-slate-100" onClick={() => setOpen((o) => !o)}>
-        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-green-500 font-semibold text-white">{name[0]?.toUpperCase()}</span>
+        <Avatar email={user.email} name={user.name} size={36} />
         <span className="hidden font-medium sm:inline">{user.role === 'owner' ? 'Owner' : name}</span>
         <ChevronDown className="h-4 w-4 text-slate-500" />
       </button>

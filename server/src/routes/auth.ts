@@ -6,6 +6,11 @@ import { SESSION_COOKIE, audit, createSession, destroySession, requireRole } fro
 import { hashPassword, verifyPassword } from '../security.js';
 
 const LoginBody = z.object({ email: z.string().email().max(200), password: z.string().min(1).max(200) });
+const ProfileBody = z.object({
+  name: z.string().trim().max(100),
+  email: z.string().trim().email().max(200),
+  current_password: z.string().max(200).optional(),
+});
 const PasswordBody = z.object({ current_password: z.string().min(1).max(200), new_password: z.string().min(10).max(200) });
 
 // A real hash so unknown-email logins take as long as wrong-password ones.
@@ -47,6 +52,33 @@ export function authRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void 
   app.get('/api/auth/me', async (req, reply) => {
     if (!req.user) return reply.code(401).send({ error: 'not logged in' });
     return { user: req.user };
+  });
+
+  // The signed-in user's own name and email. A new email (the login) needs
+  // the current password.
+  app.put('/api/auth/profile', { preHandler: requireRole('viewer') }, async (req, reply) => {
+    const parsed = ProfileBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.path[0] === 'email' ? 'enter a valid email address' : 'invalid profile' });
+    const user = req.user!;
+    const { name, email, current_password } = parsed.data;
+    const changingEmail = email.toLowerCase() !== user.email.toLowerCase();
+    if (changingEmail) {
+      const { rows } = await pool.query('SELECT password_hash FROM users WHERE id = $1', [user.id]);
+      if (!current_password || !(await verifyPassword(current_password, rows[0].password_hash))) {
+        return reply.code(403).send({ error: 'enter your current password to change the email' });
+      }
+      const taken = await pool.query('SELECT 1 FROM users WHERE lower(email) = lower($1) AND id <> $2', [email, user.id]);
+      if (taken.rowCount) return reply.code(409).send({ error: 'another user already has this email' });
+    }
+    await pool.query('UPDATE users SET name = $2, email = $3 WHERE id = $1', [user.id, name, email]);
+    await audit(pool, {
+      accountId: user.accountId,
+      userId: user.id,
+      action: changingEmail ? 'auth.email_changed' : 'auth.profile_changed',
+      detail: changingEmail ? { from: user.email, to: email } : {},
+      ip: req.ip,
+    });
+    return { user: { ...user, name, email } };
   });
 
   app.post('/api/auth/password', { preHandler: requireRole('viewer') }, async (req, reply) => {

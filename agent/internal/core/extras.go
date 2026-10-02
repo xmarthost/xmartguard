@@ -275,26 +275,24 @@ func (a *Agent) daily(q string, days int) []dayPoint {
 	return out
 }
 
-// Dashboard is the cPGuard-style server overview.
-func (a *Agent) Dashboard(days int) map[string]any {
-	if days != 7 && days != 30 && days != 90 {
-		days = 30
-	}
-	threats := a.countWindow(`SELECT count(*) FROM findings WHERE created_at >= ? AND created_at < ?`, days)
-	web := a.countWindow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? AND at < ?`, days)
-	conns := a.countWindow(`SELECT coalesce(sum(packets),0) FROM drop_stats WHERE minute >= ? AND minute < ?`, days)
+// Alert is something on a server that needs a person: shown on its
+// dashboard and in the portal's bell.
+type Alert struct {
+	Level   string   `json:"level"`
+	Text    string   `json:"text"`
+	Link    string   `json:"link"`
+	Details []string `json:"details"`
+}
 
-	dayExpr := func(col string) string { return `strftime('%Y-%m-%d', ` + col + `, 'unixepoch')` }
-	attacks := a.daily(`SELECT `+dayExpr("minute")+` AS d, sum(packets) FROM drop_stats WHERE minute >= ? GROUP BY d`, days)
-	webDaily := a.daily(`SELECT `+dayExpr("at")+` AS d, count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? GROUP BY d`, days)
-	infections := map[string][]dayPoint{}
-	for _, cat := range []string{scanner.CatVirus, scanner.CatSuspicious, scanner.CatBinary, scanner.CatSymlink} {
-		infections[cat] = a.daily(`SELECT `+dayExpr("created_at")+` AS d, count(*) FROM findings WHERE category = '`+cat+`' AND created_at >= ? GROUP BY d`, days)
-	}
+type alertSet struct {
+	list          []Alert
+	ipsListed     int
+	domainsListed int
+}
 
+// alerts lists what needs attention now (cheap: no charts).
+func (a *Agent) alerts() alertSet {
 	cmsCounts := a.CMS.Counts()
-	var cmsIssues int64
-	_ = a.DB.QueryRow(`SELECT coalesce(sum(core_issues + db_issues + outdated_plugins + outdated_themes),0) FROM cms_sites`).Scan(&cmsIssues)
 	ipsListed := 0
 	var listedIPs []string
 	for _, ip := range a.repIPs() {
@@ -305,18 +303,12 @@ func (a *Agent) Dashboard(days int) map[string]any {
 	}
 	domSum, _, _, _ := reputation.LoadDomains(a.DB, "", 1, 0)
 
-	type alert struct {
-		Level   string   `json:"level"`
-		Text    string   `json:"text"`
-		Link    string   `json:"link"`
-		Details []string `json:"details"`
-	}
-	alerts := []alert{}
+	alerts := []Alert{}
 	add := func(level, text, link string, details ...string) {
 		if len(details) > 10 {
 			details = append(details[:10], fmt.Sprintf("… and %d more", len(details)-10))
 		}
-		alerts = append(alerts, alert{level, text, link, details})
+		alerts = append(alerts, Alert{level, text, link, details})
 	}
 	if domSum.Flagged > 0 {
 		var names []string
@@ -349,6 +341,30 @@ func (a *Agent) Dashboard(days int) map[string]any {
 	if osmRecent > 0 {
 		add("warning", fmt.Sprintf("%d outgoing spam alert(s) in the last 24 hours", osmRecent), "osm")
 	}
+	return alertSet{alerts, ipsListed, domSum.Flagged}
+}
+
+// Dashboard is the server overview.
+func (a *Agent) Dashboard(days int) map[string]any {
+	if days != 7 && days != 30 && days != 90 {
+		days = 30
+	}
+	threats := a.countWindow(`SELECT count(*) FROM findings WHERE created_at >= ? AND created_at < ?`, days)
+	web := a.countWindow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? AND at < ?`, days)
+	conns := a.countWindow(`SELECT coalesce(sum(packets),0) FROM drop_stats WHERE minute >= ? AND minute < ?`, days)
+
+	dayExpr := func(col string) string { return `strftime('%Y-%m-%d', ` + col + `, 'unixepoch')` }
+	attacks := a.daily(`SELECT `+dayExpr("minute")+` AS d, sum(packets) FROM drop_stats WHERE minute >= ? GROUP BY d`, days)
+	webDaily := a.daily(`SELECT `+dayExpr("at")+` AS d, count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? GROUP BY d`, days)
+	infections := map[string][]dayPoint{}
+	for _, cat := range []string{scanner.CatVirus, scanner.CatSuspicious, scanner.CatBinary, scanner.CatSymlink} {
+		infections[cat] = a.daily(`SELECT `+dayExpr("created_at")+` AS d, count(*) FROM findings WHERE category = '`+cat+`' AND created_at >= ? GROUP BY d`, days)
+	}
+
+	cmsCounts := a.CMS.Counts()
+	var cmsIssues int64
+	_ = a.DB.QueryRow(`SELECT coalesce(sum(core_issues + db_issues + outdated_plugins + outdated_themes),0) FROM cms_sites`).Scan(&cmsIssues)
+	al := a.alerts()
 	return map[string]any{
 		"days":                days,
 		"threats":             threats,
@@ -360,11 +376,11 @@ func (a *Agent) Dashboard(days int) map[string]any {
 		"summary": map[string]any{
 			"outdated_cms":        cmsCounts.Outdated,
 			"cms_issues":          cmsIssues,
-			"ips_blacklisted":     ipsListed,
-			"domains_blacklisted": domSum.Flagged,
+			"ips_blacklisted":     al.ipsListed,
+			"domains_blacklisted": al.domainsListed,
 			"db_infections":       cmsCounts.DBInfected,
 		},
-		"alerts":   alerts,
+		"alerts":   al.list,
 		"services": a.ServiceHealth(),
 	}
 }

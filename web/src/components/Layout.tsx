@@ -9,6 +9,7 @@ import { useAuth, can } from '../auth';
 import { useApi } from '../hooks';
 import type { Server } from '../api';
 import { Logo } from './ui';
+import { Avatar } from './Avatar';
 import ModernLayout from './ModernLayout';
 import { useUiStyle } from '../useUiStyle';
 
@@ -204,9 +205,7 @@ function UserMenu() {
   return (
     <div className="relative">
       <button className="flex items-center gap-2 text-sm text-white" onClick={() => setOpen((o) => !o)}>
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-green-500 font-semibold text-white">
-          {(user.name || user.email)[0]?.toUpperCase()}
-        </span>
+        <Avatar email={user.email} name={user.name} size={32} />
         <span className="hidden sm:inline">{user.name || user.email}</span>
         <ChevronDown className="h-4 w-4" />
       </button>

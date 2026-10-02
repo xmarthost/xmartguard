@@ -1355,6 +1355,9 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return a.Dashboard(in.Days), nil
 	}
+	h["alerts.get"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"alerts": a.alerts().list}, nil
+	}
 
 	// ---- reputation
 	h["reputation.get"] = func(context.Context, json.RawMessage) (any, error) {
