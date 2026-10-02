@@ -16,15 +16,26 @@ export async function loadDQSKey(pool: Pool, accountId: string): Promise<string>
   return String(rows[0]?.dqs_key ?? '');
 }
 
-/** Sends one server its account's mail settings. */
+/** Agents that take the account's Google Safe Browsing key (mail.global). */
+export const SAFE_BROWSING_MIN_AGENT = '0.21.2';
+
+export const SafeBrowsingKey = z.string().trim().max(200).regex(/^[A-Za-z0-9_-]*$/, 'A Google API key is letters, digits, - and _');
+
+/** The account-wide keys every server uses unless it has its own. */
+export async function loadGlobalKeys(pool: Pool, accountId: string): Promise<{ dqs_key: string; safe_browsing_key: string }> {
+  const { rows } = await pool.query('SELECT dqs_key, safe_browsing_key FROM account_mail WHERE account_id = $1', [accountId]);
+  return { dqs_key: String(rows[0]?.dqs_key ?? ''), safe_browsing_key: String(rows[0]?.safe_browsing_key ?? '') };
+}
+
+/** Sends one server its account's keys (always both: the agent replaces them together). */
 export async function syncMail(pool: Pool, hub: AgentHub, serverId: string): Promise<void> {
   const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [serverId]);
   if (!rows[0]) return;
-  await hub.command(serverId, 'mail.global', { dqs_key: await loadDQSKey(pool, rows[0].account_id) }, 60_000);
+  await hub.command(serverId, 'mail.global', await loadGlobalKeys(pool, rows[0].account_id), 60_000);
 }
 
 /** The key is a secret: only its ends are shown. */
-function hint(k: string): string {
+export function hint(k: string): string {
   return k ? `${k.slice(0, 4)}…${k.slice(-3)}` : '';
 }
 
@@ -82,7 +93,7 @@ export function mailRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): voi
     for (const s of await servers(acc)) {
       if (!s.online || versionLess(s.agent_version, MAIL_MIN_AGENT)) continue;
       pushed++;
-      void hub.command(s.id, 'mail.global', { dqs_key: key }, 60_000).catch(() => undefined);
+      void syncMail(pool, hub, s.id).catch(() => undefined);
     }
     return { dqs_key_set: key !== '', dqs_key_hint: hint(key), pushed };
   });

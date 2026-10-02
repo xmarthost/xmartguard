@@ -23,6 +23,7 @@ const FirewallPage = lazy(() => import('./pages/Firewall').then((m) => ({ defaul
 const IPReputation = lazy(() => import('./pages/Firewall').then((m) => ({ default: m.IPReputation })));
 const TrustedServices = lazy(() => import('./pages/TrustedServices'));
 const MailProtection = lazy(() => import('./pages/MailProtection'));
+const FleetDomainReputation = lazy(() => import('./pages/DomainReputation'));
 const CaptchaPage = lazy(() => import('./pages/CaptchaPage'));
 const WafIntel = lazy(() => import('./pages/WafIntel'));
 const SecurityMonitor = lazy(() => import('./pages/SecurityMonitor'));
@@ -85,6 +86,7 @@ export default function App() {
         <Route path="/waf-rulesets" element={<Protected><WafRuleSets /></Protected>} />
         <Route path="/trusted-services" element={<Protected><TrustedServices /></Protected>} />
         <Route path="/mail-protection" element={<Protected><MailProtection /></Protected>} />
+        <Route path="/domain-reputation" element={<Protected><FleetDomainReputation /></Protected>} />
         <Route path="/captcha-page" element={<Protected><CaptchaPage /></Protected>} />
         <Route path="/waf-intel" element={<Protected><WafIntel /></Protected>} />
         <Route path="/appearance" element={<Protected><AppearancePage /></Protected>} />

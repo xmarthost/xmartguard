@@ -185,7 +185,8 @@ func (a *Agent) checkDomains(ctx context.Context) error {
 	}
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	res, err := reputation.CheckDomains(cctx, a.DB, net.DefaultResolver, domains, a.Settings.Get().DomainRep.SafeBrowsingKey)
+	sbKey, _ := a.safeBrowsingKey()
+	res, err := reputation.CheckDomains(cctx, a.DB, net.DefaultResolver, domains, sbKey)
 	_ = store.SetKV(a.DB, "last_domainrep", strconv.FormatInt(time.Now().Unix(), 10))
 	n := a.Settings.Get().Notifications
 	for _, r := range res {

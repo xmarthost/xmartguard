@@ -27,3 +27,23 @@ describe('mail protection', () => {
     expect((await c.req('PUT', '/api/mail-protection', { dqs_key: '' })).body.dqs_key_set).toBe(false);
   });
 });
+
+describe('domain reputation', () => {
+  it('keeps one Google Safe Browsing key for all servers, next to the DQS key', async () => {
+    await c.login();
+    await c.req('PUT', '/api/mail-protection', { dqs_key: 'abcdefghijklmnopqrstuvwxyz' });
+    expect((await c.req('PUT', '/api/domain-reputation', { safe_browsing_key: 'bad key/' })).status).toBe(400);
+    const r = await c.req('PUT', '/api/domain-reputation', { safe_browsing_key: 'AIzaSyA1234567890abcdefXYZ' });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ key_set: true, key_hint: 'AIza…XYZ' });
+    const g = await c.req('GET', '/api/domain-reputation');
+    expect(g.body.key_set).toBe(true);
+    expect(JSON.stringify(g.body)).not.toContain('AIzaSyA1234567890abcdefXYZ');
+    // Saving one key keeps the other.
+    const { rows } = await h.pool.query('SELECT dqs_key, safe_browsing_key FROM account_mail');
+    expect(rows[0]).toMatchObject({ dqs_key: 'abcdefghijklmnopqrstuvwxyz', safe_browsing_key: 'AIzaSyA1234567890abcdefXYZ' });
+    await c.req('PUT', '/api/mail-protection', { dqs_key: '' });
+    const after = await h.pool.query('SELECT dqs_key, safe_browsing_key FROM account_mail');
+    expect(after.rows[0]).toMatchObject({ dqs_key: '', safe_browsing_key: 'AIzaSyA1234567890abcdefXYZ' });
+  });
+});

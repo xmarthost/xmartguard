@@ -1318,7 +1318,9 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			return nil, err
 		}
 		sum, rows, total, err := reputation.LoadDomains(a.DB, in.Q, in.Limit, in.Offset)
-		return map[string]any{"summary": sum, "domains": rows, "total": total}, err
+		_, src := a.safeBrowsingKey()
+		return map[string]any{"summary": sum, "domains": rows, "total": total, "enabled": a.Settings.Get().DomainRep.Enabled,
+			"safe_browsing": src, "last_check": store.GetKV(a.DB, "last_domainrep")}, err
 	}
 	h["domainrep.check"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
 		err := a.checkDomains(ctx)

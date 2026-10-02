@@ -1520,23 +1520,31 @@ function SuspendSection({ serverId, s, admin, busy, onSave }: { serverId: string
 
 function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: boolean; busy: boolean; onSave: (p: Partial<DomainRepS>) => void }) {
   const dis = !admin || busy;
-  const [key, setKey] = useState(s.safe_browsing_key);
-  useEffect(() => setKey(s.safe_browsing_key), [s.safe_browsing_key]);
   return (
     <div className="mt-6 border-t border-slate-200 pt-6">
       <h2 className="text-lg font-semibold text-navy-900">Domain Reputation</h2>
-      <p className="mb-2 text-sm text-slate-500">Check every hosted domain against Spamhaus DBL, SURBL and URIBL.</p>
+      <p className="mb-2 text-sm text-slate-500">Check every hosted domain against Spamhaus DBL, SURBL and URIBL, and Google Safe Browsing.</p>
       <SettingRow title="Domain reputation monitoring" desc="Checked once a night (3:00–6:00); alerts when a domain becomes listed" recommended>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </SettingRow>
-      <SettingRow title="Google Safe Browsing API key" desc="Optional. Adds malware and phishing (SOCIAL_ENGINEERING) checks from Google.">
-        <div className="flex gap-2">
-          <input className="input w-72" type="password" value={key} disabled={dis} placeholder="AIza…" onChange={(e) => setKey(e.target.value)} />
-          <button className="btn-outline" disabled={dis || key === s.safe_browsing_key} onClick={() => onSave({ safe_browsing_key: key.trim() })}>
-            Save
-          </button>
-        </div>
-      </SettingRow>
+      <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+        The Google Safe Browsing key is set once for all servers in{' '}
+        <Link to="/domain-reputation" className="text-blue-700 hover:underline">
+          Overview » Domain Reputation
+        </Link>
+        .
+        {s.safe_browsing_key && (
+          <>
+            {' '}
+            This server still has its own key, which wins here.{' '}
+            {admin && (
+              <button className="text-blue-700 hover:underline" disabled={busy} onClick={() => onSave({ safe_browsing_key: '' })}>
+                Use the portal&apos;s key instead
+              </button>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

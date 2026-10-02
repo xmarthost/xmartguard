@@ -298,6 +298,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             { to: '/captcha-page', label: 'CAPTCHA Page', icon: <ShieldQuestion /> },
             { to: '/trusted-services', label: 'Trusted Services', icon: <BadgeCheck /> },
             { to: '/mail-protection', label: 'Mail Protection', icon: <Mail /> },
+            { to: '/domain-reputation', label: 'Domain Reputation', icon: <Globe2 /> },
           ],
         },
         {

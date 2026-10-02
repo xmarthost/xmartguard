@@ -30,6 +30,7 @@ import { mcpRoutes } from './routes/mcp.js';
 import { wafRulesetRoutes } from './routes/waf-rulesets.js';
 import { appearanceRoutes } from './routes/appearance.js';
 import { mailRoutes } from './routes/mail.js';
+import { domainRepRoutes } from './routes/domainrep.js';
 import { trustedRoutes } from './routes/trusted.js';
 import { captchaRoutes } from './routes/captcha.js';
 import { wafIntelRoutes } from './routes/waf-intel.js';
@@ -107,6 +108,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   captchaRoutes(app, pool, cfg, hub);
   wafIntelRoutes(app, pool, hub);
   mailRoutes(app, pool, hub);
+  domainRepRoutes(app, pool, hub);
   // API answers are live data: never stored by browsers or proxies/CDNs.
   app.addHook('onSend', async (req, reply, payload) => {
     if (req.url.startsWith('/api/') && !reply.hasHeader('Cache-Control')) reply.header('Cache-Control', 'no-store');

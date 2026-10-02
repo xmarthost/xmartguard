@@ -31,3 +31,22 @@ func TestMailGlobalDQSKey(t *testing.T) {
 		t.Fatalf("key left: %q", k)
 	}
 }
+
+// The portal's Google Safe Browsing key works the same way.
+func TestGlobalSafeBrowsingKey(t *testing.T) {
+	a := newTestAgent(t, `{}`)
+	h := a.Handlers()["mail.global"]
+	if _, err := h(context.Background(), json.RawMessage(`{"dqs_key":"","safe_browsing_key":"bad key/"}`)); err == nil {
+		t.Fatal("invalid key accepted")
+	}
+	if _, err := h(context.Background(), json.RawMessage(`{"dqs_key":"","safe_browsing_key":"AIzaSyPortalKey123"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if k, src := a.safeBrowsingKey(); k != "AIzaSyPortalKey123" || src != "portal" {
+		t.Fatalf("%q %q", k, src)
+	}
+	a.Settings.Patch(json.RawMessage(`{"domain_reputation":{"safe_browsing_key":"AIzaSyServerKey"}}`))
+	if k, src := a.safeBrowsingKey(); k != "AIzaSyServerKey" || src != "server" {
+		t.Fatalf("%q %q", k, src)
+	}
+}

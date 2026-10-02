@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
@@ -19,9 +20,11 @@ const kvEximOurs = "exim_guard_ours"
 // used where the server has no key of its own.
 const kvMailGlobal = "mail_global"
 
-// MailGlobal is what the portal sends with mail.global.
+// MailGlobal is what the portal sends with mail.global: the account-wide
+// keys every server uses unless it has its own.
 type MailGlobal struct {
-	DQSKey string `json:"dqs_key"`
+	DQSKey          string `json:"dqs_key"`
+	SafeBrowsingKey string `json:"safe_browsing_key,omitempty"`
 }
 
 func (a *Agent) mailGlobal() MailGlobal {
@@ -35,6 +38,10 @@ func (a *Agent) setMailGlobal(g MailGlobal) error {
 	g.DQSKey = strings.ToLower(strings.TrimSpace(g.DQSKey))
 	if g.DQSKey != "" && !mail.ValidDQSKey(g.DQSKey) {
 		return fmt.Errorf("invalid Spamhaus DQS key")
+	}
+	g.SafeBrowsingKey = strings.TrimSpace(g.SafeBrowsingKey)
+	if !settings.ValidSafeBrowsingKey(g.SafeBrowsingKey) {
+		return fmt.Errorf("invalid Google Safe Browsing key")
 	}
 	if g == a.mailGlobal() {
 		return nil
@@ -53,6 +60,17 @@ func (a *Agent) dqsKey() (key, source string) {
 		return k, "server"
 	}
 	if k := a.mailGlobal().DQSKey; k != "" {
+		return k, "portal"
+	}
+	return "", ""
+}
+
+// safeBrowsingKey: the server's own key, else the portal's.
+func (a *Agent) safeBrowsingKey() (key, source string) {
+	if k := a.Settings.Get().DomainRep.SafeBrowsingKey; k != "" {
+		return k, "server"
+	}
+	if k := a.mailGlobal().SafeBrowsingKey; k != "" {
 		return k, "portal"
 	}
 	return "", ""

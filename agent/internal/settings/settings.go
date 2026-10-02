@@ -419,6 +419,11 @@ type AutoSuspend struct {
 	WhitelistDomains  []string `json:"whitelist_domains"`
 }
 
+// ValidSafeBrowsingKey accepts "" or a plausible Google API key.
+func ValidSafeBrowsingKey(k string) bool {
+	return len(k) <= 200 && !strings.ContainsAny(k, " \t\n/?&")
+}
+
 // DomainReputation checks hosted domains against domain blocklists.
 type DomainReputation struct {
 	Enabled         bool   `json:"enabled"`
@@ -871,7 +876,7 @@ func validate(s Settings) error {
 			return fmt.Errorf("invalid IP address %q", ip)
 		}
 	}
-	if len(s.DomainRep.SafeBrowsingKey) > 200 || strings.ContainsAny(s.DomainRep.SafeBrowsingKey, " \t\n/?&") {
+	if !ValidSafeBrowsingKey(s.DomainRep.SafeBrowsingKey) {
 		return errors.New("invalid Safe Browsing API key")
 	}
 	for _, ip := range s.WAF.WhitelistIPs {

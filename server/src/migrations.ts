@@ -399,4 +399,12 @@ CREATE TABLE account_mail (
 );
 `,
   },
+  {
+    version: '012_global_safe_browsing',
+    sql: `
+-- Overview » Domain Reputation: the Google Safe Browsing key every server
+-- uses unless it has its own.
+ALTER TABLE account_mail ADD COLUMN safe_browsing_key text NOT NULL DEFAULT '';
+`,
+  },
 ];
