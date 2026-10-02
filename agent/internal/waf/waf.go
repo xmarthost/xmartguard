@@ -918,6 +918,10 @@ type EventFilter struct {
 	Query    string `json:"q"`
 	Limit    int    `json:"limit"`
 	Offset   int    `json:"offset"`
+	// Since keeps hits from this time on; BeforeID pages through an export
+	// without repeats while new hits arrive.
+	Since    int64 `json:"since"`
+	BeforeID int64 `json:"before_id"`
 }
 
 // Events lists ModSecurity hits, newest first.
@@ -928,6 +932,12 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 	}
 	if f.Category != "" {
 		where, args = append(where, "category = ?"), append(args, f.Category)
+	}
+	if f.Since > 0 {
+		where, args = append(where, "at >= ?"), append(args, f.Since)
+	}
+	if f.BeforeID > 0 {
+		where, args = append(where, "id < ?"), append(args, f.BeforeID)
 	}
 	if f.Query != "" {
 		where, args = append(where, "(ip LIKE ? OR host LIKE ? OR uri LIKE ? OR msg LIKE ?)"),

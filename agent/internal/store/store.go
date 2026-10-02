@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS findings (
   orig_gid    INTEGER NOT NULL DEFAULT -1
 );
 CREATE INDEX IF NOT EXISTS findings_created ON findings(created_at);
+CREATE INDEX IF NOT EXISTS findings_updated ON findings(updated_at);
 CREATE INDEX IF NOT EXISTS findings_path ON findings(path);
 CREATE TABLE IF NOT EXISTS cms_vulns (
   key        TEXT PRIMARY KEY,
@@ -319,6 +320,10 @@ var columnMigrations = []string{
 	// Scan progress: files to check (counted while the scan runs) and path now.
 	`ALTER TABLE scans ADD COLUMN total INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE scans ADD COLUMN current TEXT NOT NULL DEFAULT ''`,
+	// Scan progress in accounts (or folders), not counted files.
+	`ALTER TABLE scans ADD COLUMN units INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE scans ADD COLUMN units_done INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE scans ADD COLUMN unit TEXT NOT NULL DEFAULT ''`,
 	// WAF hits: what the rule matched ("justification"), HTTP version.
 	`ALTER TABLE waf_events ADD COLUMN detail TEXT NOT NULL DEFAULT ''`,
 	// DB scanner: which column matched, the kind of injection, the matching

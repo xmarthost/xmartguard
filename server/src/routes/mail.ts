@@ -4,6 +4,7 @@ import type { Pool } from '../db.js';
 import type { AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { versionLess } from '../agents/release.js';
+import { eachLimit } from '../agents/limit.js';
 
 /** Agents that take the account's mail settings (mail.global). */
 export const MAIL_MIN_AGENT = '0.19.2';
@@ -47,24 +48,17 @@ export function mailRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): voi
   /** Each server's Exim state, asked in batches of 10. */
   async function states(accountId: string, action: 'exim.rbls' | 'exim.guard') {
     const list = await servers(accountId);
-    const out: Record<string, unknown>[] = [];
-    for (let i = 0; i < list.length; i += 10) {
-      out.push(
-        ...(await Promise.all(
-          list.slice(i, i + 10).map(async (s) => {
-            if (!s.online) return { ...s, state: null, error: 'offline' };
-            if (versionLess(s.agent_version, MAIL_MIN_AGENT)) return { ...s, state: null, error: `agent ${s.agent_version} is too old (update to ${MAIL_MIN_AGENT} or later)` };
-            try {
-              const r = (await hub.command(s.id, action, {}, action === 'exim.guard' ? 120_000 : 15_000)) as { guard?: unknown; rbls?: unknown };
-              return { ...s, state: r?.guard ?? null, cpanel: Array.isArray(r?.rbls) && r.rbls.length > 0, error: '' };
-            } catch (err) {
-              return { ...s, state: null, error: (err as Error).message };
-            }
-          }),
-        )),
-      );
-    }
-    return out;
+    // Each server answers on its own: a slow one does not hold up the rest.
+    return eachLimit(list, 16, async (s): Promise<Record<string, unknown>> => {
+      if (!s.online) return { ...s, state: null, error: 'offline' };
+      if (versionLess(s.agent_version, MAIL_MIN_AGENT)) return { ...s, state: null, error: `agent ${s.agent_version} is too old (update to ${MAIL_MIN_AGENT} or later)` };
+      try {
+        const r = (await hub.command(s.id, action, {}, action === 'exim.guard' ? 120_000 : 15_000)) as { guard?: unknown; rbls?: unknown };
+        return { ...s, state: r?.guard ?? null, cpanel: Array.isArray(r?.rbls) && r.rbls.length > 0, error: '' };
+      } catch (err) {
+        return { ...s, state: null, error: (err as Error).message };
+      }
+    });
   }
 
   app.get('/api/mail-protection', viewer, async (req) => {

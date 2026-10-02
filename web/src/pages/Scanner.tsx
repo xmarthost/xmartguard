@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Database, Download, File, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Settings as Cog, Sparkles, Square, Timer, Trash2 } from 'lucide-react';
+import { Database, File, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Settings as Cog, Sparkles, Square, Timer, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { bytes } from '../format';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Badge, Modal, Pager, agentCall, fmtTime, useAction, useAgent, useToast } from '../components/controls';
 import { useApi } from '../hooks';
+import { DownloadRange, fetchAll, saveFile } from '../components/DownloadRange';
 import { compact } from '../components/AttackOverview';
 import type { Server } from '../api';
 
@@ -17,6 +18,9 @@ interface Scan {
   files: number;
   total?: number;
   current?: string;
+  units?: number;
+  units_done?: number;
+  unit?: string;
   infected: number;
   initiator: string;
   started_at: number;
@@ -83,31 +87,31 @@ interface HostingUser {
   web_root: string;
 }
 
-/** Live progress of a running scan: files checked of the files counted. */
+/** Live progress of a running scan: accounts (or folders) finished of all,
+ * so nothing has to count the files first. */
 function ScanProgress({ s }: { s: Scan }) {
-  const total = s.total ?? 0;
-  const pct = total > 0 ? Math.min(99, Math.floor((s.files / total) * 100)) : 0;
-  const secs = Math.max(1, Date.now() / 1000 - s.started_at);
-  const rate = Math.round(s.files / secs);
+  const units = s.units ?? 0;
+  const done = Math.min(s.units_done ?? 0, units);
+  const pct = units > 0 ? Math.min(99, Math.floor((done / units) * 100)) : 0;
+  const what = ['full', 'daily', 'weekly'].includes(s.kind) ? 'accounts' : 'folders';
   return (
     <div className="min-w-[220px]">
-      <div className="flex justify-between text-xs">
-        <span className="font-medium text-navy-900">
-          {s.files.toLocaleString()} {total > 0 ? `/ ${total.toLocaleString()}` : ''} files
-        </span>
-        <span className="text-slate-500">{total > 0 ? `${pct}%` : 'counting…'}</span>
+      <div className="flex justify-between gap-2 text-xs">
+        <span className="font-medium text-navy-900">{s.files.toLocaleString()} files</span>
+        <span className="text-slate-500">{units > 0 ? `${pct}%` : 'starting…'}</span>
       </div>
       <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-100">
-        {total > 0 ? (
+        {units > 0 ? (
           <div className="h-2 rounded-full bg-gradient-to-r from-blue-500 to-navy-600 transition-all duration-700" style={{ width: `${Math.max(2, pct)}%` }} />
         ) : (
           <div className="h-2 w-1/3 animate-pulse rounded-full bg-blue-300" />
         )}
       </div>
-      <div className="mt-1 text-[11px] text-slate-400">
-        {rate.toLocaleString()} files/s
-        {total > 0 && rate > 0 && ` · about ${Math.max(1, Math.ceil((total - s.files) / rate / 60))} min left`}
-      </div>
+      {units > 0 && (
+        <div className="mt-1 truncate text-[11px] text-slate-400" title={s.unit}>
+          {done.toLocaleString()} of {units.toLocaleString()} {what} done{s.unit ? ` · now ${s.unit}` : ''}
+        </div>
+      )}
     </div>
   );
 }
@@ -121,13 +125,15 @@ export function ManualScans() {
   const { id } = useParams();
   const host = useServerName(id);
   const { user } = useAuth();
-  const scans = useAgent<{ scans: Scan[] }>(id, 'scan.list', {}, 2000);
+  const [offset, setOffset] = useState(0);
+  const pageSize = 25;
+  const scans = useAgent<{ scans: Scan[]; total?: number; last_full?: Scan }>(id, 'scan.list', { limit: pageSize, offset }, 3000);
   const paths = useAgent<{ users: HostingUser[] }>(id, 'scanner.paths');
   const { run, busy } = useAction();
   const [quick, setQuick] = useState('');
   const [path, setPath] = useState('');
   const canRun = can(user, 'operator');
-  const lastFull = scans.data?.scans.find((s) => s.kind === 'full' && s.status === 'completed');
+  const lastFull = scans.data?.last_full ?? scans.data?.scans.find((s) => s.kind === 'full' && s.status === 'completed');
   const lastOf = (target: string) => scans.data?.scans.find((s) => s.target === target && s.status === 'completed');
 
   const start = (kind: string, p = '') =>
@@ -250,6 +256,11 @@ export function ManualScans() {
               ))}
             </tbody>
           </table>
+        )}
+        {(scans.data?.total ?? 0) > pageSize && (
+          <div className="mt-3">
+            <Pager total={scans.data?.total ?? 0} limit={pageSize} offset={offset} onChange={setOffset} />
+          </div>
         )}
       </div>
     </div>
@@ -387,6 +398,26 @@ export function ScannerLogs() {
     list.reload();
   };
 
+  const [exporting, setExporting] = useState('');
+  /** Downloads every detection of a period (with the filters set), not just this page. */
+  const exportRange = async (seconds: number, label: string) => {
+    try {
+      const all = await fetchAll<Finding>(
+        async (since, before_id) =>
+          (await agentCall<{ findings: Finding[] }>(id!, 'findings.list', { scan_id: scanId, category, status, q: query, limit: 500, since, before_id })).findings,
+        seconds,
+        (n) => setExporting(n.toLocaleString()),
+      );
+      if (!all.length) return alert(`No detections in: ${label}`);
+      const span = seconds ? label.toLowerCase().replace(/^last /, '').replace(/ /g, '') : 'all';
+      saveFile(`xpguard-detections-${host}-${scanId ? `scan${scanId}-` : ''}${span}-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(all));
+    } catch (e: any) {
+      alert(e.message || 'Export failed');
+    } finally {
+      setExporting('');
+    }
+  };
+
   const rows = list.data?.findings ?? [];
   return (
     <div className="space-y-5">
@@ -436,20 +467,7 @@ export function ScannerLogs() {
           <form onSubmit={(e) => (e.preventDefault(), setQuery(q))}>
             <input className="input w-56" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />
           </form>
-          <button
-            className="btn border border-slate-300 bg-white"
-            title="Download CSV"
-            onClick={() => {
-              const url = URL.createObjectURL(new Blob([toCSV(rows)], { type: 'text/csv' }));
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `xpguard-detections-${host}.csv`;
-              a.click();
-              URL.revokeObjectURL(url);
-            }}
-          >
-            <Download className="h-4 w-4" />
-          </button>
+          <DownloadRange onPick={exportRange} busyText={exporting} />
         </div>
       </div>
 

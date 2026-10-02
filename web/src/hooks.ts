@@ -28,7 +28,17 @@ export function useApi<T>(path: string | null, intervalMs?: number) {
     setLoading(true);
     load();
     let t: ReturnType<typeof setInterval> | undefined;
-    if (intervalMs) t = setInterval(load, intervalMs);
+    let busy = false;
+    if (intervalMs)
+      t = setInterval(async () => {
+        if (busy || document.hidden) return;
+        busy = true;
+        try {
+          await load();
+        } finally {
+          busy = false;
+        }
+      }, intervalMs);
     return () => {
       alive.current = false;
       if (t) clearInterval(t);

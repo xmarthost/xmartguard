@@ -37,6 +37,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/monitor"
 	"github.com/xmarthost/xmartguard/agent/internal/notify"
+	"github.com/xmarthost/xmartguard/agent/internal/prio"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
@@ -235,6 +236,7 @@ func (a *Agent) Start(ctx context.Context) {
 		}
 	}()
 	go a.Realtime.Run(ctx)
+	go a.Scanner.WatchNewSites(ctx)
 	go a.Firewall.Run(ctx)
 	go a.Firewall.RunBruteForce(ctx)
 	go a.Firewall.RunConnLog(ctx)
@@ -246,6 +248,15 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.WAF.Run(ctx)
 	go a.wafSyncLoop(ctx)
 	go a.CMS.Run(ctx)
+	// Move wp-cron lines of earlier versions (all at 0:00) to their own times.
+	go func() {
+		prio.LowThread()
+		if c := a.Settings.Get().CMS; c.WPCron {
+			if n := cms.RespreadCrons(c.WPCronHours); n > 0 {
+				a.Log.Info("wp-cron jobs spread out over the day", "accounts", n)
+			}
+		}
+	}()
 	go a.OSM.Run(ctx)
 	go a.domainRepLoop(ctx)
 	go a.Captcha.Run(ctx)
@@ -631,9 +642,20 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return a.scanReport(sc), nil
 	}
-	h["scan.list"] = func(context.Context, json.RawMessage) (any, error) {
-		scans, err := a.Scanner.ListScans(100)
-		return map[string]any{"scans": scans}, err
+	h["scan.list"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, _ := decode[struct {
+			Limit  int `json:"limit"`
+			Offset int `json:"offset"`
+		}](p)
+		if in.Limit <= 0 || in.Limit > 500 {
+			in.Limit = 100
+		}
+		scans, total, err := a.Scanner.ListScansPage(in.Limit, max(in.Offset, 0))
+		out := map[string]any{"scans": scans, "total": total}
+		if last, err := a.Scanner.LastScan("full"); err == nil {
+			out["last_full"] = last
+		}
+		return out, err
 	}
 	h["scanner.paths"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{"users": scanner.Users()}, nil

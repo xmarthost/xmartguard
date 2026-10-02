@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Ban, CheckCircle2, Download, EyeOff, Search, ShieldAlert, Trash2, X } from 'lucide-react';
+import { Ban, CheckCircle2, EyeOff, Search, ShieldAlert, Trash2, X } from 'lucide-react';
 import { exclusionError, uriPath, type RuleExclusion } from '../components/RuleExclusions';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
 import { Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
 import { useServerName } from './Scanner';
+import { DownloadRange, fetchAll, saveFile } from '../components/DownloadRange';
 
 interface WafEvent {
   id: number;
@@ -36,14 +37,6 @@ function toCSV(rows: WafEvent[]): string {
   ].join('\n');
 }
 
-function download(name: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 /** Shared table for WAF Logs and Bot Attacks. */
 function WafEventsPage({ title, categories, emptyText }: { title: string; categories: { v: string; l: string }[]; emptyText: string }) {
@@ -66,18 +59,18 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
   const rows = ev.data?.events ?? [];
   const allSel = rows.length > 0 && rows.every((r) => sel.includes(r.id));
 
-  /** Exports every matching entry, not just the page on screen. */
-  const exportAll = async () => {
-    const all: WafEvent[] = [];
-    const total = ev.data?.total ?? 0;
+  /** Exports every matching entry of a period, not just the page on screen. */
+  const exportRange = async (seconds: number, label: string) => {
     try {
-      for (let off = 0; off < total; off += 1000) {
-        setExporting(`${Math.min(off, total).toLocaleString()} / ${total.toLocaleString()}`);
-        const r = await agentCall<{ events: WafEvent[] }>(id!, 'waf.events', { category: cat, q: query, limit: 1000, offset: off });
-        all.push(...r.events);
-        if (r.events.length < 1000) break;
-      }
-      download(`${title.toLowerCase().replace(/ /g, '-')}-${host}-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(all));
+      const all = await fetchAll<WafEvent>(
+        async (since, before_id) =>
+          (await agentCall<{ events: WafEvent[] }>(id!, 'waf.events', { category: cat, q: query, limit: 1000, since, before_id })).events,
+        seconds,
+        (n) => setExporting(n.toLocaleString()),
+      );
+      if (!all.length) return alert(`No entries in: ${label}`);
+      const span = seconds ? label.toLowerCase().replace(/^last /, '').replace(/ /g, '') : 'all';
+      saveFile(`${title.toLowerCase().replace(/ /g, '-')}-${host}-${span}-${new Date().toISOString().slice(0, 10)}.csv`, toCSV(all));
     } catch (e: any) {
       alert(e.message || 'Export failed');
     } finally {
@@ -133,10 +126,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
               <Search className="h-4 w-4" />
             </button>
           </form>
-          <button className="btn-outline" title="Export all matching entries (CSV)" disabled={!ev.data?.total || !!exporting} onClick={exportAll}>
-            <Download className="h-4 w-4" />
-            {exporting && <span className="text-xs">{exporting}</span>}
-          </button>
+          <DownloadRange onPick={exportRange} busyText={exporting} disabled={!ev.data?.total} />
         </div>
       </div>
 

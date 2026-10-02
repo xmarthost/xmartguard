@@ -39,6 +39,9 @@ export interface MetricsSample {
 
 export class CommandError extends Error {}
 
+/** Unanswered commands one server may have at a time. */
+export const MAX_PENDING = 200;
+
 /** Agent commands slower than this are logged. */
 const SLOW_COMMAND_MS = 3000;
 
@@ -114,6 +117,8 @@ export class AgentHub {
   command(serverId: string, action: string, params: unknown = {}, timeoutMs = 30_000): Promise<unknown> {
     const conn = this.conns.get(serverId);
     if (!conn) return Promise.reject(new CommandError('server is offline'));
+    // A server too slow to answer must not collect an endless queue.
+    if (conn.pending.size >= MAX_PENDING) return Promise.reject(new CommandError('server is busy; try again in a moment'));
     const id = crypto.randomUUID();
     const started = Date.now();
     const p = new Promise((resolve, reject) => {

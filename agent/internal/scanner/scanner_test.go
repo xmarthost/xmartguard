@@ -435,7 +435,8 @@ func TestRecordSkipsClearedContent(t *testing.T) {
 }
 
 // A hosting account created while the agent runs is watched within a
-// minute, and the files put into it before that are scanned too.
+// minute. (The files put into it before that are left to its "new" scan,
+// see TestNewWebsiteScanned, so a migration does not flood realtime.)
 func TestRealtimeWatchesNewAccounts(t *testing.T) {
 	s := newScanner(t)
 	base := t.TempDir()
@@ -465,13 +466,13 @@ func TestRealtimeWatchesNewAccounts(t *testing.T) {
 	os.WriteFile(filepath.Join(acct, "public_html", "late.php"), []byte(malicious["eval.php"]), 0o644)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, n, _ := s.ListFindings(FindingFilter{Limit: 10}); n == 2 {
+		if fs, n, _ := s.ListFindings(FindingFilter{Limit: 10}); n == 1 && strings.HasSuffix(fs[0].Path, "late.php") {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	fs, _, _ := s.ListFindings(FindingFilter{Limit: 10})
-	t.Fatalf("new account: %d of 2 files found (%v)", len(fs), fs)
+	t.Fatalf("new account: want late.php only, found %v", fs)
 }
 
 // On servers with more folders than the watch limit, every account's top

@@ -113,3 +113,52 @@ func TestStopEngineScan(t *testing.T) {
 		t.Fatal("engine still running after stop")
 	}
 }
+
+// A path scan reports progress in folders (no file counting), and a scan
+// whose engine is killed carries on by itself.
+func TestEngineKilledResumes(t *testing.T) {
+	useEngine(t)
+	old := RetryWait
+	RetryWait = 100 * time.Millisecond
+	defer func() { RetryWait = old }()
+	s := newScanner(t)
+	files := map[string]string{"public_html/index.php": "<?php echo 1;", "top.php": malicious["exec.php"]}
+	for _, d := range []string{"a", "b", "c"} {
+		for i := 0; i < 300; i++ {
+			files[d+"/f"+strconv.Itoa(i)+".php"] = "<?php echo " + strconv.Itoa(i) + ";"
+		}
+	}
+	files["c/bad.php"] = malicious["eval.php"]
+	root := writeTree(t, files)
+	id, err := s.Start("path", root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	killed := false
+	for end := time.Now().Add(20 * time.Second); time.Now().Before(end) && !killed; time.Sleep(time.Millisecond) {
+		procs, _ := filepath.Glob("/proc/[0-9]*/cmdline")
+		for _, p := range procs {
+			if b, _ := os.ReadFile(p); strings.HasPrefix(string(b), "xpguard-scan\x00") {
+				pid, _ := strconv.Atoi(filepath.Base(filepath.Dir(p)))
+				killed = exec.Command("kill", "-9", strconv.Itoa(pid)).Run() == nil
+			}
+		}
+		if sc, _ := s.GetScan(id); sc.Status == "completed" {
+			break
+		}
+	}
+	if !killed {
+		t.Skip("engine finished before it could be killed")
+	}
+	sc := waitScan(t, s, id)
+	if sc.Status != "completed" || sc.Infected != 2 {
+		t.Fatalf("after kill: %+v", sc)
+	}
+	// root files + public_html + a + b + c
+	if sc.Units != 5 || sc.UnitsDone != 5 {
+		t.Fatalf("units %d/%d, want 5/5", sc.UnitsDone, sc.Units)
+	}
+	if sc.Files < 903 {
+		t.Fatalf("files %d", sc.Files)
+	}
+}

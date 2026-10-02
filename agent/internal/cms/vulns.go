@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net/http"
 	"net/url"
@@ -215,11 +216,7 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 		}
 		changed = true
 	}
-	php := "/usr/local/bin/php"
-	if _, err := os.Stat(php); err != nil {
-		php = "php"
-	}
-	line := fmt.Sprintf("0 */%d * * * cd %s && %s -q wp-cron.php >/dev/null 2>&1 %s", max(1, min(hours, 24)), site, php, cronMarker)
+	line := cronLine(site, hours)
 	out, _ := exec.Command("crontab", "-u", owner, "-l").Output()
 	cur := strings.ReplaceAll(string(out), legacyCronMarker, cronMarker)
 	// Keep one line for the site, with the current interval.
@@ -247,6 +244,82 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 	}
 	return true, nil
 }
+
+// cronLine is the crontab entry for a site. Every site gets its own minute
+// and hour from a hash of its path: with "every 24 hours" at 0:00 for all
+// of them, hundreds of wp-cron.php runs started at midnight together and
+// overloaded the server. It runs at a lower priority (nice) as well.
+func cronLine(site string, hours int) string {
+	hours = max(1, min(hours, 24))
+	php := "/usr/local/bin/php"
+	if _, err := os.Stat(php); err != nil {
+		php = "php"
+	}
+	h := fnv.New32a()
+	h.Write([]byte(site))
+	sum := h.Sum32()
+	minute := sum % 60
+	hourField := "*"
+	if hours > 1 {
+		var hs []string
+		for x := int(sum/60) % hours; x < 24; x += hours {
+			hs = append(hs, strconv.Itoa(x))
+		}
+		hourField = strings.Join(hs, ",")
+	}
+	return fmt.Sprintf("%d %s * * * cd %s && nice -n 15 %s -q wp-cron.php >/dev/null 2>&1 %s", minute, hourField, site, php, cronMarker)
+}
+
+// RespreadCrons rewrites the wp-cron lines xPGuard added in earlier
+// versions (all at minute 0, the 24-hour ones all at midnight) to their
+// spread-out times. It returns how many accounts' crontabs changed.
+func RespreadCrons(hours int) int {
+	files, _ := filepath.Glob(filepath.Join(cronSpool, "*"))
+	changed := 0
+	for _, f := range files {
+		owner := filepath.Base(f)
+		raw, err := os.ReadFile(f)
+		if err != nil || (!strings.Contains(string(raw), cronMarker) && !strings.Contains(string(raw), legacyCronMarker)) {
+			continue
+		}
+		if strings.ContainsAny(owner, " /;&|$`") {
+			continue
+		}
+		out, err := exec.Command("crontab", "-u", owner, "-l").Output()
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+		dirty := false
+		for i, l := range lines {
+			if !strings.Contains(l, cronMarker) && !strings.Contains(l, legacyCronMarker) {
+				continue
+			}
+			m := reOurCron.FindStringSubmatch(l)
+			if m == nil {
+				continue
+			}
+			if want := cronLine(m[1], hours); l != want {
+				lines[i], dirty = want, true
+			}
+		}
+		if dirty && installCrontab(owner, strings.Join(lines, "\n")+"\n") == nil {
+			changed++
+		}
+	}
+	return changed
+}
+
+// cronSpool holds the users' crontabs (RHEL/AlmaLinux; Debian keeps them in
+// /var/spool/cron/crontabs).
+var cronSpool = func() string {
+	if st, err := os.Stat("/var/spool/cron/crontabs"); err == nil && st.IsDir() {
+		return "/var/spool/cron/crontabs"
+	}
+	return "/var/spool/cron"
+}()
+
+var reOurCron = regexp.MustCompile(`\bcd (/\S+) && `)
 
 const (
 	cronMarker       = "# xpguard-wp-cron"

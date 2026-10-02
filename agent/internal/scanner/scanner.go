@@ -65,8 +65,11 @@ type Scan struct {
 	Target     string `json:"target"`
 	Status     string `json:"status"`
 	Files      int64  `json:"files"`
-	Total      int64  `json:"total"` // files to check (0 while still counting)
+	Total      int64  `json:"total"` // files to check (scans before 0.21)
 	Current    string `json:"current,omitempty"`
+	Units      int64  `json:"units"`          // accounts or folders to scan
+	UnitsDone  int64  `json:"units_done"`     // of them finished
+	Unit       string `json:"unit,omitempty"` // the account or folder now
 	Infected   int64  `json:"infected"`
 	Initiator  string `json:"initiator"`
 	StartedAt  int64  `json:"started_at"`
@@ -384,6 +387,10 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		if s.KnownGoodPath != nil && s.KnownGoodPath(path, sum) {
 			return nil, ErrTrusted
 		}
+		// Softaculous and WP Toolkit login helpers (see hostingtools.go).
+		if trustedHostingTool(path, content) {
+			return nil, ErrTrusted
+		}
 		if s.Cleared != nil {
 			sum := sha256.Sum256(content)
 			if s.Cleared(hex.EncodeToString(sum[:])) {
@@ -604,7 +611,8 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 	}
 }
 
-// Start queues a scan and returns its ID. kind: full | quick | path | daily | weekly.
+// Start queues a scan and returns its ID. kind: full | quick | path | daily |
+// weekly | new (a new, transferred or restored account, at low speed).
 func (s *Scanner) Start(kind, target, initiator string) (int64, error) {
 	var roots []string
 	var since time.Time
@@ -620,7 +628,7 @@ func (s *Scanner) Start(kind, target, initiator string) (int64, error) {
 		}
 		since = time.Now().AddDate(0, 0, -days)
 		target = fmt.Sprintf("files changed in the last %d day(s)", days)
-	case "quick", "path":
+	case "quick", "path", "new":
 		p, err := ValidateTarget(target)
 		if err != nil {
 			return 0, err
@@ -641,7 +649,7 @@ func (s *Scanner) Start(kind, target, initiator string) (int64, error) {
 	s.mu.Lock()
 	s.cancels[id] = cancel
 	s.mu.Unlock()
-	go s.run(ctx, id, roots, since)
+	go s.run(ctx, id, kind, roots, since)
 	return id, nil
 }
 
@@ -657,7 +665,15 @@ func (s *Scanner) Stop(id int64) error {
 	return nil
 }
 
-func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.Time) {
+// EngineRetries is how often a scan whose engine was killed (the server
+// ran out of memory, someone killed it) is started again, and RetryWait how
+// long it waits first.
+var (
+	EngineRetries = 3
+	RetryWait     = 2 * time.Minute
+)
+
+func (s *Scanner) run(ctx context.Context, id int64, kind string, roots []string, since time.Time) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.cancels, id)
@@ -676,11 +692,18 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	_, _ = s.DB.Exec(`UPDATE scans SET status='running', started_at=? WHERE id=?`, store.Now(), id)
 
 	cfg := s.Settings.Get().Scanner
+	if kind == "new" {
+		// New, transferred and restored accounts: scanned at once, gently.
+		cfg.ScanSpeed = "low"
+	}
 	var infected atomic.Int64
+	var base int64 // files of earlier attempts
+	unitsDone := 0
 	hooks := treeHooks{
-		total: func(n int64) { _, _ = s.DB.Exec(`UPDATE scans SET total = ? WHERE id = ?`, n, id) },
-		progress: func(files int64, current string) {
-			_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=?, current=? WHERE id=?`, files, infected.Load(), current, id)
+		total: func(n int64) { _, _ = s.DB.Exec(`UPDATE scans SET units = ? WHERE id = ?`, n, id) },
+		progress: func(files int64, current string, done int, unit string) {
+			unitsDone = done
+			_, _ = s.DB.Exec(`UPDATE scans SET files=?, infected=?, current=?, units_done=?, unit=? WHERE id=?`, base+files, infected.Load(), current, done, unit, id)
 		},
 		hit: func(path string, info fs.FileInfo, d Detection) {
 			if _, err := s.Record(id, "manual", path, info, d); err == nil {
@@ -690,10 +713,29 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	}
 	var files int64
 	var walkErr error
-	if EngineCommand != nil {
-		files, walkErr = s.runEngine(ctx, roots, since, cfg, hooks)
-	} else {
-		files, walkErr = s.scanTree(ctx, roots, since, cfg, hooks)
+	for attempt := 0; ; attempt++ {
+		var n int64
+		if EngineCommand != nil {
+			n, walkErr = s.runEngine(ctx, roots, since, unitsDone, cfg, hooks)
+		} else {
+			n, walkErr = s.scanTree(ctx, roots, since, unitsDone, cfg, hooks)
+		}
+		files = base + n
+		if walkErr == nil || ctx.Err() != nil || !engineCrashed(walkErr) || attempt >= EngineRetries {
+			break
+		}
+		// The engine process died (out of memory, killed): carry on from the
+		// account it was in after a pause.
+		base = files
+		s.Log.Warn("scan engine stopped unexpectedly; resuming", "id", id, "err", walkErr, "attempt", attempt+1)
+		_, _ = s.DB.Exec(`UPDATE scans SET error=? WHERE id=?`, fmt.Sprintf("engine stopped (%v); resuming", walkErr), id)
+		select {
+		case <-ctx.Done():
+		case <-time.After(RetryWait):
+		}
+		if ctx.Err() != nil {
+			break
+		}
 	}
 	status, errText := "completed", ""
 	if errors.Is(walkErr, context.Canceled) || ctx.Err() != nil {
@@ -701,58 +743,81 @@ func (s *Scanner) run(ctx context.Context, id int64, roots []string, since time.
 	} else if walkErr != nil {
 		status, errText = "failed", walkErr.Error()
 	}
-	_, _ = s.DB.Exec(`UPDATE scans SET status=?, files=?, infected=?, finished_at=?, error=?, current='', total=CASE WHEN ? = 'completed' THEN ? ELSE total END WHERE id=?`, status, files, infected.Load(), store.Now(), errText, status, files, id)
+	_, _ = s.DB.Exec(`UPDATE scans SET status=?, files=?, infected=?, finished_at=?, error=?, current='', unit='', units_done=CASE WHEN ? = 'completed' THEN units ELSE units_done END WHERE id=?`, status, files, infected.Load(), store.Now(), errText, status, id)
 	s.Log.Info("scan finished", "id", id, "status", status, "files", files, "infected", infected.Load())
 }
 
+// engineCrashed reports an engine process that ended without finishing
+// (killed by a signal or crashed), as opposed to a scan error it reported.
+func engineCrashed(err error) bool {
+	return strings.HasPrefix(err.Error(), "scan engine: ") && !strings.Contains(err.Error(), "executable file not found")
+}
+
+// yaraBatch is how many files YARA checks at a time during a scan.
+const yaraBatch = 20000
+
 // treeHooks receive what a scan of a tree finds.
 type treeHooks struct {
-	total    func(n int64)
-	progress func(files int64, current string) // at most once a second
+	total    func(units int64)                                        // accounts or folders to scan
+	progress func(files int64, current string, done int, unit string) // at most once a second
 	hit      func(path string, info fs.FileInfo, d Detection)
+}
+
+// scanUnit is one step of a scan's progress: an account, or one folder
+// (shallow: only the files directly in it) of a single scanned folder.
+type scanUnit struct {
+	base, path, label string
+	shallow           bool
+}
+
+// scanUnits splits the roots into progress units: each root is one (an
+// account's home); a single folder is split into its subfolders, so a
+// path or account scan shows progress too.
+func scanUnits(roots []string, skipDir func(root, path string, d fs.DirEntry) bool) []scanUnit {
+	if len(roots) == 1 {
+		r := roots[0]
+		ents, err := os.ReadDir(r)
+		if st, serr := os.Stat(r); err == nil && serr == nil && st.IsDir() {
+			out := []scanUnit{{base: r, path: r, label: filepath.Base(r), shallow: true}}
+			for _, e := range ents { // sorted by name
+				p := filepath.Join(r, e.Name())
+				if e.IsDir() && !skipDir(r, p, e) {
+					out = append(out, scanUnit{base: r, path: p, label: e.Name()})
+				}
+			}
+			return out
+		}
+	}
+	owners := map[string]string{}
+	for _, u := range Users() {
+		owners[filepath.Clean(u.Home)] = u.Name
+	}
+	out := make([]scanUnit, 0, len(roots))
+	for _, r := range roots {
+		label := filepath.Base(r)
+		if u := owners[filepath.Clean(r)]; u != "" {
+			label = u
+		}
+		out = append(out, scanUnit{base: r, path: r, label: label})
+	}
+	return out
 }
 
 // scanTree walks the roots and checks every file (changed since since,
 // when set): the work of a scan, in this process or in the scan engine.
-func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time, cfg settings.Scanner, h treeHooks) (int64, error) {
+func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time, skip int, cfg settings.Scanner, h treeHooks) (int64, error) {
 	var files int64
 	qdir := QuarantineDir()
 	homeMap := homes()
 	skipDir := func(root, path string, d fs.DirEntry) bool {
 		return path != root && (skipAnywhere[d.Name()] || (filepath.Dir(path) == root && skipInHome[d.Name()]) || path == qdir || systemPath(path))
 	}
-	// Count the files to check alongside the scan, for the progress bar.
-	go func() {
-		var total int64
-		for _, root := range roots {
-			_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				if err != nil {
-					return nil
-				}
-				if d.IsDir() {
-					if skipDir(root, path, d) {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				if d.Type().IsRegular() {
-					if !since.IsZero() {
-						if info, err := d.Info(); err != nil || info.ModTime().Before(since) {
-							return nil
-						}
-					}
-					total++
-				}
-				return nil
-			})
-		}
-		if ctx.Err() == nil && h.total != nil {
-			h.total(total)
-		}
-	}()
+	// Progress is counted in units (accounts, or a folder's subfolders), not
+	// files: counting every file first would read the whole disk twice.
+	units := scanUnits(roots, skipDir)
+	if h.total != nil {
+		h.total(int64(len(units)))
+	}
 	lastProgress := time.Now()
 	var scripts []string // for YARA
 	useYARA := cfg.YARA && YARABin() != "" && len(YARARules()) > 0
@@ -764,6 +829,19 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 	type job struct {
 		path string
 		info fs.FileInfo
+		unit int
+	}
+	// A unit is done once every one of its files has been checked (not
+	// just queued): a resumed scan skips only those.
+	queued := make([]atomic.Int64, len(units))
+	checked := make([]atomic.Int64, len(units))
+	walked := 0 // units the walker has left
+	doneUnits := skip
+	finished := func() int {
+		for doneUnits < walked && checked[doneUnits].Load() == queued[doneUnits].Load() {
+			doneUnits++
+		}
+		return doneUnits
 	}
 	type result struct {
 		job
@@ -771,6 +849,24 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 		err error
 	}
 	gov, workers := newGovernor(ctx, cfg.ScanSpeed, runtime.GOMAXPROCS(0))
+	yaraReport := func(batch []string) {
+		if ctx.Err() != nil {
+			return
+		}
+		for path, rule := range yaraScan(ctx, batch, workers) {
+			// Public feed rules are broad: suspicious, confirmed by the AI.
+			cat := CatVirus
+			if ns, name, ok := strings.Cut(rule, ":"); ok {
+				rule = name
+				if ns == "feed" {
+					cat = CatSuspicious
+				}
+			}
+			if info, err := os.Lstat(path); err == nil {
+				h.hit(path, info, Detection{cat, "YARA." + rule})
+			}
+		}
+	}
 	jobs := make(chan job, 256)
 	results := make(chan result, 256)
 	var wg sync.WaitGroup
@@ -794,23 +890,42 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 	collected := make(chan struct{})
 	go func() {
 		defer close(collected)
-		for r := range results {
+		handle := func(r result) {
 			if errors.Is(r.err, ErrTrusted) {
-				continue
+				return
 			}
 			if useYARA && (r.err != nil || r.det == nil) && r.info.Size() <= maxSize {
 				scripts = append(scripts, r.path)
+				// In batches: a list of every file of a big server would
+				// take hundreds of MB.
+				if len(scripts) >= yaraBatch {
+					yaraReport(scripts)
+					scripts = scripts[:0]
+				}
 			}
 			if r.err != nil || r.det == nil {
-				continue
+				return
 			}
 			h.hit(r.path, r.info, *r.det)
+		}
+		for r := range results {
+			handle(r)
+			checked[r.unit].Add(1) // after its hit was reported
 		}
 	}()
 
 	var walkErr error
-	for _, root := range roots {
-		walkErr = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	for i, u := range units {
+		if i < skip {
+			continue
+		}
+		root := u.base
+		walked = i
+		if h.progress != nil {
+			h.progress(files, u.path, finished(), u.label)
+			lastProgress = time.Now()
+		}
+		walkErr = filepath.WalkDir(u.path, func(path string, d fs.DirEntry, err error) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -818,7 +933,7 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 				return nil // unreadable entry: skip
 			}
 			if d.IsDir() {
-				if skipDir(root, path, d) {
+				if path != u.path && (u.shallow || skipDir(root, path, d)) {
 					return filepath.SkipDir
 				}
 				return nil
@@ -845,11 +960,12 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 			if time.Since(lastProgress) >= time.Second {
 				lastProgress = time.Now()
 				if h.progress != nil {
-					h.progress(files, path)
+					h.progress(files, path, finished(), u.label)
 				}
 			}
 			select {
-			case jobs <- job{path, info}:
+			case jobs <- job{path, info, i}:
+				queued[i].Add(1)
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -863,20 +979,12 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 	wg.Wait()
 	close(results)
 	<-collected
-	if ctx.Err() == nil {
-		for path, rule := range yaraScan(ctx, scripts, workers) {
-			// Public feed rules are broad: suspicious, confirmed by the AI.
-			cat := CatVirus
-			if ns, name, ok := strings.Cut(rule, ":"); ok {
-				rule = name
-				if ns == "feed" {
-					cat = CatSuspicious
-				}
-			}
-			if info, err := os.Lstat(path); err == nil {
-				h.hit(path, info, Detection{cat, "YARA." + rule})
-			}
-		}
+	if h.progress != nil && walkErr == nil {
+		walked = len(units)
+		h.progress(files, "", finished(), "")
+	}
+	if len(scripts) > 0 {
+		yaraReport(scripts)
 	}
 	return files, walkErr
 }
@@ -907,14 +1015,44 @@ func (s *Scanner) ListScans(limit int) ([]Scan, error) { return s.ListScansUnder
 // GetScan returns one scan.
 func (s *Scanner) GetScan(id int64) (Scan, error) {
 	var sc Scan
-	err := s.DB.QueryRow(`SELECT id, kind, target, status, files, total, current, infected, initiator, started_at, finished_at, error FROM scans WHERE id = ?`, id).
-		Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error)
+	err := s.DB.QueryRow(`SELECT id, kind, target, status, files, total, current, units, units_done, unit, infected, initiator, started_at, finished_at, error FROM scans WHERE id = ?`, id).
+		Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Units, &sc.UnitsDone, &sc.Unit, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error)
+	return sc, err
+}
+
+const scanCols = `id, kind, target, status, files, total, current, units, units_done, unit, infected, initiator, started_at, finished_at, error`
+
+// ListScansPage lists scans newest first, a page at a time, with the count.
+func (s *Scanner) ListScansPage(limit, offset int) ([]Scan, int, error) {
+	var total int
+	_ = s.DB.QueryRow(`SELECT count(*) FROM scans`).Scan(&total)
+	rows, err := s.DB.Query(`SELECT `+scanCols+` FROM scans ORDER BY id DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	out := []Scan{}
+	for rows.Next() {
+		var sc Scan
+		if err := rows.Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Units, &sc.UnitsDone, &sc.Unit, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, sc)
+	}
+	return out, total, rows.Err()
+}
+
+// LastScan is the newest completed scan of a kind.
+func (s *Scanner) LastScan(kind string) (Scan, error) {
+	var sc Scan
+	err := s.DB.QueryRow(`SELECT `+scanCols+` FROM scans WHERE kind = ? AND status = 'completed' ORDER BY id DESC LIMIT 1`, kind).
+		Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Units, &sc.UnitsDone, &sc.Unit, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error)
 	return sc, err
 }
 
 // ListScansUnder lists scans whose target is dir or below it ("" = all).
 func (s *Scanner) ListScansUnder(dir string, limit int) ([]Scan, error) {
-	q, args := `SELECT id, kind, target, status, files, total, current, infected, initiator, started_at, finished_at, error FROM scans`, []any{}
+	q, args := `SELECT id, kind, target, status, files, total, current, units, units_done, unit, infected, initiator, started_at, finished_at, error FROM scans`, []any{}
 	if dir != "" {
 		q, args = q+` WHERE target = ? OR substr(target, 1, ?) = ?`, append(args, dir, len(dir)+1, dir+"/")
 	}
@@ -926,7 +1064,7 @@ func (s *Scanner) ListScansUnder(dir string, limit int) ([]Scan, error) {
 	out := []Scan{}
 	for rows.Next() {
 		var sc Scan
-		if err := rows.Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error); err != nil {
+		if err := rows.Scan(&sc.ID, &sc.Kind, &sc.Target, &sc.Status, &sc.Files, &sc.Total, &sc.Current, &sc.Units, &sc.UnitsDone, &sc.Unit, &sc.Infected, &sc.Initiator, &sc.StartedAt, &sc.FinishedAt, &sc.Error); err != nil {
 			return nil, err
 		}
 		out = append(out, sc)
@@ -959,6 +1097,10 @@ type FindingFilter struct {
 	// Source: manual, realtime, scheduled, ai, or "background" (anything
 	// but manual scans).
 	Source string `json:"source"`
+	// Since keeps detections from this time on; BeforeID pages through an
+	// export without repeats while new detections arrive.
+	Since    int64 `json:"since"`
+	BeforeID int64 `json:"before_id"`
 }
 
 // ListFindings returns detections, newest first, with the total count.
@@ -970,6 +1112,13 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	}
 	if f.Category != "" {
 		where, args = append(where, "category = ?"), append(args, f.Category)
+	}
+	if f.Since > 0 {
+		// Detected, found again or acted on in the period.
+		where, args = append(where, "updated_at >= ?"), append(args, f.Since)
+	}
+	if f.BeforeID > 0 {
+		where, args = append(where, "id < ?"), append(args, f.BeforeID)
 	}
 	if f.Status != "" {
 		where, args = append(where, "status = ?"), append(args, f.Status)

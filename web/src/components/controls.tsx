@@ -31,7 +31,18 @@ export function useAgent<T>(serverId: string | undefined, action: string, params
     setLoading(true);
     load();
     if (!intervalMs) return;
-    const t = setInterval(load, intervalMs);
+    // A slow or unreachable server must not pile up requests: the next
+    // refresh waits for the last one, and hidden tabs do not poll.
+    let busy = false;
+    const t = setInterval(async () => {
+      if (busy || document.hidden) return;
+      busy = true;
+      try {
+        await load();
+      } finally {
+        busy = false;
+      }
+    }, intervalMs);
     return () => clearInterval(t);
   }, [load, intervalMs]);
   return { data, error, loading, reload: load, setData };

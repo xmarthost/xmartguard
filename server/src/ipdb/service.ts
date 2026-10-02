@@ -7,6 +7,7 @@ import type { AgentHub } from '../agents/hub.js';
 import { versionLess } from '../agents/release.js';
 import type { GeoDB } from './geo.js';
 import { MAIL_MIN_AGENT, syncMail } from '../routes/mail.js';
+import { eachLimit, single } from '../agents/limit.js';
 
 /** Agents older than this do not implement the ipdb.* commands. */
 export const IPDB_MIN_AGENT = '0.3.0';
@@ -83,17 +84,18 @@ export class IPDBService {
 
   start(): void {
     // Every server whitelists the other servers of its account.
-    const fleet = () => this.syncFleetAll().catch((err) => this.log.warn({ err }, 'fleet sync failed'));
+    // (single: with hundreds of servers a run can outlast the interval.)
+    const fleet = single(() => this.syncFleetAll().catch((err) => this.log.warn({ err }, 'fleet sync failed')));
     this.timers.push(setInterval(fleet, 10 * 60_000));
     if (!this.cfg.ipdbSync) return;
-    const tick = async () => {
+    const tick = single(async () => {
       try {
         if (this.dirty || Date.now() - this.builtAt > 10 * 60_000) await this.rebuild();
         await this.syncAll();
       } catch (err) {
         this.log.error({ err }, 'ipdb tick failed');
       }
-    };
+    });
     this.timers.push(setInterval(tick, 60_000));
     this.timers.push(setTimeout(tick, 5_000));
     const feeds = () => this.refreshFeeds().catch((err) => this.log.error({ err }, 'ipdb feeds failed'));
@@ -234,14 +236,10 @@ export class IPDBService {
 
   private async syncFleetAll(): Promise<void> {
     const conns = this.hub.connections().filter((c) => !versionLess(c.version, FLEET_MIN_AGENT));
-    for (let i = 0; i < conns.length; i += 10) {
-      await Promise.all(
-        conns.slice(i, i + 10).map(async (c) => {
-          await this.syncFleet(c.serverId).catch(() => undefined);
-          if (!versionLess(c.version, MAIL_MIN_AGENT)) await syncMail(this.pool, this.hub, c.serverId).catch(() => undefined);
-        }),
-      );
-    }
+    await eachLimit(conns, 10, async (c) => {
+      await this.syncFleet(c.serverId).catch(() => undefined);
+      if (!versionLess(c.version, MAIL_MIN_AGENT)) await syncMail(this.pool, this.hub, c.serverId).catch(() => undefined);
+    });
   }
 
   /** Every enrolled server's addresses: never listed. */
@@ -258,15 +256,9 @@ export class IPDBService {
 
   private async syncAll(): Promise<void> {
     const conns = this.hub.connections().filter((c) => !versionLess(c.version, IPDB_MIN_AGENT));
-    for (let i = 0; i < conns.length; i += 5) {
-      await Promise.all(
-        conns.slice(i, i + 5).map((c) =>
-          this.syncServer(c.serverId).catch((err) =>
-            this.log.warn({ serverId: c.serverId, err: (err as Error).message }, 'ipdb sync failed'),
-          ),
-        ),
-      );
-    }
+    await eachLimit(conns, 8, (c) =>
+      this.syncServer(c.serverId).catch((err) => this.log.warn({ serverId: c.serverId, err: (err as Error).message }, 'ipdb sync failed')),
+    );
     if (this.dirty) await this.rebuild();
   }
 

@@ -10,6 +10,9 @@ import { parseEd25519PublicKey, sha256, verifyEd25519 } from '../security.js';
 import { currentRelease, versionLess } from '../agents/release.js';
 import type { IPDBService } from '../ipdb/service.js';
 
+/** How often agents are pinged; one missed answer closes the connection. */
+export const AGENT_PING_MS = 30_000;
+
 const uuid = z.string().uuid();
 
 const EnrollBody = z.object({
@@ -175,7 +178,29 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
 
       socket.send(JSON.stringify({ type: 'challenge', nonce }));
 
+      // A server that goes down without closing its connection (power loss,
+      // network cut) is noticed within a minute: it would otherwise look
+      // online while every command to it waits for its timeout.
+      let alive = true;
+      socket.on('pong', () => {
+        alive = true;
+      });
+      const heartbeat = setInterval(() => {
+        if (!alive) {
+          log.warn('agent stopped answering; closing its connection');
+          socket.terminate();
+          return;
+        }
+        alive = false;
+        try {
+          socket.ping();
+        } catch {
+          /* closing */
+        }
+      }, AGENT_PING_MS);
+
       socket.on('message', (raw) => {
+        alive = true;
         chain = chain.then(async () => {
           let msg: Record<string, unknown>;
           try {
@@ -222,6 +247,7 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
 
       socket.on('close', () => {
         clearTimeout(authTimer);
+        clearInterval(heartbeat);
         chain = chain.then(async () => {
           if (conn) {
             await hub.detach(conn);

@@ -185,7 +185,10 @@ func (r *Realtime) addNewRoots() {
 		_, known := r.byPath[root]
 		r.mu.Unlock()
 		if !known {
-			r.addTree(root, true)
+			// A new account's websites get their own low-speed "new" scan
+			// (see WatchNewSites); here only its folders are watched, so a
+			// migration of many accounts does not queue every file at once.
+			r.addTree(root, false)
 		}
 	}
 }
@@ -628,6 +631,9 @@ func (r *Realtime) flushPending() {
 	}
 }
 
+// ScheduleFrom and ScheduleTo are the hours the daily and weekly scans start in.
+var ScheduleFrom, ScheduleTo = 2, 5
+
 // Scheduler runs the daily and weekly scans of recently changed files.
 func (s *Scanner) Scheduler(ctx context.Context, lastRun func(kind string) int64, markRun func(kind string)) {
 	t := time.NewTicker(15 * time.Minute)
@@ -635,9 +641,10 @@ func (s *Scanner) Scheduler(ctx context.Context, lastRun func(kind string) int64
 	for {
 		cfg := s.Settings.Get().Scanner
 		now := time.Now().In(ScheduleZone(cfg.ScheduleTZ))
-		// Run just after midnight (00:00-03:00 in the schedule's time zone,
-		// whatever the server's clock is set to) at most once per period.
-		if cfg.Enabled && now.Hour() < 3 {
+		// Run at night (02:00-05:00 in the schedule's time zone, whatever
+		// the server's clock is set to) at most once per period: not at
+		// midnight, when hosting servers run most of their users' cron jobs.
+		if cfg.Enabled && now.Hour() >= ScheduleFrom && now.Hour() < ScheduleTo {
 			if cfg.WeeklyScan && now.Weekday() == time.Sunday && now.Unix()-lastRun("weekly") > 6*86400 {
 				if _, err := s.Start("weekly", "", "scheduler"); err == nil {
 					markRun("weekly")

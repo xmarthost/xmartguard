@@ -39,6 +39,7 @@ var EngineCommand func() *exec.Cmd
 type EngineReq struct {
 	Roots  []string         `json:"roots"`
 	Since  int64            `json:"since,omitempty"`
+	Skip   int              `json:"skip,omitempty"` // units already scanned (a resumed scan)
 	Config settings.Scanner `json:"config"`
 }
 
@@ -46,6 +47,8 @@ type EngineReq struct {
 type engineMsg struct {
 	T       string `json:"t"` // total | progress | hit | done
 	N       int64  `json:"n,omitempty"`
+	Done    int    `json:"done,omitempty"` // progress: units finished
+	Unit    string `json:"unit,omitempty"` // progress: the account or folder now
 	Path    string `json:"path,omitempty"`
 	Cat     string `json:"cat,omitempty"`
 	Name    string `json:"name,omitempty"`
@@ -65,7 +68,7 @@ func EngineCores(speed string, cpus int) int {
 }
 
 // runEngine runs a scan in the engine process and records its hits.
-func (s *Scanner) runEngine(ctx context.Context, roots []string, since time.Time, cfg settings.Scanner, h treeHooks) (int64, error) {
+func (s *Scanner) runEngine(ctx context.Context, roots []string, since time.Time, skip int, cfg settings.Scanner, h treeHooks) (int64, error) {
 	cmd := EngineCommand()
 	cores := EngineCores(cfg.ScanSpeed, runtime.NumCPU())
 	if cmd.Env == nil {
@@ -73,7 +76,7 @@ func (s *Scanner) runEngine(ctx context.Context, roots []string, since time.Time
 	}
 	cmd.Env = append(cmd.Env, "GOMAXPROCS="+strconv.Itoa(cores))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
-	req := EngineReq{Roots: roots, Config: cfg}
+	req := EngineReq{Roots: roots, Skip: skip, Config: cfg}
 	if !since.IsZero() {
 		req.Since = since.Unix()
 	}
@@ -113,7 +116,7 @@ func (s *Scanner) runEngine(ctx context.Context, roots []string, since time.Time
 		case "progress":
 			files = m.N
 			if h.progress != nil {
-				h.progress(m.N, m.Path)
+				h.progress(m.N, m.Path, m.Done, m.Unit)
 			}
 		case "hit":
 			info, err := os.Lstat(m.Path)
@@ -170,6 +173,9 @@ func startLowPriority(cmd *exec.Cmd, done <-chan struct{}) error {
 		return err
 	}
 	pid := cmd.Process.Pid
+	// When the server runs out of memory the kernel ends the scan rather
+	// than MySQL or a website; the agent starts it again (see run).
+	_ = os.WriteFile("/proc/"+strconv.Itoa(pid)+"/oom_score_adj", []byte("800"), 0o644)
 	_ = unix.Setpriority(unix.PRIO_PGRP, pid, 19)
 	const ioprioClassIdle, ioprioClassShift, ioprioWhoPgrp = 3, 13, 2
 	_, _, _ = unix.Syscall(unix.SYS_IOPRIO_SET, ioprioWhoPgrp, uintptr(pid), ioprioClassIdle<<ioprioClassShift)
@@ -194,9 +200,11 @@ func RunEngine(ctx context.Context, s *Scanner, in io.Reader, out io.Writer) err
 	if req.Since > 0 {
 		since = time.Unix(req.Since, 0)
 	}
-	files, err := s.scanTree(ctx, req.Roots, since, req.Config, treeHooks{
-		total:    func(n int64) { emit(engineMsg{T: "total", N: n}) },
-		progress: func(n int64, cur string) { emit(engineMsg{T: "progress", N: n, Path: cur}) },
+	files, err := s.scanTree(ctx, req.Roots, since, req.Skip, req.Config, treeHooks{
+		total: func(n int64) { emit(engineMsg{T: "total", N: n}) },
+		progress: func(n int64, cur string, done int, unit string) {
+			emit(engineMsg{T: "progress", N: n, Path: cur, Done: done, Unit: unit})
+		},
 		hit: func(path string, _ fs.FileInfo, d Detection) {
 			// Signature and heuristic hits are checked again by the agent;
 			// symlinks and YARA matches are final.

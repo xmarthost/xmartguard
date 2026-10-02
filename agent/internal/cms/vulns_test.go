@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -83,7 +84,7 @@ func TestEnsureRealCron(t *testing.T) {
 		t.Fatalf("wp-config: %s", cfg)
 	}
 	tab, _ := exec.Command("crontab", "-u", "nobody", "-l").Output()
-	if !strings.Contains(string(tab), "0 */12 * * * cd "+site) {
+	if !strings.Contains(string(tab), cronLine(site, 12)) {
 		t.Fatalf("crontab: %s", tab)
 	}
 	if changed, _ := EnsureRealCron(site, "nobody", 12); changed {
@@ -94,7 +95,7 @@ func TestEnsureRealCron(t *testing.T) {
 		t.Fatalf("interval change: %v %v", changed, err)
 	}
 	tab, _ = exec.Command("crontab", "-u", "nobody", "-l").Output()
-	if strings.Count(string(tab), "cd "+site) != 1 || !strings.Contains(string(tab), "0 */1 * * * cd "+site) {
+	if strings.Count(string(tab), "cd "+site) != 1 || !strings.Contains(string(tab), cronLine(site, 1)) {
 		t.Fatalf("crontab after interval change: %s", tab)
 	}
 	// Turning the option off undoes both changes.
@@ -108,5 +109,55 @@ func TestEnsureRealCron(t *testing.T) {
 	}
 	if changed, _ := RemoveRealCron(site, "nobody"); changed {
 		t.Fatal("second remove changed things")
+	}
+}
+
+// Sites get their own minute and hour, so "every 24 hours" does not start
+// every site's wp-cron.php at midnight together.
+func TestCronLinesSpread(t *testing.T) {
+	minutes, hours := map[string]bool{}, map[string]bool{}
+	for i := 0; i < 200; i++ {
+		f := strings.Fields(cronLine("/home/u"+strconv.Itoa(i)+"/public_html", 24))
+		minutes[f[0]], hours[f[1]] = true, true
+		if strings.Contains(f[1], ",") || strings.Contains(f[1], "*") {
+			t.Fatalf("24h line runs more than once a day: %v", f)
+		}
+	}
+	if len(minutes) < 40 || len(hours) < 20 {
+		t.Fatalf("not spread: %d minutes, %d hours", len(minutes), len(hours))
+	}
+	if f := strings.Fields(cronLine("/home/a/public_html", 6)); strings.Count(f[1], ",") != 3 {
+		t.Fatalf("6h line: %v", f)
+	}
+	if f := strings.Fields(cronLine("/home/a/public_html", 1)); f[1] != "*" {
+		t.Fatalf("hourly line: %v", f)
+	}
+	if l := cronLine("/home/a/public_html", 1); !strings.Contains(l, "nice -n 15 ") || !strings.HasSuffix(l, cronMarker) {
+		t.Fatalf("line: %s", l)
+	}
+}
+
+// Lines written by earlier versions (all at 0:00) move to their own times.
+func TestRespreadCrons(t *testing.T) {
+	if _, err := exec.LookPath("crontab"); err != nil || os.Geteuid() != 0 {
+		t.Skip("needs root and crontab")
+	}
+	if os.Getenv("XG_DESTRUCTIVE_TESTS") != "1" {
+		t.Skip("edits the crontab of user nobody; set XG_DESTRUCTIVE_TESTS=1")
+	}
+	defer exec.Command("crontab", "-u", "nobody", "-r").Run()
+	old := "MAILTO=\"\"\n0 */24 * * * cd /home/x/public_html && php -q wp-cron.php >/dev/null 2>&1 " + cronMarker + "\n5 1 * * * /bin/true\n"
+	if err := installCrontab("nobody", old); err != nil {
+		t.Skip("crontab:", err)
+	}
+	if n := RespreadCrons(24); n != 1 {
+		t.Fatalf("changed %d crontabs", n)
+	}
+	tab, _ := exec.Command("crontab", "-u", "nobody", "-l").Output()
+	if !strings.Contains(string(tab), cronLine("/home/x/public_html", 24)) || !strings.Contains(string(tab), "5 1 * * * /bin/true") || !strings.Contains(string(tab), "MAILTO") {
+		t.Fatalf("crontab: %s", tab)
+	}
+	if n := RespreadCrons(24); n != 0 {
+		t.Fatal("second pass changed things")
 	}
 }

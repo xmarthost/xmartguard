@@ -43,8 +43,8 @@ func TestScanTreeCost(t *testing.T) {
 	cfg.YARA = false
 	var files int64
 	t0 := time.Now()
-	n, err := s.scanTree(context.Background(), []string{root}, time.Time{}, cfg, treeHooks{
-		total: func(int64) {}, progress: func(int64, string) {},
+	n, err := s.scanTree(context.Background(), []string{root}, time.Time{}, 0, cfg, treeHooks{
+		total: func(int64) {}, progress: func(int64, string, int, string) {},
 		hit: func(string, fs.FileInfo, Detection) {},
 	})
 	if err != nil {

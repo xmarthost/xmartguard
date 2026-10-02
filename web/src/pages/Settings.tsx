@@ -334,10 +334,10 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         <SettingRow title="Realtime scanning" desc="Scan files in website directories as soon as they are written" recommended>
           <Toggle on={s.realtime} disabled={dis} onChange={(v) => onSave({ realtime: v })} />
         </SettingRow>
-        <SettingRow title="Daily scan" desc={`Scan all files modified in the last 24 hours (every night after 12:00 AM, ${tzLabel(s.schedule_tz)})`} recommended>
+        <SettingRow title="Daily scan" desc={`Scan all files modified in the last 24 hours (every night between 2:00 and 5:00 AM, ${tzLabel(s.schedule_tz)})`} recommended>
           <Toggle on={s.daily_scan} disabled={dis} onChange={(v) => onSave({ daily_scan: v })} />
         </SettingRow>
-        <SettingRow title="Weekly scan" desc={`Scan all files modified in the last 7 days (Saturday to Sunday night, after 12:00 AM, ${tzLabel(s.schedule_tz)}); replaces that night's daily scan`} recommended>
+        <SettingRow title="Weekly scan" desc={`Scan all files modified in the last 7 days (Saturday to Sunday night, between 2:00 and 5:00 AM, ${tzLabel(s.schedule_tz)}); replaces that night's daily scan`} recommended>
           <Toggle on={s.weekly_scan} disabled={dis} onChange={(v) => onSave({ weekly_scan: v })} />
         </SettingRow>
         <SettingRow title="Scan schedule time zone" desc="The nightly scans start between 12:00 AM and 3:00 AM in this time zone, whatever the server's own clock is set to.">
@@ -1338,7 +1338,7 @@ function CMSSection({ s, meta, admin, busy, onSave }: { s: CMSS; meta: Meta; adm
       </SettingRow>
       <SettingRow
         title="Override wordpress wp-cron.php"
-        desc="Performance setting, not a malware action: WordPress normally runs its scheduled tasks (wp-cron.php) on visitors' page loads. This adds DISABLE_WP_CRON to wp-config.php and runs wp-cron.php from the site owner's cron instead, at the interval below. Turning it off puts both back."
+        desc="Performance setting, not a malware action: WordPress normally runs its scheduled tasks (wp-cron.php) on visitors' page loads. This adds DISABLE_WP_CRON to wp-config.php and runs wp-cron.php from the site owner's cron instead, at the interval below, at a lower priority and at a different minute and hour for each website (never all at midnight). Turning it off puts both back."
       >
         <Toggle on={s.wp_cron} disabled={dis || !s.enabled} onChange={(v) => onSave({ wp_cron: v })} />
       </SettingRow>
