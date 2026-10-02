@@ -19,6 +19,8 @@ import "fmt"
 const (
 	IDEditorCookie = 7700040
 	IDEditorAuth   = 7700041
+	// Mail clients (Outlook) asking cPanel for their settings.
+	IDAutodiscover = 7700042
 	// editorThreshold: no request reaches it.
 	editorThreshold = 100000
 )
@@ -56,4 +58,19 @@ func editorSetup() string {
 		`  SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_[0-9a-f]{32}$" "t:none,chain"` + "\n  " + set + "\n" +
 		fmt.Sprintf(`SecRule REQUEST_URI "@rx (?:/wp-json/|[?&]rest_route=)" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, IDEditorAuth) + "\n" +
 		`  SecRule REQUEST_HEADERS:Authorization "@rx ^(?:basic|bearer)\s+\S{8,}" "t:none,t:lowercase,chain"` + "\n  " + set + "\n"
+}
+
+// AllowedMethods are the HTTP methods the OWASP CRS lets through.
+const AllowedMethods = "GET HEAD POST OPTIONS PUT PATCH DELETE"
+
+// autodiscoverSetup lets mail clients' Autodiscover requests through:
+// Outlook POSTs an XML document (<Autodiscover><Request><EMailAddress>…)
+// to /autodiscover/autodiscover.xml, which the CRS XSS rules (941100,
+// libinjection) read as markup; cPanel answers it, no website code runs.
+func autodiscoverSetup() string {
+	return "# Mail clients asking for their settings (Outlook Autodiscover, xPGuard WAF level).\n" +
+		fmt.Sprintf(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDAutodiscover) + "\n" +
+		`  SecRule REQUEST_FILENAME "@rx ^/+autodiscover/autodiscover\.xml$" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n" +
+		`  SecRule REQUEST_HEADERS:Content-Type "@rx ^(?:text|application)/xml" "t:none,t:lowercase,chain"` + "\n" +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n"
 }

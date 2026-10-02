@@ -202,9 +202,14 @@ func randomName(name string) bool {
 var (
 	reAutoPrepend = regexp.MustCompile(`(?im)^\s*(?:php_value\s+)?auto_(?:prepend|append)_file\s*=?\s*["']?([^"'\s]+)`)
 	// Security plugins that legitimately load through auto_prepend_file.
-	knownPrepend   = []string{"wordfence-waf.php", "ninjafirewall", "nfwlog", "malcare", "bv-", "sucuri", "wp-defender", "patchstack", "/usr/local/", "/opt/"}
-	reActiveMarkup = regexp.MustCompile(`(?i)<script|<iframe|http-equiv\s*=\s*["']?refresh|window\.location|document\.location`)
-	imageExts      = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".ico": true, ".bmp": true, ".tif": true, ".tiff": true, ".webp": true}
+	knownPrepend = []string{"wordfence-waf.php", "ninjafirewall", "nfwlog", "malcare", "bv-", "sucuri", "wp-defender", "patchstack", "/usr/local/", "/opt/"}
+	// A redirect or a frame: what SEO-spam and phishing pages hidden under
+	// image names do. Scripts alone are not enough: CDN challenge and error
+	// pages saved as .jpg by image importers (template kits, optimizers)
+	// carry scripts too, and the web server sends .jpg files as images.
+	reActiveMarkup   = regexp.MustCompile(`(?i)<iframe|http-equiv\s*=\s*["']?refresh|(?:window|document|top|self)\.location(?:\.href)?\s*=|location\.(?:replace|assign)\s*\(`)
+	reSavedErrorPage = regexp.MustCompile(`(?i)cloudflare|_cf_chl|cf-browser-verification|just a moment|attention required|access denied|captcha|404 not found|403 forbidden|<title>[^<]*(?:error|not found)`)
+	imageExts        = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".ico": true, ".bmp": true, ".tif": true, ".tiff": true, ".webp": true}
 )
 
 // configLoader flags php.ini, .user.ini and .htaccess files that make PHP
@@ -249,7 +254,7 @@ func markupInImage(ext string, content []byte) *Detection {
 		// A cached HTML error page (a CDN or avatar cache saving a 404 page as
 		// .jpg) is harmless; spam and phishing pages carry scripts,
 		// frames or redirects.
-		if reActiveMarkup.Match(content) {
+		if reActiveMarkup.Match(content) && !reSavedErrorPage.Match(content) {
 			return &Detection{CatSuspicious, "Disguised.MarkupInImage"}
 		}
 	}

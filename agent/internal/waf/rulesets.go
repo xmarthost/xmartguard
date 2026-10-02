@@ -266,8 +266,12 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		}
 		setupText := fmt.Sprintf("# OWASP CRS %s set up by xPGuard (WAF Rule Sets in the portal).\nInclude %s\n"+
 			"SecAction \"id:900000,phase:1,pass,t:none,nolog,setvar:tx.%s=%d\"\n"+
-			"SecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=%d,setvar:tx.outbound_anomaly_score_threshold=%d\"\n",
-			rs.CRS.Version, filepath.Join(dir, "crs-setup.conf.example"), plVar, pl, in, out)
+			"SecAction \"id:900110,phase:1,pass,t:none,nolog,setvar:tx.inbound_anomaly_score_threshold=%d,setvar:tx.outbound_anomaly_score_threshold=%d\"\n"+
+			// Websites' own APIs (Laravel, Node, ERP apps, the WordPress REST
+			// API) update and delete with PUT, PATCH and DELETE; CRS allows
+			// only GET, HEAD, POST and OPTIONS by default (rule 911100).
+			"SecAction \"id:900200,phase:1,pass,t:none,nolog,setvar:'tx.allowed_methods=%s'\"\n",
+			rs.CRS.Version, filepath.Join(dir, "crs-setup.conf.example"), plVar, pl, in, out, AllowedMethods)
 		crs.Detail = fmt.Sprintf("paranoia level %d, anomaly threshold %d", pl, in)
 		post := ""
 		if sb, ok := m.softBlock(rs.CRS, in); ok {
@@ -279,7 +283,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			crs.Detail += "; weak signals from clean visitors get the CAPTCHA page"
 		}
 		if lv := m.level(); lv != "strict" {
-			setupText += editorSetup()
+			setupText += editorSetup() + autodiscoverSetup()
 			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing"
 		}
 		files[setup] = setupText

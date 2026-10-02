@@ -56,6 +56,8 @@ type Finding struct {
 	// AIInjected: the AI found malicious code added to a legitimate file
 	// (it can be trimmed).
 	AIInjected bool `json:"ai_injected,omitempty"`
+	// Repeats: how often the quarantined file was written again.
+	Repeats int64 `json:"repeats,omitempty"`
 }
 
 // Scan is one scan job.
@@ -87,6 +89,8 @@ type Scanner struct {
 	Log      *slog.Logger
 	// OnFinding is called for every new detection (notifications).
 	OnFinding func(Finding)
+	// OnReinfection is called when a quarantined file keeps coming back.
+	OnReinfection func(Finding)
 	// OnClean is called for new or changed code files the realtime scanner
 	// found clean (the AI scanner's "all files" mode).
 	OnClean func(path string, info fs.FileInfo)
@@ -556,6 +560,26 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		}
 		return f, nil
 	}
+	// The same file back after it was quarantined: something keeps writing
+	// it (a running process, a cron job, a malicious plugin or database
+	// entry). One copy is kept already, so the file is removed again and the
+	// finding counts the return instead of adding a row, a notification
+	// and an email every time.
+	if f.SHA256 != "" {
+		var qid int64
+		var repeats int64
+		if err := s.DB.QueryRow(`SELECT id, repeats FROM findings WHERE path = ? AND sha256 = ? AND status = 'quarantined' ORDER BY id DESC LIMIT 1`, path, f.SHA256).Scan(&qid, &repeats); err == nil && s.actionFor(d.Category, f.Owner) == settings.ActionQuarantine {
+			if sha256File(path) == f.SHA256 && os.Remove(path) == nil {
+				repeats++
+				_, _ = s.DB.Exec(`UPDATE findings SET repeats = ?, updated_at = ?, scan_id = CASE WHEN ? > 0 THEN ? ELSE scan_id END WHERE id = ?`, repeats, now, scanID, scanID, qid)
+				f.ID, f.Status, f.Repeats = qid, "quarantined", repeats
+				if s.OnReinfection != nil && reinfectionAlert(repeats) {
+					s.OnReinfection(f)
+				}
+				return f, nil
+			}
+		}
+	}
 	res, err := s.DB.Exec(`INSERT INTO findings (scan_id, source, path, owner, category, signature, sha256, size, status, created_at, updated_at, orig_mode, orig_uid, orig_gid)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, scanID, source, path, f.Owner, f.Category, f.Signature, f.SHA256, f.Size, f.Status, now, now, int(info.Mode().Perm()), uid, gid)
 	if err != nil {
@@ -571,6 +595,28 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 }
 
 var errExists = errors.New("already recorded")
+
+// reinfectionAlert says which returns of a file are worth an alert: the
+// 3rd, then every thousandth (a dropper running every few seconds would
+// otherwise send thousands).
+func reinfectionAlert(n int64) bool { return n == 3 || n%1000 == 0 }
+
+// actionFor is the configured action for a category of a file's owner.
+func (s *Scanner) actionFor(category, owner string) string {
+	cfg := s.Settings.Get().Scanner
+	if owner == "root" && !ScanRootFiles {
+		return settings.ActionNotify
+	}
+	switch category {
+	case CatSuspicious:
+		return cfg.SuspiciousAction
+	case CatBinary:
+		return cfg.BinaryAction
+	case CatSymlink:
+		return settings.ActionNotify
+	}
+	return cfg.VirusAction
+}
 
 // applyAction runs the configured action (quarantine, disable, …) for a
 // finding's category and updates f.Status.
@@ -1145,7 +1191,7 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 		return nil, 0, err
 	}
 	rows, err := s.DB.Query(`SELECT id, scan_id, findings.source, path, owner, category, signature, findings.sha256, findings.size, status, created_at, updated_at,
-		coalesce(v.verdict, ''), coalesce(v.reason, ''), coalesce(v.confidence, 0), coalesce(v.model, ''), coalesce(v.injected, 0)
+		coalesce(v.verdict, ''), coalesce(v.reason, ''), coalesce(v.confidence, 0), coalesce(v.model, ''), coalesce(v.injected, 0), findings.repeats
 		FROM findings LEFT JOIN ai_verdicts v ON v.sha256 = findings.sha256 AND findings.sha256 != ''
 		WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -1155,7 +1201,7 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	out := []Finding{}
 	for rows.Next() {
 		var x Finding
-		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt, &x.AIVerdict, &x.AIReason, &x.AIConfidence, &x.AIModel, &x.AIInjected); err != nil {
+		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt, &x.AIVerdict, &x.AIReason, &x.AIConfidence, &x.AIModel, &x.AIInjected, &x.Repeats); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, x)

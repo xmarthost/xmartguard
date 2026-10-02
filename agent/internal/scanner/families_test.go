@@ -22,7 +22,8 @@ func TestFamiliesDetect(t *testing.T) {
 		{"ua cloaking", ".php", `<?php $ua=$_SERVER['HTTP_USER_AGENT']; if (preg_match('/googlebot|bingbot/i',$ua)) { include 'page.html'; exit; }`, "PHP.SEO.UserAgentCloaking"},
 		{"remote content hook", ".php", `<?php add_action('template_redirect', function(){ $r = wp_remote_get($u, ['sslverify' => false]); echo wp_remote_retrieve_body($r); exit; });`, "PHP.Injector.RemoteContent"},
 		{"user.ini loader", ".ini", "auto_prepend_file = \"/home/u/public_html/wp-content/.x.ico\"\n", "PHP.Config.AutoPrependLoader"},
-		{"html in png", ".png", "<!DOCTYPE html><html><body>spam<script src=x.js></script></body></html>", "Disguised.MarkupInImage"},
+		{"redirect page in png", ".png", "<!DOCTYPE html><html><body>spam<script>window.location.href='https://spam.example/'</script></body></html>", "Disguised.MarkupInImage"},
+		{"frame page in jpg", ".jpg", "<html><body><iframe src='https://phish.example/login'></iframe></body></html>", "Disguised.MarkupInImage"},
 	}
 	for _, c := range cases {
 		d := analyze(c.ext, []byte(c.src))
@@ -71,6 +72,17 @@ func TestFamiliesNoFalsePositives(t *testing.T) {
 		}
 		if d := analyze(ext, []byte(src)); d != nil {
 			t.Errorf("%s: false positive %+v", name, d)
+		}
+	}
+	// HTML pages that image importers saved as .jpg (server100: 508 of them,
+	// all cleared by the AI): a CDN challenge with scripts and a redirect,
+	// and a plain page with analytics scripts.
+	for name, page := range map[string]string{
+		"cdn challenge": `<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script>window._cf_chl_opt={cType:'managed'};window.location.href=window.location.href;</script></body></html>`,
+		"scripts only":  `<html><head><script async src="https://www.googletagmanager.com/gtag/js"></script><script>dataLayer=[];</script></head><body>Template preview</body></html>`,
+	} {
+		if d := analyze(".jpg", []byte(page)); d != nil {
+			t.Errorf("%s saved as .jpg: false positive %+v", name, d)
 		}
 	}
 	// A stats cache (no extension) holding logged attack URLs.

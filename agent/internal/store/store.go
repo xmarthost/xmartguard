@@ -320,6 +320,8 @@ var columnMigrations = []string{
 	// Scan progress: files to check (counted while the scan runs) and path now.
 	`ALTER TABLE scans ADD COLUMN total INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE scans ADD COLUMN current TEXT NOT NULL DEFAULT ''`,
+	// A quarantined file written again: counted on its finding.
+	`ALTER TABLE findings ADD COLUMN repeats INTEGER NOT NULL DEFAULT 0`,
 	// Scan progress in accounts (or folders), not counted files.
 	`ALTER TABLE scans ADD COLUMN units INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE scans ADD COLUMN units_done INTEGER NOT NULL DEFAULT 0`,

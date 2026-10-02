@@ -76,6 +76,11 @@ func scriptInImage(ext string, content []byte) *Detection {
 	if !imageExts[ext] || !bytes.Contains(bytes.ToLower(content), []byte("<script")) {
 		return nil
 	}
+	// A whole HTML page under an image name is markupInImage's to judge
+	// (CDN challenge and error pages saved by image importers are common).
+	if head := bytes.TrimLeft(content[:min(len(content), 512)], " \t\r\n\ufeff"); len(head) > 0 && head[0] == '<' {
+		return nil
+	}
 	if reImgScript.Match(content) {
 		return &Detection{CatSuspicious, "Disguised.ScriptInImage"}
 	}

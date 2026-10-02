@@ -220,7 +220,7 @@ func domainRx(d string) string {
 
 // allowRule reports xPGuard's exclusion rules (they let requests through).
 func allowRule(id int) bool {
-	return (id >= IDWPAdminExcl && id <= IDAdminPanel) || id == IDEditorCookie || id == IDEditorAuth
+	return (id >= IDWPAdminExcl && id <= IDAdminPanel) || id == IDEditorCookie || id == IDEditorAuth || id == IDAutodiscover
 }
 
 // RenderExclusionsOnly is the rules file when xPGuard's own rules are off

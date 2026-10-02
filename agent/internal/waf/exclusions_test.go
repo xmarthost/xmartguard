@@ -370,6 +370,13 @@ func TestLevelsWithCRS(t *testing.T) {
 		{"editor cookie on a front-end form stays inspected", "POST", "/contact/", form, attack, []string{editor}, 403},
 		{"one weak signal in a form passes", "POST", "/contact/", form, weak, nil, 200},
 		{"attack in a form is blocked", "POST", "/contact/", form, attack, nil, 403},
+		// An app's own API (a Node.js ERP updating a voucher): CRS 911100
+		// allowed only GET/HEAD/POST/OPTIONS.
+		{"API update with PUT", "PUT", "/api/vouchers/11764", json, `{"voucher_type":"CPV","lines":[{"account_id":4,"credit":1100}]}`, nil, 200},
+		{"API delete with DELETE", "DELETE", "/api/vouchers/11764", json, "", nil, 200},
+		{"API change with PATCH", "PATCH", "/api/vouchers/11764", json, `{"is_posted":true}`, nil, 200},
+		// Outlook asking cPanel for its mail settings.
+		{"Outlook autodiscover", "POST", "/autodiscover/autodiscover.xml", "text/xml", `<?xml version="1.0" encoding="utf-8"?><Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006"><Request><EMailAddress>user@shop.example.com</EMailAddress><AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema></Request></Autodiscover>`, nil, 200},
 	}
 	check := func(level string) {
 		for _, c := range cases {

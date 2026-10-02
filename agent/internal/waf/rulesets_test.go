@@ -118,6 +118,11 @@ func TestExtrasRenderCRSAndCustom(t *testing.T) {
 	if !strings.Contains(setup, "blocking_paranoia_level=2") || !strings.Contains(setup, "inbound_anomaly_score_threshold=10,") || !strings.Contains(setup, "id:7700040,") {
 		t.Fatalf("setup: %s", setup)
 	}
+	// Apps' own APIs may update and delete (PUT/PATCH/DELETE); mail clients'
+	// Autodiscover requests pass.
+	if !strings.Contains(setup, "tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE") || !strings.Contains(setup, "id:7700042,") {
+		t.Fatalf("setup: %s", setup)
+	}
 	if states[0].State != "active" || states[1].State != "active" {
 		t.Fatalf("states %+v", states)
 	}

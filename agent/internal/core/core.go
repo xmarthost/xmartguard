@@ -110,6 +110,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a := &Agent{Cfg: cfg, Log: log, DB: db, Settings: st, Mailer: &notify.Mailer{Hostname: host, Log: log}}
 	a.Scanner = scanner.New(db, st, log)
 	a.Scanner.OnFinding = a.onFinding
+	a.Scanner.OnReinfection = a.onReinfection
 	a.Scanner.OnClean = func(path string, _ os.FileInfo) { a.AI.EnqueueNew(path) }
 	a.Scanner.Cleared = func(sha string) bool { return ai.IsCleared(db, sha) }
 	plugins := &wpcore.Plugins{CacheDir: filepath.Join(store.StateDir(), "cms", "plugin-checksums")}

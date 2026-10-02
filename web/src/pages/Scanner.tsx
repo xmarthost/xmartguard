@@ -45,6 +45,7 @@ interface Finding {
   ai_confidence?: number;
   ai_model?: string;
   ai_injected?: boolean;
+  repeats?: number;
 }
 
 interface AIResult {
@@ -78,6 +79,20 @@ function AIBadge({ v, reason, confidence, status }: { v?: string; reason?: strin
       <Sparkles className="h-3 w-3" /> {v}
       {confidence ? <span className="font-normal opacity-70">{confidence}%</span> : null}
     </span>
+  );
+}
+
+/** How often a quarantined file was written again: something in the
+ * account re-creates it (a process, cron job or malicious plugin). */
+function Returns({ n }: { n?: number }) {
+  if (!n) return null;
+  return (
+    <div
+      className="mt-1 inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-red-700"
+      title="This file was quarantined and then written again by something in the account (a running process, a cron job, or a malicious plugin or database entry). Quarantining it again does not stop that: find and remove the source."
+    >
+      came back {n.toLocaleString()}×
+    </div>
   );
 }
 
@@ -512,7 +527,10 @@ export function ScannerLogs() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <div className="font-medium break-all text-navy-900">{f.path.split('/').pop()}</div>
-                        <Badge value={f.status} />
+                        <span className="flex shrink-0 flex-col items-end gap-1">
+                          <Badge value={f.status} />
+                          <Returns n={f.repeats} />
+                        </span>
                       </div>
                       <div className="mt-0.5 text-xs break-all text-slate-400">{f.path}</div>
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
@@ -561,7 +579,10 @@ export function ScannerLogs() {
                     <td className="py-3 font-mono text-xs">{f.signature}</td>
                     <td className="py-3"><AIBadge v={f.ai_verdict} reason={f.ai_reason} confidence={f.ai_confidence} status={f.status} /></td>
                     <td className="py-3">{f.owner}</td>
-                    <td className="py-3"><Badge value={f.status} /></td>
+                    <td className="py-3">
+                      <Badge value={f.status} />
+                      <Returns n={f.repeats} />
+                    </td>
                     <td className="py-3 whitespace-nowrap">{fmtTime(f.created_at)}</td>
                   </tr>
                 ))}
