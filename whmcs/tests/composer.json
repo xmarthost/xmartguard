@@ -1,0 +1,9 @@
+{
+    "name": "xmarthost/whmcs-mcp-tests",
+    "description": "Test harness for the XMart Host MCP WHMCS addon (WHMCS itself is stubbed).",
+    "require": {
+        "php": ">=7.2",
+        "illuminate/database": "^8.83"
+    },
+    "config": { "platform-check": false }
+}

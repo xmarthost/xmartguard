@@ -1,0 +1,5 @@
+vendor/
+composer.lock
+*.sqlite
+.e2e_root/
+.e2e_server.log
