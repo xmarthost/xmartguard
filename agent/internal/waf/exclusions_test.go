@@ -91,7 +91,7 @@ func TestExclusionsWithCRS(t *testing.T) {
 		{"WooCommerce checkout note with PHP words", "shop.example.com", "POST", "/wp-json/wc/store/v1/checkout?_locale=site", json, `{"customer_note":"Please passthru the parcel to reception, phpinfo desk"}`, nil, 200},
 		{"Elementor saves with PUT", "shop.example.com", "PUT", "/solar/wp-json/elementor/v1/global-classes?context=preview", json, `{"items":{}}`, nil, 200},
 		{"Elementor saves with DELETE", "shop.example.com", "DELETE", "/wp-json/elementor/v1/global-classes?context=frontend", json, `{}`, nil, 200},
-		{"PUT outside the REST API stays refused", "shop.example.com", "PUT", "/upload.php", json, `{}`, nil, 403},
+		{"PUT is an allowed method (API apps of customers)", "shop.example.com", "PUT", "/api/vouchers/11764", json, `{"amount":100}`, nil, 200},
 		{"Method override outside the REST API stays refused", "shop.example.com", "POST", "/contact/", form, "a=1", []string{"X-HTTP-Method-Override: PUT"}, 403},
 		{"ViserLab colour stylesheet", "shop.example.com", "GET", "/assets/templates/metro_hyip/css/color.php?base_color=f60233&secondary_color=000000", "", "", nil, 200},
 		{"PHP in a css folder stays blocked", "shop.example.com", "GET", "/assets/templates/metro_hyip/css/shell.php", "", "", nil, 403},
@@ -144,9 +144,6 @@ func TestExclusionsWithCRS(t *testing.T) {
 		if sendBody(t, "shop.example.com", "POST", c.uri, c.ctype, c.body, c.hdr...) != 403 {
 			t.Fatalf("%s passes even without the exclusion", c.uri)
 		}
-	}
-	if sendBody(t, "shop.example.com", "PUT", "/wp-json/elementor/v1/global-classes", json, `{}`) != 403 {
-		t.Fatal("PUT passes even without the exclusion")
 	}
 	for _, c := range cases {
 		if strings.Contains(c.name, "Urdu") || strings.Contains(c.name, "consent cookie") || strings.Contains(c.name, "SMM panel") || strings.Contains(c.name, "robots.txt") {

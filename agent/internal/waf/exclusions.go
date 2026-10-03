@@ -50,6 +50,12 @@ const (
 	// with a session cookie, skip the injection rules (the application checks
 	// the login itself).
 	IDAdminPanel = 7700018
+	// IDWPCommentText: the text, name and website of a WordPress comment or
+	// WooCommerce review skip the SQL-injection rules. Reviews read like SQL
+	// to them ("sweet -- woody; select it if…"), and WordPress stores
+	// comments with prepared statements; the XSS and other rules still check
+	// them.
+	IDWPCommentText = 7700019
 	// IDCPanelOff: websites whose ModSecurity the account switched off in
 	// cPanel » ModSecurity. Apache already honours that for its virtual host;
 	// this makes it certain for every rule set and on LiteSpeed.
@@ -127,6 +133,9 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	if !off[IDStaticCookies] {
 		w(`SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDStaticCookies)
 		w(`  SecRule REQUEST_FILENAME "@rx \.%s$" "t:none,t:urlDecodeUni,t:lowercase,%s"`, staticExts, removeTagTargets("REQUEST_COOKIES"))
+	}
+	if !off[IDWPCommentText] {
+		w(`SecRule REQUEST_FILENAME "@rx /wp-comments-post\.php$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:comment,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:author,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:url"`, IDWPCommentText)
 	}
 	if !off[IDAdminPanel] {
 		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDAdminPanel)
