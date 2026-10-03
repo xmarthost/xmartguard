@@ -139,3 +139,23 @@ func TestRuleChangesAreTestedAndReloaded(t *testing.T) {
 		t.Fatalf("rules not rolled back: %q", b)
 	}
 }
+
+// On cPanel the installed module decides, not only "httpd -M" (LiteSpeed's
+// httpd wrapper and config errors in other files make it fail); when it is
+// asked, its answer explains a missing ModSecurity.
+func TestModuleCheckExplains(t *testing.T) {
+	dir := t.TempDir()
+	fake := dir + "/httpd"
+	os.WriteFile(fake, []byte("#!/bin/sh\necho 'AH00526: Syntax error on line 12 of /etc/apache2/conf.d/x.conf:' >&2\nexit 1\n"), 0o755)
+	ok, why := moduleCheck(fake)
+	if ok || !strings.Contains(why, "Syntax error on line 12") {
+		t.Fatalf("ok %v, why %q", ok, why)
+	}
+	os.WriteFile(fake, []byte("#!/bin/sh\necho 'Loaded Modules:'\necho ' security2_module (shared)'\n"), 0o755)
+	if ok, why := moduleCheck(fake); !ok || why != "" {
+		t.Fatalf("ok %v, why %q", ok, why)
+	}
+	if ok, why := moduleCheck(""); ok || why == "" {
+		t.Fatal("no httpd")
+	}
+}

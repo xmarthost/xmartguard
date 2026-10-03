@@ -30,6 +30,9 @@ type Target struct {
 	Plain  bool   `json:"plain"`
 	Hooked bool   `json:"hooked"`
 	Hint   string `json:"hint"`
+	// ModSecCheck says why ModSecurity was not found (what "httpd -M"
+	// answered), shown in the portal.
+	ModSecCheck string `json:"modsec_check,omitempty"`
 	// HookFile, when set, gets an "Include IncludeFile" line (cPanel's
 	// modsec2.user.conf, where cPGuard hooks its rules in too).
 	HookFile string `json:"hook_file,omitempty"`
@@ -92,13 +95,43 @@ func firstBin(names ...string) string {
 
 // hasModule reports whether Apache has mod_security2 available.
 func hasModule(httpd string) bool {
+	ok, _ := moduleCheck(httpd)
+	return ok
+}
+
+// moduleCheck runs "httpd -M"; without security2 in the answer it also
+// returns why (a config error, a timeout, LiteSpeed's httpd wrapper).
+func moduleCheck(httpd string) (bool, string) {
 	if httpd == "" {
-		return false
+		return false, "no httpd program found"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, httpd, "-M").CombinedOutput()
-	return strings.Contains(string(out), "security2")
+	out, err := exec.CommandContext(ctx, httpd, "-M").CombinedOutput()
+	if strings.Contains(string(out), "security2") {
+		return true, ""
+	}
+	why := strings.TrimSpace(string(out))
+	if ctx.Err() != nil {
+		why = httpd + " -M took longer than 30 seconds"
+	} else if i := strings.IndexByte(why, '\n'); i > 0 && !strings.Contains(strings.ToLower(why[:i]), "error") {
+		// The module list itself: keep its first line only.
+		why = why[:i]
+	}
+	if why == "" && err != nil {
+		why = err.Error()
+	}
+	if len(why) > 300 {
+		why = why[:300] + "…"
+	}
+	return false, httpd + " -M: " + why
+}
+
+// cpanelModSecFiles are what EasyApache's ea-apache24-mod_security2
+// installs: the module and its config with WHM's user rules file.
+var cpanelModSecFiles = []string{
+	"/etc/apache2/modules/mod_security2.so", "/usr/local/apache/modules/mod_security2.so",
+	"/etc/apache2/conf.d/modsec2.conf", "/etc/apache2/conf.d/modsec/modsec2.conf", "/etc/apache2/conf.d/modsec2.user.conf",
 }
 
 // Detect finds the local web server and how to hook ModSecurity into it.
@@ -107,9 +140,23 @@ func Detect() Target {
 	switch {
 	case exists("/usr/local/cpanel/version"):
 		httpd := firstBin("/usr/local/apache/bin/httpd", "/usr/sbin/httpd", "httpd", "apachectl")
+		// The installed module and its config decide; "httpd -M" can fail
+		// for other reasons (LiteSpeed's httpd wrapper, a slow start, an
+		// error in another config file) and is only asked without them.
+		modsec, why := false, ""
+		for _, f := range cpanelModSecFiles {
+			if exists(f) {
+				modsec = true
+				break
+			}
+		}
+		if !modsec {
+			modsec, why = moduleCheck(httpd)
+		}
 		t := Target{
-			Name:   "cpanel",
-			ModSec: hasModule(httpd) || exists("/etc/apache2/conf.d/modsec/modsec2.conf") || exists("/etc/apache2/conf.d/modsec2.user.conf"),
+			Name:        "cpanel",
+			ModSec:      modsec,
+			ModSecCheck: why,
 			// Hooked in through WHM's ModSecurity user rules file, which
 			// modsec2.conf includes inside its IfModule block (Apache and
 			// LiteSpeed read it).

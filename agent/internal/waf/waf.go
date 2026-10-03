@@ -74,7 +74,9 @@ type Status struct {
 	Panel     string `json:"panel"`
 	Error     string `json:"error"`
 	Warning   string `json:"warning"`
-	Rules     int    `json:"rules"`
+	// ModSecCheck says why ModSecurity was not found.
+	ModSecCheck string `json:"modsec_check,omitempty"`
+	Rules       int    `json:"rules"`
 	// ReplacedBy: xPGuard's own blocking rules are off here because this
 	// rule set is used instead (e.g. Malware.Expert).
 	ReplacedBy string `json:"replaced_by,omitempty"`
@@ -113,7 +115,7 @@ func (m *Manager) Status() Status {
 	since, _ := strconv.ParseInt(store.GetKV(m.DB, "waf_enabled_since"), 10, 64)
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
 		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest, EnabledSince: since,
-		ReplacedBy: m.OwnRulesReplacedBy()}
+		ReplacedBy: m.OwnRulesReplacedBy(), ModSecCheck: t.ModSecCheck}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {
@@ -332,9 +334,13 @@ func (m *Manager) Apply() error {
 	var central *Central
 	switch {
 	case !t.ModSec || t.IncludeFile == "":
+		detail := "ModSecurity is not available on this web server"
+		if t.ModSecCheck != "" {
+			detail += " (" + t.ModSecCheck + ")"
+		}
 		for i := range states {
 			if states[i].State == "active" {
-				states[i].State, states[i].Detail = "unsupported", "ModSecurity is not available on this web server"
+				states[i].State, states[i].Detail = "unsupported", detail
 			}
 		}
 	case !cfg.Enabled && extra == "":

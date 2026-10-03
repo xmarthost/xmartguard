@@ -111,7 +111,10 @@ func (a *Agent) wafResult(ctx context.Context, rs waf.RuleSets) WAFSyncResult {
 	} else if a.Settings.Get().WAF.Enabled {
 		xg.State, xg.Detail = "active", ""
 		if !st.Available {
-			xg.State, xg.Detail = "unsupported", st.WebServer
+			xg.State, xg.Detail = "unsupported", "ModSecurity not found on "+st.WebServer
+			if st.ModSecCheck != "" {
+				xg.Detail += " (" + st.ModSecCheck + ")"
+			}
 		} else if st.Error != "" {
 			xg.State, xg.Detail = "error", st.Error
 		} else if st.SelfTest != nil && !st.SelfTest.OK {
