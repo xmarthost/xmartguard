@@ -13,6 +13,11 @@ func analyze(ext string, content []byte) *Detection {
 			return d
 		}
 	}
+	if ext == ".htaccess" {
+		if d := htaccessHack(content); d != nil {
+			return d
+		}
+	}
 	if d := markupInImage(ext, content); d != nil {
 		if v := analyzePHP(content); v != nil {
 			return codeInNonScript(ext, v, content)

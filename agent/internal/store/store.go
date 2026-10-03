@@ -322,6 +322,8 @@ var columnMigrations = []string{
 	`ALTER TABLE scans ADD COLUMN current TEXT NOT NULL DEFAULT ''`,
 	// A quarantined file written again: counted on its finding.
 	`ALTER TABLE findings ADD COLUMN repeats INTEGER NOT NULL DEFAULT 0`,
+	// How a file was cleaned ("replaced with the official WordPress 6.6.2 file").
+	`ALTER TABLE findings ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
 	// Scan progress in accounts (or folders), not counted files.
 	`ALTER TABLE scans ADD COLUMN units INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE scans ADD COLUMN units_done INTEGER NOT NULL DEFAULT 0`,

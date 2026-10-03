@@ -219,7 +219,10 @@ func (s *Scanner) Trim(id int64, cuts []Cut, maxPercent int) error {
 		return fmt.Errorf("the scanner still detects %s after trimming", d.Signature)
 	}
 
-	return s.replaceLive(id, r, orig, out, "trimmed")
+	if err := s.replaceLive(id, r, orig, out, "trimmed"); err != nil {
+		return err
+	}
+	return s.SetNote(id, "Injected code removed; the rest of the file kept")
 }
 
 // replaceLive keeps the current content (orig) in quarantine and puts

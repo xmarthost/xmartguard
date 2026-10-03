@@ -66,6 +66,15 @@ func TestInfectedCoreFileIsReplacedWithOfficial(t *testing.T) {
 	if got, _ := os.ReadFile(qpath); string(got) != infected {
 		t.Fatal("infected copy not kept in quarantine")
 	}
+	// The finding says how it was cleaned.
+	var note string
+	for i := 0; i < 50 && note == ""; i++ {
+		a.DB.QueryRow(`SELECT note FROM findings WHERE path = ?`, p).Scan(&note)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.HasPrefix(note, "Replaced with the official WordPress ") {
+		t.Fatalf("note %q", note)
+	}
 }
 
 func TestAICleanVerdictRestoresFalsePositive(t *testing.T) {

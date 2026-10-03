@@ -46,6 +46,8 @@ interface Finding {
   ai_model?: string;
   ai_injected?: boolean;
   repeats?: number;
+  /** How the file was cleaned. */
+  note?: string;
 }
 
 interface AIResult {
@@ -94,6 +96,12 @@ function Returns({ n }: { n?: number }) {
       came back {n.toLocaleString()}×
     </div>
   );
+}
+
+/** How a cleaned file was cleaned (official WordPress file, attack rules removed…). */
+function CleanNote({ note }: { note?: string }) {
+  if (!note) return null;
+  return <div className="mt-1 max-w-[16rem] text-[11px] leading-snug text-emerald-700">{note}</div>;
 }
 
 interface HostingUser {
@@ -293,8 +301,8 @@ const ACTIONS: { v: string; l: string; confirm?: string }[] = [
 
 function toCSV(rows: Finding[]): string {
   const esc = (v: unknown) => `"${String(v).replace(/"/g, '""')}"`;
-  const head = ['time', 'path', 'owner', 'category', 'signature', 'status', 'sha256', 'size'];
-  return [head.join(','), ...rows.map((f) => [fmtTime(f.created_at), f.path, f.owner, f.category, f.signature, f.status, f.sha256, f.size].map(esc).join(','))].join('\n');
+  const head = ['time', 'path', 'owner', 'category', 'signature', 'status', 'note', 'sha256', 'size'];
+  return [head.join(','), ...rows.map((f) => [fmtTime(f.created_at), f.path, f.owner, f.category, f.signature, f.status, f.note ?? '', f.sha256, f.size].map(esc).join(','))].join('\n');
 }
 
 interface ScanReportData {
@@ -530,6 +538,7 @@ export function ScannerLogs() {
                         <span className="flex shrink-0 flex-col items-end gap-1">
                           <Badge value={f.status} />
                           <Returns n={f.repeats} />
+                          <CleanNote note={f.note} />
                         </span>
                       </div>
                       <div className="mt-0.5 text-xs break-all text-slate-400">{f.path}</div>
@@ -582,6 +591,7 @@ export function ScannerLogs() {
                     <td className="py-3">
                       <Badge value={f.status} />
                       <Returns n={f.repeats} />
+                      <CleanNote note={f.note} />
                     </td>
                     <td className="py-3 whitespace-nowrap">{fmtTime(f.created_at)}</td>
                   </tr>

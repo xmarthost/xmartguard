@@ -58,6 +58,8 @@ type Finding struct {
 	AIInjected bool `json:"ai_injected,omitempty"`
 	// Repeats: how often the quarantined file was written again.
 	Repeats int64 `json:"repeats,omitempty"`
+	// Note says how the file was cleaned.
+	Note string `json:"note,omitempty"`
 }
 
 // Scan is one scan job.
@@ -647,6 +649,14 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 			s.Log.Warn("quarantine failed", "path", path, "err", err)
 		} else {
 			f.Status = "quarantined"
+			// A site's own .htaccess is cleaned, not left missing.
+			if strings.HasPrefix(d.Signature, "Htaccess.") && filepath.Base(path) == ".htaccess" && isWPRoot(filepath.Dir(path)) {
+				if err := s.CleanHackedHtaccess(f.ID); err != nil {
+					s.Log.Warn("cleaning .htaccess failed", "path", path, "err", err)
+				} else {
+					f.Status, f.Note = "cleaned", NoteHtaccess
+				}
+			}
 		}
 	case settings.ActionDisable:
 		if err := s.Disable(f.ID); err != nil {
@@ -1191,7 +1201,7 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 		return nil, 0, err
 	}
 	rows, err := s.DB.Query(`SELECT id, scan_id, findings.source, path, owner, category, signature, findings.sha256, findings.size, status, created_at, updated_at,
-		coalesce(v.verdict, ''), coalesce(v.reason, ''), coalesce(v.confidence, 0), coalesce(v.model, ''), coalesce(v.injected, 0), findings.repeats
+		coalesce(v.verdict, ''), coalesce(v.reason, ''), coalesce(v.confidence, 0), coalesce(v.model, ''), coalesce(v.injected, 0), findings.repeats, findings.note
 		FROM findings LEFT JOIN ai_verdicts v ON v.sha256 = findings.sha256 AND findings.sha256 != ''
 		WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
@@ -1201,7 +1211,7 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	out := []Finding{}
 	for rows.Next() {
 		var x Finding
-		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt, &x.AIVerdict, &x.AIReason, &x.AIConfidence, &x.AIModel, &x.AIInjected, &x.Repeats); err != nil {
+		if err := rows.Scan(&x.ID, &x.ScanID, &x.Source, &x.Path, &x.Owner, &x.Category, &x.Signature, &x.SHA256, &x.Size, &x.Status, &x.CreatedAt, &x.UpdatedAt, &x.AIVerdict, &x.AIReason, &x.AIConfidence, &x.AIModel, &x.AIInjected, &x.Repeats, &x.Note); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, x)

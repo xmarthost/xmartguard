@@ -574,6 +574,7 @@ func (a *Agent) maybeRepairCore(f scanner.Finding) bool {
 		a.Log.Warn("WordPress core repair failed", "file", f.Path, "err", err)
 		return false
 	}
+	_ = a.Scanner.SetNote(f.ID, "Replaced with the official WordPress "+version+" file")
 	a.Log.Info("infected WordPress core file replaced with the official file", "file", f.Path, "version", version, "rel", rel)
 	if n := a.Settings.Get().Notifications; n.OnVirus {
 		a.alertAdmin("WordPress core file repaired",

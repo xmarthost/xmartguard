@@ -28,7 +28,7 @@ func (s *Scanner) load(id int64) (row, error) {
 }
 
 func (s *Scanner) setStatus(id int64, status, qpath string) error {
-	_, err := s.DB.Exec(`UPDATE findings SET status = ?, qpath = ?, updated_at = ? WHERE id = ?`, status, qpath, store.Now(), id)
+	_, err := s.DB.Exec(`UPDATE findings SET status = ?, qpath = ?, note = '', updated_at = ? WHERE id = ?`, status, qpath, store.Now(), id)
 	return err
 }
 
