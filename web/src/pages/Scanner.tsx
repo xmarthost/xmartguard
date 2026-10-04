@@ -40,6 +40,7 @@ interface Finding {
   size: number;
   status: string;
   created_at: number;
+  updated_at?: number;
   ai_verdict?: string;
   ai_reason?: string;
   ai_confidence?: number;
@@ -96,6 +97,12 @@ function Returns({ n }: { n?: number }) {
       came back {n.toLocaleString()}×
     </div>
   );
+}
+
+/** When a tracked file was last found, written again or acted on (later than its first detection). */
+function LastSeen({ f }: { f: Finding }) {
+  if (!f.updated_at || f.updated_at - f.created_at < 60) return null;
+  return <div className="text-[11px] text-slate-500">last activity {fmtTime(f.updated_at)}</div>;
 }
 
 /** How a cleaned file was cleaned (official WordPress file, attack rules removed…). */
@@ -403,7 +410,7 @@ export function ScannerLogs() {
   const [refreshing, setRefreshing] = useState(false);
   const toast = useToast();
   const limit = 25;
-  const params = { scan_id: scanId, category, status, q: query, limit, offset };
+  const params = { scan_id: scanId, category, status, q: query, limit, offset, recent: true };
   const list = useAgent<{ findings: Finding[]; total: number }>(id, 'findings.list', params, 15_000);
   const { run, busy } = useAction();
   const canAct = can(user, 'operator');
@@ -549,6 +556,7 @@ export function ScannerLogs() {
                       </div>
                       <div className="mt-1 text-xs text-slate-400">
                         {f.owner} · {fmtTime(f.created_at)}
+                        <LastSeen f={f} />
                       </div>
                     </div>
                   </div>
@@ -593,7 +601,10 @@ export function ScannerLogs() {
                       <Returns n={f.repeats} />
                       <CleanNote note={f.note} />
                     </td>
-                    <td className="py-3 whitespace-nowrap">{fmtTime(f.created_at)}</td>
+                    <td className="py-3 whitespace-nowrap">
+                      {fmtTime(f.created_at)}
+                      <LastSeen f={f} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

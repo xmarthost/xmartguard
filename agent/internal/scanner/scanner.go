@@ -1157,6 +1157,9 @@ type FindingFilter struct {
 	// export without repeats while new detections arrive.
 	Since    int64 `json:"since"`
 	BeforeID int64 `json:"before_id"`
+	// Recent orders by the last activity (a file found again, written
+	// again or acted on comes first) instead of by first detection.
+	Recent bool `json:"recent"`
 }
 
 // ListFindings returns detections, newest first, with the total count.
@@ -1196,6 +1199,10 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 		f.Limit = 50
 	}
 	cond := strings.Join(where, " AND ")
+	order := "id DESC" // exports page through with BeforeID
+	if f.Recent && f.BeforeID == 0 {
+		order = "findings.updated_at DESC, id DESC"
+	}
 	var total int
 	if err := s.DB.QueryRow(`SELECT count(*) FROM findings WHERE `+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -1203,7 +1210,7 @@ func (s *Scanner) ListFindings(f FindingFilter) ([]Finding, int, error) {
 	rows, err := s.DB.Query(`SELECT id, scan_id, findings.source, path, owner, category, signature, findings.sha256, findings.size, status, created_at, updated_at,
 		coalesce(v.verdict, ''), coalesce(v.reason, ''), coalesce(v.confidence, 0), coalesce(v.model, ''), coalesce(v.injected, 0), findings.repeats, findings.note
 		FROM findings LEFT JOIN ai_verdicts v ON v.sha256 = findings.sha256 AND findings.sha256 != ''
-		WHERE `+cond+` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
+		WHERE `+cond+` ORDER BY `+order+` LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}

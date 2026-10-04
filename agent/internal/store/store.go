@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -305,7 +306,7 @@ func OpenPath(path string) (*sql.DB, error) {
 	// Columns added after a table was first released ("duplicate column"
 	// errors mean the column already exists).
 	for _, stmt := range columnMigrations {
-		_, _ = db.Exec(stmt)
+		addColumn(db, stmt)
 	}
 	_ = os.Chmod(path, 0o600)
 	return db, nil
@@ -340,6 +341,20 @@ var columnMigrations = []string{
 	`ALTER TABLE fw_rules ADD COLUMN proto TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE fw_rules ADD COLUMN ports TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE fw_rules ADD COLUMN dir TEXT NOT NULL DEFAULT ''`,
+}
+
+// addColumn runs one ALTER TABLE ... ADD COLUMN. "duplicate column" means
+// it is there already; anything else (the database busy while another
+// process of an updating agent still writes) is retried, so a column the
+// code reads is never missing.
+func addColumn(db *sql.DB, stmt string) {
+	for i := 0; i < 10; i++ {
+		_, err := db.Exec(stmt)
+		if err == nil || strings.Contains(err.Error(), "duplicate column") || strings.Contains(err.Error(), "no such table") {
+			return
+		}
+		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+	}
 }
 
 // Now is the clock used for timestamps (overridable in tests).
