@@ -29,12 +29,12 @@ export function hasRole(user: SessionUser, min: Role): boolean {
   return RANK[user.role] >= RANK[min];
 }
 
-export async function createSession(pool: Pool, cfg: Config, userId: string, req: FastifyRequest): Promise<string> {
+export async function createSession(pool: Pool, cfg: Config, userId: string, req: FastifyRequest, hours = cfg.sessionTtlHours): Promise<string> {
   const token = randomToken();
   await pool.query(
     `INSERT INTO sessions (id, user_id, expires_at, ip, user_agent)
      VALUES ($1, $2, now() + make_interval(hours => $3), $4, $5)`,
-    [sha256(token), userId, cfg.sessionTtlHours, req.ip, String(req.headers['user-agent'] || '').slice(0, 300)],
+    [sha256(token), userId, hours, req.ip, String(req.headers['user-agent'] || '').slice(0, 300)],
   );
   return token;
 }

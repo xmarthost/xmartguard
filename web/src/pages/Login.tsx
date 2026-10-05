@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth';
@@ -12,6 +12,21 @@ export default function Login() {
   const [q] = useSearchParams();
   const [error, setError] = useState(q.get('sso') === 'expired' ? 'That sign-in link has expired or was already used. Sign in with your password, or open the panel again from the website.' : '');
   const [busy, setBusy] = useState(false);
+  const [client, setClient] = useState<{ login: string; area: string } | null>(null);
+  // Customers sign in through the website's client area (its "App Portal"
+  // button opens the panel without a password). A browser that came from
+  // there goes back there; this page stays the operator's sign-in
+  // (/login?admin shows it in any browser).
+  useEffect(() => {
+    api<{ client_login_url: string; client_area_url: string }>('GET', '/api/auth/options')
+      .then((o) => {
+        if (!o.client_login_url) return;
+        setClient({ login: o.client_login_url, area: o.client_area_url });
+        const isClient = /(?:^|;\s*)xg_client=1/.test(document.cookie);
+        if (isClient && !q.has('admin') && !user) window.location.replace(q.has('out') ? o.client_area_url : o.client_login_url);
+      })
+      .catch(() => {});
+  }, [q, user]);
   if (user) return <Navigate to="/" replace />;
 
   return (
@@ -49,6 +64,14 @@ export default function Login() {
         <button className="btn-primary w-full" disabled={busy}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
+        {client && (
+          <div className="mt-6 border-t border-slate-200 pt-5 text-center">
+            <p className="mb-3 text-sm text-slate-500">Customer? Open the panel from your client area: no password needed.</p>
+            <a className="inline-flex w-full items-center justify-center rounded-lg bg-red-600 px-4 py-2.5 font-semibold text-white hover:bg-red-700" href={client.login}>
+              Sign in to the client area
+            </a>
+          </div>
+        )}
       </form>
     </div>
   );

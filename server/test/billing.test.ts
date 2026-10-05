@@ -69,11 +69,20 @@ describe('billing API (website -> portal)', () => {
     const res = await fetch(h.url + u.pathname + u.search, { redirect: 'manual' });
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/');
-    const cookie = res.headers.get('set-cookie')!.split(';')[0];
+    const cookies = res.headers.getSetCookie();
+    const cookie = cookies[0].split(';')[0];
+    // A month-long session, and the browser is marked as a client's.
+    expect(cookies[0]).toMatch(/Max-Age=2592000/);
+    expect(cookies.some((c) => c.startsWith('xg_client=1'))).toBe(true);
     const me = await fetch(h.url + '/api/auth/me', { headers: { cookie } });
     expect((await me.json()).user.email).toBe('ali@example.com');
+    // A used link sends the customer back to the client area's sign-in.
     const twice = await fetch(h.url + u.pathname + u.search, { redirect: 'manual' });
-    expect(twice.headers.get('location')).toBe('/login?sso=expired');
+    expect(twice.headers.get('location')).toBe('https://shop.example.com/login?next=%2Faccount%2Fpanel');
+    expect((await new Client(h.url).req('GET', '/api/auth/options')).body).toEqual({
+      client_login_url: 'https://shop.example.com/login?next=%2Faccount%2Fpanel',
+      client_area_url: 'https://shop.example.com/account',
+    });
   });
 
   it('keeps customers to the servers they paid for', async () => {

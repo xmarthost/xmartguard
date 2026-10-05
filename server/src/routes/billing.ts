@@ -216,11 +216,19 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
     return rows[0] ?? null;
   }
 
-  // Sign-in from the website's customer area.
+  // Where customers sign in: the website's client area (empty without one).
+  const clientLogin = () => (cfg.billingSiteUrl ? `${cfg.billingSiteUrl}/login?next=${encodeURIComponent('/account/panel')}` : '');
+  app.get('/api/auth/options', async () => ({ client_login_url: clientLogin(), client_area_url: cfg.billingSiteUrl ? `${cfg.billingSiteUrl}/account` : '' }));
+
+  // Sign-in from the website's client area ("App Portal" button): no
+  // password, and the session lasts CLIENT_SESSION_DAYS (30). A marker
+  // cookie sends this browser back to the client area when it is signed out.
   app.get('/sso', async (req, reply) => {
     const u = await consume(String((req.query as Record<string, string>).token ?? ''), 'login');
-    if (!u) return reply.redirect('/login?sso=expired');
-    reply.setCookie(SESSION_COOKIE, await createSession(pool, cfg, u.user_id, req), cookieOpts);
+    if (!u) return reply.redirect(clientLogin() || '/login?sso=expired');
+    const hours = cfg.clientSessionDays * 24;
+    reply.setCookie(SESSION_COOKIE, await createSession(pool, cfg, u.user_id, req, hours), { ...cookieOpts, maxAge: hours * 3600 });
+    reply.setCookie('xg_client', '1', { path: '/', sameSite: 'lax', secure: cfg.cookieSecure, maxAge: 400 * 24 * 3600 });
     await audit(pool, { accountId: u.account_id, userId: u.user_id, action: 'auth.sso', ip: req.ip });
     return reply.redirect('/');
   });

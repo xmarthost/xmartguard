@@ -227,7 +227,7 @@ function UserMenu() {
             className="flex w-full items-center gap-2 px-4 py-2 text-left text-red-600 hover:bg-slate-50"
             onClick={async () => {
               await logout();
-              nav('/login');
+              nav('/login?out=1');
             }}
           >
             <LogOut className="h-4 w-4" /> Logout

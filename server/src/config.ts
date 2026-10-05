@@ -73,6 +73,8 @@ export interface Config {
   billingSecret: string;
   /** The website customers buy and renew on (for links in the portal). */
   billingSiteUrl: string;
+  /** Days a customer stays signed in after opening the panel from the client area. */
+  clientSessionDays: number;
 }
 
 /** captcha.<parent domain> of the portal (app.xpguard.org → captcha.xpguard.org). */
@@ -124,6 +126,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     turnstileVerifyUrl: env.TURNSTILE_VERIFY_URL || 'https://challenges.cloudflare.com/turnstile/v0/siteverify',
     billingSecret: env.BILLING_SECRET || '',
     billingSiteUrl: (env.BILLING_SITE_URL || '').replace(/\/+$/, ''),
+    clientSessionDays: int(env.CLIENT_SESSION_DAYS, 30),
     cookieSecure: bool(env.COOKIE_SECURE, publicUrl.startsWith('https://')),
     trustProxy: bool(env.TRUST_PROXY, false),
     downloadsDir: path.resolve(env.DOWNLOADS_DIR || path.join(repoRoot, 'dist', 'downloads')),
