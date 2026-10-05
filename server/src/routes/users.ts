@@ -56,7 +56,8 @@ export function userRoutes(app: FastifyInstance, pool: Pool): void {
 
 /** Creates an account + owner user. Used by the CLI and first-run bootstrap. */
 export async function createOwner(pool: Pool, email: string, password: string, accountName = 'Default'): Promise<string> {
-  const { rows } = await pool.query('INSERT INTO accounts (name) VALUES ($1) RETURNING id', [accountName]);
+  // The first owner's account runs the portal.
+  const { rows } = await pool.query('INSERT INTO accounts (name, platform) VALUES ($1, NOT EXISTS (SELECT 1 FROM accounts WHERE platform)) RETURNING id', [accountName]);
   const accountId = rows[0].id;
   const u = await pool.query(
     "INSERT INTO users (account_id, email, name, password_hash, role) VALUES ($1,$2,'Owner',$3,'owner') RETURNING id",

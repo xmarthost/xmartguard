@@ -1,3 +1,5 @@
+import SetPassword from './pages/SetPassword';
+import Subscription from './pages/Subscription';
 import { lazy, Suspense, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, can, useAuth } from './auth';
@@ -61,6 +63,8 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/set-password" element={<SetPassword />} />
+        <Route path="/subscription" element={<Protected><Subscription /></Protected>} />
         <Route path="/" element={<Protected><Overview /></Protected>} />
         <Route path="/servers" element={<Protected><ServerList /></Protected>} />
         <Route path="/servers/add" element={<Protected role="admin"><AddServer /></Protected>} />

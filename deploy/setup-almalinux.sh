@@ -35,6 +35,7 @@ while [ $# -gt 0 ]; do
     --branch) BRANCH="$2"; shift 2 ;;
     --token)  TOKEN="$2"; shift 2 ;;
     --captcha-domain) CAPTCHA_DOMAIN="$2"; shift 2 ;;
+    --billing-site) BILLING_SITE="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --ai|--ai-url|--ai-model) echo "note: $1 is no longer used (AI keys are set in the portal)"; shift 2 ;;
     *) echo "unknown option: $1"; exit 2 ;;
@@ -181,6 +182,16 @@ else
   echo "CAPTCHA_URL=https://$DOMAIN" >>"$ENV"
 fi
 PORTAL_PORT=$(sed -n 's/^PORTAL_PORT=//p' "$ENV")
+
+# Billing: the website (xpguard.org) sells server licences and tells the
+# portal through a signed API. The shared secret is made once and kept.
+grep -q '^BILLING_SECRET=' "$ENV" || echo "BILLING_SECRET=$(openssl rand -hex 32)" >>"$ENV"
+if [ -z "${BILLING_SITE:-}" ]; then
+  BILLING_SITE=$(sed -n 's/^BILLING_SITE_URL=//p' "$ENV")
+  [ -n "$BILLING_SITE" ] || BILLING_SITE="https://${DOMAIN#*.}"
+fi
+sed -i '/^BILLING_SITE_URL=/d' "$ENV"
+echo "BILLING_SITE_URL=$BILLING_SITE" >>"$ENV"
 
 # ------------------------------------------------------------------ AI
 # 0.6 uses free AI APIs configured in the portal. Drop the 0.5 local model
@@ -439,5 +450,8 @@ echo " AI scanner:          add free AI API keys (Gemini, Groq, OpenRouter) unde
 [ "$CAPTCHA_DOMAIN" != none ] && echo " CAPTCHA page:        https://$CAPTCHA_DOMAIN  (add the Turnstile keys under Overview > CAPTCHA Page)"
 echo " Update later:        curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh"
 echo "                      bash /root/setup.sh --domain $DOMAIN --email $EMAIL"
+echo " Billing website:     $(sed -n 's/^BILLING_SITE_URL=//p' "$ENV")"
+echo " Billing secret:      $(sed -n 's/^BILLING_SECRET=//p' "$ENV")"
+echo "   (paste it into the website admin: Settings > Control panel)"
 echo " Logs:                cd $DIR/deploy && docker compose logs -f portal"
 echo "============================================================"

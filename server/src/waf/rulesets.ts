@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool } from '../db.js';
+import { masterAccount } from '../tenancy.js';
 import type { Config } from '../config.js';
 import { readTar } from '../signatures/service.js';
 
@@ -170,6 +171,7 @@ export function validateCustomRules(text: string): string | null {
 }
 
 export async function loadConfig(pool: Pool, accountId: string): Promise<{ config: RuleSetsConfig; version: number; updated_at: string | null }> {
+  accountId = await masterAccount(pool, accountId);
   const { rows } = await pool.query('SELECT config, version, updated_at FROM waf_rulesets WHERE account_id = $1', [accountId]);
   if (!rows[0]) return { config: DEFAULT_CONFIG, version: 0, updated_at: null };
   const parsed = RuleSetsConfig.safeParse({ ...DEFAULT_CONFIG, ...rows[0].config });

@@ -2,9 +2,10 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
+import { masterAccount, scopeAccounts } from '../tenancy.js';
 import type { Config } from '../config.js';
 import type { AgentHub } from '../agents/hub.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requirePlatform, requireRole } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
 import { CAPTCHA_DESIGNS, type CaptchaDesign, renderInfo, renderPage } from '../captcha/page.js';
 import { altchaChallenge, altchaScript, altchaVerify } from '../captcha/altcha.js';
@@ -97,6 +98,7 @@ export const turnstile = {
 };
 
 async function load(pool: Pool, accountId: string) {
+  accountId = await masterAccount(pool, accountId);
   const { rows } = await pool.query('SELECT config, version, updated_at FROM captcha_config WHERE account_id = $1', [accountId]);
   if (!rows[0]) return { config: DEFAULT, version: 0, updated_at: null as string | null };
   const p = CaptchaConfig.safeParse(rows[0].config);
@@ -151,8 +153,8 @@ function validParams(p: { s: string; ip: string; h: string; u: string }): string
 }
 
 export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: AgentHub): void {
-  const viewer = { preHandler: requireRole('viewer') };
-  const admin = { preHandler: requireRole('admin') };
+  const viewer = { preHandler: requirePlatform('viewer') };
+  const admin = { preHandler: requirePlatform('admin') };
   const pageUrl = `${cfg.captchaUrl}/v`;
   turnstile.url = cfg.turnstileVerifyUrl;
   const captchaHost = (() => {
@@ -164,7 +166,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
   })();
 
   async function servers(accountId: string) {
-    const { rows } = await pool.query("SELECT id, hostname FROM servers WHERE account_id = $1 AND status = 'active' ORDER BY hostname", [accountId]);
+    const { rows } = await pool.query("SELECT id, hostname FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active' ORDER BY hostname", [await scopeAccounts(pool, accountId)]);
     return rows.map((r) => ({ id: String(r.id), hostname: String(r.hostname), online: hub.isOnline(String(r.id)) }));
   }
 

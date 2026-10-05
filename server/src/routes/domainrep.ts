@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
+import { masterAccount, scopeAccounts } from '../tenancy.js';
 import type { AgentHub } from '../agents/hub.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requirePlatform, requireRole } from '../auth.js';
 import { versionLess } from '../agents/release.js';
 import { eachLimit } from '../agents/limit.js';
 import { SAFE_BROWSING_MIN_AGENT, SafeBrowsingKey, hint, loadGlobalKeys, syncMail } from './mail.js';
@@ -13,13 +14,13 @@ import { SAFE_BROWSING_MIN_AGENT, SafeBrowsingKey, hint, loadGlobalKeys, syncMai
  * (switched on, which key it uses, listed domains, last check).
  */
 export function domainRepRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): void {
-  const viewer = { preHandler: requireRole('viewer') };
-  const admin = { preHandler: requireRole('admin') };
+  const viewer = { preHandler: requirePlatform('viewer') };
+  const admin = { preHandler: requirePlatform('admin') };
 
   async function servers(accountId: string) {
     const { rows } = await pool.query(
-      "SELECT id, hostname, agent_version FROM servers WHERE account_id = $1 AND status = 'active' ORDER BY hostname",
-      [accountId],
+      "SELECT id, hostname, agent_version FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active' ORDER BY hostname",
+      [await scopeAccounts(pool, accountId)],
     );
     return rows.map((r) => ({ id: String(r.id), hostname: String(r.hostname), agent_version: String(r.agent_version ?? ''), online: hub.isOnline(r.id) }));
   }

@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool } from '../db.js';
+import { masterAccount } from '../tenancy.js';
 import type { Config } from '../config.js';
 import { complete, ProviderError, type ProviderRow } from './providers.js';
 import { SYSTEM, maxTokens, parseAnswer, userMessage, type FileIn, type Judgement } from './prompt.js';
@@ -167,6 +168,8 @@ export class AIGateway {
 
   /** Calls the account's AI keys in order until one answers. */
   async ask(accountId: string, system: string, user: string, tokens: number, files = 1): Promise<{ text: string; model: string }> {
+    // Customers' servers use the platform's AI keys.
+    accountId = await masterAccount(this.pool, accountId);
     const { rows } = await this.pool.query<ProviderRow & { cooldown_until: Date | null; priority: number }>(
       `SELECT id, kind, name, base_url, api_key, model, priority, cooldown_until FROM ai_providers
        WHERE account_id = $1 AND enabled ORDER BY priority, (CASE WHEN day = current_date THEN requests_today ELSE 0 END), created_at`,

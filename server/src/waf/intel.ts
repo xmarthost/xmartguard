@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from '../db.js';
+import { masterAccount } from '../tenancy.js';
 
 /**
  * WAF fleet intelligence. Agents report the file names of web shells their
@@ -162,6 +163,7 @@ export interface Intel {
 
 /** What the agents of an account apply. */
 export async function intelFor(pool: Pool, accountId: string): Promise<Intel> {
+  accountId = await masterAccount(pool, accountId);
   const cfg = await loadIntelConfig(pool, accountId);
   const names = cfg.enabled ? (await learnedNames(pool, accountId, cfg)).filter((n) => n.status === 'active').map((n) => n.name).sort().slice(0, 3000) : [];
   const patches = cfg.enabled ? PATCHES.filter((p) => !cfg.disabled_patches.includes(p.id)).map(({ plugin: _p, ...p }) => p) : [];

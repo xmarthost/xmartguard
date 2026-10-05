@@ -2,19 +2,20 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import type { AgentHub } from '../agents/hub.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requirePlatform } from '../auth.js';
+import { masterAccount, scopeAccounts } from '../tenancy.js';
 import { signedPayload } from '../agent-sign.js';
 import { PATCHES, intelFor, learnedNames, loadIntelConfig, nameOK, type IntelConfig } from '../waf/intel.js';
 
 /** WAF fleet intelligence (Overview » WAF Intelligence) and its agent API. */
 export function wafIntelRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): void {
-  const viewer = { preHandler: requireRole('viewer') };
-  const admin = { preHandler: requireRole('admin') };
+  const viewer = { preHandler: requirePlatform('viewer') };
+  const admin = { preHandler: requirePlatform('admin') };
 
   /** Sends the account's intelligence to its online servers. */
   async function push(accountId: string) {
     const intel = await intelFor(pool, accountId);
-    const { rows } = await pool.query("SELECT id FROM servers WHERE account_id = $1 AND status = 'active'", [accountId]);
+    const { rows } = await pool.query("SELECT id FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active'", [await scopeAccounts(pool, accountId)]);
     let pushed = 0;
     for (const r of rows) {
       const id = String(r.id);
@@ -98,6 +99,8 @@ export function wafIntelRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub):
   app.post('/api/agent/waf/intel', { bodyLimit: 512 * 1024 }, async (req, reply) => {
     const r = await signedPayload(pool, req.body, Report, reply);
     if (!r) return;
+    // Names are learned from every customer's servers, under the platform account.
+    r.accountId = await masterAccount(pool, r.accountId);
     const before = r.data.reports.length ? (await intelFor(pool, r.accountId)).etag : '';
     for (const x of r.data.reports) {
       const name = x.name.toLowerCase();

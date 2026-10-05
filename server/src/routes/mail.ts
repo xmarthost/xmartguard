@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
+import { masterAccount, scopeAccounts } from '../tenancy.js';
 import type { AgentHub } from '../agents/hub.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requirePlatform, requireRole } from '../auth.js';
 import { versionLess } from '../agents/release.js';
 import { eachLimit } from '../agents/limit.js';
 
@@ -12,6 +13,7 @@ export const MAIL_MIN_AGENT = '0.19.2';
 const DQSKey = z.string().trim().regex(/^(?:[A-Za-z0-9]{20,40})?$/, 'A Spamhaus DQS key is 20-40 letters and digits');
 
 export async function loadDQSKey(pool: Pool, accountId: string): Promise<string> {
+  accountId = await masterAccount(pool, accountId);
   const { rows } = await pool.query('SELECT dqs_key FROM account_mail WHERE account_id = $1', [accountId]);
   return String(rows[0]?.dqs_key ?? '');
 }
@@ -23,6 +25,7 @@ export const SafeBrowsingKey = z.string().trim().max(200).regex(/^[A-Za-z0-9_-]*
 
 /** The account-wide keys every server uses unless it has its own. */
 export async function loadGlobalKeys(pool: Pool, accountId: string): Promise<{ dqs_key: string; safe_browsing_key: string }> {
+  accountId = await masterAccount(pool, accountId);
   const { rows } = await pool.query('SELECT dqs_key, safe_browsing_key FROM account_mail WHERE account_id = $1', [accountId]);
   return { dqs_key: String(rows[0]?.dqs_key ?? ''), safe_browsing_key: String(rows[0]?.safe_browsing_key ?? '') };
 }
@@ -45,13 +48,13 @@ export function hint(k: string): string {
  * phishing-filter state, so it shows whether the key works.
  */
 export function mailRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): void {
-  const viewer = { preHandler: requireRole('viewer') };
-  const admin = { preHandler: requireRole('admin') };
+  const viewer = { preHandler: requirePlatform('viewer') };
+  const admin = { preHandler: requirePlatform('admin') };
 
   async function servers(accountId: string) {
     const { rows } = await pool.query(
-      "SELECT id, hostname, agent_version FROM servers WHERE account_id = $1 AND status = 'active' ORDER BY hostname",
-      [accountId],
+      "SELECT id, hostname, agent_version FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active' ORDER BY hostname",
+      [await scopeAccounts(pool, accountId)],
     );
     return rows.map((r) => ({ id: String(r.id), hostname: String(r.hostname), agent_version: String(r.agent_version ?? ''), online: hub.isOnline(r.id) }));
   }

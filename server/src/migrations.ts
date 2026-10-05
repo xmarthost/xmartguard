@@ -407,4 +407,38 @@ CREATE TABLE account_mail (
 ALTER TABLE account_mail ADD COLUMN safe_browsing_key text NOT NULL DEFAULT '';
 `,
   },
+  {
+    version: '013_billing',
+    sql: `
+-- The platform account runs the portal (master settings, every customer's
+-- servers on its rollout pages); customer accounts are created by the
+-- website's billing and use the platform's master settings.
+ALTER TABLE accounts ADD COLUMN platform boolean NOT NULL DEFAULT false;
+UPDATE accounts SET platform = true WHERE id = (SELECT id FROM accounts ORDER BY created_at LIMIT 1);
+-- What a customer bought: how many servers, until when.
+CREATE TABLE account_licenses (
+  account_id    uuid PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  plan          text NOT NULL,
+  plan_name     text NOT NULL DEFAULT '',
+  max_servers   integer NOT NULL CHECK (max_servers >= 0),
+  period_end    timestamptz,
+  status        text NOT NULL CHECK (status IN ('active','expired','suspended','cancelled')),
+  customer_ref  text NOT NULL DEFAULT '',
+  updated_at    timestamptz NOT NULL DEFAULT now()
+);
+-- One-time links: set a password (new customers), sign in from the website.
+CREATE TABLE user_tokens (
+  token_hash  text PRIMARY KEY,
+  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose     text NOT NULL CHECK (purpose IN ('set_password','login')),
+  expires_at  timestamptz NOT NULL,
+  used_at     timestamptz
+);
+-- Signed billing requests seen (replay protection).
+CREATE TABLE billing_nonces (
+  sig  text PRIMARY KEY,
+  at   timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

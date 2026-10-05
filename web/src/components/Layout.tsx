@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-
 import {
   BookOpen, BadgeCheck, ShieldQuestion, Brain,
   Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
-  LogOut, Mail, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
+  CreditCard, LogOut, Mail, Menu, Server as ServerIcon, Settings, ShieldCheck, Users, X,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { useApi } from '../hooks';
@@ -245,6 +245,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const serverId = serverMatch?.params.id && serverMatch.params.id !== 'add' ? serverMatch.params.id : null;
   const { data } = useApi<{ server: Server }>(serverId ? `/api/servers/${serverId}` : null);
   const close = () => setMobileOpen(false);
+  const platform = useAuth().user?.platform !== false;
 
   const base = `/servers/${serverId}`;
   const entries: RailEntry[] = serverId
@@ -285,7 +286,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         },
         { label: 'Settings', icon: <Settings />, to: `${base}/settings` },
       ]
-    : [
+    : platform
+    ? [
         { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
         {
@@ -310,6 +312,14 @@ export default function Layout({ children }: { children: ReactNode }) {
         },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
         { label: 'Appearance', icon: <Palette />, to: '/appearance' },
+      ]
+    : [
+        // Customers: their servers and account; master settings are the provider's.
+        { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
+        { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
+        { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
+        { label: 'AI Connector', icon: <Cable />, to: '/ai-connector' },
+        { label: 'Subscription', icon: <CreditCard />, to: '/subscription' },
       ];
   const bottom: RailEntry[] = [
     { label: 'Security Log', icon: <ShieldCheck />, to: '/security' },

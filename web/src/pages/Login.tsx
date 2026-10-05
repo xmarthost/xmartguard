@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { ErrorBox, Logo } from '../components/ui';
@@ -9,7 +9,8 @@ export default function Login() {
   const nav = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [q] = useSearchParams();
+  const [error, setError] = useState(q.get('sso') === 'expired' ? 'That sign-in link has expired or was already used. Sign in with your password, or open the panel again from the website.' : '');
   const [busy, setBusy] = useState(false);
   if (user) return <Navigate to="/" replace />;
 

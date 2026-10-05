@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
-import { requireRole } from '../auth.js';
+import { requirePlatform } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
 import type { WPCoreService } from '../wpcore/service.js';
 import type { SignatureService } from '../signatures/service.js';
@@ -61,14 +61,14 @@ export function wpcoreRoutes(app: FastifyInstance, pool: Pool, wp: WPCoreService
     return { etag: b.etag, ...b.bundle };
   });
 
-  app.get('/api/wp-core/status', { preHandler: requireRole('viewer') }, async () => wp.status());
-  app.post('/api/wp-core/sync', { preHandler: requireRole('admin') }, async (_req, reply) => {
+  app.get('/api/wp-core/status', { preHandler: requirePlatform('viewer') }, async () => wp.status());
+  app.post('/api/wp-core/sync', { preHandler: requirePlatform('admin') }, async (_req, reply) => {
     try {
       return { ...(await wp.sync()), status: await wp.status() };
     } catch (err) {
       return reply.code(502).send({ error: (err as Error).message });
     }
   });
-  app.get('/api/signatures/status', { preHandler: requireRole('viewer') }, async () => sigs.status());
-  app.post('/api/signatures/sync', { preHandler: requireRole('admin') }, async () => ({ results: await sigs.sync(), status: await sigs.status() }));
+  app.get('/api/signatures/status', { preHandler: requirePlatform('viewer') }, async () => sigs.status());
+  app.post('/api/signatures/sync', { preHandler: requirePlatform('admin') }, async () => ({ results: await sigs.sync(), status: await sigs.status() }));
 }

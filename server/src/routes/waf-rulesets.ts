@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import type { AgentHub } from '../agents/hub.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requirePlatform } from '../auth.js';
+import { scopeAccounts } from '../tenancy.js';
 import { signedPayload } from '../agent-sign.js';
 import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, linkedTo, loadConfig, usesMalwareExpert, validateCustomRules } from '../waf/rulesets.js';
 
@@ -12,12 +13,12 @@ import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConf
  * 15 minutes.
  */
 export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub, crs: CRSService): void {
-  const viewer = { preHandler: requireRole('viewer') };
-  const admin = { preHandler: requireRole('admin') };
+  const viewer = { preHandler: requirePlatform('viewer') };
+  const admin = { preHandler: requirePlatform('admin') };
 
   /** Asks every online server of the account to apply the rule sets now. */
   async function rollout(accountId: string): Promise<{ pushed: number; offline: number }> {
-    const { rows } = await pool.query("SELECT id FROM servers WHERE account_id = $1 AND status = 'active'", [accountId]);
+    const { rows } = await pool.query("SELECT id FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active'", [await scopeAccounts(pool, accountId)]);
     let pushed = 0;
     for (const r of rows) {
       if (!hub.isOnline(r.id)) continue;
@@ -35,8 +36,8 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
     const servers = await pool.query(
       `SELECT s.id, s.hostname, s.control_panel, s.web_server, s.agent_version, w.version, w.status, w.updated_at
          FROM servers s LEFT JOIN waf_server_status w ON w.server_id = s.id
-        WHERE s.account_id = $1 AND s.status = 'active' ORDER BY s.hostname`,
-      [acc],
+        WHERE s.account_id = ANY($1::uuid[]) AND s.status = 'active' ORDER BY s.hostname`,
+      [await scopeAccounts(pool, acc)],
     );
     return {
       ...cur,
@@ -62,7 +63,7 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
       if (err) return reply.code(400).send({ error: err });
     }
     // Feeds can only be linked to this account's servers.
-    const own = await pool.query('SELECT id FROM servers WHERE account_id = $1', [req.user!.accountId]);
+    const own = await pool.query('SELECT id FROM servers WHERE account_id = ANY($1::uuid[])', [await scopeAccounts(pool, req.user!.accountId)]);
     const ownIds = new Set(own.rows.map((r) => String(r.id)));
     for (const x of [...c.vendors, ...c.remote]) {
       if (x.servers.some((id) => !ownIds.has(id))) return reply.code(400).send({ error: `${x.name}: linked to an unknown server` });

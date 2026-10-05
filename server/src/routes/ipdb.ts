@@ -29,15 +29,10 @@ const AddWhite = z.object({ cidr: z.string().max(60), note: z.string().max(200).
  */
 export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService): void {
   const viewer = { preHandler: requireRole('viewer') };
-  let operatorAccount: string | null = null;
 
+  // The platform account's administrators manage the shared IPDB.
   async function isOperator(user: SessionUser): Promise<boolean> {
-    if (!hasRole(user, 'admin')) return false;
-    if (!operatorAccount) {
-      const { rows } = await pool.query('SELECT id FROM accounts ORDER BY created_at, id LIMIT 1');
-      operatorAccount = rows[0]?.id ?? null;
-    }
-    return user.accountId === operatorAccount;
+    return hasRole(user, 'admin') && user.platform;
   }
 
   async function requireOperator(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {

@@ -38,6 +38,8 @@ export default function AddServer() {
     return () => clearInterval(t);
   }, [tok, joined]);
 
+  const [buyUrl, setBuyUrl] = useState('');
+
   async function issue() {
     setBusy(true);
     setError('');
@@ -47,6 +49,7 @@ export default function AddServer() {
       setTok(await api<TokenResponse>('POST', '/api/enrollment-tokens', { label }));
     } catch (e: any) {
       setError(e.message);
+      setBuyUrl(e?.status === 402 ? String(e.data?.buy_url ?? '') || 'subscription' : '');
     } finally {
       setBusy(false);
     }
@@ -69,7 +72,23 @@ export default function AddServer() {
             <p className="mb-3 text-sm text-slate-500">
               Each token works once and expires after 24 hours. Nothing secret stays in your shell history after it is used.
             </p>
-            {error && <ErrorBox message={error} />}
+            {error && !buyUrl && <ErrorBox message={error} />}
+            {buyUrl && (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <p className="font-semibold">No free server licence</p>
+                <p className="mt-1">{error}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {buyUrl !== 'subscription' && (
+                    <a className="btn-primary" href={buyUrl} target="_blank" rel="noreferrer">
+                      Buy another server licence
+                    </a>
+                  )}
+                  <button type="button" className="btn-outline" onClick={() => nav('/subscription')}>
+                    View my plan
+                  </button>
+                </div>
+              </div>
+            )}
             {!tok ? (
               <div className="flex flex-wrap gap-2">
                 <input className="input max-w-xs" placeholder="Label (optional), e.g. server5" value={label} onChange={(e) => setLabel(e.target.value)} />

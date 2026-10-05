@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { isIP } from 'node:net';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
+import { masterAccount, scopeAccounts } from '../tenancy.js';
 import type { AgentHub } from '../agents/hub.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requirePlatform, requireRole } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
 
 /** One CIDR or address; wider than /8 (IPv4) or /16 (IPv6) is refused. */
@@ -28,6 +29,7 @@ export type TrustedConfig = z.infer<typeof TrustedConfig>;
 const DEFAULT: TrustedConfig = { enabled: true, disabled: [], custom: [] };
 
 async function load(pool: Pool, accountId: string): Promise<{ config: TrustedConfig; version: number; updated_at: string | null }> {
+  accountId = await masterAccount(pool, accountId);
   const { rows } = await pool.query('SELECT config, version, updated_at FROM trusted_services WHERE account_id = $1', [accountId]);
   if (!rows[0]) return { config: DEFAULT, version: 0, updated_at: null };
   const p = TrustedConfig.safeParse(rows[0].config);
@@ -41,13 +43,13 @@ async function load(pool: Pool, accountId: string): Promise<{ config: TrustedCon
  * every online server; the others fetch it when they reconnect.
  */
 export function trustedRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): void {
-  const viewer = { preHandler: requireRole('viewer') };
-  const admin = { preHandler: requireRole('admin') };
+  const viewer = { preHandler: requirePlatform('viewer') };
+  const admin = { preHandler: requirePlatform('admin') };
 
   async function servers(accountId: string) {
     const { rows } = await pool.query(
-      "SELECT id, hostname, agent_version FROM servers WHERE account_id = $1 AND status = 'active' ORDER BY hostname",
-      [accountId],
+      "SELECT id, hostname, agent_version FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active' ORDER BY hostname",
+      [await scopeAccounts(pool, accountId)],
     );
     return rows.map((r) => ({ id: String(r.id), hostname: String(r.hostname), agent_version: String(r.agent_version ?? ''), online: hub.isOnline(r.id) }));
   }

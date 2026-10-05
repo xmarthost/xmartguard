@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requireRole, requirePlatform } from '../auth.js';
 import { sha256 } from '../security.js';
 import { verifyAgent } from '../agent-sign.js';
 import { TRAIN_MIN_PER_CLASS, type AIGateway } from '../ai/gateway.js';
@@ -85,9 +85,9 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
 
   // ---------------------------------------------------------------- settings
 
-  app.get('/api/ai/presets', { preHandler: requireRole('viewer') }, async () => ({ presets: PRESETS }));
+  app.get('/api/ai/presets', { preHandler: requirePlatform('viewer') }, async () => ({ presets: PRESETS }));
 
-  app.get('/api/ai/providers', { preHandler: requireRole('viewer') }, async (req) => {
+  app.get('/api/ai/providers', { preHandler: requirePlatform('viewer') }, async (req) => {
     const { rows } = await pool.query(
       `SELECT id, kind, name, base_url, api_key, model, priority, enabled, cooldown_until, last_error, last_error_at, last_ok_at,
          requests, failures, files, tokens_in, tokens_out, CASE WHEN day = current_date THEN requests_today ELSE 0 END AS requests_today, created_at
@@ -97,7 +97,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
     return { providers: rows.map((r) => ({ ...r, api_key: mask(r.api_key) })) };
   });
 
-  app.post('/api/ai/providers', { preHandler: requireRole('admin') }, async (req, reply) => {
+  app.post('/api/ai/providers', { preHandler: requirePlatform('admin') }, async (req, reply) => {
     const b = ProviderBody.safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid provider' });
     const pre = preset(b.data.kind)!;
@@ -136,7 +136,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
     return { ok: true };
   });
 
-  app.delete('/api/ai/providers/:id', { preHandler: requireRole('admin') }, async (req, reply) => {
+  app.delete('/api/ai/providers/:id', { preHandler: requirePlatform('admin') }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (!z.string().uuid().safeParse(id).success) return reply.code(404).send({ error: 'not found' });
     const { rowCount } = await pool.query('DELETE FROM ai_providers WHERE id = $1 AND account_id = $2', [id, req.user!.accountId]);
@@ -146,7 +146,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
   });
 
   /** Fetches the models a key can use (for the model picker). */
-  app.post('/api/ai/models', { preHandler: requireRole('admin') }, async (req, reply) => {
+  app.post('/api/ai/models', { preHandler: requirePlatform('admin') }, async (req, reply) => {
     const b = z
       .object({ kind: z.string(), base_url: z.string().max(300).optional(), api_key: z.string().max(400).optional(), provider_id: z.string().uuid().optional() })
       .safeParse(req.body);
@@ -167,7 +167,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
   });
 
   /** Sends a tiny test file through one key. */
-  app.post('/api/ai/providers/:id/test', { preHandler: requireRole('admin') }, async (req, reply) => {
+  app.post('/api/ai/providers/:id/test', { preHandler: requirePlatform('admin') }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (!z.string().uuid().safeParse(id).success) return reply.code(404).send({ error: 'not found' });
     const { rows } = await pool.query('SELECT id, kind, name, base_url, api_key, model FROM ai_providers WHERE id = $1 AND account_id = $2', [id, req.user!.accountId]);
@@ -183,7 +183,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
     }
   });
 
-  app.get('/api/ai/status', { preHandler: requireRole('viewer') }, async (req) => {
+  app.get('/api/ai/status', { preHandler: requirePlatform('viewer') }, async (req) => {
     const acc = req.user!.accountId;
     const [p, kb, models] = await Promise.all([
       pool.query(
@@ -223,7 +223,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
 
   // ---------------------------------------------------------------- knowledge base
 
-  app.get('/api/ai/kb', { preHandler: requireRole('viewer') }, async (req) => {
+  app.get('/api/ai/kb', { preHandler: requirePlatform('viewer') }, async (req) => {
     const q = z
       .object({ verdict: z.string().optional(), q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), offset: z.coerce.number().int().min(0).optional() })
       .parse(req.query);
@@ -250,7 +250,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
   });
 
   /** An admin corrects the AI (false positive / missed malware); every server gets the fix. */
-  app.put('/api/ai/kb/:sha', { preHandler: requireRole('admin') }, async (req, reply) => {
+  app.put('/api/ai/kb/:sha', { preHandler: requirePlatform('admin') }, async (req, reply) => {
     const sha = (req.params as { sha: string }).sha.toLowerCase();
     const b = z.object({ verdict: z.enum(['malicious', 'clean']), reason: z.string().max(300).optional() }).safeParse(req.body);
     if (!/^[0-9a-f]{64}$/.test(sha) || !b.success) return reply.code(400).send({ error: 'invalid request' });
@@ -267,7 +267,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
     return { ok: true };
   });
 
-  app.post('/api/ai/train', { preHandler: requireRole('admin') }, async () => {
+  app.post('/api/ai/train', { preHandler: requirePlatform('admin') }, async () => {
     const { rows } = await pool.query('SELECT DISTINCT base_version FROM ai_samples');
     const out = [];
     for (const r of rows) out.push({ base: r.base_version, result: await gw.train(r.base_version) });

@@ -4,6 +4,7 @@ import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
 import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
+import { isPlatform } from '../tenancy.js';
 import { randomToken, sha256 } from '../security.js';
 import { currentRelease } from '../agents/release.js';
 import { ACTIONS } from './agent-cmd.js';
@@ -281,6 +282,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         const verdict = String(a.verdict);
         if (!/^[0-9a-f]{64}$/.test(sha) || !['malicious', 'clean'].includes(verdict)) throw new ToolError('sha256 (64 hex) and verdict malicious|clean are required');
         const reason = String(a.reason ?? '').slice(0, 300);
+        if (!(await isPlatform(pool, ctx.accountId))) throw new ToolError('the knowledge base is managed by the service provider');
         const { rowCount } = await pool.query(
           `UPDATE ai_kb SET verdict = $2, confidence = 100, overridden = true, injected = CASE WHEN $2 = 'clean' THEN false ELSE injected END,
              reason = $3, model = 'admin', updated_at = now(), seq = nextval(pg_get_serial_sequence('ai_kb', 'seq'))

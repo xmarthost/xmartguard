@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Pool } from '../db.js';
 import { withTx } from '../db.js';
 import type { Config } from '../config.js';
+import { serverLimitError } from './billing.js';
 import type { AgentHub, MetricsSample } from '../agents/hub.js';
 import { audit } from '../auth.js';
 import { parseEd25519PublicKey, sha256, verifyEd25519 } from '../security.js';
@@ -77,6 +78,8 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
         );
         const tok = rows[0];
         if (!tok) return null;
+        // The plan's server limit, checked again as the server joins.
+        if (await serverLimitError(pool, tok.account_id, false)) return 'limit' as const;
         const dup = await c.query('SELECT 1 FROM servers WHERE public_key = $1', [body.public_key]);
         if (dup.rowCount) return 'duplicate' as const;
         const ins = await c.query(
@@ -95,6 +98,7 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
       });
       if (result === null) return reply.code(403).send({ error: 'token is invalid, expired or already used' });
       if (result === 'duplicate') return reply.code(409).send({ error: 'this agent key is already enrolled' });
+      if (result === 'limit') return reply.code(402).send({ error: 'the xPGuard plan of this account has no free server licence: buy another one, then install again' });
       await audit(pool, {
         accountId: result.accountId,
         serverId: result.serverId,

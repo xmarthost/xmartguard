@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
+import { serverLimitError } from './billing.js';
 import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { enrollmentToken, sha256 } from '../security.js';
@@ -205,6 +206,11 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
   app.post('/api/enrollment-tokens', admin, async (req, reply) => {
     const body = TokenBody.safeParse(req.body ?? {});
     if (!body.success) return reply.code(400).send({ error: 'invalid request' });
+    // The plan's server limit (customers of the website's billing).
+    const limit = await serverLimitError(pool, req.user!.accountId, true);
+    if (limit) {
+      return reply.code(402).send({ error: limit, limit: true, buy_url: cfg.billingSiteUrl ? `${cfg.billingSiteUrl}/account/add-servers` : '' });
+    }
     const token = enrollmentToken();
     const { rows } = await pool.query(
       `INSERT INTO enrollment_tokens (account_id, token_hash, label, created_by, expires_at)

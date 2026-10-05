@@ -2,6 +2,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The whole error answer (e.g. buy_url of a plan limit). */
+    public data: Record<string, unknown> | null = null,
   ) {
     super(message);
   }
@@ -40,7 +42,7 @@ export async function api<T = any>(method: string, path: string, body?: unknown)
   }
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('xg:unauthorized'));
-    throw new ApiError(res.status, data?.error || res.statusText);
+    throw new ApiError(res.status, data?.error || res.statusText, data && typeof data === 'object' ? data : null);
   }
   return data as T;
 }
@@ -50,6 +52,8 @@ export interface User {
   email: string;
   name: string;
   role: 'owner' | 'admin' | 'operator' | 'viewer';
+  /** The account runs the portal (master settings); false for customers. */
+  platform?: boolean;
 }
 
 export interface Process {

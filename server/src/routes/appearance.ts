@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
-import { audit, requireRole } from '../auth.js';
+import { audit, requirePlatform } from '../auth.js';
+import { platformAccount } from '../tenancy.js';
 
 /**
  * Portal appearance: a ready-made theme or custom colours, chosen by an
@@ -23,10 +24,10 @@ export type Appearance = z.infer<typeof Appearance>;
 export const DEFAULT_APPEARANCE: Appearance = { theme: 'navy', mode: 'light' };
 
 export function appearanceRoutes(app: FastifyInstance, pool: Pool): void {
-  // Public: the login page is themed too. Before sign-in (or after the
-  // session expired) the most recently saved choice applies.
-  app.get('/api/appearance', async (req) => {
-    const acc = req.user?.accountId;
+  // Public: the login page is themed too. The platform account's choice
+  // applies to everyone (customers cannot change the portal's look).
+  app.get('/api/appearance', async () => {
+    const acc = await platformAccount(pool);
     const { rows } = acc
       ? await pool.query('SELECT appearance FROM account_appearance WHERE account_id = $1', [acc])
       : await pool.query('SELECT appearance FROM account_appearance ORDER BY updated_at DESC LIMIT 1');
@@ -34,7 +35,7 @@ export function appearanceRoutes(app: FastifyInstance, pool: Pool): void {
     return { appearance: parsed.success ? parsed.data : DEFAULT_APPEARANCE };
   });
 
-  app.put('/api/appearance', { preHandler: requireRole('admin') }, async (req, reply) => {
+  app.put('/api/appearance', { preHandler: requirePlatform('admin') }, async (req, reply) => {
     const b = Appearance.safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: 'invalid appearance' });
     if (b.data.theme === 'custom' && (!b.data.sidebar || !b.data.accent)) return reply.code(400).send({ error: 'custom themes need a sidebar and an accent colour' });

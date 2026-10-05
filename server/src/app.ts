@@ -12,6 +12,7 @@ import type { Pool } from './db.js';
 import { AgentHub } from './agents/hub.js';
 import { registerAuth } from './auth.js';
 import { authRoutes } from './routes/auth.js';
+import { billingRoutes } from './routes/billing.js';
 import { agentRoutes } from './routes/agent.js';
 import { serverRoutes } from './routes/servers.js';
 import { userRoutes } from './routes/users.js';
@@ -93,6 +94,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   registerAuth(app, pool);
   app.get('/api/health', async () => ({ ok: true }));
   authRoutes(app, pool, cfg);
+  billingRoutes(app, pool, cfg);
   agentRoutes(app, pool, cfg, hub, ipdb);
   serverRoutes(app, pool, cfg, hub);
   userRoutes(app, pool);

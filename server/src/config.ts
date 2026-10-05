@@ -69,6 +69,10 @@ export interface Config {
   captchaUrl: string;
   /** Cloudflare Turnstile's verification endpoint (a stand-in for offline testing). */
   turnstileVerifyUrl: string;
+  /** Shared secret of the website's billing (empty: billing API off). */
+  billingSecret: string;
+  /** The website customers buy and renew on (for links in the portal). */
+  billingSiteUrl: string;
 }
 
 /** captcha.<parent domain> of the portal (app.xpguard.org → captcha.xpguard.org). */
@@ -118,6 +122,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicUrl,
     captchaUrl: (env.CAPTCHA_URL || defaultCaptchaUrl(publicUrl)).replace(/\/+$/, ''),
     turnstileVerifyUrl: env.TURNSTILE_VERIFY_URL || 'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+    billingSecret: env.BILLING_SECRET || '',
+    billingSiteUrl: (env.BILLING_SITE_URL || '').replace(/\/+$/, ''),
     cookieSecure: bool(env.COOKIE_SECURE, publicUrl.startsWith('https://')),
     trustProxy: bool(env.TRUST_PROXY, false),
     downloadsDir: path.resolve(env.DOWNLOADS_DIR || path.join(repoRoot, 'dist', 'downloads')),

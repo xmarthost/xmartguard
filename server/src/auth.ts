@@ -11,6 +11,8 @@ export interface SessionUser {
   email: string;
   name: string;
   role: Role;
+  /** The account runs the portal (master settings). */
+  platform: boolean;
 }
 
 declare module 'fastify' {
@@ -48,14 +50,15 @@ export function registerAuth(app: FastifyInstance, pool: Pool): void {
     const token = req.cookies[SESSION_COOKIE];
     if (!token) return;
     const { rows } = await pool.query(
-      `SELECT u.id, u.account_id, u.email, u.name, u.role
-         FROM sessions s JOIN users u ON u.id = s.user_id
+      `SELECT u.id, u.account_id, u.email, u.name, u.role,
+              (a.platform OR NOT EXISTS (SELECT 1 FROM accounts WHERE platform)) AS platform
+         FROM sessions s JOIN users u ON u.id = s.user_id JOIN accounts a ON a.id = u.account_id
         WHERE s.id = $1 AND s.expires_at > now()`,
       [sha256(token)],
     );
     if (rows[0]) {
       const r = rows[0];
-      req.user = { id: r.id, accountId: r.account_id, email: r.email, name: r.name, role: r.role };
+      req.user = { id: r.id, accountId: r.account_id, email: r.email, name: r.name, role: r.role, platform: Boolean(r.platform) };
     }
   });
   // CSRF defence: state-changing browser requests must be JSON (not form-postable
@@ -76,6 +79,15 @@ export function registerAuth(app: FastifyInstance, pool: Pool): void {
 export function requireRole(min: Role) {
   return async (req: FastifyRequest, reply: FastifyReply) => {
     if (!req.user) return reply.code(401).send({ error: 'authentication required' });
+    if (!hasRole(req.user, min)) return reply.code(403).send({ error: 'insufficient permissions' });
+  };
+}
+
+/** Master settings: the platform account's users with at least this role. */
+export function requirePlatform(min: Role) {
+  return async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!req.user) return reply.code(401).send({ error: 'authentication required' });
+    if (!req.user.platform) return reply.code(403).send({ error: 'this setting is managed by the service provider' });
     if (!hasRole(req.user, min)) return reply.code(403).send({ error: 'insufficient permissions' });
   };
 }

@@ -32,6 +32,8 @@ services:
       TRUST_PROXY: "true"
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      BILLING_SECRET: ${BILLING_SECRET:-}
+      BILLING_SITE_URL: ${BILLING_SITE_URL:-}
     volumes:
       - portal_data:/app/data
     ports:
