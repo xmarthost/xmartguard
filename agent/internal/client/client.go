@@ -134,6 +134,12 @@ func wsURL(base, serverID string) (string, error) {
 	return u.String(), nil
 }
 
+// errNotFound: the WebSocket request was answered with 404 or 410.
+var errNotFound = errors.New("the portal answered that it does not know this server")
+
+// ServerIDHeader carries the server id next to the query string.
+const ServerIDHeader = "X-Xpguard-Server"
+
 // ErrRevoked means the portal no longer recognises this server.
 var ErrRevoked = errors.New("server has been removed from the portal")
 
@@ -146,11 +152,25 @@ func (s *Session) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
+		// Removed from the portal (or a proxy in front of it answering for
+		// it): the protection on this server keeps running and the agent
+		// asks again every hour, so a broken proxy never stops it.
 		if errors.Is(err, ErrRevoked) {
-			return err
+			s.Log.Error("the portal does not know this server (removed, or a proxy in front of it drops the request); protection keeps running, asking again in 1 hour", "err", err)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(time.Hour):
+			}
+			continue
 		}
 		if time.Since(started) > time.Minute {
 			backoff = time.Second
+		}
+		if errors.Is(err, errNotFound) {
+			backoff = 10 * time.Minute
+		} else if backoff > 2*time.Minute {
+			backoff = 2 * time.Minute
 		}
 		wait := backoff + time.Duration(rand.Int64N(int64(backoff/2)+1))
 		s.Log.Warn("portal connection lost", "err", err, "retry_in", wait.Round(time.Second))
@@ -159,7 +179,9 @@ func (s *Session) Run(ctx context.Context) error {
 			return nil
 		case <-time.After(wait):
 		}
-		backoff = min(backoff*2, 2*time.Minute)
+		if backoff < 2*time.Minute {
+			backoff = min(backoff*2, 2*time.Minute)
+		}
 	}
 }
 
@@ -184,12 +206,16 @@ func (s *Session) runOnce(ctx context.Context) error {
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	conn, res, err := websocket.Dial(dctx, u, &websocket.DialOptions{
 		HTTPClient: HTTPClient(s.Cfg.InsecureTLS),
-		HTTPHeader: http.Header{"User-Agent": {"xpguard-agent/" + version.Version}},
+		// The server id also in a header: some proxies (LiteSpeed's
+		// WebSocket proxy) drop the query string.
+		HTTPHeader: http.Header{"User-Agent": {"xpguard-agent/" + version.Version}, ServerIDHeader: {s.Cfg.ServerID}},
 	})
 	cancel()
 	if err != nil {
 		if res != nil && (res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusGone) {
-			return ErrRevoked
+			// The portal's answer for a removed server, but also what a
+			// proxy that mangles the request gets: asked again in 10 minutes.
+			return fmt.Errorf("%w (HTTP %d)", errNotFound, res.StatusCode)
 		}
 		return err
 	}

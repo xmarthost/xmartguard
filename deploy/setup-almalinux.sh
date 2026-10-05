@@ -343,10 +343,12 @@ ProxyPreserveHost On
 # The agents' WebSocket: a ws:// proxy rule, which LiteSpeed (reading this
 # Apache config) and Apache's mod_proxy_wstunnel both follow. LiteSpeed
 # ignores ProxyPass's upgrade=websocket, and the agents would stay offline.
+# The query string is written out: LiteSpeed's WebSocket proxy drops it
+# otherwise (agents also send their id in a header).
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteCond %{HTTP:Upgrade} =websocket [NC]
-  RewriteRule ^/?(api/agent/ws.*)$ ws://127.0.0.1:$PORTAL_PORT/\$1 [P,L]
+  RewriteRule ^/?(api/agent/ws.*)$ ws://127.0.0.1:$PORTAL_PORT/\$1?%{QUERY_STRING} [P,L]
 </IfModule>
 ProxyPass /.well-known !
 ProxyPass / http://127.0.0.1:$PORTAL_PORT/ upgrade=websocket timeout=3600 keepalive=On

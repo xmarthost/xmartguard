@@ -296,11 +296,6 @@ func cmdRun() error {
 	}
 	err = s.Run(ctx)
 	a.Mailer.Flush()
-	if errors.Is(err, client.ErrRevoked) {
-		log.Error("this server was removed from the portal; stopping. Re-install to enroll again.")
-		// Exit 0 so systemd does not restart-loop (unit uses Restart=on-failure).
-		return nil
-	}
 	return err
 }
 

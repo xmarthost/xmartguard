@@ -306,13 +306,18 @@ describe('agent end-to-end', () => {
     expect(h.ipdb.entries).not.toContain('198.51.100.0/24');
   });
 
-  it('stops cleanly when the server is removed in the portal', async () => {
-    const exited = new Promise<number | null>((r) => proc!.once('exit', (code) => r(code)));
+  it('keeps protecting when the server is removed in the portal', async () => {
+    // A removed server (or a proxy that answers for the portal) never stops
+    // the agent: the scanner, WAF and firewall keep running, and it asks
+    // the portal again later.
     expect((await c.req('DELETE', `/api/servers/${serverId}`)).status).toBe(200);
-    expect(await exited).toBe(0);
+    await new Promise((r) => setTimeout(r, 4000));
+    expect(proc!.exitCode).toBeNull();
+    // It is not taken back: its connection attempts are refused.
+    const ws = await fetch(`${h.url}/api/agent/ws?server_id=${serverId}`);
+    expect(ws.status).toBe(404);
+    proc!.kill('SIGTERM');
+    await new Promise((r) => proc!.once('exit', r));
     proc = null;
-    // A restarted agent must not reconnect.
-    const out = spawn(agentBin, ['run'], { env: env() });
-    expect(await new Promise((r) => out.once('exit', r))).toBe(0);
   });
 });

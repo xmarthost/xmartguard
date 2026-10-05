@@ -150,6 +150,14 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
     }, 5_000).unref();
   }
 
+  // The agent's server id: from the query string, or from its header when a
+  // proxy in front of the portal (LiteSpeed's WebSocket proxy) drops the query.
+  const agentServerId = (req: { query: unknown; headers: Record<string, string | string[] | undefined> }): string | undefined => {
+    const q = (req.query as Record<string, string> | undefined)?.server_id;
+    const h = req.headers['x-xpguard-server'];
+    return q || (typeof h === 'string' ? h : undefined) || undefined;
+  };
+
   // Unknown/revoked servers get a plain HTTP 404 before the upgrade so the
   // agent can tell "removed" apart from a network error.
   app.get(
@@ -157,14 +165,17 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
     {
       websocket: true,
       preValidation: async (req, reply) => {
-        const id = (req.query as Record<string, string>).server_id;
+        const id = agentServerId(req);
+        // No id at all is a mangled request (a proxy dropped the query
+        // string), not a removed server: 400, which agents do not take for "removed".
+        if (!id) return reply.code(400).send({ error: 'server_id missing' });
         if (!uuid.safeParse(id).success) return reply.code(404).send({ error: 'unknown server' });
         const { rowCount } = await pool.query("SELECT 1 FROM servers WHERE id = $1 AND status = 'active'", [id]);
         if (!rowCount) return reply.code(404).send({ error: 'unknown server' });
       },
     },
     (socket, req) => {
-      const serverId = (req.query as Record<string, string>).server_id;
+      const serverId = agentServerId(req)!;
       const nonce = crypto.randomBytes(32).toString('base64');
       const log = req.log.child({ serverId });
       let conn: Awaited<ReturnType<AgentHub['attach']>> | null = null;
