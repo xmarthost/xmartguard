@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { applyAppearance, type Appearance } from './theme';
 import { api, type User } from './api';
+import { clearAgentCache } from './components/controls';
 
 interface AuthState {
   user: User | null;
@@ -32,9 +33,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Signs out and goes where the portal says (the website's sign-out for
+  // customers, the operator sign-in for staff): a full page load, so no
+  // screen of the panel shows signed in for a moment.
   const logout = useCallback(async () => {
-    await api('POST', '/api/auth/logout').catch(() => {});
+    const r = await api<{ redirect?: string }>('POST', '/api/auth/logout').catch(() => null);
+    clearAgentCache();
     setUser(null);
+    window.location.replace(r?.redirect || '/login?out=1');
   }, []);
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Plus, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api';
 
@@ -10,15 +10,49 @@ export function agentCall<T = any>(serverId: string, action: string, params: unk
 }
 
 /** Loads an agent action, optionally polling. */
-export function useAgent<T>(serverId: string | undefined, action: string, params: unknown = {}, intervalMs?: number) {
+/** Last answers kept for this tab (cache: true), so a reload shows the page at once. */
+const CACHE = 'xg:agent:';
+function cached<T>(k: string): T | null {
+  try {
+    const v = sessionStorage.getItem(CACHE + k);
+    return v ? (JSON.parse(v) as T) : null;
+  } catch {
+    return null;
+  }
+}
+/** Forgets the kept answers (sign-out). */
+export function clearAgentCache() {
+  try {
+    for (const k of Object.keys(sessionStorage)) if (k.startsWith(CACHE)) sessionStorage.removeItem(k);
+  } catch {
+    /* storage blocked */
+  }
+}
+
+export function useAgent<T>(serverId: string | undefined, action: string, params: unknown = {}, intervalMs?: number, opts: { cache?: boolean } = {}) {
   const key = JSON.stringify(params);
-  const [data, setData] = useState<T | null>(null);
+  const ck = opts.cache && serverId ? `${serverId}:${action}:${key}` : '';
+  const [data, setData] = useState<T | null>(() => (ck ? cached<T>(ck) : null));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Another server or period: its kept answer (or nothing) until it loads.
+  const shown = useRef(ck);
+  if (shown.current !== ck) {
+    shown.current = ck;
+    setData(ck ? cached<T>(ck) : null);
+  }
   const load = useCallback(async () => {
     if (!serverId) return;
     try {
-      setData(await agentCall<T>(serverId, action, JSON.parse(key)));
+      const v = await agentCall<T>(serverId, action, JSON.parse(key));
+      setData(v);
+      if (ck) {
+        try {
+          sessionStorage.setItem(CACHE + ck, JSON.stringify(v));
+        } catch {
+          /* full or blocked */
+        }
+      }
       setError(null);
     } catch (e: any) {
       setError(e.message);
@@ -26,7 +60,7 @@ export function useAgent<T>(serverId: string | undefined, action: string, params
       setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, action, key]);
+  }, [serverId, action, key, ck]);
   useEffect(() => {
     setLoading(true);
     load();

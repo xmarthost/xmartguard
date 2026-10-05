@@ -92,14 +92,22 @@ describe('billing API (website -> portal)', () => {
     await c.req('POST', '/api/auth/set-password', { token: new URL(link.body.url).searchParams.get('token'), password: 'another-long-password' });
     const t1 = await c.req('POST', '/api/enrollment-tokens', { label: 'one' });
     expect(t1.status).toBe(200);
+    // A token made before (unused, even one not shown again) never blocks:
+    // the new token replaces it while the licence is free.
+    await h.pool.query("INSERT INTO enrollment_tokens (account_id, token_hash, label, expires_at) SELECT account_id, 'legacy-hash', 'old', now() + interval '1 hour' FROM enrollment_tokens WHERE id = $1", [t1.body.id]);
     const t2 = await c.req('POST', '/api/enrollment-tokens', { label: 'two' });
-    expect(t2.status).toBe(402);
-    expect(t2.body).toMatchObject({ limit: true, buy_url: 'https://shop.example.com/account/add-servers' });
-    // The first token enrols a server; then the limit holds at enrolment too.
+    expect(t2.status).toBe(200);
+    expect((await c.req('GET', '/api/enrollment-tokens/pending')).body.tokens.map((t: { label: string }) => t.label)).toEqual(['two']);
+    expect((await new Client(h.url).req('POST', '/api/agent/enroll', { token: t1.body.token, public_key: 'x', agent_version: '0.21.9', inventory: {} })).status).not.toBe(200);
+    t1.body.token = t2.body.token;
+    // The token enrols a server; then the limit holds for new tokens and at enrolment too.
     const key = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
     const enroll = (token: string) => new Client(h.url).req('POST', '/api/agent/enroll', { token, public_key: key(), agent_version: '0.21.9', inventory: { hostname: 'cust1.example.com' } });
     expect((await enroll(t1.body.token)).status).toBe(200);
     expect((await c.req('GET', '/api/license')).body.servers_used).toBe(1);
+    const full = await c.req('POST', '/api/enrollment-tokens', { label: 'full' });
+    expect(full.status).toBe(402);
+    expect(full.body).toMatchObject({ limit: true, buy_url: 'https://shop.example.com/account/add-servers' });
     // More licences bought: a token again; down to 1 before it is used: refused at enrolment.
     await call('/api/billing/provision', { email: 'sara@example.com', plan: 'pro', max_servers: 2, period_end: inAYear() });
     const t3 = await c.req('POST', '/api/enrollment-tokens', { label: 'three' });
@@ -116,6 +124,20 @@ describe('billing API (website -> portal)', () => {
     expect(usage.body.servers[0].hostname).toBe('cust1.example.com');
     // The platform account is never limited.
     expect((await owner.req('POST', '/api/enrollment-tokens', { label: 'mine' })).status).toBe(200);
+  });
+
+  it('signs customers out of the website too; staff stay on the operator sign-in', async () => {
+    await call('/api/billing/provision', { email: 'out@example.com', plan: 'pro', max_servers: 1, period_end: inAYear() });
+    const link = await call('/api/billing/password-link', { email: 'out@example.com' });
+    const c = new Client(h.url);
+    await c.req('POST', '/api/auth/set-password', { token: new URL(link.body.url).searchParams.get('token'), password: 'another-long-password' });
+    expect((await c.req('GET', '/api/auth/me')).status).toBe(200);
+    const out = await c.req('POST', '/api/auth/logout');
+    expect(out.body.redirect).toBe('https://shop.example.com/logout?from=panel');
+    expect((await c.req('GET', '/api/auth/me')).status).toBe(401);
+    const staff = new Client(h.url);
+    await staff.login();
+    expect((await staff.req('POST', '/api/auth/logout')).body.redirect).toBe('/login?admin&out=1');
   });
 
   it('gives each server one free trial, and shows unused tokens again', async () => {

@@ -4,6 +4,7 @@ import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
 import { SESSION_COOKIE, audit, createSession, destroySession, requireRole } from '../auth.js';
 import { hashPassword, verifyPassword } from '../security.js';
+import { isPlatform } from '../tenancy.js';
 
 const LoginBody = z.object({ email: z.string().email().max(200), password: z.string().min(1).max(200) });
 const ProfileBody = z.object({
@@ -43,10 +44,22 @@ export function authRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void 
     return { ok: true };
   });
 
+  // Where the browser goes next: a customer signs out of the website's
+  // client area too (else the website opens the panel again at once); the
+  // platform's own staff stay on the operator sign-in and lose the client
+  // marker (set when they tried the client area in this browser).
   app.post('/api/auth/logout', async (req, reply) => {
+    const user = req.user;
     await destroySession(pool, req.cookies[SESSION_COOKIE]);
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
-    return { ok: true };
+    let redirect = '/login?out=1';
+    if (user && (await isPlatform(pool, user.accountId))) {
+      reply.clearCookie('xg_client', { path: '/' });
+      redirect = '/login?admin&out=1';
+    } else if (user && cfg.billingSiteUrl) {
+      redirect = `${cfg.billingSiteUrl}/logout?from=panel`;
+    }
+    return { ok: true, redirect };
   });
 
   app.get('/api/auth/me', async (req, reply) => {

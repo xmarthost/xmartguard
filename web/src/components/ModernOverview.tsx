@@ -5,6 +5,7 @@ import {
   AlertTriangle, BarChart3, BookOpen, CalendarDays, ChevronDown, ChevronRight, Database, Globe, Info, LineChart, ShieldAlert, ShieldCheck, TrendingDown, TrendingUp, Waypoints,
 } from 'lucide-react';
 import { useAgent } from './controls';
+import { PageLoader } from './ui';
 import { ServiceStrip, change, compact, type Alert, type Dash } from './AttackOverview';
 import { IconTile, Sparkline, TONES, type Tone } from './ModernBits';
 
@@ -160,7 +161,7 @@ function SeriesChart({ data, color, name, line, height = 'h-64' }: { data: { day
 
 /** The Modern style's server dashboard (same data as AttackOverview). */
 export default function ModernOverview({ serverId, online, days, setDays }: { serverId: string; online: boolean; days: number; setDays?: (d: number) => void }) {
-  const { data, error } = useAgent<Dash>(online ? serverId : undefined, 'dashboard.get', { days }, 60_000);
+  const { data, error } = useAgent<Dash>(online ? serverId : undefined, 'dashboard.get', { days }, 60_000, { cache: true });
   const [allAlerts, setAllAlerts] = useState(false);
   const [wk1, setWk1] = useState(false);
   const [ln1, setLn1] = useState(false);
@@ -170,7 +171,7 @@ export default function ModernOverview({ serverId, online, days, setDays }: { se
   const [ln3, setLn3] = useState(false);
   if (!online) return <div className="card p-6 text-sm text-slate-500">The server is offline; the security overview appears when the agent reconnects.</div>;
   if (error && !data) return <div className="card p-4 text-sm text-slate-500">Security overview unavailable: {error}</div>;
-  if (!data) return <div className="card p-6 text-sm text-slate-400">Loading security overview…</div>;
+  if (!data) return <PageLoader />;
 
   const total = data.threats.current + data.web_attacks.current + data.blocked_connections.current;
   const prevTotal = data.threats.previous + data.web_attacks.previous + data.blocked_connections.previous;
