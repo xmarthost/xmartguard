@@ -441,4 +441,24 @@ CREATE TABLE billing_nonces (
 );
 `,
   },
+  {
+    version: '014_trials_tokens',
+    sql: `
+-- Free-trial licences, and the server addresses that already used one: a
+-- server gets one free trial, whichever account installs it.
+ALTER TABLE account_licenses ADD COLUMN trial boolean NOT NULL DEFAULT false;
+CREATE TABLE trial_hosts (
+  ip          text PRIMARY KEY,
+  account_id  uuid REFERENCES accounts(id) ON DELETE SET NULL,
+  server_id   uuid,
+  hostname    text NOT NULL DEFAULT '',
+  -- End of the trial that used it: only that same trial may reinstall there.
+  trial_until timestamptz,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+-- An install token stays readable until a server uses it (or it expires),
+-- so the Add Server page can show the command again after a reload.
+ALTER TABLE enrollment_tokens ADD COLUMN token text;
+`,
+  },
 ];

@@ -5,6 +5,8 @@ import { api, type Server } from '../api';
 import { CopyBox, ErrorBox, Spinner } from '../components/ui';
 
 interface TokenResponse {
+  id?: string;
+  label?: string;
   token: string;
   expires_at: string;
   install_command: string;
@@ -39,6 +41,23 @@ export default function AddServer() {
   }, [tok, joined]);
 
   const [buyUrl, setBuyUrl] = useState('');
+  // Tokens not used yet stay visible (after a reload too) until a server uses them.
+  const [pending, setPending] = useState<TokenResponse[]>([]);
+  async function loadPending(pick: boolean) {
+    try {
+      const r = await api<{ tokens: TokenResponse[] }>('GET', '/api/enrollment-tokens/pending');
+      setPending(r.tokens);
+      if (pick && r.tokens[0]) setTok((t) => t ?? r.tokens[0]);
+    } catch {
+      /* viewers cannot list tokens */
+    }
+  }
+  useEffect(() => {
+    loadPending(true);
+  }, []);
+  useEffect(() => {
+    if (joined) loadPending(false);
+  }, [joined]);
 
   async function issue() {
     setBusy(true);
@@ -47,6 +66,8 @@ export default function AddServer() {
       const { servers } = await api<{ servers: Server[] }>('GET', '/api/servers');
       known.current = new Set(servers.map((s) => s.id));
       setTok(await api<TokenResponse>('POST', '/api/enrollment-tokens', { label }));
+      setJoined(null);
+      loadPending(false);
     } catch (e: any) {
       setError(e.message);
       setBuyUrl(e?.status === 402 ? String(e.data?.buy_url ?? '') || 'subscription' : '');
@@ -97,7 +118,39 @@ export default function AddServer() {
                 </button>
               </div>
             ) : (
-              <p className="text-sm text-green-700">Token created. Expires {new Date(tok.expires_at).toLocaleString()}.</p>
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="text-sm text-green-700">
+                  Token {tok.label ? <strong>{tok.label}</strong> : null} ready. It stays here until a server uses it; expires {new Date(tok.expires_at).toLocaleString()}.
+                </p>
+                <button className="btn-outline" onClick={() => { setTok(null); setLabel(''); }}>
+                  Create another token
+                </button>
+              </div>
+            )}
+            {pending.length > 1 && (
+              <div className="mt-4 rounded-lg border border-slate-200 p-3 text-sm">
+                <p className="mb-2 font-medium text-navy-900">Tokens not used yet</p>
+                <ul className="space-y-1">
+                  {pending.map((p) => (
+                    <li key={p.id} className="flex flex-wrap items-center gap-2">
+                      <button className={`text-left underline-offset-2 hover:underline ${tok?.id === p.id ? 'font-semibold text-blue-700' : 'text-slate-700'}`} onClick={() => setTok(p)}>
+                        {p.label || 'Unnamed token'}
+                      </button>
+                      <span className="text-xs text-slate-400">expires {new Date(p.expires_at).toLocaleString()}</span>
+                      <button
+                        className="ml-auto text-xs text-red-600 hover:underline"
+                        onClick={async () => {
+                          await api('DELETE', `/api/enrollment-tokens/${p.id}`).catch(() => {});
+                          if (tok?.id === p.id) setTok(null);
+                          loadPending(false);
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
         </div>

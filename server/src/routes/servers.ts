@@ -213,9 +213,9 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
     }
     const token = enrollmentToken();
     const { rows } = await pool.query(
-      `INSERT INTO enrollment_tokens (account_id, token_hash, label, created_by, expires_at)
-       VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5)) RETURNING id, expires_at`,
-      [req.user!.accountId, sha256(token), body.data.label, req.user!.id, cfg.enrollTokenTtlHours],
+      `INSERT INTO enrollment_tokens (account_id, token_hash, label, created_by, expires_at, token)
+       VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5), $6) RETURNING id, expires_at`,
+      [req.user!.accountId, sha256(token), body.data.label, req.user!.id, cfg.enrollTokenTtlHours, token],
     );
     await audit(pool, { accountId: req.user!.accountId, userId: req.user!.id, action: 'enrollment_token.created', ip: req.ip });
     return {
@@ -235,6 +235,23 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
       [req.user!.accountId],
     );
     return { tokens: rows };
+  });
+
+  // Tokens not used yet, with their install command (shown again after a reload).
+  app.get('/api/enrollment-tokens/pending', admin, async (req) => {
+    const { rows } = await pool.query(
+      `SELECT id, label, token, created_at, expires_at FROM enrollment_tokens
+        WHERE account_id = $1 AND used_at IS NULL AND expires_at > now() AND token IS NOT NULL
+        ORDER BY created_at DESC LIMIT 20`,
+      [req.user!.accountId],
+    );
+    return {
+      tokens: rows.map((r) => ({
+        id: r.id, label: r.label, token: r.token, created_at: r.created_at, expires_at: r.expires_at,
+        install_command: installCommand(cfg, r.token),
+        uninstall_command: `curl -fsSL ${cfg.publicUrl}/uninstall.sh | bash`,
+      })),
+    };
   });
 
   app.delete('/api/enrollment-tokens/:id', admin, async (req, reply) => {

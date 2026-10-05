@@ -259,14 +259,27 @@ export function SecurityLogPage() {
 }
 
 export function SupportPage() {
+  // Customers open tickets in the website's client area.
+  const opts = useApi<{ client_area_url: string }>('/api/auth/options');
+  const tickets = opts.data?.client_area_url ? `${opts.data.client_area_url}/tickets` : '';
   return (
     <div className="card mx-auto mt-6 max-w-2xl space-y-3 p-8">
       <h1 className="h-title">Support</h1>
-      <p className="text-slate-600">
-        Need help with xPGuard? Email <a className="text-navy-700 underline" href="mailto:support@xmarthost.com">support@xmarthost.com</a> with your server hostname and a description of the problem.
-      </p>
+      {tickets ? (
+        <>
+          <p className="text-slate-600">Open a support ticket in your client area. Our team answers there and by email.</p>
+          <div className="flex flex-wrap gap-2">
+            <a className="btn-primary" href={`${tickets}/new`} target="_blank" rel="noreferrer">Open a support ticket</a>
+            <a className="btn-outline" href={tickets} target="_blank" rel="noreferrer">My tickets</a>
+          </div>
+        </>
+      ) : (
+        <p className="text-slate-600">
+          Need help with xPGuard? Email <a className="text-navy-700 underline" href="mailto:support@xmarthost.com">support@xmarthost.com</a> with your server hostname and a description of the problem.
+        </p>
+      )}
       <p className="text-sm text-slate-500">
-        Useful commands on the server: <code className="rounded bg-slate-100 px-1">systemctl status xpguard-agent</code>,{' '}
+        Useful details for a ticket: your server hostname, and the output of <code className="rounded bg-slate-100 px-1">systemctl status xpguard-agent</code> and{' '}
         <code className="rounded bg-slate-100 px-1">tail -n 100 /opt/xpguard/logs/agent.log</code>
       </p>
     </div>

@@ -118,6 +118,41 @@ describe('billing API (website -> portal)', () => {
     expect((await owner.req('POST', '/api/enrollment-tokens', { label: 'mine' })).status).toBe(200);
   });
 
+  it('gives each server one free trial, and shows unused tokens again', async () => {
+    const key = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    const customer = async (email: string) => {
+      await call('/api/billing/provision', { email, plan: 'free-trial', plan_name: 'Free Trial', max_servers: 1, period_end: inAYear(), trial: true });
+      const link = await call('/api/billing/password-link', { email });
+      const c = new Client(h.url);
+      await c.req('POST', '/api/auth/set-password', { token: new URL(link.body.url).searchParams.get('token'), password: 'trial-long-password' });
+      return c;
+    };
+    const a = await customer('trial-a@example.com');
+    const t = await a.req('POST', '/api/enrollment-tokens', { label: 'trial box' });
+    // The token and its command are still there after a reload.
+    const pending = await a.req('GET', '/api/enrollment-tokens/pending');
+    expect(pending.body.tokens[0]).toMatchObject({ id: t.body.id, token: t.body.token, label: 'trial box' });
+    expect(pending.body.tokens[0].install_command).toContain(t.body.token);
+    const inv = { hostname: 'box.example.com', primary_ip: '203.0.113.50', ips: ['203.0.113.50', '10.0.0.5'] };
+    expect((await new Client(h.url).req('POST', '/api/agent/enroll', { token: t.body.token, public_key: key(), agent_version: '0.21.9', inventory: inv })).status).toBe(200);
+    // Used: gone from the list, and its plain text is no longer stored.
+    expect((await a.req('GET', '/api/enrollment-tokens/pending')).body.tokens).toHaveLength(0);
+    // Another account's trial cannot install on the same server.
+    const b = await customer('trial-b@example.com');
+    const tb = await b.req('POST', '/api/enrollment-tokens', { label: 'same box' });
+    const again = await new Client(h.url).req('POST', '/api/agent/enroll', { token: tb.body.token, public_key: key(), agent_version: '0.21.9', inventory: inv });
+    expect(again.status).toBe(402);
+    expect(again.body.error).toMatch(/203\.0\.113\.50\) already used its xPGuard free trial/);
+    // The same account's next trial (a new trial period) cannot reuse the server either.
+    await call('/api/billing/provision', { email: 'trial-a@example.com', plan: 'free-trial', max_servers: 2, period_end: new Date(Date.now() + 60 * 86400_000).toISOString(), trial: true });
+    const ta2 = await a.req('POST', '/api/enrollment-tokens', { label: 'second trial' });
+    const reuse = await new Client(h.url).req('POST', '/api/agent/enroll', { token: ta2.body.token, public_key: key(), agent_version: '0.21.9', inventory: inv });
+    expect(reuse.status).toBe(402);
+    // A paid licence installs there without trouble.
+    await call('/api/billing/provision', { email: 'trial-b@example.com', plan: 'pro', max_servers: 1, period_end: inAYear(), trial: false });
+    expect((await new Client(h.url).req('POST', '/api/agent/enroll', { token: tb.body.token, public_key: key(), agent_version: '0.21.9', inventory: inv })).status).toBe(200);
+  });
+
   it('keeps master settings to the platform account', async () => {
     const c = new Client(h.url);
     await c.login('ali@example.com', 'a-good-long-password');

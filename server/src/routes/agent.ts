@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Pool } from '../db.js';
 import { withTx } from '../db.js';
 import type { Config } from '../config.js';
-import { serverLimitError } from './billing.js';
+import { loadLicense, publicIPs, serverLimitError, trialHostError } from './billing.js';
 import type { AgentHub, MetricsSample } from '../agents/hub.js';
 import { audit } from '../auth.js';
 import { parseEd25519PublicKey, sha256, verifyEd25519 } from '../security.js';
@@ -80,6 +80,13 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
         if (!tok) return null;
         // The plan's server limit, checked again as the server joins.
         if (await serverLimitError(pool, tok.account_id, false)) return 'limit' as const;
+        // Free trials: once per server, recognised by its public addresses.
+        const lic = await loadLicense(pool, tok.account_id);
+        const ips = lic?.trial ? publicIPs(inv.primary_ip, inv.ips, req.ip) : [];
+        if (lic?.trial) {
+          const used = await trialHostError(c, tok.account_id, lic.period_end, ips, null, s(inv.hostname));
+          if (used) return { trialUsed: used };
+        }
         const dup = await c.query('SELECT 1 FROM servers WHERE public_key = $1', [body.public_key]);
         if (dup.rowCount) return 'duplicate' as const;
         const ins = await c.query(
@@ -93,11 +100,13 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
           ],
         );
         const serverId: string = ins.rows[0].id;
-        await c.query('UPDATE enrollment_tokens SET used_at = now(), server_id = $2 WHERE id = $1', [tok.id, serverId]);
+        await c.query('UPDATE enrollment_tokens SET used_at = now(), server_id = $2, token = NULL WHERE id = $1', [tok.id, serverId]);
+        if (lic?.trial) await trialHostError(c, tok.account_id, lic.period_end, ips, serverId, s(inv.hostname));
         return { serverId, accountId: tok.account_id as string };
       });
       if (result === null) return reply.code(403).send({ error: 'token is invalid, expired or already used' });
       if (result === 'duplicate') return reply.code(409).send({ error: 'this agent key is already enrolled' });
+      if (typeof result === 'object' && 'trialUsed' in result) return reply.code(402).send({ error: result.trialUsed });
       if (result === 'limit') return reply.code(402).send({ error: 'the xPGuard plan of this account has no free server licence: buy another one, then install again' });
       await audit(pool, {
         accountId: result.accountId,

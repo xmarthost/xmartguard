@@ -16,6 +16,7 @@ import { isPlatform } from '../tenancy.js';
  */
 
 export interface License {
+  trial: boolean;
   plan: string;
   plan_name: string;
   max_servers: number;
@@ -25,12 +26,12 @@ export interface License {
 
 export async function loadLicense(pool: Pool, accountId: string): Promise<License | null> {
   const { rows } = await pool.query(
-    'SELECT plan, plan_name, max_servers, period_end, status FROM account_licenses WHERE account_id = $1',
+    'SELECT plan, plan_name, max_servers, period_end, status, trial FROM account_licenses WHERE account_id = $1',
     [accountId],
   );
   if (!rows[0]) return null;
   const r = rows[0];
-  return { plan: r.plan, plan_name: r.plan_name, max_servers: Number(r.max_servers), period_end: r.period_end ? new Date(r.period_end).toISOString() : null, status: r.status };
+  return { trial: Boolean(r.trial), plan: r.plan, plan_name: r.plan_name, max_servers: Number(r.max_servers), period_end: r.period_end ? new Date(r.period_end).toISOString() : null, status: r.status };
 }
 
 /** Servers connected plus install tokens not used yet. */
@@ -59,6 +60,42 @@ export async function serverLimitError(pool: Pool, accountId: string, withTokens
   return '';
 }
 
+/** Public addresses of a server (private, loopback and link-local left out). */
+export function publicIPs(...lists: unknown[]): string[] {
+  const out = new Set<string>();
+  const priv = /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|0\.|::1$|fe80:|f[cd][0-9a-f]{2}:)/i;
+  for (const l of lists) {
+    for (const v of Array.isArray(l) ? l : [l]) {
+      const ip = String(v ?? '').trim().replace(/^::ffff:/, '').replace(/\/\d+$/, '').toLowerCase();
+      if (ip && /^[0-9a-f.:]+$/.test(ip) && !priv.test(ip)) out.add(ip);
+    }
+  }
+  return [...out];
+}
+
+/**
+ * A free trial is once per server: an address already recorded for another
+ * account's trial cannot start one again ('' when it can). The addresses are
+ * recorded for this account as the server joins.
+ */
+export async function trialHostError(c: { query: Pool['query'] }, accountId: string, trialUntil: string | null, ips: string[], serverId: string | null, hostname: string): Promise<string> {
+  if (!ips.length) return '';
+  // Used by another account, or by an earlier trial of this one: refused.
+  // Reinstalling during the same trial (same end date) is allowed.
+  const { rows } = await c.query(
+    `SELECT ip FROM trial_hosts WHERE ip = ANY($1::text[])
+       AND (account_id IS DISTINCT FROM $2 OR trial_until IS DISTINCT FROM $3::timestamptz) LIMIT 1`,
+    [ips, accountId, trialUntil],
+  );
+  if (rows[0]) return `This server (${rows[0].ip}) already used its xPGuard free trial (one month per server). Buy a licence to protect it.`;
+  if (serverId) {
+    for (const ip of ips) {
+      await c.query('INSERT INTO trial_hosts (ip, account_id, server_id, hostname, trial_until) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (ip) DO NOTHING', [ip, accountId, serverId, hostname.slice(0, 200), trialUntil]);
+    }
+  }
+  return '';
+}
+
 const Provision = z.object({
   email: z.string().trim().toLowerCase().email().max(200),
   name: z.string().trim().max(100).default(''),
@@ -68,6 +105,7 @@ const Provision = z.object({
   period_end: z.string().datetime({ offset: true }).nullable(),
   status: z.enum(['active', 'expired', 'suspended', 'cancelled']).default('active'),
   customer_ref: z.string().trim().max(100).default(''),
+  trial: z.boolean().default(false),
 });
 const ByEmail = z.object({ email: z.string().trim().toLowerCase().email().max(200) });
 
@@ -160,11 +198,11 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
       created = true;
     }
     await pool.query(
-      `INSERT INTO account_licenses (account_id, plan, plan_name, max_servers, period_end, status, customer_ref)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO account_licenses (account_id, plan, plan_name, max_servers, period_end, status, customer_ref, trial)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (account_id) DO UPDATE SET plan = EXCLUDED.plan, plan_name = EXCLUDED.plan_name, max_servers = EXCLUDED.max_servers,
-         period_end = EXCLUDED.period_end, status = EXCLUDED.status, customer_ref = EXCLUDED.customer_ref, updated_at = now()`,
-      [user.account_id, b.plan, b.plan_name, b.max_servers, b.period_end, b.status, b.customer_ref],
+         period_end = EXCLUDED.period_end, status = EXCLUDED.status, customer_ref = EXCLUDED.customer_ref, trial = EXCLUDED.trial, updated_at = now()`,
+      [user.account_id, b.plan, b.plan_name, b.max_servers, b.period_end, b.status, b.customer_ref, b.trial],
     );
     await audit(pool, { accountId: user.account_id, action: 'billing.license', detail: { plan: b.plan, max_servers: b.max_servers, period_end: b.period_end, status: b.status, created }, ip: req.ip });
     const needsPassword = user.password_hash.startsWith('!');
