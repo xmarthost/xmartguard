@@ -7,7 +7,7 @@ import { Card, Pager, SettingRow, Toggle, useAction } from '../components/contro
 import { useApi } from '../hooks';
 
 interface Resp {
-  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean };
+  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean; design?: Design; countdown?: number };
   version: number;
   updated_at: string | null;
   url: string;
@@ -16,6 +16,22 @@ interface Resp {
 }
 
 type Provider = 'auto' | 'turnstile' | 'altcha';
+type Design = 'classic' | 'minimal' | 'midnight';
+
+/** The page's looks: name, description and a small sketch of it. */
+const DESIGNS: { id: Design; name: string; desc: string; bg: string; card: string; text: string }[] = [
+  { id: 'classic', name: 'Classic', desc: 'White card on a soft background', bg: 'linear-gradient(135deg,#e7eefb,#fdeee2)', card: '#ffffff', text: '#123a78' },
+  { id: 'minimal', name: 'Minimal', desc: 'No card: the animation beside the text', bg: '#fbfcfe', card: 'transparent', text: '#123a78' },
+  { id: 'midnight', name: 'Midnight', desc: 'Dark background, glass card', bg: 'linear-gradient(135deg,#1b3a6b,#0b1424 60%,#4a2a14)', card: 'rgba(17,28,48,.85)', text: '#f1f5ff' },
+];
+
+const COUNTDOWNS: [number, string][] = [
+  [0, 'No wait (go back at once)'],
+  [3, '3 seconds'],
+  [5, '5 seconds'],
+  [10, '10 seconds'],
+  [15, '15 seconds'],
+];
 
 const PROVIDERS: [Provider, string, string][] = [
   ['auto', 'Turnstile, ALTCHA as fallback', "Turnstile for everyone; when it cannot load or fails in a visitor's browser (privacy add-ons, VPNs, old browsers), the page switches to ALTCHA by itself. Without Turnstile keys: ALTCHA only."],
@@ -51,6 +67,8 @@ export default function CaptchaPage() {
   const [minutes, setMinutes] = useState(720);
   const [provider, setProvider] = useState<Provider>('auto');
   const [strictIP, setStrictIP] = useState(false);
+  const [design, setDesign] = useState<Design>('classic');
+  const [countdown, setCountdown] = useState(5);
 
   useEffect(() => {
     if (!res.data) return;
@@ -59,6 +77,8 @@ export default function CaptchaPage() {
     setMinutes(res.data.config.minutes);
     setProvider(res.data.config.provider ?? 'auto');
     setStrictIP(Boolean(res.data.config.strict_ip));
+    setDesign(res.data.config.design ?? 'classic');
+    setCountdown(res.data.config.countdown ?? 5);
     setSecret('');
   }, [res.data]);
 
@@ -71,12 +91,14 @@ export default function CaptchaPage() {
     minutes !== d.config.minutes ||
     secret !== '' ||
     provider !== (d.config.provider ?? 'auto') ||
-    strictIP !== Boolean(d.config.strict_ip);
+    strictIP !== Boolean(d.config.strict_ip) ||
+    design !== (d.config.design ?? 'classic') ||
+    countdown !== (d.config.countdown ?? 5);
   const online = d.servers.filter((s) => s.online).length;
   const preview = d.servers[0] ? `${d.url}?s=${d.servers[0].id}&preview=1` : '';
   const save = () =>
     run(
-      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP }).then((r) => (res.reload(), r)),
+      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP, design, countdown }).then((r) => (res.reload(), r)),
       (r) => `Saved: applied on ${r.pushed} online server${r.pushed === 1 ? '' : 's'}${r.offline ? `; ${r.offline} offline will follow when they reconnect` : ''}`,
     );
 
@@ -185,6 +207,52 @@ export default function CaptchaPage() {
             </a>
           )}
         </div>
+      </Card>
+
+      <Card title="Look" desc="How the page looks to visitors. An animation runs while the check is done; once verified the page counts the seconds down and sends the visitor back.">
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          {DESIGNS.map((x) => (
+            <div
+              key={x.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => admin && !busy && setDesign(x.id)}
+              onKeyDown={(e) => e.key === 'Enter' && admin && !busy && setDesign(x.id)}
+              className={`cursor-pointer rounded-xl border-2 p-2 transition ${design === x.id ? 'border-[var(--xg-primary)] ring-2 ring-[var(--xg-primary)]/20' : 'border-slate-200 hover:border-slate-300'}`}
+            >
+              <div className="flex h-24 items-center justify-center rounded-lg" style={{ background: x.bg }}>
+                <div className="flex w-3/4 items-center gap-2 rounded-md px-2 py-2" style={{ background: x.card, boxShadow: x.card === 'transparent' ? 'none' : '0 4px 14px -6px rgba(0,0,0,.35)' }}>
+                  <span className="h-7 w-7 shrink-0 animate-spin rounded-full border-[3px] border-orange-400 border-t-blue-600" />
+                  <span className="flex-1 space-y-1">
+                    <span className="block h-1.5 w-4/5 rounded" style={{ background: x.text, opacity: 0.8 }} />
+                    <span className="block h-1.5 w-1/2 rounded" style={{ background: x.text, opacity: 0.4 }} />
+                  </span>
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2 px-1">
+                <span>
+                  <span className="block text-sm font-semibold text-navy-900">{x.name}</span>
+                  <span className="block text-xs text-slate-500">{x.desc}</span>
+                </span>
+                {preview && (
+                  <a className="shrink-0 text-xs font-medium whitespace-nowrap text-[var(--xg-primary)] hover:underline" href={`${preview}&d=${x.id}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                    Preview
+                  </a>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <SettingRow title="Seconds before going back" desc="After the check the page shows a countdown with a progress bar and a Go now link, then opens the page the visitor asked for.">
+          <select className="input w-56" value={countdown} disabled={!admin || busy} onChange={(e) => setCountdown(Number(e.target.value))}>
+            {COUNTDOWNS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+        <p className="text-xs text-slate-500">Save to use the chosen look for every visitor; Preview shows a look before saving.</p>
       </Card>
 
       <RecentChecks admin={admin} />

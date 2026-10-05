@@ -58,7 +58,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
 
   it('is off until the Turnstile keys are saved', async () => {
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false });
+    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5 });
     expect(g.body.url).toBe('https://captcha.example.org/v');
     const page = await h.app.inject({ method: 'GET', url: link() });
     expect(page.statusCode).toBe(503);
@@ -73,7 +73,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(put.status).toBe(200);
     expect(put.body.version).toBe(1);
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false });
+    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5 });
     expect(JSON.stringify(g.body)).not.toContain('0x4AAAAAAAsecret');
     // Saving without a secret keeps the saved one.
     expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 })).status).toBe(200);
@@ -154,6 +154,24 @@ describe('CAPTCHA page for suspicious visitors', () => {
     // Clearing the list.
     expect((await admin.req('DELETE', '/api/captcha/events')).body.deleted).toBeGreaterThan(0);
     expect((await admin.req('GET', '/api/captcha/events')).body.total).toBe(0);
+  });
+
+  it('has three looks and a countdown, chosen in the portal and tried in previews', async () => {
+    expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, design: 'neon', countdown: 5 })).status).toBe(400);
+    expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, design: 'minimal', countdown: 99 })).status).toBe(400);
+    expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, design: 'minimal', countdown: 10 })).status).toBe(200);
+    expect((await admin.req('GET', '/api/captcha')).body.config).toMatchObject({ design: 'minimal', countdown: 10 });
+    const hdr = { 'cf-connecting-ip': '198.51.100.20' };
+    const page = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=198.51.100.20&h=shop.example.com&u=/wp-login.php`, headers: hdr });
+    expect(page.body).toContain('<body class="d-minimal">');
+    expect(page.body).toContain('WAIT=10');
+    expect(page.body).toContain('id="badge"');
+    // A preview may show another look; a visitor's link may not.
+    expect((await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&preview=1&d=midnight`, headers: hdr })).body).toContain('<body class="d-midnight">');
+    expect((await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=198.51.100.20&h=shop.example.com&d=midnight&u=/x`, headers: hdr })).body).toContain('<body class="d-minimal">');
+    // Configurations saved before the looks existed get the defaults.
+    await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 });
+    expect((await admin.req('GET', '/api/captcha')).body.config).toMatchObject({ design: 'classic', countdown: 5 });
   });
 
   it('shows only the service page on the CAPTCHA host', async () => {

@@ -6,7 +6,7 @@ import type { Config } from '../config.js';
 import type { AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
-import { renderInfo, renderPage } from '../captcha/page.js';
+import { CAPTCHA_DESIGNS, type CaptchaDesign, renderInfo, renderPage } from '../captcha/page.js';
 import { altchaChallenge, altchaScript, altchaVerify } from '../captcha/altcha.js';
 
 /**
@@ -35,10 +35,13 @@ export const CaptchaConfig = z.object({
   // Off: another address may solve it (mobile networks and ISPs often use
   // different addresses for different sites), a few per hour.
   strict_ip: z.boolean().default(false),
+  // The page's look and the seconds shown before the visitor goes back.
+  design: z.enum(CAPTCHA_DESIGNS).default('classic'),
+  countdown: z.number().int().min(0).max(15).default(5),
 });
 export type CaptchaConfig = z.infer<typeof CaptchaConfig>;
 
-const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false };
+const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5 };
 
 /** The check the page shows ('' = not usable: Turnstile chosen without keys). */
 export function effectiveProvider(c: CaptchaConfig): 'turnstile' | 'altcha' | 'auto' | '' {
@@ -127,7 +130,16 @@ export function parseParams(rawUrl: string) {
   const head = new URLSearchParams(at >= 0 ? query.slice(0, at) : query);
   let u = at >= 0 ? query.slice(at + 3) : (head.get('u') ?? '/');
   if (!u.startsWith('/') && /^%2f/i.test(u)) u = decodeURIComponent(u);
-  return { s: head.get('s') ?? '', ip: head.get('ip') ?? '', h: (head.get('h') ?? '').toLowerCase(), u, preview: head.get('preview') === '1' };
+  const d = head.get('d') ?? '';
+  return {
+    s: head.get('s') ?? '',
+    ip: head.get('ip') ?? '',
+    h: (head.get('h') ?? '').toLowerCase(),
+    u,
+    preview: head.get('preview') === '1',
+    // Previews may show another design than the saved one.
+    design: (CAPTCHA_DESIGNS as readonly string[]).includes(d) ? (d as CaptchaDesign) : undefined,
+  };
 }
 
 function validParams(p: { s: string; ip: string; h: string; u: string }): string | null {
@@ -199,7 +211,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       return html(reply, renderPage({ host: p.h, visitorIp: ip, params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
     }
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
-    return html(reply, renderPage({ host: p.h, visitorIp: ip, params, siteKey: provider === 'altcha' ? '' : config.site_key, provider }));
+    const design = (p.preview && p.design) || config.design;
+    return html(reply, renderPage({ host: p.h, visitorIp: ip, params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown }));
   });
 
   // ALTCHA: the widget (from this portal, not a CDN) and its checks.
@@ -296,6 +309,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         minutes: cur.config.minutes,
         provider: cur.config.provider,
         strict_ip: cur.config.strict_ip,
+        design: cur.config.design,
+        countdown: cur.config.countdown,
       },
       version: cur.version,
       updated_at: cur.updated_at,
@@ -313,6 +328,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     minutes: z.number().int().min(10).max(7 * 24 * 60),
     provider: z.enum(['auto', 'turnstile', 'altcha']).default('auto'),
     strict_ip: z.boolean().default(false),
+    design: z.enum(CAPTCHA_DESIGNS).default('classic'),
+    countdown: z.number().int().min(0).max(15).default(5),
   });
   app.put('/api/captcha', admin, async (req, reply) => {
     const b = Save.safeParse(req.body);
@@ -331,7 +348,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       [acc, JSON.stringify(c)],
     );
     const version = Number(rows[0].version);
-    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes, provider: c.provider, strict_ip: c.strict_ip }, ip: req.ip });
+    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes, provider: c.provider, strict_ip: c.strict_ip, design: c.design, countdown: c.countdown }, ip: req.ip });
     let pushed = 0;
     let offline = 0;
     for (const s of await servers(acc)) {

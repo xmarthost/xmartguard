@@ -6,6 +6,10 @@
 const esc = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
+/** The page's looks, chosen in the portal (Overview » CAPTCHA Page). */
+export const CAPTCHA_DESIGNS = ['classic', 'minimal', 'midnight'] as const;
+export type CaptchaDesign = (typeof CAPTCHA_DESIGNS)[number];
+
 export interface PageData {
   /** Website the visitor wanted (shown and returned to). */
   host: string;
@@ -19,7 +23,24 @@ export interface PageData {
   provider?: 'turnstile' | 'altcha' | 'auto';
   /** Error shown instead of the check. */
   error?: string;
+  /** Look of the page (classic when not set). */
+  design?: CaptchaDesign;
+  /** Seconds counted down before the visitor is sent back (0: at once). */
+  countdown?: number;
 }
+
+/**
+ * The animated badge: the xPGuard shield in a turning ring with orbiting
+ * dots while the check runs; the ring turns green with a tick once verified.
+ */
+const badge = `<div class="badge" id="badge" aria-hidden="true">
+<svg class="ring" viewBox="0 0 120 120"><defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--a1)"/><stop offset="1" stop-color="var(--a2)"/></linearGradient></defs>
+<circle cx="60" cy="60" r="54" fill="none" stroke="var(--track)" stroke-width="6"/>
+<circle class="arc" cx="60" cy="60" r="54" fill="none" stroke="url(#rg)" stroke-width="6" stroke-linecap="round" stroke-dasharray="110 230"/></svg>
+<div class="orbit"><i></i><i></i><i></i></div>
+<img class="shield" src="/xpguard-shield.png" alt="">
+<svg class="tick" viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
+</div>`;
 
 const css = `
 *{box-sizing:border-box}
@@ -30,6 +51,49 @@ body{min-height:100vh;display:flex;flex-direction:column;align-items:center;just
 .card{width:100%;max-width:520px;background:#fff;border:1px solid #e3e9f2;border-radius:22px;box-shadow:0 18px 50px -20px rgba(15,42,85,.25);
   padding:34px 28px 26px;text-align:center}
 .shield{width:112px;height:112px;margin:0 auto 10px;display:block}
+:root{--a1:#1d4f96;--a2:#f06a1d;--track:#e8eef7;--ok:#16a34a}
+.badge{position:relative;width:132px;height:132px;margin:0 auto 12px}
+.badge .ring{position:absolute;inset:0;width:100%;height:100%;animation:s 1.6s linear infinite}
+.badge .shield{position:absolute;inset:22px;width:88px;height:88px;margin:0;animation:pulse 2.4s ease-in-out infinite}
+.badge .orbit{position:absolute;inset:0;animation:s 3.2s linear infinite reverse}
+.badge .orbit i{position:absolute;left:50%;top:-1px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:var(--a2);box-shadow:0 0 10px var(--a2)}
+.badge .orbit i:nth-child(2){transform:rotate(120deg);transform-origin:5px 67px;background:var(--a1);box-shadow:0 0 10px var(--a1)}
+.badge .orbit i:nth-child(3){transform:rotate(240deg);transform-origin:5px 67px;background:#22c3a6;box-shadow:0 0 10px #22c3a6}
+.badge .tick{position:absolute;right:2px;bottom:6px;width:38px;height:38px;opacity:0;transform:scale(.4);transition:all .45s cubic-bezier(.2,1.6,.4,1)}
+.badge .tick circle{fill:var(--ok)}.badge .tick path{fill:none;stroke:#fff;stroke-width:5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:40;stroke-dashoffset:40;transition:stroke-dashoffset .5s .25s}
+.badge.done .ring{animation:none}.badge.done .arc{stroke:var(--ok);stroke-dasharray:340 0;transition:stroke-dasharray .6s}
+.badge.done .orbit{display:none}.badge.done .shield{animation:none}
+.badge.done .tick{opacity:1;transform:scale(1)}.badge.done .tick path{stroke-dashoffset:0}
+.badge.err .ring{animation-duration:4s}.badge.err .arc{stroke:#dc2626}
+.badge.idle .ring,.badge.idle .shield{animation:none}.badge.idle .orbit{display:none}.badge.idle .arc{stroke-dasharray:340 0}
+@keyframes pulse{50%{transform:scale(.94)}}
+@media (prefers-reduced-motion:reduce){.badge .ring,.badge .orbit,.badge .shield{animation:none}}
+.count{margin:14px auto 0;max-width:340px}
+.count p{margin:0 0 8px;font-size:16px;font-weight:600}
+.count .nw{white-space:nowrap}.count .n{display:inline-block;min-width:1.1em;font-size:22px;font-weight:800;color:var(--a2);text-align:center}
+.bar{height:6px;border-radius:9px;background:var(--track);overflow:hidden}
+.bar span{display:block;height:100%;width:100%;background:linear-gradient(90deg,var(--a1),var(--a2));transition:width 1s linear}
+.count a{display:inline-block;margin-top:10px;font-size:14px;color:var(--a1);font-weight:600}
+.elapsed{font-size:12px;color:#7b8aa3;margin-top:6px}
+/* Minimal: no card, the badge beside the text on wide screens. */
+body.d-minimal{background:#fbfcfe;background-image:none}
+.d-minimal .card{max-width:760px;background:transparent;border:0;box-shadow:none;display:grid;grid-template-columns:170px 1fr;gap:6px 34px;text-align:left;align-items:start}
+.d-minimal .badge{grid-row:span 9;margin:6px 0 0;width:150px;height:150px}.d-minimal .badge .shield{inset:26px;width:98px;height:98px}
+.d-minimal .site{text-transform:none;font-size:clamp(20px,4.6vw,28px);letter-spacing:0}
+.d-minimal .widget{justify-content:flex-start}.d-minimal .count{margin-left:0}.d-minimal .foot{justify-content:flex-start;grid-column:1/-1}
+.d-minimal summary{text-align:left}
+.d-minimal details,.d-minimal .label,.d-minimal .status,.d-minimal .ip,.d-minimal .by,.d-minimal .preview{grid-column:2}
+@media (max-width:600px){.d-minimal .card{grid-template-columns:1fr;text-align:center}.d-minimal .badge{grid-row:auto;margin:0 auto 10px}.d-minimal .card>*{grid-column:1!important}.d-minimal .widget{justify-content:center}.d-minimal .count{margin:14px auto 0}.d-minimal .foot{justify-content:center}}
+/* Midnight: dark, glassy card. */
+body.d-midnight{color:#e6edf8;background:#0b1424;background-image:radial-gradient(circle at 15% 10%,#1b3a6b 0,transparent 45%),radial-gradient(circle at 90% 90%,#4a2a14 0,transparent 40%)}
+.d-midnight{--a1:#5b9bff;--a2:#ff8a3d;--track:#22324d;--ok:#22c55e}
+.d-midnight .card{background:rgba(17,28,48,.78);border-color:#25395c;box-shadow:0 24px 60px -20px rgba(0,0,0,.6);backdrop-filter:blur(8px)}
+.d-midnight .site{color:#f1f5ff}.d-midnight .by{color:#a9c3ee}.d-midnight .ip{background:#13223b;border-color:#25395c;color:#b9c8e2}.d-midnight .ip b{color:#fff}
+.d-midnight .label,.d-midnight details{color:#9fb0cc}.d-midnight summary,.d-midnight .status{color:#a9c3ee}
+.d-midnight .foot{border-color:#22324d;color:#8798b6}.d-midnight .box{background:#2a1714;border-color:#5c2a20;color:#ffb4a3}
+.d-midnight .status.ok{color:#4ade80}.d-midnight .status.err{color:#f87171}
+.d-midnight .again{background:#13223b;border-color:#2c446c;color:#cfe0ff}.d-midnight .elapsed{color:#7f90ae}
+.d-midnight .foot img{filter:brightness(0) invert(1);opacity:.85}
 .site{font-size:clamp(22px,6vw,34px);font-weight:800;letter-spacing:.5px;text-transform:uppercase;margin:6px 0 4px;word-break:break-word;color:#123a78}
 .by{font-size:17px;font-weight:600;margin:0 0 14px;color:#1d4f96}
 .by b{color:#f06a1d}
@@ -62,27 +126,44 @@ export function renderPage(d: PageData): string {
     : `<p class="label">Human verification</p>
 <div class="widget"><div id="ts"></div></div>
 <p class="status" id="status" role="status" aria-live="polite"><span class="spin"></span>Loading the check…</p>
+<p class="elapsed" id="elapsed"></p>
+<div class="count" id="count" hidden></div>
 <button type="button" class="again" id="again" hidden>Try again</button>`;
+  const wait = Math.max(0, Math.min(15, d.countdown ?? 5));
   const provider = d.provider ?? 'turnstile';
   const script =
     d.error || !d.params
       ? ''
       : `<script>
-var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
+var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
 function show(t,c){st.className='status'+(c?' '+c:'');st.innerHTML=t}
 // After an error the check is not restarted by itself (it would solve again
 // and repeat the same error): the visitor chooses to try again.
-function fail(t){show(t,'err');ag.hidden=false}
-ag.onclick=function(){ag.hidden=true;if(usingAltcha){startAltcha()}else{show('Please confirm you are not a robot.');if(window.turnstile)turnstile.reset()}};
+function fail(t){show(t,'err');ag.hidden=false;bd.className='badge err'}
+function stopClock(){clearInterval(tick);el.textContent=''}
+// Verified: the badge turns green and the seconds count down to the return.
+function back(url){
+  stopClock();bd.className='badge done';
+  if(WAIT<=0){show('Verified. Taking you back to '+HOST+'…','ok');location.replace(url);return}
+  show('Verified: you are human.','ok');
+  var left=WAIT;cn.hidden=false;
+  cn.innerHTML='<p>You will be taken back to <b>'+HOST+'</b> in <span class="nw"><span class="n" id="n">'+left+'</span> second'+(left===1?'':'s')+'</span></p><div class="bar"><span id="bar"></span></div><a href="#" id="go">Go now</a>';
+  var nEl=document.getElementById('n'),bar=document.getElementById('bar');
+  document.getElementById('go').onclick=function(e){e.preventDefault();location.replace(url)};
+  requestAnimationFrame(function(){bar.style.width=((left-1)/WAIT*100)+'%'});
+  var iv=setInterval(function(){left--;nEl.textContent=Math.max(left,0);bar.style.width=(Math.max(left-1,0)/WAIT*100)+'%';
+    if(left<=0){clearInterval(iv);location.replace(url)}},1000);
+}
+ag.onclick=function(){ag.hidden=true;bd.className='badge';if(usingAltcha){startAltcha()}else{show('Please confirm you are not a robot.');if(window.turnstile)turnstile.reset()}};
 function done(sol){
   show('<span class="spin"></span>Checking…');
   fetch('/v/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({},sol,P))})
   .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
   .then(function(x){
     if(!x.ok){fail(x.j.error||'The check failed. Please try again.');return}
-    if(x.j.preview){show('Preview: the check works. A real visitor would now go back to the website.','ok');return}
-    show('Verified. Taking you back to ${host}…','ok');
-    setTimeout(function(){location.replace(x.j.redirect)},${1200});
+    if(x.j.preview){stopClock();bd.className='badge done';show('Preview: the check works. A real visitor would now count down and go back to the website.','ok');
+      if(WAIT>0){cn.hidden=false;cn.innerHTML='<p>You will be taken back to <b>'+HOST+'</b> in <span class="nw"><span class="n">'+WAIT+'</span> seconds</span></p><div class="bar"><span></span></div>'}return}
+    back(x.j.redirect);
   }).catch(function(){fail('Network error. Please try again.')});
 }
 // ALTCHA: the browser solves a small puzzle by itself (no third party).
@@ -109,7 +190,7 @@ function startTurnstile(){
   var started=false;
   window.onTs=function(){
     started=true;
-    show('Please confirm you are not a robot.');
+    show('Please confirm you are not a robot.');stopClock();
     turnstile.render('#ts',{sitekey:KEY,callback:function(t){done({token:t})},
       'error-callback':function(){if(MODE==='auto'&&!usingAltcha){startAltcha();return true}show('The check could not load. Please reload the page.','err')},
       'expired-callback':function(){show('The check expired. Please try again.','err')}});
@@ -129,9 +210,9 @@ if(MODE==='altcha')startAltcha();else startTurnstile();
 <link rel="icon" type="image/png" href="/favicon-32.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>${css}</style>
-</head><body>
+</head><body class="d-${d.design ?? 'classic'}">
 <main class="card">
-<img class="shield" src="/xpguard-shield.png" alt="">
+${d.error ? badge.replace('class="badge"', 'class="badge idle"') : badge}
 ${d.params?.preview ? '<p class="preview">Preview of the page visitors see. Solving it here only tests the check; no website is changed.</p>' : ''}
 <h1 class="site">${host}</h1>
 <p class="by">is protected by <b>xPGuard</b></p>
