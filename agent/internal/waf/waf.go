@@ -835,6 +835,9 @@ func (m *Manager) tailLogs(ctx context.Context) {
 			return
 		}
 		// Visitors sent to the login-page CAPTCHA are not attacks.
+		if isGateRule(ev.RuleID) && !isSelfTest(ev) {
+			NoteCaptchaSent(ev.IP, ev.Host, time.Now())
+		}
 		if isSelfTest(ev) || isGateRule(ev.RuleID) || !dedupe.add(ev.UID) {
 			return
 		}

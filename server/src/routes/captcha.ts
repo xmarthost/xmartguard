@@ -170,6 +170,26 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     return rows.map((r) => ({ id: String(r.id), hostname: String(r.hostname), online: hub.isOnline(String(r.id)) }));
   }
 
+  // Answers of servers to "is this website yours?" (captcha.host), cached.
+  const confirmed = new Map<string, { site: 'yes' | 'no'; at: number }>();
+  async function siteConfirmed(serverId: string, ip: string, host: string): Promise<'yes' | 'no' | 'unknown'> {
+    const key = `${serverId}|${ip}|${host}`;
+    const hit = confirmed.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.site;
+    if (!hub.isOnline(serverId)) return 'unknown';
+    try {
+      const r = (await hub.command(serverId, 'captcha.host', { ip, host }, 8_000)) as { hosted?: unknown };
+      // Agents before this check do not know the command (unknown below).
+      if (typeof r?.hosted !== 'boolean') return 'unknown';
+      if (confirmed.size > 20_000) confirmed.clear();
+      const site = r.hosted ? 'yes' : 'no';
+      confirmed.set(key, { site, at: Date.now() });
+      return site;
+    } catch {
+      return 'unknown';
+    }
+  }
+
   async function record(accountId: string, serverId: string, ip: string, host: string, result: string) {
     await pool
       .query('INSERT INTO captcha_events (account_id, server_id, ip, host, result) VALUES ($1, $2, $3, $4, $5)', [accountId, serverId, ip, host.slice(0, 255), result])
@@ -183,6 +203,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       .code(code)
       .type('text/html; charset=utf-8')
       .header('Cache-Control', 'no-store')
+      // Never in search results: the page only makes sense for one visitor.
+      .header('X-Robots-Tag', 'noindex, nofollow, noarchive')
       .header(
         'Content-Security-Policy',
         "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
@@ -194,6 +216,10 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!captchaHost || captchaHost === new URL(cfg.publicUrl).host.toLowerCase()) return;
     if ((req.headers.host ?? '').toLowerCase() !== captchaHost) return;
     const path = req.url.split('?')[0];
+    // Crawlers may look (and see noindex); nothing here is for search results.
+    if (path === '/robots.txt') {
+      return reply.type('text/plain; charset=utf-8').header('X-Robots-Tag', 'noindex').send('User-agent: *\nAllow: /\n');
+    }
     if (path === '/v' || path === '/v/verify' || path === '/v/altcha.js' || path === '/v/altcha/challenge' || /^\/(?:xpguard-shield|xpguard-wordmark|favicon-32)\.png$/.test(path)) return;
     return html(reply, renderInfo());
   });
@@ -206,15 +232,22 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const bad = validParams(p);
     if (bad) return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: bad }), 400);
     const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
-    if (!rows[0]) return html(reply, renderPage({ host: p.h, visitorIp: ip, params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
+    if (!rows[0]) return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
     const { config } = await load(pool, rows[0].account_id);
     const provider = effectiveProvider(config);
     if (!config.enabled || !provider) {
-      return html(reply, renderPage({ host: p.h, visitorIp: ip, params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
+      return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
     }
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
     const design = (p.preview && p.design) || config.design;
-    return html(reply, renderPage({ host: p.h, visitorIp: ip, params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown }));
+    // The page names the website only when its server confirms the site is
+    // one of its own: a made-up link can not make this domain show another
+    // name (say, a bank's), and a site that is not on the server is refused.
+    const site = p.preview ? 'yes' : await siteConfirmed(p.s, p.ip, p.h);
+    if (site === 'no') {
+      return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
+    }
+    return html(reply, renderPage({ host: site === 'yes' ? p.h : '', visitorIp: ip, params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown }));
   });
 
   // ALTCHA: the widget (from this portal, not a CDN) and its checks.

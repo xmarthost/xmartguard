@@ -21,6 +21,9 @@ const (
 	IDSoftStrict   = 7700032 // +1 behind a proxy
 	IDSoftFlag     = 7700034
 	IDSoftDeny     = 7700036
+	// IDSoftTrusted: search engine crawlers and other trusted services
+	// (official address lists) are never sent to the CAPTCHA page.
+	IDSoftTrusted = 7700038
 	// IDSoftCaptcha is in the CAPTCHA range: sending a visitor to the
 	// CAPTCHA page is not counted as an attack.
 	IDSoftCaptcha = 7700905
@@ -54,6 +57,7 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 	strict := filepath.Join(m.RulesDir, FileStrictIPs)
 	pass := filepath.Join(m.RulesDir, FileCaptchaPass)
 	proxies := filepath.Join(m.RulesDir, FileProxyRanges)
+	trusted := m.trustedList()
 	files := map[string]string{
 		strict:  AddrFile(m.strictList()),
 		pass:    CentralFiles(c)[FileCaptchaPass],
@@ -70,6 +74,12 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 	}
 	w("# Soft blocking: weak signals from clean visitors get the CAPTCHA page (xPGuard).")
 	byAddr(IDSoftVerified, pass, fmt.Sprintf("setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d", relaxed))
+	if len(trusted) > 0 {
+		// Same list (and file) as the bot rules use.
+		tf := filepath.Join(m.RulesDir, FileTrustedIPs)
+		files[tf] = strings.Join(trusted, "\n") + "\n"
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, tf, IDSoftTrusted, relaxed)
+	}
 	byAddr(IDSoftStrict, strict, fmt.Sprintf("setvar:tx.xg_strict=1,setvar:tx.inbound_anomaly_score_threshold=%d", in))
 	w(`SecRule &TX:xg_strict "@eq 0" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDSoftFlag)
 	w(`  SecRule &TX:xg_verified "@eq 0" "t:none,setvar:tx.xg_soft=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, relaxed)

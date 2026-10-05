@@ -222,24 +222,71 @@ func (a *Agent) centralLiftBan(ip string) {
 }
 
 // hostedHere reports whether host (with or without www. and a port) is a
-// domain of this server. Servers without cPanel's domain list accept any.
+// website on the list of this server's domains. Without a list, nothing is.
 func hostedHere(host string, domains map[string]string) bool {
-	h := strings.ToLower(strings.TrimSpace(host))
-	if hh, _, err := net.SplitHostPort(h); err == nil {
-		h = hh
-	}
-	h = strings.TrimSuffix(h, ".")
-	if h == "" || strings.ContainsAny(h, "/?#@ ") {
+	h := waf.NormHost(host)
+	if h == "" || len(domains) == 0 {
 		return false
-	}
-	if len(domains) == 0 {
-		return true
 	}
 	if _, ok := domains[h]; ok {
 		return true
 	}
 	_, ok := domains[strings.TrimPrefix(h, "www.")]
 	return ok
+}
+
+// lookupIP and localAddrs are replaced in tests.
+var (
+	lookupIP = func(ctx context.Context, host string) ([]net.IP, error) {
+		return net.DefaultResolver.LookupIP(ctx, "ip", host)
+	}
+	localAddrs = func() []net.IP {
+		var out []net.IP
+		addrs, _ := net.InterfaceAddrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok {
+				out = append(out, n.IP)
+			}
+		}
+		return out
+	}
+)
+
+// siteHere reports whether host is a website on this server, for a
+// visitor ip that solved the portal's CAPTCHA. With cPanel's domain list
+// that list decides. Without one (other panels), the WAF must have sent ip
+// to the CAPTCHA for host recently, or host must point at this server: so
+// the CAPTCHA domain never sends anyone on to a site that is not hosted
+// here (an open redirect that phishing mails could use).
+func (a *Agent) siteHere(ip, host string) bool {
+	if d := reputation.HostedDomains(UserDomainsPath); len(d) > 0 {
+		return hostedHere(host, d)
+	}
+	h := waf.NormHost(host)
+	if h == "" {
+		return false
+	}
+	if ip != "" && waf.SentToCaptcha(ip, h) {
+		return true
+	}
+	if net.ParseIP(h) != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ips, err := lookupIP(ctx, h)
+	if err != nil {
+		return false
+	}
+	local := localAddrs()
+	for _, x := range ips {
+		for _, l := range local {
+			if x.Equal(l) && !x.IsLoopback() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // applyCentralConfig makes the portal's setting this server's setting.
@@ -312,6 +359,18 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		}
 		return map[string]any{"ok": true}, nil
 	}
+	// captcha.host: may the CAPTCHA page name host (a website here that sent
+	// ip to it)? Asked before the page shows a site's name.
+	h["captcha.host"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IP   string `json:"ip"`
+			Host string `json:"host"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"hosted": a.siteHere(in.IP, in.Host)}, nil
+	}
 	// captcha.pass: a visitor solved the CAPTCHA page for ip on host.
 	h["captcha.pass"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
@@ -321,7 +380,7 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if err != nil {
 			return nil, err
 		}
-		if !hostedHere(in.Host, reputation.HostedDomains(UserDomainsPath)) {
+		if !a.siteHere(in.IP, in.Host) {
 			return nil, fmt.Errorf("%s is not a website on this server", in.Host)
 		}
 		if err := a.centralPass(in.IP); err != nil {

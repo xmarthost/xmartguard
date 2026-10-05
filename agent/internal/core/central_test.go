@@ -3,11 +3,14 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/store"
+	"github.com/xmarthost/xmartguard/agent/internal/waf"
 )
 
 func TestHostedHere(t *testing.T) {
@@ -20,8 +23,44 @@ func TestHostedHere(t *testing.T) {
 			t.Errorf("%q: %v", host, got)
 		}
 	}
-	if !hostedHere("any.example.net", nil) || hostedHere("a b", nil) {
-		t.Error("without a domain list")
+	if hostedHere("any.example.net", nil) || hostedHere("a b", nil) {
+		t.Error("without a domain list, no site is on the list")
+	}
+}
+
+// Without cPanel's domain list a solved CAPTCHA is only accepted for a site
+// the WAF sent the visitor from, or one that points at this server: the
+// CAPTCHA domain must never send people on to any other site.
+func TestSiteHereWithoutDomainList(t *testing.T) {
+	a := newTestAgent(t, `{}`)
+	old, oldLookup, oldLocal := UserDomainsPath, lookupIP, localAddrs
+	UserDomainsPath = filepath.Join(t.TempDir(), "none")
+	defer func() { UserDomainsPath, lookupIP, localAddrs = old, oldLookup, oldLocal }()
+	localAddrs = func() []net.IP { return []net.IP{net.ParseIP("203.0.113.10"), net.ParseIP("127.0.0.1")} }
+	lookupIP = func(_ context.Context, host string) ([]net.IP, error) {
+		switch host {
+		case "mine.example.com":
+			return []net.IP{net.ParseIP("203.0.113.10")}, nil
+		case "localhost.example.com":
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		}
+		return []net.IP{net.ParseIP("198.51.100.99")}, nil
+	}
+	if !a.siteHere("192.0.2.5", "mine.example.com") {
+		t.Error("a site that points at this server")
+	}
+	for _, h := range []string{"evil.com", "localhost.example.com", "203.0.113.10", "", "a b"} {
+		if a.siteHere("192.0.2.5", h) {
+			t.Errorf("%q accepted", h)
+		}
+	}
+	// Behind a CDN (other address): accepted once the WAF sent the visitor.
+	if a.siteHere("192.0.2.5", "cdn.example.com") {
+		t.Fatal("cdn site accepted before a redirect")
+	}
+	waf.NoteCaptchaSent("192.0.2.5", "www.cdn.example.com", time.Now())
+	if !a.siteHere("192.0.2.5", "cdn.example.com:443") || a.siteHere("192.0.2.6", "cdn.example.com") {
+		t.Error("redirect record not matched to visitor and site")
 	}
 }
 

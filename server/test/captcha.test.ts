@@ -12,6 +12,8 @@ const pub = keys.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32)
 const passes: unknown[] = [];
 let online = true;
 let agentError = '';
+// What the server answers to "is this website yours?" (undefined: an agent without the command).
+let hostAnswer: (host: string) => boolean | undefined = (host) => host !== 'paypal.com';
 
 beforeAll(async () => {
   h = await startHarness({ captchaUrl: 'https://captcha.example.org', trustProxy: true });
@@ -25,6 +27,10 @@ beforeAll(async () => {
     if (action === 'captcha.pass') {
       if (agentError) throw new Error(agentError);
       passes.push(params);
+    }
+    if (action === 'captcha.host') {
+      const hosted = hostAnswer((params as { host: string }).host);
+      return hosted === undefined ? { ok: true } : { hosted };
     }
     return { ok: true };
   };
@@ -90,6 +96,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(page.body).toContain('0x4AAAAAAAtestSiteKey');
     expect(page.body).not.toContain('0x4AAAAAAAsecret');
     expect(page.headers['content-security-policy']).toContain('challenges.cloudflare.com');
+    expect(page.headers['x-robots-tag']).toContain('noindex');
     // Bad links: no check.
     for (const bad of [`/v?s=${serverId}&ip=x&h=shop.example.com&u=/`, `/v?s=${serverId}&ip=1.2.3.4&h=<script>&u=/`, `/v?s=${serverId}&ip=1.2.3.4&h=a.org&u=//evil.com`, '/v?s=nope&ip=1.2.3.4&h=a.org&u=/']) {
       const r = await h.app.inject({ method: 'GET', url: bad });
@@ -172,6 +179,32 @@ describe('CAPTCHA page for suspicious visitors', () => {
     // Configurations saved before the looks existed get the defaults.
     await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 });
     expect((await admin.req('GET', '/api/captcha')).body.config).toMatchObject({ design: 'classic', countdown: 5 });
+  });
+
+  it('never names a website its server does not confirm', async () => {
+    // A made-up link for a site that is not on the server: refused, the name not shown.
+    const spoof = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=paypal.com&u=/signin`, headers: { 'cf-connecting-ip': '203.0.113.5' } });
+    expect(spoof.statusCode).toBe(404);
+    expect(spoof.body).not.toContain('paypal.com');
+    // An older agent that cannot answer: the check works, the page says "this website".
+    hostAnswer = () => undefined;
+    try {
+      const old = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=old-agent.example.com&u=/`, headers: { 'cf-connecting-ip': '203.0.113.5' } });
+      expect(old.statusCode).toBe(200);
+      expect(old.body).not.toContain('<h1 class="site">old-agent.example.com');
+      expect(old.body).toContain('this website');
+    } finally {
+      hostAnswer = (host) => host !== 'paypal.com';
+    }
+  });
+
+  it('keeps the CAPTCHA host out of search results', async () => {
+    const r = await h.app.inject({ method: 'GET', url: '/robots.txt', headers: { host: 'captcha.example.org' } });
+    expect(r.statusCode).toBe(200);
+    expect(r.headers['content-type']).toContain('text/plain');
+    const front = await h.app.inject({ method: 'GET', url: '/', headers: { host: 'captcha.example.org' } });
+    expect(front.headers['x-robots-tag']).toContain('noindex');
+    expect(front.body).toContain('name="robots" content="noindex');
   });
 
   it('shows only the service page on the CAPTCHA host', async () => {
