@@ -340,6 +340,14 @@ ProxyPreserveHost On
 <IfModule mod_headers.c>
   RequestHeader set X-Forwarded-Proto "https"
 </IfModule>
+# The agents' WebSocket: a ws:// proxy rule, which LiteSpeed (reading this
+# Apache config) and Apache's mod_proxy_wstunnel both follow. LiteSpeed
+# ignores ProxyPass's upgrade=websocket, and the agents would stay offline.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTP:Upgrade} =websocket [NC]
+  RewriteRule ^/?(api/agent/ws.*)$ ws://127.0.0.1:$PORTAL_PORT/\$1 [P,L]
+</IfModule>
 ProxyPass /.well-known !
 ProxyPass / http://127.0.0.1:$PORTAL_PORT/ upgrade=websocket timeout=3600 keepalive=On
 ProxyPassReverse / http://127.0.0.1:$PORTAL_PORT/
