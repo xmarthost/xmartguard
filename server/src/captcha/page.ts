@@ -97,8 +97,11 @@ body.d-midnight{color:#e6edf8;background:#0b1424;background-image:radial-gradien
 .site{font-size:clamp(22px,6vw,34px);font-weight:800;letter-spacing:.5px;text-transform:uppercase;margin:6px 0 4px;word-break:break-word;color:#123a78}
 .by{font-size:17px;font-weight:600;margin:0 0 14px;color:#1d4f96}
 .by b{color:#f06a1d}
-.ip{display:inline-block;font-size:15px;background:#f1f5fb;border:1px solid #e1e8f3;border-radius:999px;padding:7px 16px;margin:4px 0 22px;color:#334a6b}
-.ip b{color:#0f2a55;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.ip{display:inline-block;max-width:100%;box-sizing:border-box;font-size:15px;background:#f1f5fb;border:1px solid #e1e8f3;border-radius:999px;padding:7px 16px;margin:4px 0 22px;color:#334a6b}
+.ip b{color:#0f2a55;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
+/* An IPv6 address is long: its own line, smaller, wrapped inside the box on phones. */
+.ip.v6{border-radius:16px;padding:8px 14px}
+.ip.v6 b{display:block;font-size:13px;line-height:1.45;margin-top:2px}
 .label{font-size:12px;font-weight:700;letter-spacing:1.4px;color:#5a6b85;margin:0 0 10px;text-transform:uppercase}
 .widget{min-height:70px;display:flex;justify-content:center;align-items:center}
 .status{min-height:24px;margin:16px 0 0;font-size:15px;font-weight:600;color:#1d4f96}
@@ -216,7 +219,7 @@ ${d.error ? badge.replace('class="badge"', 'class="badge idle"') : badge}
 ${d.params?.preview ? '<p class="preview">Preview of the page visitors see. Solving it here only tests the check; no website is changed.</p>' : ''}
 <h1 class="site">${host}</h1>
 <p class="by">is protected by <b>xPGuard</b></p>
-<p class="ip">Your IP address is <b>${esc(d.visitorIp)}</b></p>
+<p class="ip${d.visitorIp.includes(':') ? ' v6' : ''}">Your IP address is <b>${esc(d.visitorIp).replace(/:/g, ':<wbr>')}</b></p>
 ${body}
 <noscript><div class="box">Please enable JavaScript to continue.</div></noscript>
 <details><summary>Why am I seeing this?</summary>

@@ -502,9 +502,10 @@ var pageTmpl = template.Must(template.New("p").Parse(`<!doctype html>
 {{if eq .Provider "turnstile"}}<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>{{end}}
 {{if eq .Provider "recaptcha"}}<script src="https://www.google.com/recaptcha/api.js" async defer></script>{{end}}
 <style>
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;color:#0f172a;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px}
 .c{background:#fff;border-radius:14px;box-shadow:0 10px 30px #0f172a1a;max-width:420px;width:100%;padding:28px}
 h1{font-size:20px;margin:0 0 8px;color:#1e2a5a}p{color:#475569;font-size:14px;line-height:1.5}
+p b{overflow-wrap:anywhere}
 img{display:block;width:100%;max-width:260px;height:auto;border-radius:8px;border:1px solid #e2e8f0;margin:12px 0}
 input[type=text]{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:18px;letter-spacing:4px}
 button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:8px;background:#1e2a5a;color:#fff;font-size:15px;cursor:pointer}

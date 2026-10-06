@@ -115,6 +115,19 @@ function visitorIP(req: FastifyRequest, trustProxy: boolean): string {
   return req.ip;
 }
 
+/**
+ * The address the page shows: IPv4 first. A phone often reaches this page
+ * over IPv6 while the website saw its IPv4 address (or the other way round);
+ * the IPv4 one is the one people know and the one the check is for.
+ */
+export function shownIP(visitor: string, linked: string): string {
+  const v = visitor.replace(/^::ffff:/i, '');
+  if (isIP(v) === 4) return v;
+  const l = linked.replace(/^::ffff:/i, '');
+  if (isIP(l) === 4) return l;
+  return v || l;
+}
+
 /** Same address, written either way (IPv4-mapped IPv6 included). */
 function sameIP(a: string, b: string): boolean {
   const n = (x: string) => x.toLowerCase().replace(/^::ffff:/, '');
@@ -230,13 +243,13 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // Preview from Overview » CAPTCHA Page: only the check itself is tried.
     if (p.preview) Object.assign(p, { ip, h: 'example.com', u: '/wp-login.php' });
     const bad = validParams(p);
-    if (bad) return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: bad }), 400);
+    if (bad) return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: bad }), 400);
     const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
-    if (!rows[0]) return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
+    if (!rows[0]) return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
     const { config } = await load(pool, rows[0].account_id);
     const provider = effectiveProvider(config);
     if (!config.enabled || !provider) {
-      return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
+      return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
     }
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
     const design = (p.preview && p.design) || config.design;
@@ -245,9 +258,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // name (say, a bank's), and a site that is not on the server is refused.
     const site = p.preview ? 'yes' : await siteConfirmed(p.s, p.ip, p.h);
     if (site === 'no') {
-      return html(reply, renderPage({ host: '', visitorIp: ip, params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
+      return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
     }
-    return html(reply, renderPage({ host: site === 'yes' ? p.h : '', visitorIp: ip, params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown }));
+    return html(reply, renderPage({ host: site === 'yes' ? p.h : '', visitorIp: shownIP(ip, p.ip), params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown }));
   });
 
   // ALTCHA: the widget (from this portal, not a CDN) and its checks.

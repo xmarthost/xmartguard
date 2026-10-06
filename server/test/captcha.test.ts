@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 import { envelopeMessage } from '../src/agent-sign.js';
-import { parseParams, turnstile } from '../src/routes/captcha.js';
+import { parseParams, shownIP, turnstile } from '../src/routes/captcha.js';
 
 let h: Harness;
 let admin: Client;
@@ -179,6 +179,17 @@ describe('CAPTCHA page for suspicious visitors', () => {
     // Configurations saved before the looks existed get the defaults.
     await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 });
     expect((await admin.req('GET', '/api/captcha')).body.config).toMatchObject({ design: 'classic', countdown: 5 });
+  });
+
+  it('shows the IPv4 address first; an IPv6 one fits a phone screen', async () => {
+    expect(shownIP('2404:3100:19fc:6fcd:18db:6195:dd34:1', '203.0.113.5')).toBe('203.0.113.5');
+    expect(shownIP('::ffff:198.51.100.2', '2001:db8::1')).toBe('198.51.100.2');
+    expect(shownIP('2001:db8::2', '2001:db8::1')).toBe('2001:db8::2');
+    // Reached over IPv6, the website saw IPv4: the page shows the IPv4 one.
+    const page = await h.app.inject({ method: 'GET', url: link(), headers: { 'cf-connecting-ip': '2404:3100:19fc:6fcd:18db:6195:dd34:1' } });
+    expect(page.body).toContain('Your IP address is <b>203.0.113.5</b>');
+    const v6 = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=2001:db8::7&h=shop.example.com&u=/`, headers: { 'cf-connecting-ip': '2001:db8::7' } });
+    expect(v6.body).toContain('<p class="ip v6">Your IP address is <b>2001:<wbr>db8:<wbr>:<wbr>7</b>');
   });
 
   it('never names a website its server does not confirm', async () => {
