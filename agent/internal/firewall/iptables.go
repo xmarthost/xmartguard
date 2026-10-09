@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -144,6 +145,39 @@ func run(ctx context.Context, stdin, bin string, args ...string) ([]byte, error)
 
 func ctx60() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 60*time.Second)
+}
+
+// ipsetMu serialises this agent's ipset commands: the kernel refuses to
+// swap or destroy a set while it is being listed ("Device or resource
+// busy"), and the IPDB counters list the large IPDB sets every minute.
+var ipsetMu sync.Mutex
+
+// runIPSet runs an ipset command under ipsetMu.
+func runIPSet(ctx context.Context, stdin, bin string, args ...string) ([]byte, error) {
+	ipsetMu.Lock()
+	defer ipsetMu.Unlock()
+	return run(ctx, stdin, bin, args...)
+}
+
+// ipsetBusyWait is how long a busy set is waited for between tries (tests set 0).
+var ipsetBusyWait = time.Second
+
+// restoreIPSet loads the sets, trying again while a set is busy (another
+// program, such as a monitoring tool or CSF, is listing it). The script can
+// be run again safely: it starts each temporary set from empty.
+func restoreIPSet(ctx context.Context, bin, script string) error {
+	var err error
+	for try := 1; try <= 5; try++ {
+		if _, err = runIPSet(ctx, script, bin, "restore"); err == nil || !strings.Contains(err.Error(), "resource busy") {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(try) * ipsetBusyWait):
+		}
+	}
+	return err
 }
 
 // renderIPSet builds an `ipset restore` script that swaps fresh contents in.
@@ -433,7 +467,7 @@ func (t IPTables) Apply(r Ruleset) error {
 	}
 	ctx, cancel := ctx60()
 	defer cancel()
-	if _, err := run(ctx, renderIPSet(r), t.IPSet, "restore"); err != nil {
+	if err := restoreIPSet(ctx, t.IPSet, renderIPSet(r)); err != nil {
 		return err
 	}
 	for _, f := range t.families() {
@@ -502,8 +536,8 @@ func (t IPTables) Remove() error {
 	}
 	if t.IPSet != "" {
 		for _, s := range ipsets() {
-			_, _ = run(ctx, "", t.IPSet, "destroy", s.name)
-			_, _ = run(ctx, "", t.IPSet, "destroy", s.name+"_n")
+			_, _ = runIPSet(ctx, "", t.IPSet, "destroy", s.name)
+			_, _ = runIPSet(ctx, "", t.IPSet, "destroy", s.name+"_n")
 		}
 	}
 	return nil
@@ -516,14 +550,14 @@ func (t IPTables) AddTempBan(ip string, seconds int) error {
 	}
 	ctx, cancel := ctx60()
 	defer cancel()
-	_, err := run(ctx, "", t.IPSet, "add", set, ip, "timeout", strconv.Itoa(seconds), "-exist")
+	_, err := runIPSet(ctx, "", t.IPSet, "add", set, ip, "timeout", strconv.Itoa(seconds), "-exist")
 	return err
 }
 
 func (t IPTables) setMembers(name string) ([]string, error) {
 	ctx, cancel := ctx60()
 	defer cancel()
-	out, err := run(ctx, "", t.IPSet, "list", name)
+	out, err := runIPSet(ctx, "", t.IPSet, "list", name)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +586,7 @@ func (t IPTables) IPDBCounters() map[string]uint64 {
 	ctx, cancel := ctx60()
 	defer cancel()
 	for _, name := range []string{"xg_ipdb4", "xg_ipdb6"} {
-		raw, err := run(ctx, "", t.IPSet, "list", name)
+		raw, err := runIPSet(ctx, "", t.IPSet, "list", name)
 		if err != nil {
 			continue
 		}
@@ -628,6 +662,6 @@ func (t IPTables) Healthy() bool {
 	if _, err := run(ctx, "", t.IPT, "-w", "-C", "INPUT", "-j", ChainMain); err != nil {
 		return false
 	}
-	_, err := run(ctx, "", t.IPSet, "list", "-n", "xg_tban4")
+	_, err := runIPSet(ctx, "", t.IPSet, "list", "-n", "xg_tban4")
 	return err == nil
 }
