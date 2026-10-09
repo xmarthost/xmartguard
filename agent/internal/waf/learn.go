@@ -217,7 +217,11 @@ func (m *Manager) activeAuto() []settings.RuleExclusion {
 
 // dynamic is what this server adds to the settings' exclusions.
 func (m *Manager) dynamic() Dynamic {
-	return Dynamic{Auto: m.activeAuto(), CPanelOff: CPanelModsecOff()}
+	d := Dynamic{Auto: m.activeAuto(), CPanelOff: CPanelModsecOff()}
+	if len(m.exemptList()) > 0 {
+		d.ExemptFile = filepath.Join(m.RulesDir, FileExemptIPs)
+	}
+	return d
 }
 
 // strictList: addresses with a bad reputation (IPDB, Tor, bans).

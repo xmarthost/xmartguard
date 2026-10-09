@@ -38,7 +38,7 @@ const maxHostWhitelist = 300
 // traffic: they are allowed in the other firewalls too (cPHulk, CSF/LFD,
 // Imunify360...), so a server transfer or a login from them is never
 // blocked there.
-func (a *Agent) whitelistAddrs() []string {
+func (a *Agent) whitelistAddrs(limit int) []string {
 	if a.Firewall == nil {
 		return nil
 	}
@@ -48,7 +48,7 @@ func (a *Agent) whitelistAddrs() []string {
 	}
 	var out []string
 	for _, r := range rs {
-		if r.Advanced() || len(out) >= maxHostWhitelist {
+		if r.Advanced() || (limit > 0 && len(out) >= limit) {
 			continue
 		}
 		out = append(out, r.CIDR)
@@ -66,7 +66,7 @@ func (a *Agent) syncHostTrust() []hostfw.Result {
 	if len(addrs) == 0 {
 		return a.hostTrustResults() // DNS failure: keep what is there
 	}
-	res := a.HostFW.SyncWith(addrs, a.whitelistAddrs())
+	res := a.HostFW.SyncWith(addrs, a.whitelistAddrs(maxHostWhitelist))
 	for _, r := range res {
 		if r.Error != "" {
 			a.Log.Warn("could not allow the portal in a host firewall", "firewall", r.Tool, "err", r.Error)
@@ -98,6 +98,26 @@ func (a *Agent) hostTrustLoop(ctx context.Context) {
 	}
 }
 
+// wafExemptIPs are the addresses the WAF never inspects: this server, the
+// portal, the account's other xPGuard servers and the firewall whitelist
+// (an address whitelisted is trusted everywhere, like cPGuard/CSF). Proxy
+// networks are left out by the WAF itself.
+func (a *Agent) wafExemptIPs() []string {
+	return append(append([]string{}, a.protectedIPs()...), a.whitelistAddrs(0)...)
+}
+
+// refreshWAFExempt reloads the WAF when its exempt list changed.
+func (a *Agent) refreshWAFExempt() {
+	a.wafExemptMu.Lock()
+	defer a.wafExemptMu.Unlock()
+	if a.WAF == nil || !a.Settings.Get().WAF.Enabled || !a.WAF.ExemptListChanged() {
+		return
+	}
+	if err := a.WAF.Apply(); err != nil {
+		a.Log.Warn("WAF reload after a whitelist change failed", "err", err)
+	}
+}
+
 // proxyListLoop refreshes the WAF's proxy IP check list every two hours
 // when the firewall's blocked addresses changed (applying the WAF reloads
 // the web server, so it is not done on every ban).
@@ -108,7 +128,7 @@ func (a *Agent) proxyListLoop(ctx context.Context) {
 			return
 		case <-time.After(2 * time.Hour):
 		}
-		if a.WAF.BlockedListChanged() {
+		if a.WAF.BlockedListChanged() || a.WAF.ExemptListChanged() {
 			if err := a.WAF.Apply(); err != nil {
 				a.Log.Warn("WAF proxy IP list refresh failed", "err", err)
 			}

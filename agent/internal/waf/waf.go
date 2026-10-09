@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,6 +40,9 @@ type Manager struct {
 	BlockedIPs func() []string
 	// TrustedIPs returns trusted services' addresses (bot rules skip them).
 	TrustedIPs func() []string
+	// ExemptIPs returns the addresses the WAF never inspects: this server,
+	// its fleet, the portal and the firewall whitelist.
+	ExemptIPs func() []string
 	// VerifiedBots are the search crawlers whose official lists are loaded.
 	VerifiedBots func() []string
 	// IPDBIPs, TorIPs and RBLExempt feed the IPDB POST block and Tor rules.
@@ -172,6 +176,66 @@ func (m *Manager) trustedList() []string {
 	return ok
 }
 
+// exemptList is ExemptIPs without proxy networks: an address behind
+// Cloudflare or a local reverse proxy is any visitor's.
+func (m *Manager) exemptList() []string {
+	if m.ExemptIPs == nil {
+		return nil
+	}
+	var proxies []*net.IPNet
+	for _, p := range ProxyRanges {
+		if !strings.Contains(p, "/") {
+			if strings.Contains(p, ":") {
+				p += "/128"
+			} else {
+				p += "/32"
+			}
+		}
+		if _, n, err := net.ParseCIDR(p); err == nil {
+			proxies = append(proxies, n)
+		}
+	}
+	var ok []string
+	seen := map[string]bool{}
+	for _, a := range m.ExemptIPs() {
+		a = modsecAddr(a)
+		if !validAddr(a) || seen[a] {
+			continue
+		}
+		ip, n, err := net.ParseCIDR(a)
+		if err != nil {
+			ip = net.ParseIP(a)
+		}
+		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+			continue
+		}
+		overlaps := false
+		for _, p := range proxies {
+			if p.Contains(ip) || (n != nil && n.Contains(p.IP)) {
+				overlaps = true
+				break
+			}
+		}
+		if overlaps {
+			continue
+		}
+		seen[a] = true
+		ok = append(ok, a)
+	}
+	sort.Strings(ok)
+	return ok
+}
+
+// ExemptListChanged reports whether exempt-ips.txt is out of date.
+func (m *Manager) ExemptListChanged() bool {
+	cur, _ := os.ReadFile(filepath.Join(m.RulesDir, FileExemptIPs))
+	l := m.exemptList()
+	if len(l) == 0 {
+		return len(cur) > 0
+	}
+	return string(cur) != strings.Join(l, "\n")+"\n"
+}
+
 // TrustedListChanged reports whether trusted-ips.txt is out of date.
 func (m *Manager) TrustedListChanged() bool {
 	cur, _ := os.ReadFile(filepath.Join(m.RulesDir, FileTrustedIPs))
@@ -187,6 +251,9 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 	files := BotFiles(cfg)
 	if l := m.trustedList(); len(l) > 0 {
 		files[FileTrustedIPs] = strings.Join(l, "\n") + "\n"
+	}
+	if l := m.exemptList(); len(l) > 0 {
+		files[FileExemptIPs] = strings.Join(l, "\n") + "\n"
 	}
 	var blocked []string
 	if cfg.ProxyIPCheck && m.BlockedIPs != nil {

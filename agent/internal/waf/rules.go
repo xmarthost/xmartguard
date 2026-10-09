@@ -20,10 +20,13 @@ import (
 
 // Rule id ranges by category.
 const (
-	IDWhitelist     = 7700001
-	IDWhiteDomains  = 7700002
-	IDDisable       = 7700003
-	IDTrusted       = 7700004
+	IDWhitelist    = 7700001
+	IDWhiteDomains = 7700002
+	IDDisable      = 7700003
+	IDTrusted      = 7700004
+	// IDExempt: the server's own addresses, its fleet, the portal and the
+	// firewall whitelist are never inspected (ctl:ruleEngine=Off).
+	IDExempt        = 7700006
 	IDUploadMalware = 7700101
 	IDUploadPHP     = 7700102
 	IDSensitive     = 7700201
@@ -225,6 +228,7 @@ const (
 	FileProxyRanges = "proxy-ranges.txt"
 	FileBlockedIPs  = "blocked-ips.txt"
 	FileTrustedIPs  = "trusted-ips.txt"
+	FileExemptIPs   = "exempt-ips.txt"
 	// IPDB POST block and Tor rules: the addresses, and those never
 	// blocked by them (allowed, temporarily allowed, CAPTCHA solved).
 	FileIPDBIPs   = "ipdb-ips.txt"
@@ -339,6 +343,18 @@ var reGateToken = regexp.MustCompile(`^[a-f0-9]{16,64}$`)
 // isGateRule reports the login-page CAPTCHA redirects, which are not attacks.
 func isGateRule(id int) bool { return id >= 7700900 && id <= 7700909 }
 
+// renderExempt turns the WAF off for the addresses that are never
+// inspected: this server itself (its cron jobs and scripts calling its own
+// websites), the account's other xPGuard servers, the portal and the
+// firewall whitelist. Proxy networks (Cloudflare, a local reverse proxy)
+// are never on the list, so visitors behind them stay checked.
+func renderExempt(w func(string, ...any), d Dynamic) {
+	if d.ExemptFile == "" {
+		return
+	}
+	w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleEngine=Off"`, d.ExemptFile, IDExempt)
+}
+
 // Render builds the rules file for the given settings.
 func Render(c settings.WAF, o Options) string {
 	if c.Level == "low" {
@@ -354,6 +370,7 @@ func Render(c settings.WAF, o Options) string {
 	for _, id := range c.DisabledRules {
 		off[id] = true
 	}
+	renderExempt(w, o.Dynamic)
 	renderCPanelOff(w, o.Dynamic)
 	renderExclusions(w, c, off, o.Dynamic)
 	if len(c.WhitelistIPs) > 0 {
@@ -361,7 +378,8 @@ func Render(c settings.WAF, o Options) string {
 		for i, a := range c.WhitelistIPs {
 			ips[i] = modsecAddr(a)
 		}
-		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=7700002-7709999"`, strings.Join(ips, ","), IDWhitelist)
+		// Whitelisted: no rule at all (the OWASP CRS included) checks them.
+		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,pass,nolog,ctl:ruleEngine=Off"`, strings.Join(ips, ","), IDWhitelist)
 	}
 	if len(c.WhitelistDomains) > 0 {
 		var alt []string
@@ -687,6 +705,7 @@ func RenderLoginWatch(c settings.WAF, replacedBy string, dyn Dynamic) string {
 		off[id] = true
 	}
 	lw := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
+	renderExempt(lw, dyn)
 	renderCPanelOff(lw, dyn)
 	renderExclusions(lw, c, off, dyn)
 	// Whitelisted addresses and domains skip the vendor's rules too.

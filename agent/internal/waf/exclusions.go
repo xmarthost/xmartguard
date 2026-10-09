@@ -73,6 +73,8 @@ const (
 type Dynamic struct {
 	Auto      []settings.RuleExclusion
 	CPanelOff []string
+	// ExemptFile lists the addresses the WAF never inspects ("" = none).
+	ExemptFile string
 }
 
 // injectionTags are the CRS tags of rules that inspect request content for

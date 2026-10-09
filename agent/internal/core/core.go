@@ -89,12 +89,13 @@ type Agent struct {
 	// and Imunify360 (nil in tests).
 	HostFW *hostfw.Host
 	// Trusted holds search engine, monitor, CDN and payment addresses.
-	Trusted    *trusted.Store
-	Tor        *tor.List
-	clam       clamState
-	hostMu     sync.Mutex
-	hostLoopOn atomic.Bool // the host firewall sync runs (not in tests)
-	hostTrust  []hostfw.Result
+	Trusted     *trusted.Store
+	Tor         *tor.List
+	clam        clamState
+	hostMu      sync.Mutex
+	hostLoopOn  atomic.Bool // the host firewall sync runs (not in tests)
+	wafExemptMu sync.Mutex
+	hostTrust   []hostfw.Result
 }
 
 // New opens the local store and builds all modules.
@@ -154,6 +155,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Firewall.OnAllowChange = func() {
 		if a.hostLoopOn.Load() {
 			go a.syncHostTrust()
+			go a.refreshWAFExempt()
 		}
 	}
 	a.Firewall.EssentialTCPOut = portalPorts(cfg.ServerURL)
@@ -201,7 +203,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
-		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, VerifiedBots: a.wafVerifiedBots,
+		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, ExemptIPs: a.wafExemptIPs, VerifiedBots: a.wafVerifiedBots,
 		IPDBIPs: a.Firewall.IPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, Intel: a.wafIntel,
 		Gate: func() *waf.Gate {
 			cur := a.Settings.Get()
