@@ -23,15 +23,20 @@ import (
 	"time"
 )
 
-// Comment marks every entry xPGuard adds.
-const Comment = "xPGuard portal"
+// Comment marks the portal's entries; WhitelistComment the addresses an
+// administrator whitelisted in xPGuard (kept allowed in the other
+// firewalls too, so cPHulk, CSF/LFD or Imunify360 never block them).
+const (
+	Comment          = "xPGuard portal"
+	WhitelistComment = "xPGuard whitelist"
+)
 
 // legacyComment marked the entries of versions before the xPGuard name;
 // they are still recognised as ours (and replaced or removed).
 const legacyComment = "XMart Guard portal"
 
 func ownComment(line string) bool {
-	return strings.Contains(line, Comment) || strings.Contains(line, legacyComment)
+	return strings.Contains(line, Comment) || strings.Contains(line, WhitelistComment) || strings.Contains(line, legacyComment)
 }
 
 // Runner runs a command (replaced in tests).
@@ -49,7 +54,7 @@ type Tool struct {
 	Present func(h *Host) bool
 	// Has reports whether ip is already allowed (by anyone); nil = unknown.
 	Has    func(h *Host, ip string) bool
-	Allow  func(h *Host, ip string) error
+	Allow  func(h *Host, ip, comment string) error
 	Remove func(h *Host, ip string) error
 }
 
@@ -110,14 +115,14 @@ func (h *Host) fileHasIP(file, ip string) bool {
 	return false
 }
 
-// appendLine adds "ip # Comment" to a list file.
-func (h *Host) appendLine(file, ip string) error {
+// appendLine adds "ip # comment" to a list file.
+func (h *Host) appendLine(file, ip, comment string) error {
 	f, err := os.OpenFile(h.path(file), os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = f.WriteString(ip + " # " + Comment + "\n")
+	_, err = f.WriteString(ip + " # " + comment + "\n")
 	return err
 }
 
@@ -178,15 +183,15 @@ func DefaultTools() []Tool {
 			Has: func(h *Host, ip string) bool {
 				return h.fileHasIP("/etc/csf/csf.allow", ip) && h.fileHasIP("/etc/csf/csf.ignore", ip)
 			},
-			Allow: func(h *Host, ip string) error {
+			Allow: func(h *Host, ip, comment string) error {
 				if !h.fileHasIP("/etc/csf/csf.allow", ip) {
 					// csf -a writes csf.allow and loads the rule at once.
-					if out, err := h.run("/usr/sbin/csf", "-a", ip, Comment); err != nil {
+					if out, err := h.run("/usr/sbin/csf", "-a", ip, comment); err != nil {
 						return errors.New(strings.TrimSpace(out))
 					}
 				}
 				if !h.fileHasIP("/etc/csf/csf.ignore", ip) {
-					if err := h.appendLine("/etc/csf/csf.ignore", ip); err != nil {
+					if err := h.appendLine("/etc/csf/csf.ignore", ip, comment); err != nil {
 						return err
 					}
 					_, _ = h.run("/usr/sbin/csf", "--lfd", "restart")
@@ -219,7 +224,7 @@ func DefaultTools() []Tool {
 				out, _ := h.run("firewall-cmd", "--zone=trusted", "--list-sources")
 				return containsField(out, ip)
 			},
-			Allow: func(h *Host, ip string) error {
+			Allow: func(h *Host, ip, comment string) error {
 				if out, err := h.run("firewall-cmd", "--permanent", "--zone=trusted", "--add-source="+ip); err != nil {
 					return errors.New(strings.TrimSpace(out))
 				}
@@ -238,8 +243,8 @@ func DefaultTools() []Tool {
 				out, err := h.run("ufw", "status")
 				return err == nil && strings.Contains(out, "Status: active")
 			},
-			Allow: func(h *Host, ip string) error {
-				out, err := h.run("ufw", "allow", "from", ip, "comment", Comment)
+			Allow: func(h *Host, ip, comment string) error {
+				out, err := h.run("ufw", "allow", "from", ip, "comment", comment)
 				if err != nil {
 					return errors.New(strings.TrimSpace(out))
 				}
@@ -254,8 +259,8 @@ func DefaultTools() []Tool {
 			Name:    "apf",
 			Present: func(h *Host) bool { return h.exists("/etc/apf/allow_hosts.rules") && h.exists("/usr/local/sbin/apf") },
 			Has:     func(h *Host, ip string) bool { return h.fileHasIP("/etc/apf/allow_hosts.rules", ip) },
-			Allow: func(h *Host, ip string) error {
-				out, err := h.run("/usr/local/sbin/apf", "-a", ip, Comment)
+			Allow: func(h *Host, ip, comment string) error {
+				out, err := h.run("/usr/local/sbin/apf", "-a", ip, comment)
 				if err != nil {
 					return errors.New(strings.TrimSpace(out))
 				}
@@ -273,10 +278,14 @@ func DefaultTools() []Tool {
 			Present: func(h *Host) bool {
 				return h.exists("/usr/local/cpanel/bin/whmapi1") && h.exists("/var/cpanel/hulkd/enabled")
 			},
-			Allow: func(h *Host, ip string) error {
-				out, err := h.run("/usr/local/cpanel/bin/whmapi1", "create_cphulk_record", "list_name=white", "ip="+ip, "comment="+Comment)
+			Allow: func(h *Host, ip, comment string) error {
+				out, err := h.run("/usr/local/cpanel/bin/whmapi1", "create_cphulk_record", "list_name=white", "ip="+ip, "comment="+comment)
 				if err != nil {
 					return errors.New(strings.TrimSpace(out))
+				}
+				// Lift a cPHulk block it already has (failed logins).
+				if !strings.Contains(ip, "/") {
+					_, _ = h.run("/usr/local/cpanel/bin/whmapi1", "flush_cphulk_login_history_for_ips", "ip="+ip)
 				}
 				return nil
 			},
@@ -291,8 +300,8 @@ func DefaultTools() []Tool {
 				_, err := exec.LookPath("imunify360-agent")
 				return err == nil || h.exists("/usr/bin/imunify360-agent")
 			},
-			Allow: func(h *Host, ip string) error {
-				out, err := h.run("imunify360-agent", "whitelist", "ip", "add", ip, "--comment", Comment)
+			Allow: func(h *Host, ip, comment string) error {
+				out, err := h.run("imunify360-agent", "whitelist", "ip", "add", ip, "--comment", comment)
 				if err != nil {
 					return errors.New(strings.TrimSpace(out))
 				}
@@ -304,6 +313,25 @@ func DefaultTools() []Tool {
 			},
 		},
 	}
+}
+
+// normAddr returns an address or CIDR range in canonical form ("" when
+// it is invalid, loopback or unspecified).
+func normAddr(s string) string {
+	s = strings.TrimSpace(s)
+	if p := net.ParseIP(s); p != nil {
+		if p.IsLoopback() || p.IsUnspecified() {
+			return ""
+		}
+		return p.String()
+	}
+	if _, n, err := net.ParseCIDR(s); err == nil {
+		if ones, _ := n.Mask.Size(); ones == 0 || n.IP.IsLoopback() {
+			return ""
+		}
+		return n.String()
+	}
+	return ""
 }
 
 func containsField(out, ip string) bool {
@@ -342,13 +370,22 @@ type Result struct {
 
 // Sync allows ips in every firewall found and withdraws entries this
 // package added for addresses that are no longer the portal's.
-func (h *Host) Sync(ips []string) []Result {
+func (h *Host) Sync(ips []string) []Result { return h.SyncWith(ips, nil) }
+
+// SyncWith is Sync for the portal's addresses and the addresses (or CIDR
+// ranges) whitelisted in xPGuard.
+func (h *Host) SyncWith(portal, whitelist []string) []Result {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	want := map[string]bool{}
-	for _, ip := range ips {
-		if p := net.ParseIP(ip); p != nil && !p.IsLoopback() && !p.IsUnspecified() {
-			want[p.String()] = true
+	want := map[string]string{} // address -> comment
+	for _, ip := range whitelist {
+		if a := normAddr(ip); a != "" {
+			want[a] = WhitelistComment
+		}
+	}
+	for _, ip := range portal {
+		if a := normAddr(ip); a != "" {
+			want[a] = Comment
 		}
 	}
 	// Lines written under the old product name get the current comment.
@@ -369,7 +406,7 @@ func (h *Host) Sync(ips []string) []Result {
 			if e.Tool != t.Name {
 				continue
 			}
-			if want[e.IP] && r.Present {
+			if want[e.IP] != "" && r.Present {
 				keep = append(keep, e)
 				r.Allowed = append(r.Allowed, e.IP)
 				continue
@@ -382,7 +419,7 @@ func (h *Host) Sync(ips []string) []Result {
 			res = append(res, r)
 			continue
 		}
-		for ip := range want {
+		for ip, comment := range want {
 			if mine[t.Name+" "+ip] {
 				continue
 			}
@@ -390,7 +427,7 @@ func (h *Host) Sync(ips []string) []Result {
 				r.Allowed = append(r.Allowed, ip) // allowed by the administrator already
 				continue
 			}
-			if err := t.Allow(h, ip); err != nil {
+			if err := t.Allow(h, ip, comment); err != nil {
 				r.Error = err.Error()
 				continue
 			}

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/hostfw"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -29,7 +30,34 @@ func (a *Agent) portalAddrs() []string {
 	return addrs
 }
 
-// syncHostTrust allows the portal in every other firewall on the server.
+// maxHostWhitelist caps how many whitelisted addresses are copied into the
+// other firewalls (each one is a command or a CSF/LFD reload).
+const maxHostWhitelist = 300
+
+// whitelistAddrs are the addresses whitelisted in xPGuard for all incoming
+// traffic: they are allowed in the other firewalls too (cPHulk, CSF/LFD,
+// Imunify360...), so a server transfer or a login from them is never
+// blocked there.
+func (a *Agent) whitelistAddrs() []string {
+	if a.Firewall == nil {
+		return nil
+	}
+	rs, err := a.Firewall.List(firewall.KindAllow)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, r := range rs {
+		if r.Advanced() || len(out) >= maxHostWhitelist {
+			continue
+		}
+		out = append(out, r.CIDR)
+	}
+	return out
+}
+
+// syncHostTrust allows the portal and the whitelisted addresses in every
+// other firewall on the server.
 func (a *Agent) syncHostTrust() []hostfw.Result {
 	if a.HostFW == nil {
 		return nil
@@ -38,7 +66,7 @@ func (a *Agent) syncHostTrust() []hostfw.Result {
 	if len(addrs) == 0 {
 		return a.hostTrustResults() // DNS failure: keep what is there
 	}
-	res := a.HostFW.Sync(addrs)
+	res := a.HostFW.SyncWith(addrs, a.whitelistAddrs())
 	for _, r := range res {
 		if r.Error != "" {
 			a.Log.Warn("could not allow the portal in a host firewall", "firewall", r.Tool, "err", r.Error)
@@ -59,6 +87,7 @@ func (a *Agent) hostTrustResults() []hostfw.Result {
 // hostTrustLoop runs at start and hourly (the portal's address may change,
 // a firewall may be installed later).
 func (a *Agent) hostTrustLoop(ctx context.Context) {
+	a.hostLoopOn.Store(true)
 	for {
 		a.syncHostTrust()
 		select {

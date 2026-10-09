@@ -169,6 +169,9 @@ type Manager struct {
 	FleetName func(ip string) string
 	// OnBan is called for automatic bans (notifications).
 	OnBan func(Event)
+	// OnAllowChange is called after the whitelist changed (the agent keeps
+	// whitelisted addresses allowed in cPHulk, CSF and other firewalls).
+	OnAllowChange func()
 	// EssentialTCPOut are outgoing TCP ports the agent itself needs (the
 	// portal); the port filter always allows them.
 	EssentialTCPOut []int
@@ -418,7 +421,30 @@ func (m *Manager) add(kind, addr, comment string, ttl time.Duration, o AllowOpts
 			return Rule{}, err
 		}
 	}
+	m.allowed(kind, []Rule{r})
 	return r, nil
+}
+
+// fullAllow is a whitelist entry for all incoming traffic.
+func fullAllow(kind string, o AllowOpts) bool {
+	return kind == KindAllow && o.Dir != DirOut && o.Proto == "" && o.Ports == ""
+}
+
+// allowed finishes whitelisting: connections the CAPTCHA redirect caught
+// before are forgotten (they would keep going to the CAPTCHA), and the
+// other firewalls on the server are told.
+func (m *Manager) allowed(kind string, rs []Rule) {
+	if kind != KindAllow && kind != KindIgnore {
+		return
+	}
+	for _, r := range rs {
+		if r.CIDR != "" && !strings.Contains(r.CIDR, "/") {
+			forgetRedirects(r.CIDR)
+		}
+	}
+	if kind == KindAllow && m.OnAllowChange != nil {
+		m.OnAllowChange()
+	}
 }
 
 // store saves one rule without reloading the firewall.
@@ -464,8 +490,14 @@ func (m *Manager) store(kind, addr, comment string, ttl time.Duration, o AllowOp
 	}
 	// Allowing an address (for incoming traffic on every port) lifts any
 	// block on it.
-	if (kind == KindAllow && o.Dir != DirOut && o.Proto == "" && o.Ports == "") || kind == KindTempAllow || kind == KindIgnore {
+	if fullAllow(kind, o) || kind == KindTempAllow || kind == KindIgnore {
 		_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind IN ('deny','tempban') AND cidr = ?`, c)
+	}
+	// Whitelisted for good: a temporary allow (a solved CAPTCHA) is no
+	// longer needed, and its blocks are over.
+	if fullAllow(kind, o) {
+		_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempallow' AND cidr = ?`, c)
+		_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status IN ('blocked','captcha')`, c)
 	}
 	if kind == KindDeny || kind == KindTempBan {
 		_, _ = m.DB.Exec(`INSERT INTO fw_events (ip, reason, source, created_at, expires_at, status) VALUES (?,?,?,?,?,?)`,
@@ -499,6 +531,9 @@ func (m *Manager) Remove(kind, addr string) error {
 		m.lift(c)
 		_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status = 'blocked'`, c)
 	}
+	if kind == KindAllow && m.OnAllowChange != nil {
+		defer m.OnAllowChange()
+	}
 	if m.Settings.Get().Firewall.Enabled {
 		err := m.Apply()
 		if lifted {
@@ -523,19 +558,24 @@ func (m *Manager) AddMany(kind string, addrs []string, comment string) ([]BatchR
 		return nil, fmt.Errorf("unsupported rule kind %q for a batch", kind)
 	}
 	out := make([]BatchResult, 0, len(addrs))
-	changed := false
+	var added []Rule
 	for _, a := range addrs {
-		if _, err := m.store(kind, a, comment, 0, AllowOpts{}); err != nil {
+		r, err := m.store(kind, a, comment, 0, AllowOpts{})
+		if err != nil {
 			out = append(out, BatchResult{Addr: a, Error: err.Error()})
 			continue
 		}
-		changed = true
+		added = append(added, r)
 		out = append(out, BatchResult{Addr: a, OK: true})
 	}
-	if changed && m.Settings.Get().Firewall.Enabled {
-		return out, m.Apply()
+	var err error
+	if len(added) > 0 && m.Settings.Get().Firewall.Enabled {
+		err = m.Apply()
 	}
-	return out, nil
+	if len(added) > 0 {
+		m.allowed(kind, added)
+	}
+	return out, err
 }
 
 // RemoveMany deletes rules of one kind for many addresses (kind "unblock":
@@ -572,6 +612,9 @@ func (m *Manager) RemoveMany(kind string, addrs []string) ([]BatchResult, error)
 			lifted = append(lifted, c)
 		}
 		out = append(out, BatchResult{Addr: a, OK: true})
+	}
+	if kind == KindAllow && m.OnAllowChange != nil {
+		defer m.OnAllowChange()
 	}
 	if m.Settings.Get().Firewall.Enabled {
 		err := m.Apply()
@@ -649,14 +692,25 @@ func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 	if err != nil || strings.Contains(c, "/") {
 		return fmt.Errorf("invalid address %q", ip)
 	}
+	whitelisted := false
 	for _, r := range mustRules(m) {
 		if r.Kind == KindDeny && Contains(r.CIDR, c) {
 			return fmt.Errorf("%s is blocked permanently", c)
+		}
+		if r.Kind == KindAllow && !r.Advanced() && Contains(r.CIDR, c) {
+			whitelisted = true
 		}
 	}
 	m.lift(c)
 	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempban' AND cidr = ?`, c)
 	_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'captcha' WHERE ip = ? AND status = 'blocked'`, c)
+	if whitelisted {
+		// Already allowed for good: no temporary entry next to it.
+		if m.Settings.Get().Firewall.Enabled {
+			return m.Apply()
+		}
+		return nil
+	}
 	if allow < time.Minute {
 		allow = time.Hour
 	}
@@ -866,6 +920,10 @@ func (m *Manager) expire() {
 	now := store.Now()
 	_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'expired' WHERE status = 'blocked' AND expires_at > 0 AND expires_at <= ?`, now)
 	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE expires_at > 0 AND expires_at <= ?`, now)
+	// A temporary allow next to a full whitelist entry for the same address
+	// (a CAPTCHA solved before it was whitelisted) is redundant.
+	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempallow' AND cidr IN (SELECT cidr FROM fw_rules WHERE kind = 'allow'
+		AND coalesce(proto,'') = '' AND coalesce(ports,'') = '' AND coalesce(dir,'') <> 'out')`)
 }
 
 // AutoBan is used by brute-force and DoS detection.

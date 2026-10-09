@@ -120,3 +120,50 @@ func TestLegacyCommentRenamed(t *testing.T) {
 		t.Fatal("legacy line not recognised")
 	}
 }
+
+// Addresses whitelisted in xPGuard are allowed in CSF/LFD too, and taken
+// out again when they leave the whitelist.
+func TestSyncWhitelist(t *testing.T) {
+	h, _ := fakeHost(t)
+	h.SyncWith([]string{"162.55.6.159"}, []string{"5.181.190.187", "198.51.100.0/24", "bogus", "127.0.0.1"})
+	allow, _ := os.ReadFile(h.Root + "/etc/csf/csf.allow")
+	ignore, _ := os.ReadFile(h.Root + "/etc/csf/csf.ignore")
+	for _, want := range []string{"5.181.190.187 # xPGuard whitelist", "198.51.100.0/24 # xPGuard whitelist", "162.55.6.159 # xPGuard portal"} {
+		if !strings.Contains(string(allow), want) || !strings.Contains(string(ignore), want) {
+			t.Fatalf("%q missing: allow=%q ignore=%q", want, allow, ignore)
+		}
+	}
+	if strings.Contains(string(allow), "bogus") || strings.Contains(string(allow), "127.0.0.1") {
+		t.Fatalf("invalid address written: %q", allow)
+	}
+	h.SyncWith([]string{"162.55.6.159"}, nil)
+	ignore, _ = os.ReadFile(h.Root + "/etc/csf/csf.ignore")
+	if strings.Contains(string(ignore), "5.181.190.187") || !strings.Contains(string(ignore), "162.55.6.159") {
+		t.Fatalf("after removal: %q", ignore)
+	}
+}
+
+// cPHulk: whitelisting also clears the failed logins that blocked the address.
+func TestCPHulkWhitelistFlushes(t *testing.T) {
+	root := t.TempDir()
+	for _, f := range []string{"/usr/local/cpanel/bin/whmapi1", "/var/cpanel/hulkd/enabled"} {
+		os.MkdirAll(filepath.Dir(root+f), 0o755)
+		os.WriteFile(root+f, nil, 0o600)
+	}
+	var calls []string
+	h := &Host{Root: root, State: filepath.Join(root, "state.json"), Run: func(_ context.Context, name string, args ...string) (string, error) {
+		calls = append(calls, strings.Join(args, " "))
+		return "", nil
+	}}
+	for _, tl := range DefaultTools() {
+		if tl.Name == "cphulk" {
+			h.Tools = append(h.Tools, tl)
+		}
+	}
+	h.SyncWith(nil, []string{"5.181.190.187"})
+	got := strings.Join(calls, "\n")
+	if !strings.Contains(got, "create_cphulk_record list_name=white ip=5.181.190.187 comment=xPGuard whitelist") ||
+		!strings.Contains(got, "flush_cphulk_login_history_for_ips ip=5.181.190.187") {
+		t.Fatalf("calls:\n%s", got)
+	}
+}

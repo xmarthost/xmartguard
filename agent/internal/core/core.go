@@ -89,11 +89,12 @@ type Agent struct {
 	// and Imunify360 (nil in tests).
 	HostFW *hostfw.Host
 	// Trusted holds search engine, monitor, CDN and payment addresses.
-	Trusted   *trusted.Store
-	Tor       *tor.List
-	clam      clamState
-	hostMu    sync.Mutex
-	hostTrust []hostfw.Result
+	Trusted    *trusted.Store
+	Tor        *tor.List
+	clam       clamState
+	hostMu     sync.Mutex
+	hostLoopOn atomic.Bool // the host firewall sync runs (not in tests)
+	hostTrust  []hostfw.Result
 }
 
 // New opens the local store and builds all modules.
@@ -150,6 +151,11 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Trusted.Match(ip, fw.TrustedDisabled)
 	}
 	a.Firewall.OnBan = a.onBan
+	a.Firewall.OnAllowChange = func() {
+		if a.hostLoopOn.Load() {
+			go a.syncHostTrust()
+		}
+	}
 	a.Firewall.EssentialTCPOut = portalPorts(cfg.ServerURL)
 	a.Mailer.Channels = a.channels
 	a.Mailer.Admin = func() string { return a.Settings.Get().Notifications.Email }
