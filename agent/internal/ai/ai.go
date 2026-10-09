@@ -69,6 +69,7 @@ type Job struct {
 	Path      string
 	SHA256    string
 	Signature string // what the local engine matched
+	Origin    string // where a flagged file is (Path may be its quarantine copy)
 }
 
 // Analyzer runs jobs in the background.

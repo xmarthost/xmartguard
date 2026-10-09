@@ -37,6 +37,8 @@ const DBScanner = lazy(() => import('./pages/CMS').then((m) => ({ default: m.DBS
 const DomainReputation = lazy(() => import('./pages/Mail').then((m) => ({ default: m.DomainReputation })));
 const OutgoingSpam = lazy(() => import('./pages/Mail').then((m) => ({ default: m.OutgoingSpam })));
 const MassOperations = lazy(() => import('./pages/MassOperations'));
+const CustomerServers = lazy(() => import('./pages/CustomerServers'));
+const AILearning = lazy(() => import('./pages/AILearning'));
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'));
 const AIConnector = lazy(() => import('./pages/AIConnector'));
 const WafRuleSets = lazy(() => import('./pages/WafRuleSets'));
@@ -96,6 +98,8 @@ export default function App() {
         <Route path="/appearance" element={<Protected><AppearancePage /></Protected>} />
         <Route path="/ai-connector" element={<Protected role="admin"><AIConnector /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
+        <Route path="/all-servers" element={<Protected><CustomerServers /></Protected>} />
+        <Route path="/ai-learning" element={<Protected><AILearning /></Protected>} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />
         <Route path="/security" element={<Protected role="admin"><SecurityLogPage /></Protected>} />

@@ -658,6 +658,9 @@ func (a *Agent) wpCoreLoop(ctx context.Context) {
 			if err := a.syncSignatures(ctx); err != nil {
 				a.Log.Debug("signature feed sync failed", "err", err)
 			}
+			if err := a.syncOverrides(ctx); err != nil {
+				a.Log.Debug("signature decisions sync failed", "err", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -689,6 +692,29 @@ func (a *Agent) syncWPCore(ctx context.Context) error {
 		return err
 	}
 	a.Log.Info("WordPress core file list updated", "versions", r.Versions, "files", set.Count())
+	return nil
+}
+
+// syncOverrides fetches the portal's signature decisions (AI Learning):
+// signatures on review or off on every server. Servers that were offline
+// when a decision changed get it here.
+func (a *Agent) syncOverrides(ctx context.Context) error {
+	var r struct {
+		ETag      string            `json:"etag"`
+		Unchanged bool              `json:"unchanged"`
+		Overrides map[string]string `json:"overrides"`
+	}
+	if err := a.AI.Portal.Post(ctx, "/api/agent/scanner/overrides", map[string]string{"etag": store.GetKV(a.DB, "sig_overrides_etag")}, &r); err != nil {
+		return err
+	}
+	if r.Unchanged || r.ETag == "" {
+		return nil
+	}
+	if err := scanner.SetOverrides(r.Overrides); err != nil {
+		return err
+	}
+	_ = store.SetKV(a.DB, "sig_overrides_etag", r.ETag)
+	a.Log.Info("signature decisions updated", "signatures", len(r.Overrides))
 	return nil
 }
 

@@ -6,6 +6,8 @@ import { sha256 } from '../security.js';
 import { verifyAgent } from '../agent-sign.js';
 import { TRAIN_MIN_PER_CLASS, type AIGateway } from '../ai/gateway.js';
 import { PRESETS, complete, listModels, preset } from '../ai/providers.js';
+import { pushOverrides, recordFalsePositives } from '../ai/learning.js';
+import type { AgentHub } from '../agents/hub.js';
 
 /**
  * AI scanner settings (one set of AI API keys for all servers of the
@@ -52,6 +54,10 @@ const JudgeBody = z.object({
         size: z.number().int().min(0),
         name: z.string().max(300),
         match: z.string().max(200).optional(),
+        // Where a flagged file is (home folder shortened to ~) and the code the signature matched.
+        path: z.string().max(1000).optional(),
+        line: z.number().int().min(0).optional(),
+        snippet: z.string().max(4000).optional(),
         excerpt: z.string().max(200_000),
         lines: z.number().int().min(0),
         truncated: z.boolean(),
@@ -78,7 +84,7 @@ const LegacyBody = z.object({
   prompt: z.string().max(300_000),
 });
 
-export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void {
+export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: AgentHub): void {
   async function agentOf(serverId: string, ts: string, message: string, signature: string, reply: FastifyReply) {
     return (await verifyAgent(pool, serverId, ts, message, signature, reply))?.accountId ?? null;
   }
@@ -288,7 +294,14 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway): void 
     } catch {
       return reply.code(400).send({ error: 'invalid payload' });
     }
-    return { results: await gw.judge(account, server_id, body.files) };
+    const results = await gw.judge(account, server_id, body.files);
+    try {
+      const moved = await recordFalsePositives(pool, server_id, body.files, results);
+      if (moved.length && hub) await pushOverrides(pool, hub);
+    } catch (err) {
+      req.log.warn({ err }, 'could not record AI false positives');
+    }
+    return { results };
   });
 
   app.post('/api/agent/ai/sync', async (req, reply) => {

@@ -352,8 +352,17 @@ type Detection struct {
 // the file.
 var ErrTrusted = errors.New("trusted content")
 
-// CheckFile applies whitelist/blacklist rules and signatures to one file.
+// CheckFile applies whitelist/blacklist rules and signatures to one file,
+// then the portal's signature decisions (AI Learning).
 func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner) (*Detection, error) {
+	d, err := s.checkFile(path, info, cfg)
+	if d != nil {
+		d = applyOverride(d)
+	}
+	return d, err
+}
+
+func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner) (*Detection, error) {
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return nil, nil
 	}

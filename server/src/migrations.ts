@@ -461,4 +461,43 @@ CREATE TABLE trial_hosts (
 ALTER TABLE enrollment_tokens ADD COLUMN token text;
 `,
   },
+  {
+    version: '015_ai_learning',
+    sql: `
+-- AI Learning: every file the scanner flagged and the AI then found clean
+-- (a false positive): where, which signature, the code it matched and why
+-- the AI restored it. One row per file content, server and path.
+CREATE TABLE ai_fp (
+  id          bigserial PRIMARY KEY,
+  sha256      text NOT NULL,
+  server_id   uuid REFERENCES servers(id) ON DELETE CASCADE,
+  signature   text NOT NULL,
+  path        text NOT NULL DEFAULT '',
+  name        text NOT NULL DEFAULT '',
+  size        bigint NOT NULL DEFAULT 0,
+  line        integer NOT NULL DEFAULT 0,
+  snippet     text NOT NULL DEFAULT '',
+  reason      text NOT NULL DEFAULT '',
+  confidence  integer NOT NULL DEFAULT 0,
+  model       text NOT NULL DEFAULT '',
+  source      text NOT NULL DEFAULT 'ai',
+  count       integer NOT NULL DEFAULT 1,
+  first_at    timestamptz NOT NULL DEFAULT now(),
+  last_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX ai_fp_key ON ai_fp (sha256, coalesce(server_id, '00000000-0000-0000-0000-000000000000'::uuid), path);
+CREATE INDEX ai_fp_sig_idx ON ai_fp (signature, last_at DESC);
+-- Signature decisions for every server: 'review' (the AI checks matches
+-- before anything is quarantined), 'off' (the signature is not used),
+-- 'keep' (stays as is; never relaxed automatically).
+CREATE TABLE sig_overrides (
+  signature   text PRIMARY KEY,
+  action      text NOT NULL CHECK (action IN ('review','off','keep')),
+  note        text NOT NULL DEFAULT '',
+  auto        boolean NOT NULL DEFAULT false,
+  created_by  text NOT NULL DEFAULT '',
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

@@ -409,6 +409,20 @@ func (m *Manager) AddAllow(addr, comment string, o AllowOpts) (Rule, error) {
 }
 
 func (m *Manager) add(kind, addr, comment string, ttl time.Duration, o AllowOpts) (Rule, error) {
+	r, err := m.store(kind, addr, comment, ttl, o)
+	if err != nil {
+		return Rule{}, err
+	}
+	if m.Settings.Get().Firewall.Enabled {
+		if err := m.Apply(); err != nil {
+			return Rule{}, err
+		}
+	}
+	return r, nil
+}
+
+// store saves one rule without reloading the firewall.
+func (m *Manager) store(kind, addr, comment string, ttl time.Duration, o AllowOpts) (Rule, error) {
 	c, err := ParseAddr(addr)
 	if err != nil {
 		return Rule{}, err
@@ -457,11 +471,6 @@ func (m *Manager) add(kind, addr, comment string, ttl time.Duration, o AllowOpts
 		_, _ = m.DB.Exec(`INSERT INTO fw_events (ip, reason, source, created_at, expires_at, status) VALUES (?,?,?,?,?,?)`,
 			c, orDefault(comment, "manually blocked"), "manual", now, expires, "blocked")
 	}
-	if m.Settings.Get().Firewall.Enabled {
-		if err := m.Apply(); err != nil {
-			return Rule{}, err
-		}
-	}
 	return Rule{Kind: kind, CIDR: c, Comment: comment, CreatedAt: now, ExpiresAt: expires, Proto: o.Proto, Ports: o.Ports, Dir: o.Dir}, nil
 }
 
@@ -498,6 +507,80 @@ func (m *Manager) Remove(kind, addr string) error {
 		return err
 	}
 	return nil
+}
+
+// BatchResult is one address of a batch change.
+type BatchResult struct {
+	Addr  string `json:"addr"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// AddMany adds the same kind of rule for many addresses with one firewall
+// reload (allow, deny or ignore; the whitelist without advanced options).
+func (m *Manager) AddMany(kind string, addrs []string, comment string) ([]BatchResult, error) {
+	if kind != KindAllow && kind != KindDeny && kind != KindIgnore {
+		return nil, fmt.Errorf("unsupported rule kind %q for a batch", kind)
+	}
+	out := make([]BatchResult, 0, len(addrs))
+	changed := false
+	for _, a := range addrs {
+		if _, err := m.store(kind, a, comment, 0, AllowOpts{}); err != nil {
+			out = append(out, BatchResult{Addr: a, Error: err.Error()})
+			continue
+		}
+		changed = true
+		out = append(out, BatchResult{Addr: a, OK: true})
+	}
+	if changed && m.Settings.Get().Firewall.Enabled {
+		return out, m.Apply()
+	}
+	return out, nil
+}
+
+// RemoveMany deletes rules of one kind for many addresses (kind "unblock":
+// every block of each address), with one firewall reload.
+func (m *Manager) RemoveMany(kind string, addrs []string) ([]BatchResult, error) {
+	out := make([]BatchResult, 0, len(addrs))
+	var lifted []string
+	for _, a := range addrs {
+		c, err := ParseAddr(a)
+		if err != nil {
+			out = append(out, BatchResult{Addr: a, Error: err.Error()})
+			continue
+		}
+		if kind == "unblock" {
+			m.lift(c)
+			_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind IN ('deny','tempban') AND cidr = ?`, c)
+			_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status = 'blocked'`, c)
+			lifted = append(lifted, c)
+			out = append(out, BatchResult{Addr: a, OK: true})
+			continue
+		}
+		res, err := m.DB.Exec(`DELETE FROM fw_rules WHERE kind = ? AND cidr = ?`, kind, c)
+		if err != nil {
+			out = append(out, BatchResult{Addr: a, Error: err.Error()})
+			continue
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			out = append(out, BatchResult{Addr: a, Error: fmt.Sprintf("%s is not in the %s list", c, kind)})
+			continue
+		}
+		if kind == KindDeny || kind == KindTempBan {
+			m.lift(c)
+			_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status = 'blocked'`, c)
+			lifted = append(lifted, c)
+		}
+		out = append(out, BatchResult{Addr: a, OK: true})
+	}
+	if m.Settings.Get().Firewall.Enabled {
+		err := m.Apply()
+		for _, c := range lifted {
+			forgetRedirects(c)
+		}
+		return out, err
+	}
+	return out, nil
 }
 
 // Unblock removes every block (deny and temp ban) for an address.

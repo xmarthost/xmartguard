@@ -206,3 +206,15 @@ func TestFleetSyncLearnsHashesAndModel(t *testing.T) {
 		t.Fatal("delta not saved")
 	}
 }
+
+func TestShortPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"/home/alice/public_html/wp-content/x.php": "~/public_html/wp-content/x.php",
+		"/home2/bob/x.php":                         "~/x.php",
+		"/var/www/html/x.php":                      "/var/www/html/x.php",
+	} {
+		if got := ShortPath(in); got != want {
+			t.Errorf("%s: %s", in, got)
+		}
+	}
+}

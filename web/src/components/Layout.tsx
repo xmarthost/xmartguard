@@ -289,6 +289,7 @@ export default function Layout({ children }: { children: ReactNode }) {
     ? [
         { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
+        { label: 'All Servers', icon: <Users />, to: '/all-servers' },
         {
           label: 'Web Protection',
           icon: <ShieldHalf />,
@@ -306,6 +307,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           icon: <BrainCircuit />,
           children: [
             { to: '/ai', label: 'AI Scanner', icon: <BrainCircuit /> },
+            { to: '/ai-learning', label: 'AI Learning', icon: <Brain /> },
             { to: '/ai-connector', label: 'AI Connector', icon: <Cable /> },
           ],
         },

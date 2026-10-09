@@ -217,3 +217,59 @@ describe('AI answer parsing', () => {
     expect(cooldownFor(400, '', null)).toBe(0);
   });
 });
+
+describe('AI learning (false positives)', () => {
+  it('keeps what the scanner flagged and why the AI restored it, and moves a noisy signature to review', async () => {
+    const sig = 'PHP.Suspicious.TemplateEcho';
+    const flagged = (i: number) =>
+      file(`fp${i}`, `1|<?php echo esc_html($title${i});`, {
+        match: sig,
+        name: 'view.php',
+        path: `~/public_html/wp-content/plugins/demo/view${i}.php`,
+        line: 1,
+        snippet: `<?php echo esc_html($title${i});`,
+      });
+    // A signature that also caught malware is never relaxed automatically.
+    await agentPost('/api/agent/ai/judge', envelope({ files: [file('m1', '1|<?php eval($_POST["k"]);', { match: 'PHP.Mixed.Sig' }), file('m2', '1|<?php echo 1;', { match: 'PHP.Mixed.Sig' })] }));
+    for (let i = 1; i <= 4; i++) await agentPost('/api/agent/ai/judge', envelope({ files: [flagged(i)] }));
+    let l = await admin.req('GET', '/api/ai/learning');
+    expect(l.body.signatures.find((s: any) => s.signature === sig)).toMatchObject({ files: 4, servers: 1, action: null, malicious: 0 });
+    // The same file again counts once more, not as a new file.
+    await agentPost('/api/agent/ai/judge', envelope({ files: [flagged(1)] }));
+    await agentPost('/api/agent/ai/judge', envelope({ files: [flagged(5)] }));
+    l = await admin.req('GET', '/api/ai/learning');
+    const row = l.body.signatures.find((s: any) => s.signature === sig);
+    expect(row).toMatchObject({ files: 5, events: 6, action: 'review', auto: true });
+    expect(l.body.signatures.find((s: any) => s.signature === 'PHP.Mixed.Sig')).toMatchObject({ files: 1, malicious: 1, action: null });
+
+    const files = await admin.req('GET', `/api/ai/learning/files?signature=${encodeURIComponent(sig)}`);
+    expect(files.body.total).toBe(5);
+    expect(files.body.files.find((f: any) => f.path.endsWith('view1.php'))).toMatchObject({ count: 2, line: 1, reason: 'ordinary template code', server: 'web1' });
+
+    // Export: servers numbered, no host names.
+    const exp = await fetch(h.url + '/api/ai/learning/export?format=json', { headers: { cookie: admin.cookie } });
+    expect(exp.headers.get('content-disposition')).toContain('xpguard-false-positives-');
+    const text = await exp.text();
+    expect(text).not.toContain('web1');
+    const rep = JSON.parse(text);
+    const s = rep.signatures.find((x: any) => x.signature === sig);
+    expect(s).toMatchObject({ decision: 'review', decided_automatically: true, clean_files: 5, malicious_verdicts: 0 });
+    expect(s.examples[0]).toMatchObject({ server: 'server-1', matched_code: expect.stringContaining('esc_html'), ai_reason: 'ordinary template code' });
+    const csv = await (await fetch(h.url + '/api/ai/learning/export?format=csv', { headers: { cookie: admin.cookie } })).text();
+    expect(csv.split('\n')[0]).toContain('signature,decision,path');
+    expect(csv).toContain('view5.php');
+
+    // Agents get the decisions; "keep" changes nothing on servers.
+    const o = await agentPost('/api/agent/scanner/overrides', envelope({ etag: '' }));
+    expect(o.body.overrides).toEqual({ [sig]: 'review' });
+    expect((await agentPost('/api/agent/scanner/overrides', envelope({ etag: o.body.etag }))).body).toMatchObject({ unchanged: true });
+    expect((await admin.req('PUT', '/api/ai/learning/signature', { signature: 'PHP.Mixed.Sig', action: 'keep' })).status).toBe(200);
+    expect((await admin.req('PUT', '/api/ai/learning/signature', { signature: sig, action: 'off', note: 'too broad' })).status).toBe(200);
+    expect((await agentPost('/api/agent/scanner/overrides', envelope({ etag: o.body.etag }))).body.overrides).toEqual({ [sig]: 'off' });
+    expect((await admin.req('PUT', '/api/ai/learning/signature', { signature: 'XG.AI.Malicious', action: 'off' })).status).toBe(400);
+    expect((await admin.req('PUT', '/api/ai/learning/signature', { signature: sig, action: 'none' })).status).toBe(200);
+    expect((await agentPost('/api/agent/scanner/overrides', envelope({ etag: '' }))).body.overrides).toEqual({});
+    // Clearing the records of a signature.
+    expect((await admin.req('DELETE', `/api/ai/learning?signature=${encodeURIComponent(sig)}`)).body).toMatchObject({ deleted: 5 });
+  });
+});

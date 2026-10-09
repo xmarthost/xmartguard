@@ -39,3 +39,19 @@ export async function scopeAccounts(pool: Pool, accountId: string): Promise<stri
   const { rows } = await pool.query('SELECT id FROM accounts');
   return rows.map((r) => String(r.id));
 }
+
+/**
+ * Master access: the platform account (the portal's owner) may open and
+ * manage every customer's servers. Strict: without a platform account no
+ * account reaches another's servers.
+ */
+export async function isMaster(pool: Pool, accountId: string): Promise<boolean> {
+  return (await platformAccount(pool)) === accountId;
+}
+
+/** Whether an account may manage a server: its own, or any for the master. */
+export async function serverInScope(pool: Pool, accountId: string, serverId: string): Promise<boolean> {
+  const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [serverId]);
+  if (!rows[0]) return false;
+  return String(rows[0].account_id) === accountId || (await isMaster(pool, accountId));
+}

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,6 +87,9 @@ type fileReq struct {
 	Size      int64    `json:"size"`
 	Name      string   `json:"name"`
 	Match     string   `json:"match,omitempty"` // the local engine's detection, "" for a clean file
+	Path      string   `json:"path,omitempty"`    // flagged file: where (home folder shortened to ~)
+	Line      int      `json:"line,omitempty"`    // and the line and code the signature matched
+	Snippet   string   `json:"snippet,omitempty"`
 	Excerpt   string   `json:"excerpt"`
 	Lines     int      `json:"lines"`
 	Truncated bool     `json:"truncated"`
@@ -121,6 +125,14 @@ func (a *Analyzer) analyzePortal(ctx context.Context, jobs []Job, cfg settings.A
 		text, lines, truncated := Excerpt(raw, cfg.MaxKB*1024)
 		f := fileReq{ID: strconv.Itoa(i), SHA256: j.SHA256, Size: int64(len(raw)), Name: baseName(j.Path),
 			Match: j.Signature, Excerpt: text, Lines: lines, Truncated: truncated}
+		if j.Signature != "" {
+			origin := j.Origin
+			if origin == "" {
+				origin = j.Path
+			}
+			f.Path = ShortPath(origin)
+			f.Line, f.Snippet = scanner.Locate(j.Signature, raw)
+		}
 		if base != nil {
 			if len(raw) > ml.MaxBytes {
 				raw = raw[:ml.MaxBytes]
@@ -162,6 +174,17 @@ func (a *Analyzer) analyzePortal(ctx context.Context, jobs []Job, cfg settings.A
 		return out, errors.New(errs[0])
 	}
 	return out, nil
+}
+
+var homeDir = regexp.MustCompile(`^/home[0-9]*/[^/]+/`)
+
+// ShortPath shortens a file's path for reports: the account's home folder
+// becomes "~/", so no account name leaves the server.
+func ShortPath(p string) string {
+	if homeDir.MatchString(p) {
+		return homeDir.ReplaceAllString(p, "~/")
+	}
+	return p
 }
 
 // ------------------------------------------------------------------ fleet sync

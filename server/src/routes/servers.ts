@@ -7,6 +7,7 @@ import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, requireRole } from '../auth.js';
 import { enrollmentToken, sha256 } from '../security.js';
 import { currentRelease } from '../agents/release.js';
+import { isMaster } from '../tenancy.js';
 
 const IdParams = z.object({ id: z.string().uuid() });
 const RANGES: Record<string, { interval: string; bucket: number }> = {
@@ -49,8 +50,8 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
 
   async function load(accountId: string, id: string) {
     const { rows } = await pool.query(
-      `SELECT ${SERVER_COLUMNS} FROM servers WHERE id = $1 AND account_id = $2 AND status = 'active'`,
-      [id, accountId],
+      `SELECT ${SERVER_COLUMNS} FROM servers WHERE id = $1 AND (account_id = $2 OR $3) AND status = 'active'`,
+      [id, accountId, await isMaster(pool, accountId)],
     );
     return rows[0];
   }
@@ -181,8 +182,8 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
     if (!body.success) return reply.code(400).send({ error: 'invalid tags' });
     const tags = [...new Set(body.data.tags)];
     const { rowCount } = await pool.query(
-      "UPDATE servers SET tags = $3 WHERE id = $1 AND account_id = $2 AND status = 'active'",
-      [id, req.user!.accountId, tags],
+      "UPDATE servers SET tags = $3 WHERE id = $1 AND (account_id = $2 OR $4) AND status = 'active'",
+      [id, req.user!.accountId, tags, await isMaster(pool, req.user!.accountId)],
     );
     if (!rowCount) return reply.code(404).send({ error: 'server not found' });
     return { tags };
@@ -193,8 +194,8 @@ export function serverRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub:
     if (!id) return;
     const { rowCount } = await pool.query(
       `UPDATE servers SET status = 'revoked', revoked_at = now(), connected = false
-        WHERE id = $1 AND account_id = $2 AND status = 'active'`,
-      [id, req.user!.accountId],
+        WHERE id = $1 AND (account_id = $2 OR $3) AND status = 'active'`,
+      [id, req.user!.accountId, await isMaster(pool, req.user!.accountId)],
     );
     if (!rowCount) return reply.code(404).send({ error: 'server not found' });
     hub.revoke(id);

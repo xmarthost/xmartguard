@@ -422,7 +422,7 @@ func (a *Agent) afterFinding(f scanner.Finding, wordpress bool) {
 	// verdicts teach every linked server.
 	if f.Category == scanner.CatSuspicious || (f.Category == scanner.CatVirus && a.Settings.Get().AI.Provider == "portal" && f.Signature != scanner.LearnedLabel) {
 		if p, _, err := a.Scanner.ContentPath(f.ID); err == nil {
-			a.AI.Enqueue(ai.Job{FindingID: f.ID, Path: p, SHA256: f.SHA256, Signature: f.Signature})
+			a.AI.Enqueue(ai.Job{FindingID: f.ID, Path: p, SHA256: f.SHA256, Signature: f.Signature, Origin: f.Path})
 		}
 	}
 	n := a.Settings.Get().Notifications
@@ -796,6 +796,52 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return map[string]any{"ok": true}, a.Firewall.Remove(in.Kind, in.Addr)
 	}
+	// scanner.overrides: the portal's signature decisions (AI Learning).
+	h["scanner.overrides"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			ETag      string            `json:"etag"`
+			Overrides map[string]string `json:"overrides"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if err := scanner.SetOverrides(in.Overrides); err != nil {
+			return nil, err
+		}
+		_ = store.SetKV(a.DB, "sig_overrides_etag", in.ETag)
+		return map[string]any{"overrides": len(scanner.Overrides())}, nil
+	}
+	// fw.add_many / fw.remove_many: many addresses at once (Mass Operations),
+	// one firewall reload; each address reports its own result.
+	h["fw.add_many"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Kind    string   `json:"kind"`
+			Addrs   []string `json:"addrs"`
+			Comment string   `json:"comment"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if len(in.Addrs) == 0 || len(in.Addrs) > 1000 {
+			return nil, errors.New("send between 1 and 1000 addresses")
+		}
+		r, err := a.Firewall.AddMany(in.Kind, in.Addrs, in.Comment)
+		return map[string]any{"results": r}, err
+	}
+	h["fw.remove_many"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Kind  string   `json:"kind"`
+			Addrs []string `json:"addrs"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if len(in.Addrs) == 0 || len(in.Addrs) > 1000 {
+			return nil, errors.New("send between 1 and 1000 addresses")
+		}
+		r, err := a.Firewall.RemoveMany(in.Kind, in.Addrs)
+		return map[string]any{"results": r}, err
+	}
 	h["fw.unblock"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct{ Addr string }](p)
 		if err != nil {
@@ -940,7 +986,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		if f.Status == "deleted" {
 			return nil, errors.New("the file was deleted")
 		}
-		j := ai.Job{FindingID: f.ID, Path: path, SHA256: f.SHA256, Signature: f.Signature}
+		j := ai.Job{FindingID: f.ID, Path: path, SHA256: f.SHA256, Signature: f.Signature, Origin: f.Path}
 		v, err := a.AI.Analyze(ctx, j)
 		if err != nil {
 			return nil, err
@@ -1583,7 +1629,10 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 			return
 		}
 	}
-	if !st.AI.Act || f.Status != "detected" {
+	// A signature on review (AI Learning) used to quarantine on its own; it
+	// now waits for the AI, so a confident "malicious" applies the virus
+	// action even when the AI is not otherwise allowed to act.
+	if (!st.AI.Act && !scanner.InReview(f.Signature)) || f.Status != "detected" {
 		return
 	}
 	switch st.Scanner.VirusAction {

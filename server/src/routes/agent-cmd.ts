@@ -5,6 +5,7 @@ import type { Config } from '../config.js';
 import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, hasRole, type Role } from '../auth.js';
 import { currentRelease } from '../agents/release.js';
+import { isMaster, serverInScope } from '../tenancy.js';
 
 /**
  * Agent actions the portal may proxy, with the minimum role and whether the
@@ -46,6 +47,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'fw.add': { role: 'operator', mutates: true },
   'fw.remove': { role: 'operator', mutates: true },
   'fw.unblock': { role: 'operator', mutates: true },
+  'fw.add_many': { role: 'operator', mutates: true, timeoutMs: 120_000 },
+  'fw.remove_many': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'fw.event_delete': { role: 'operator', mutates: true },
   'waf.event_delete': { role: 'operator', mutates: true },
   'ai.check': { role: 'operator', mutates: true, timeoutMs: 300_000 },
@@ -91,11 +94,7 @@ export function agentCommandRoutes(app: FastifyInstance, pool: Pool, cfg: Config
     const spec = ACTIONS[p.data.action];
     if (!spec) return reply.code(404).send({ error: 'unknown action' });
     if (!hasRole(user, spec.role)) return reply.code(403).send({ error: 'insufficient permissions' });
-    const { rowCount } = await pool.query(
-      "SELECT 1 FROM servers WHERE id = $1 AND account_id = $2 AND status = 'active'",
-      [p.data.id, user.accountId],
-    );
-    if (!rowCount) return reply.code(404).send({ error: 'server not found' });
+    if (!(await serverInScope(pool, user.accountId, p.data.id))) return reply.code(404).send({ error: 'server not found' });
 
     let params: Record<string, unknown> = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
     if (p.data.action === 'scan.start') params = { ...params, initiator: user.email };
@@ -131,8 +130,8 @@ export function agentCommandRoutes(app: FastifyInstance, pool: Pool, cfg: Config
     const id = (req.params as { id: string }).id;
     if (!z.string().uuid().safeParse(id).success) return reply.code(404).send({ error: 'server not found' });
     const { rows } = await pool.query(
-      "SELECT inventory FROM servers WHERE id = $1 AND account_id = $2 AND status = 'active'",
-      [id, user.accountId],
+      "SELECT inventory FROM servers WHERE id = $1 AND (account_id = $2 OR $3) AND status = 'active'",
+      [id, user.accountId, await isMaster(pool, user.accountId)],
     );
     if (!rows[0]) return reply.code(404).send({ error: 'server not found' });
     const rel = currentRelease(cfg.downloadsDir);
