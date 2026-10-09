@@ -87,8 +87,8 @@ type fileReq struct {
 	Size      int64    `json:"size"`
 	Name      string   `json:"name"`
 	Match     string   `json:"match,omitempty"` // the local engine's detection, "" for a clean file
-	Path      string   `json:"path,omitempty"`    // flagged file: where (home folder shortened to ~)
-	Line      int      `json:"line,omitempty"`    // and the line and code the signature matched
+	Path      string   `json:"path,omitempty"`  // flagged file: where (home folder shortened to ~)
+	Line      int      `json:"line,omitempty"`  // and the line and code the signature matched
 	Snippet   string   `json:"snippet,omitempty"`
 	Excerpt   string   `json:"excerpt"`
 	Lines     int      `json:"lines"`
