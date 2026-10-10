@@ -273,3 +273,35 @@ describe('AI learning (false positives)', () => {
     expect((await admin.req('DELETE', `/api/ai/learning?signature=${encodeURIComponent(sig)}`)).body).toMatchObject({ deleted: 5 });
   });
 });
+
+describe('AI clean verdicts that do not restore', () => {
+  it('keeps backdoors in mu-plugins and overwhelmingly malicious families for an administrator', async () => {
+    const mu = file('mu1', '1|<?php $f = $GLOBALS["a"]; $f($x);', {
+      match: 'PHP.Backdoor.GlobalsDispatch',
+      name: 'helix-config-mod.php',
+      path: '~/public_html/wp-content/mu-plugins/helix-config-mod.php',
+    });
+    const plain = file('pl1', '1|<?php $f = $GLOBALS["b"]; echo $f;', {
+      match: 'PHP.Backdoor.DynamicCall',
+      name: 'class-updraftplus.php',
+      path: '~/public_html/wp-content/plugins/updraftplus/class-updraftplus.php',
+    });
+    let r = await agentPost('/api/agent/ai/judge', envelope({ files: [mu, plain] }));
+    const [rm, rp] = r.body.results;
+    expect(rm).toMatchObject({ verdict: 'suspicious' });
+    expect(rm.reason).toContain('Not restored');
+    expect(rp).toMatchObject({ verdict: 'clean' });
+    // The fleet KB keeps the guarded verdict: other servers do not clear it.
+    const { rows } = await h.pool.query('SELECT verdict FROM ai_kb WHERE sha256 = $1', [mu.sha256]);
+    expect(rows[0].verdict).toBe('suspicious');
+    // A family the fleet found malicious 20 times is not cleared anywhere.
+    for (let i = 0; i < 20; i++) {
+      await h.pool.query("INSERT INTO ai_kb (sha256, verdict, confidence, match) VALUES ($1, 'malicious', 95, 'PHP.Backdoor.FamilyX')", [sha('fam' + i)]);
+    }
+    r = await agentPost('/api/agent/ai/judge', envelope({ files: [file('fx', '1|<?php echo "hello";', { match: 'PHP.Backdoor.FamilyX', path: '~/public_html/lib/x.php' })] }));
+    expect(r.body.results[0].verdict).toBe('suspicious');
+    // Not counted as a false positive in AI Learning.
+    const l = await admin.req('GET', '/api/ai/learning');
+    expect(l.body.signatures.find((s: any) => s.signature === 'PHP.Backdoor.GlobalsDispatch')).toBeUndefined();
+  });
+});

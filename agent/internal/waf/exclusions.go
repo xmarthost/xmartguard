@@ -56,6 +56,18 @@ const (
 	// comments with prepared statements; the XSS and other rules still check
 	// them.
 	IDWPCommentText = 7700019
+	// IDCPanelServices: cPanel's service subdomains (cpanel., webmail.,
+	// whm., webdisk., cpcalendars., cpcontacts.) proxy to cPanel's own
+	// daemons, which check logins themselves (and cPHulk guards them):
+	// calendar and contact sync (CalDAV/CardDAV XML), the cPanel JSON API
+	// and webmail passwords are not website input. Mail clients' setup
+	// requests (cgi-sys/autodiscover.cgi, autoconfig.cgi) are answered by
+	// cPanel too.
+	IDCPanelServices = 7700020
+	IDCPanelMailCfg  = 7700021
+	// IDDeviceIclock: attendance and access-control devices (ZKTeco "push"
+	// protocol) post their logs to /iclock/ with their own content type.
+	IDDeviceIclock = 7700022
 	// IDCPanelOff: websites whose ModSecurity the account switched off in
 	// cPanel » ModSecurity. Apache already honours that for its virtual host;
 	// this makes it certain for every rule set and on LiteSpeed.
@@ -128,6 +140,15 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	w("# Ordinary hosting traffic the OWASP CRS misreads (xPGuard hosting defaults).")
 	if !off[IDHostingBase] {
 		w(`SecAction "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=941310,ctl:ruleRemoveById=920600,ctl:ruleRemoveTargetById=942550;REQUEST_COOKIES"`, IDHostingBase)
+	}
+	if !off[IDCPanelServices] {
+		w(`SecRule SERVER_NAME "@rx ^(?:cpanel|whm|webmail|webdisk|cpcalendars|cpcontacts)\." "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleEngine=Off"`, IDCPanelServices)
+	}
+	if !off[IDCPanelMailCfg] {
+		w(`SecRule REQUEST_FILENAME "@rx ^/+cgi-sys/+(?:autodiscover|autoconfig)\.cgi$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,%s,ctl:ruleRemoveById=920350"`, IDCPanelMailCfg, tags)
+	}
+	if !off[IDDeviceIclock] {
+		w(`SecRule REQUEST_FILENAME "@rx ^/+iclock/+(?:cdata|getrequest|devicecmd|registry|push|ping|querydata|fdata)(?:\.aspx|\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=930130,ctl:ruleRemoveById=942550"`, IDDeviceIclock)
 	}
 	if !off[IDCPanelPaths] {
 		w(`SecRule REQUEST_FILENAME "@rx ^/+(?:cgi-sys/|\.well-known/|autodiscover/autodiscover\.xml$|mail/config-v1\.1\.xml$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920350"`, IDCPanelPaths)

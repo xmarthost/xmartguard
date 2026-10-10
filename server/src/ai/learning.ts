@@ -32,6 +32,40 @@ export interface FlaggedFile {
   snippet?: string;
 }
 
+/** Signatures of malware families where a wrong "clean" is costly. */
+const RISKY_SIG = /backdoor|dropper|webshell|web_shell|uploader|ai\.learned|globalsdispatch/i;
+/** Where real plugins and themes never put code: PHP or archives here are droppers. */
+const RISKY_PATH = /(?:^|\/)wp-content\/(?:mu-plugins\/[^/]+\.php$|uploads\/.*\.(?:php\d?|phtml|phar|pht|inc|zip)$)/i;
+/** A family with this many malicious verdicts, and four times more than clean ones, is not cleared by one "clean". */
+export const FAMILY_MIN_MALICIOUS = 20;
+
+/**
+ * Guard against the AI clearing real malware. A "clean" verdict does not
+ * restore a file (and is kept as "suspicious" for an administrator) when the
+ * file sits where only malware puts code (mu-plugins, PHP or archives in
+ * uploads) under a backdoor-type signature, or when the signature's family
+ * is overwhelmingly malicious across the fleet. Returns the reason, or "".
+ */
+export async function distrustClean(pool: Pool, f: { match?: string; path?: string; name: string }): Promise<string> {
+  const sig = (f.match ?? '').trim();
+  if (!sig) return '';
+  const where = f.path || f.name;
+  if (RISKY_SIG.test(sig) && RISKY_PATH.test(where)) {
+    return 'a backdoor-type signature in a folder where plugins never keep code';
+  }
+  if (!RISKY_SIG.test(sig)) return '';
+  const { rows } = await pool.query(
+    `SELECT count(*) FILTER (WHERE verdict = 'malicious')::int AS mal, count(*) FILTER (WHERE verdict = 'clean')::int AS clean
+       FROM ai_kb WHERE match = $1`,
+    [sig],
+  );
+  const { mal, clean } = rows[0];
+  if (mal >= FAMILY_MIN_MALICIOUS && clean * 4 <= mal) {
+    return `the fleet found ${mal} files of this signature malicious`;
+  }
+  return '';
+}
+
 /** Keeps the false positives from one judge request; returns the signatures it moved to review. */
 export async function recordFalsePositives(pool: Pool, serverId: string, files: (FlaggedFile & { id: string })[], results: Result[]): Promise<string[]> {
   const byId = new Map(results.map((r) => [r.id, r]));

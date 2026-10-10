@@ -389,6 +389,9 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 	}
 	ext := extOf(name)
+	if dataFile(path, ext) {
+		return nil, ErrTrusted
+	}
 	var content []byte
 	if ScriptExts[ext] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
 		var err error
@@ -404,6 +407,9 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 		// Softaculous and WP Toolkit login helpers (see hostingtools.go).
 		if trustedHostingTool(path, content) {
+			return nil, ErrTrusted
+		}
+		if translationFile(path, content) {
 			return nil, ErrTrusted
 		}
 		if s.Cleared != nil {

@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool } from '../db.js';
 import { masterAccount } from '../tenancy.js';
+import { distrustClean } from './learning.js';
 import type { Config } from '../config.js';
 import { complete, ProviderError, type ProviderRow } from './providers.js';
 import { SYSTEM, maxTokens, parseAnswer, userMessage, type FileIn, type Judgement } from './prompt.js';
@@ -153,6 +154,14 @@ export class AIGateway {
       if (!a) {
         missing.push(p);
         continue;
+      }
+      if (a.verdict === 'clean') {
+        const why = await distrustClean(this.pool, p.file);
+        if (why) {
+          a.verdict = 'suspicious';
+          a.reason = `Not restored: the AI found it clean, but ${why}; an administrator decides. AI: ${a.reason}`.slice(0, 600);
+          a.confidence = Math.min(a.confidence, 60);
+        }
       }
       await this.store(p, a, model);
       p.resolve({ id: p.file.id, verdict: a.verdict, confidence: a.confidence, reason: a.reason, injected: a.injected, cut: a.cut, model, source: 'ai' });

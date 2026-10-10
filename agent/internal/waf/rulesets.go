@@ -283,8 +283,9 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			crs.Detail += "; weak signals from clean visitors get the CAPTCHA page"
 		}
 		if lv := m.level(); lv != "strict" {
-			setupText += editorSetup() + autodiscoverSetup()
-			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing"
+			setupText += sessionSetup() + editorSetup() + autodiscoverSetup()
+			post += sessionPost()
+			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing; requests from a site's own pages with a session have threshold " + fmt.Sprint(sessionThreshold)
 		}
 		files[setup] = setupText
 		fmt.Fprintf(&inc, "\n# OWASP Core Rule Set %s\nInclude %s\nInclude %s\n", rs.CRS.Version, setup, filepath.Join(dir, "rules", "*.conf"))

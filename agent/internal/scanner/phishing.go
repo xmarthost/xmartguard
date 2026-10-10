@@ -11,9 +11,13 @@ import (
 // These checks are xPGuard's own, built from how such kits work.
 
 var (
-	rePhishExfil   = regexp.MustCompile(`(?i)api\.telegram\.org/bot|\bmail\s*\(\s*\$\w+\s*,`)
-	rePhishFields  = regexp.MustCompile(`(?i)\$_(?:POST|REQUEST)\s*\[\s*['"](?:[\w-]*(?:ssn|cvv|cvc|ccnum|cardnum|card_?number|cc_?num|exp(?:iry|date)|otp|pin|routing|acc(?:ount)?_?num|pass(?:word|wd)?|mmn|dob|atm))['"]`)
-	rePhishVisitor = regexp.MustCompile(`(?i)REMOTE_ADDR|HTTP_USER_AGENT|HTTP_X_FORWARDED_FOR`)
+	rePhishExfil = regexp.MustCompile(`(?i)api\.telegram\.org/bot|\bmail\s*\(\s*\$\w+\s*,`)
+	// Card and bank details: what a collector asks for and a site's own
+	// login or registration controller does not.
+	rePhishBankField = regexp.MustCompile(`(?i)\$_(?:POST|REQUEST)\s*\[\s*['"](?:[\w-]*(?:ssn|cvv|cvc|ccnum|cardnum|card_?number|cc_?num|exp(?:iry|date)|routing|acc(?:ount)?_?num|mmn|atm))['"]`)
+	rePhishTelegram  = regexp.MustCompile(`(?i)api\.telegram\.org/bot`)
+	rePhishFields    = regexp.MustCompile(`(?i)\$_(?:POST|REQUEST)\s*\[\s*['"](?:[\w-]*(?:ssn|cvv|cvc|ccnum|cardnum|card_?number|cc_?num|exp(?:iry|date)|otp|pin|routing|acc(?:ount)?_?num|pass(?:word|wd)?|mmn|dob|atm))['"]`)
+	rePhishVisitor   = regexp.MustCompile(`(?i)REMOTE_ADDR|HTTP_USER_AGENT|HTTP_X_FORWARDED_FOR`)
 
 	rePhishBrand    = regexp.MustCompile(`(?i)<title>[^<]{0,120}\b(?:chase|wells\s*fargo|bank\s*of\s*america|navy\s*federal|citizens\s*bank|capital\s*one|usaa|paypal|td\s*bank|pnc\s*bank|regions\s*bank|huntington|truist|us\s*bank|santander|barclays|hsbc|lloyds|halifax|natwest|amex|american\s*express|netflix|microsoft\s*(?:365|outlook)|office\s*365|apple\s*id|icloud|coinbase|binance|metamask)\b`)
 	rePhishPassword = regexp.MustCompile(`(?i)<input[^>]+type\s*=\s*['"]?password`)
@@ -36,8 +40,11 @@ func phishingKit(ext string, content []byte) *Detection {
 		return nil
 	}
 	if bytes.Contains(content, []byte("<?")) && phishMay(content) && rePhishExfil.Match(content) && rePhishVisitor.Match(content) {
-		// Collectors ask for several secrets at once; a contact form never does.
-		if n := len(rePhishFields.FindAll(content, 8)); n >= 3 {
+		// Collectors ask for several secrets at once; a contact form never
+		// does. An application's own user controller asks for a password,
+		// a PIN or an OTP and mails the user too, so without a Telegram bot
+		// card or bank fields are needed.
+		if n := len(rePhishFields.FindAll(content, 8)); n >= 3 && (rePhishTelegram.Match(content) || len(rePhishBankField.FindAll(content, 3)) >= 2) {
 			return &Detection{CatVirus, "Phishing.Collector"}
 		}
 	}

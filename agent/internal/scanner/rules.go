@@ -101,7 +101,7 @@ var Rules = []Rule{
 		`(?i)\bmail\s*\(\s*`+input+`[^;]{0,200},\s*`+input, phpExts...),
 
 	// Malicious JavaScript / miners.
-	rx("XG-JS-MINER", "JS.Miner.Browser", CatVirus, `(?i)(?:coinhive\.min\.js|CoinHive\.Anonymous|cryptoloot\.pro|coin-hive\.com|webmine\.pro)`),
+	rx("XG-JS-MINER", "JS.Miner.Browser", CatVirus, `(?i)(?:new\s+CoinHive\s*\.\s*Anonymous\s*\(|src\s*=\s*["'][^"']*(?:coinhive\.min\.js|cryptoloot\.pro|coin-hive\.com|webmine\.pro))`),
 	rx("XG-JS-INJECT-DOCWRITE", "JS.Injection.UnescapeWrite", CatSuspicious,
 		`(?i)document\.write\s*\(\s*unescape\s*\(\s*['"](?:%[0-9a-f]{2}){60,}`),
 	rx("XG-JS-FROMCHARCODE-EVAL", "JS.Obfuscated.FromCharCodeEval", CatSuspicious,

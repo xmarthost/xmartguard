@@ -37,8 +37,18 @@ func TestExclusionsRender(t *testing.T) {
 			t.Fatalf("missing %q in\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "id:7704004") || strings.Contains(out, "ruleEngine=Off") || strings.Contains(out, "bad domain") {
+	if strings.Contains(out, "id:7704004") || strings.Contains(out, `/x" ctl`) || strings.Contains(out, "bad domain") {
 		t.Fatalf("invalid or duplicate exclusion rendered:\n%s", out)
+	}
+	// cPanel's service subdomains, mail client setup and attendance devices.
+	for _, want := range []string{
+		`SecRule SERVER_NAME "@rx ^(?:cpanel|whm|webmail|webdisk|cpcalendars|cpcontacts)\." "id:7700020,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleEngine=Off"`,
+		`cgi-sys/+(?:autodiscover|autoconfig)\.cgi$" "id:7700021,`,
+		`iclock/+(?:cdata|getrequest|devicecmd|registry|push|ping|querydata|fdata)(?:\.aspx|\.php)?$" "id:7700022,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q", want)
+		}
 	}
 	// The exclusions come first: the whitelist would otherwise remove them.
 	if i, j := strings.Index(out, "id:7700010"), strings.Index(out, "id:7700309"); i < 0 || (j >= 0 && i > j) {

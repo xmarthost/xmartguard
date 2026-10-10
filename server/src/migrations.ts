@@ -500,4 +500,33 @@ CREATE TABLE sig_overrides (
 );
 `,
   },
+  {
+    version: '016_distrust_risky_clean',
+    sql: `
+-- The AI cleared files of malware families it had found malicious many
+-- times (obfuscated mu-plugins, PHP and archives in uploads). Those "clean"
+-- verdicts no longer clear the files on any server: they become
+-- "suspicious" (an administrator decides), and leave the AI Learning list.
+WITH fam AS (
+  SELECT match FROM ai_kb
+   WHERE match ~* '(backdoor|dropper|webshell|web_shell|uploader|ai\\.learned|globalsdispatch)'
+   GROUP BY match
+  HAVING count(*) FILTER (WHERE verdict = 'malicious') >= 20
+     AND count(*) FILTER (WHERE verdict = 'clean') * 4 <= count(*) FILTER (WHERE verdict = 'malicious')
+), risky AS (
+  SELECT DISTINCT sha256 FROM ai_fp
+   WHERE signature ~* '(backdoor|dropper|webshell|web_shell|uploader|ai\\.learned|globalsdispatch)'
+     AND path ~* '(^|/)wp-content/(mu-plugins/[^/]+\\.php$|uploads/.*\\.(php[0-9]?|phtml|phar|pht|inc|zip)$)'
+), bad AS (
+  SELECT sha256 FROM ai_kb WHERE verdict = 'clean' AND NOT overridden AND (match IN (SELECT match FROM fam) OR sha256 IN (SELECT sha256 FROM risky))
+), upd AS (
+  UPDATE ai_kb SET verdict = 'suspicious', confidence = LEAST(confidence, 60),
+         reason = left('Not restored: the AI found it clean, but this malware family is mostly malicious; an administrator decides. AI: ' || reason, 600),
+         updated_at = now(), seq = nextval(pg_get_serial_sequence('ai_kb', 'seq'))
+   WHERE sha256 IN (SELECT sha256 FROM bad)
+  RETURNING sha256
+)
+DELETE FROM ai_fp WHERE sha256 IN (SELECT sha256 FROM upd);
+`,
+  },
 ];

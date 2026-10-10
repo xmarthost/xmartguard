@@ -11,6 +11,7 @@ export interface FileIn {
   size: number;
   name: string;
   match?: string;
+  path?: string;
   excerpt: string;
   lines: number;
   truncated: boolean;
@@ -46,6 +47,16 @@ For each file decide what the code DOES:
 - clean: ordinary application, plugin, theme or library code. Minified or encoded code is often legitimate.
 A signature "match" from the local engine is a hint, not proof.
 
+Never call these clean (malicious, or at least suspicious):
+- a large, heavily obfuscated single file in wp-content/mu-plugins/ (random-looking name such as
+  "helix-config-mod.php", "drift-optimizer-x.php"), whatever its plugin header, "licence check" or
+  "framework" claims: real vendors do not ship that way;
+- PHP files or archives (zip) in wp-content/uploads/, or a file manager / uploader in wp-admin/ or
+  another core folder;
+- code that builds function names from strings or $GLOBALS and calls them, fetches remote content
+  to print or run, or hides its strings behind encoders, when its purpose is not plainly visible.
+Being able to give the code a harmless name is not evidence: decide by what it does.
+
 If malicious code was ADDED to an otherwise legitimate file (e.g. a backdoor on line 1 of a real
 plugin file), set "injected": true and list in "cut" exactly the lines to delete as {"from":N,"to":M}.
 If the bad code shares a line with legitimate code (including the file's own "<?php" tag), use
@@ -59,6 +70,7 @@ export function userMessage(files: FileIn[]): string {
   return files
     .map((f) => {
       const head = [`id=${f.id}`, `name=${f.name}`, `lines=${f.lines}`];
+      if (f.path) head.push(`path=${f.path.replace(/\s+/g, '_').slice(0, 300)}`);
       if (f.match) head.push(`match=${f.match}`);
       if (f.truncated) head.push('excerpt');
       return `<file ${head.join(' ')}>\n${f.excerpt.trimEnd()}\n</file>`;

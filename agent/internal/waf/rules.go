@@ -59,6 +59,13 @@ const (
 	IDRootProbe     = 7700505
 	IDBareMozilla   = 7700506
 	IDFakeSearchBot = 7700507
+	// IDCrawlerCart: crawlers adding to cart or wishlist (every such URL
+	// writes a session and runs the shop uncached).
+	IDCrawlerCart = 7700508
+	// IDCrawlerFacets: crawlers other than the search engines walking a
+	// shop's filter, sort and page-size combinations (millions of uncached
+	// pages: SEO backlink crawlers overloaded a server this way).
+	IDCrawlerFacets = 7700509
 	IDWebshell      = 7700601
 	IDWebshellDir   = 7700602
 	IDExploitProbe  = 7700603
@@ -97,6 +104,9 @@ var Catalog = []RuleInfo{
 	{IDWCStoreExcl, "exclusions", "WooCommerce block cart and checkout (Store API): PHP-injection rules skip it (addresses and order notes are stored, never run)", "allow"},
 	{IDHostingBase, "exclusions", "Hosting defaults: comments and reviews in Urdu, Arabic or with emoji (941310), crawlers' Accept charset (920600) and JSON in cookies (942550) are not attacks", "allow"},
 	{IDCPanelPaths, "exclusions", "cPanel pages reached by the server address (mail autodiscover/autoconfig, suspended page, AutoSSL): numeric Host allowed", "allow"},
+	{IDCPanelServices, "exclusions", "cPanel service subdomains (cpanel., webmail., whm., webdisk., cpcalendars., cpcontacts.): not inspected, cPanel checks their logins", "allow"},
+	{IDCPanelMailCfg, "exclusions", "Mail client setup requests answered by cPanel (cgi-sys/autodiscover.cgi, autoconfig.cgi)", "allow"},
+	{IDDeviceIclock, "exclusions", "Attendance and access-control devices posting to /iclock/ (ZKTeco push protocol)", "allow"},
 	{IDStaticCookies, "exclusions", "Images, styles and scripts: the cookies sent with them are not checked for injections", "allow"},
 	{IDWPCommentText, "exclusions", "WordPress comments and WooCommerce reviews: the text, name and website are not checked for SQL injection (WordPress stores them safely; XSS is still checked)", "allow"},
 	{IDAdminPanel, "exclusions", "Admin areas of other web apps (SMM panels, Laravel, CodeIgniter): saves from the same admin area with a session skip injection rules", "allow"},
@@ -131,6 +141,8 @@ var Catalog = []RuleInfo{
 	{IDHiddenDirPHP, "generic", "Block running PHP files inside hidden folders (/.tmb/, /.trash/), except .well-known", "block"},
 	{IDDoubleEncode, "generic", "Block double-encoded path traversal (%252e%252e) in the address", "block"},
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
+	{IDCrawlerCart, "bad_bots", "Block crawlers following add-to-cart and wishlist links (each one writes a session and runs the shop uncached)", "block"},
+	{IDCrawlerFacets, "bad_bots", "Block crawlers other than search engines on shop filter, sort and page-size URLs (endless uncached combinations)", "block"},
 	{IDRootProbe, "bad_bots", "Block PHP probes on a website's top folder that send neither a User-Agent nor a Referer", "block"},
 	{IDBareMozilla, "bad_bots", "Block the fake User-Agent \"Mozilla/5.0\" with nothing after it (scripts pretending to be a browser)", "block"},
 	{IDFakeSearchBot, "bot_blocker", "Block fake Googlebot and Bingbot: the User-Agent says so but the address is not on Google's or Microsoft's published list", "block"},
@@ -424,7 +436,7 @@ func Render(c settings.WAF, o Options) string {
 		rule(IDUploadPHP, `SecRule FILES "@rx \.(?:php[0-9]?|phtml|phar|pht|phps)$" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP file upload blocked',tag:'xpguard/upload'"`, IDUploadPHP)
 	}
 	if c.SensitiveFiles {
-		rule(IDSensitive, `SecRule REQUEST_FILENAME "@rx /(?:\.env$|[a-z0-9_.-]+\.env$|env\.(?:txt|bak|old|orig|save)$|\.aws/|wp-config(?:-sample)?\.php$|[^/]+\.php[0-9]?\.suspected$|\.git/|\.svn/|\.hg/|\.htpasswd$|\.DS_Store$|\.env\.[a-z0-9_-]+$|[^/]+\.php[0-9]?(?:\.bak|\.old|\.orig|\.save|\.swp|\.txt|\.zip|~)$|debug\.log$|error_log$|[^/]+\.sql(?:\.gz|\.zip)?$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Access to sensitive file blocked',tag:'xpguard/files'"`, IDSensitive)
+		rule(IDSensitive, `SecRule REQUEST_FILENAME "@rx /(?:\.env$|[a-z0-9_.-]+\.env$|env\.(?:txt|bak|old|orig|save)$|\.aws/|wp-config(?:-sample)?\.php$|[^/]+\.php[0-9]?\.suspected$|\.git/|\.svn/|\.hg/|\.htpasswd$|\.DS_Store$|\.env\.[a-z0-9_-]+$|[^/]+\.php[0-9]?(?:\.bak|\.old|\.orig|\.save|\.swp|\.txt|\.zip|~)$|debug\.log$|error_log$|[^/]+\.sql(?:\.gz|\.zip)?$|(?:wp[_-]options|woocommerce_[a-z0-9_]*settings)(?:\.(?:sql|zip|tar|gz|tgz|bz2|7z|rar|txt|log|bak|json|csv|xml))+$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Access to sensitive file blocked',tag:'xpguard/files'"`, IDSensitive)
 	}
 	if c.WordPress {
 		rule(IDUploadsPHP, `SecRule REQUEST_FILENAME "@rx /wp-content/(?:uploads|blogs\.dir)/.*\.(?:php[0-9]?|phtml|phar|pht)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP execution in uploads blocked',tag:'xpguard/wordpress'"`, IDUploadsPHP)
@@ -626,6 +638,16 @@ func Render(c settings.WAF, o Options) string {
 		if !off[IDRootProbe] {
 			probe(IDRootProbe, `SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
 			probe(IDRootProbe+1000, `SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
+		}
+		crawler := `SecRule REQUEST_HEADERS:User-Agent "@rx (?:bot|crawl|spider|slurp|fetcher|scraper)\b" "t:none,t:lowercase%s"`
+		if !off[IDCrawlerCart] {
+			w(`SecRule ARGS_NAMES "@rx ^(?:add[-_]to[-_](?:cart|wishlist|compare)|wishlist_add|yith_wcwl_add)" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Crawler adding to cart or wishlist blocked',tag:'xpguard/bot',chain"`, IDCrawlerCart)
+			w(`  `+crawler, "")
+		}
+		if !off[IDCrawlerFacets] {
+			w(`SecRule ARGS_GET_NAMES "@rx ^(?:filter_[a-z0-9_-]+|query_type_[a-z0-9_-]+|orderby|min_price|max_price|per_page|rating_filter|product_count|shop_view|pa_[a-z0-9_-]+)$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Crawler on shop filter URLs blocked',tag:'xpguard/bot',chain"`, IDCrawlerFacets)
+			w(`  `+crawler, ",chain")
+			w(`  SecRule REQUEST_HEADERS:User-Agent "!@rx (?:googlebot|bingbot|applebot|yandex|duckduckbot|google-inspectiontool|adsbot-google|mediapartners-google)" "t:none,t:lowercase"`)
 		}
 		if !off[IDBareMozilla] {
 			// Not for logged-in users and API clients (some site tools send it).
