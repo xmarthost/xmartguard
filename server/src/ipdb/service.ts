@@ -6,6 +6,7 @@ import type { Config } from '../config.js';
 import type { AgentHub } from '../agents/hub.js';
 import { versionLess } from '../agents/release.js';
 import type { GeoDB } from './geo.js';
+import { ABUSEIPDB_EVERY_HOURS, ABUSEIPDB_NOTE, fetchAbuseIPDB, loadAbuseIPDB } from './abuseipdb.js';
 import { MAIL_MIN_AGENT, syncMail } from '../routes/mail.js';
 import { eachLimit, single } from '../agents/limit.js';
 
@@ -110,6 +111,10 @@ export class IPDBService {
     this.timers.push(setTimeout(feeds, 30_000));
     // Attacker feeds change by the hour (blocklist.de keeps 48 hours).
     this.timers.push(setInterval(feeds, 2 * 3600_000));
+    // AbuseIPDB: checked often, downloaded every ABUSEIPDB_EVERY_HOURS.
+    const abuse = () => this.refreshAbuseIPDB().catch((err) => this.log.error({ err: (err as Error).message }, 'abuseipdb failed'));
+    this.timers.push(setTimeout(abuse, 45_000));
+    this.timers.push(setInterval(abuse, 15 * 60_000));
   }
 
   stop(): void {
@@ -357,6 +362,55 @@ export class IPDBService {
     }
   }
 
+  /** Makes one feed's entries exactly `cidrs` (note = the feed's name). */
+  private async replaceFeed(note: string, cidrs: string[], reason: string): Promise<void> {
+    await this.pool.query(
+      `DELETE FROM ipdb_entries WHERE source = 'feed' AND note = $1
+          AND NOT (cidr = ANY(ARRAY(SELECT network(t::inet) FROM unnest($2::text[]) AS t)))`,
+      [note, cidrs],
+    );
+    if (cidrs.length) {
+      await this.pool.query(
+        `INSERT INTO ipdb_entries (cidr, source, country, reason, note)
+         SELECT DISTINCT ON (network(x.c::inet)) network(x.c::inet), 'feed', x.cc, $4, $3
+           FROM unnest($1::text[], $2::text[]) AS x(c, cc)
+         ON CONFLICT (cidr) DO UPDATE SET last_seen = now() WHERE ipdb_entries.source = 'feed'`,
+        [cidrs, cidrs.map((c) => this.geo.lookup(c)), note, reason],
+      );
+    }
+    this.dirty = true;
+  }
+
+  /**
+   * AbuseIPDB blacklist (the operator's API key), every ABUSEIPDB_EVERY_HOURS
+   * or now when forced. The last download time is kept in the database, so
+   * portal restarts never use up the daily downloads. A removed or disabled
+   * key takes its addresses off the list.
+   */
+  async refreshAbuseIPDB(force = false): Promise<{ count: number; error?: string; skipped?: boolean }> {
+    const c = await loadAbuseIPDB(this.pool);
+    if (!c.api_key || !c.enabled) {
+      const { rowCount } = await this.pool.query("DELETE FROM ipdb_entries WHERE source = 'feed' AND note = $1", [ABUSEIPDB_NOTE]);
+      if (rowCount) this.dirty = true;
+      return { count: 0, skipped: true };
+    }
+    if (!force && c.last_fetch_at && Date.now() - new Date(c.last_fetch_at).getTime() < ABUSEIPDB_EVERY_HOURS * 3600_000) {
+      return { count: c.last_count, skipped: true };
+    }
+    const got = await fetchAbuseIPDB(c.api_key, c.confidence, c.max_ips);
+    const cidrs = got.error ? [] : parseFeed(got.ips.join('\n'));
+    if (got.error || !cidrs.length) {
+      const error = got.error ?? 'AbuseIPDB returned an empty list';
+      // A failed download keeps the previous list; it is retried next round.
+      await this.pool.query('UPDATE ipdb_abuseipdb SET last_fetch_at = now(), last_error = $1 WHERE id = 1', [error]);
+      this.log.warn({ err: error }, 'abuseipdb download failed');
+      return { count: 0, error };
+    }
+    await this.replaceFeed(ABUSEIPDB_NOTE, cidrs, `AbuseIPDB (confidence ${c.confidence}%+)`);
+    await this.pool.query("UPDATE ipdb_abuseipdb SET last_fetch_at = now(), last_count = $1, last_error = '' WHERE id = 1", [cidrs.length]);
+    return { count: cidrs.length };
+  }
+
   /** Downloads the configured public feeds and merges them as 'feed' entries. */
   async refreshFeeds(): Promise<Record<string, number>> {
     const result: Record<string, number> = {};
@@ -368,19 +422,7 @@ export class IPDBService {
         const cidrs = parseFeed(text);
         result[url] = cidrs.length;
         if (!cidrs.length) continue; // never wipe a feed on an empty/odd response
-        await this.pool.query(
-          `DELETE FROM ipdb_entries WHERE source = 'feed' AND note = $1
-              AND NOT (cidr = ANY(ARRAY(SELECT network(t::inet) FROM unnest($2::text[]) AS t)))`,
-          [url, cidrs],
-        );
-        await this.pool.query(
-          `INSERT INTO ipdb_entries (cidr, source, country, reason, note)
-           SELECT DISTINCT ON (network(x.c::inet)) network(x.c::inet), 'feed', x.cc, 'public blocklist', $3
-             FROM unnest($1::text[], $2::text[]) AS x(c, cc)
-           ON CONFLICT (cidr) DO UPDATE SET last_seen = now() WHERE ipdb_entries.source = 'feed'`,
-          [cidrs, cidrs.map((c) => this.geo.lookup(c)), url],
-        );
-        this.dirty = true;
+        await this.replaceFeed(url, cidrs, 'public blocklist');
       } catch (err) {
         result[url] = -1;
         this.log.warn({ url, err: (err as Error).message }, 'ipdb feed download failed');

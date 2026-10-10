@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Pool } from '../db.js';
 import { audit, hasRole, requireRole, type SessionUser } from '../auth.js';
 import { entryText, parseCidr, type IPDBService } from '../ipdb/service.js';
+import { ABUSEIPDB_EVERY_HOURS, keyHint, loadAbuseIPDB, testAbuseIPDB } from '../ipdb/abuseipdb.js';
 import { signedPayload } from '../agent-sign.js';
 
 const Paging = z.object({
@@ -261,6 +262,89 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
     await pool.query('DELETE FROM ipdb_whitelist WHERE cidr = network($1::inet)', [cidr]);
     await ipdb.rebuild();
     return { ok: true };
+  });
+
+  // AbuseIPDB (Master » IPDB): the operator's key; its blacklist goes to
+  // every server through the shared list. The key itself never leaves the
+  // portal and is shown only as a hint.
+  const abuseState = async () => {
+    const c = await loadAbuseIPDB(pool);
+    const { rows } = await pool.query("SELECT count(*)::int AS n FROM ipdb_entries WHERE source = 'feed' AND note = 'abuseipdb'");
+    return {
+      key_set: c.api_key !== '',
+      key_hint: keyHint(c.api_key),
+      enabled: c.enabled,
+      confidence: c.confidence,
+      max_ips: c.max_ips,
+      last_fetch_at: c.last_fetch_at,
+      last_count: c.last_count,
+      last_error: c.last_error,
+      listed: rows[0].n,
+      every_hours: ABUSEIPDB_EVERY_HOURS,
+    };
+  };
+  const AbuseKey = z.string().trim().regex(/^[A-Za-z0-9]{40,120}$/, 'an AbuseIPDB API key is 80 letters and digits');
+
+  app.get('/api/ipdb/abuseipdb', async (req, reply) => {
+    if (!(await requireOperator(req, reply))) return;
+    return abuseState();
+  });
+
+  app.put('/api/ipdb/abuseipdb', async (req, reply) => {
+    if (!(await requireOperator(req, reply))) return;
+    const b = z
+      .object({
+        api_key: z.union([AbuseKey, z.literal('')]).optional(), // omitted = keep, '' = remove
+        enabled: z.boolean().optional(),
+        confidence: z.number().int().min(25).max(100).optional(),
+        max_ips: z.number().int().min(1000).max(500_000).optional(),
+      })
+      .safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid request' });
+    const cur = await loadAbuseIPDB(pool);
+    const next = { ...cur, ...b.data };
+    const keyChanged = b.data.api_key !== undefined && b.data.api_key !== cur.api_key;
+    if (keyChanged && next.api_key) {
+      // A new key is saved only once AbuseIPDB accepts it.
+      const t = await testAbuseIPDB(next.api_key);
+      if (!t.ok) return reply.code(400).send({ error: `AbuseIPDB: ${t.error}` });
+    }
+    const listChanged = keyChanged || next.enabled !== cur.enabled || next.confidence !== cur.confidence || next.max_ips !== cur.max_ips;
+    await pool.query(
+      `INSERT INTO ipdb_abuseipdb (id, api_key, enabled, confidence, max_ips) VALUES (1, $1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET api_key = $1, enabled = $2, confidence = $3, max_ips = $4, updated_at = now(),
+         last_fetch_at = CASE WHEN $5 THEN NULL ELSE ipdb_abuseipdb.last_fetch_at END,
+         last_error = CASE WHEN $5 THEN '' ELSE ipdb_abuseipdb.last_error END`,
+      [next.api_key, next.enabled, next.confidence, next.max_ips, listChanged],
+    );
+    await audit(pool, {
+      accountId: req.user!.accountId,
+      userId: req.user!.id,
+      action: 'ipdb.abuseipdb',
+      detail: { key: keyChanged ? (next.api_key ? 'set' : 'removed') : 'kept', enabled: next.enabled, confidence: next.confidence, max_ips: next.max_ips },
+      ip: req.ip,
+    });
+    // Download (or drop) the list in the background; servers get it on their next sync.
+    if (listChanged) void ipdb.refreshAbuseIPDB(true).then(() => ipdb.rebuild()).catch(() => undefined);
+    return abuseState();
+  });
+
+  /** Tests a key (the one typed, else the saved one) without saving it. */
+  app.post('/api/ipdb/abuseipdb/test', async (req, reply) => {
+    if (!(await requireOperator(req, reply))) return;
+    const b = z.object({ api_key: z.union([AbuseKey, z.literal('')]).default('') }).safeParse(req.body ?? {});
+    if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid request' });
+    const key = b.data.api_key || (await loadAbuseIPDB(pool)).api_key;
+    if (!key) return reply.code(400).send({ error: 'enter an API key first' });
+    return testAbuseIPDB(key);
+  });
+
+  /** Downloads the AbuseIPDB list now (uses one of the daily downloads). */
+  app.post('/api/ipdb/abuseipdb/refresh', async (req, reply) => {
+    if (!(await requireOperator(req, reply))) return;
+    const r = await ipdb.refreshAbuseIPDB(true);
+    await ipdb.rebuild();
+    return { ...r, state: await abuseState() };
   });
 
   /** Operator: re-download the public feeds now. */

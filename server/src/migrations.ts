@@ -551,4 +551,22 @@ CREATE TABLE ipdb_cleared (
 );
 `,
   },
+  {
+    version: '019_abuseipdb',
+    sql: `
+-- The operator's AbuseIPDB key (Master » IPDB): its blacklist joins the
+-- shared IPDB of every server. One row.
+CREATE TABLE ipdb_abuseipdb (
+  id             int PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  api_key        text NOT NULL DEFAULT '',
+  enabled        boolean NOT NULL DEFAULT true,
+  confidence     int NOT NULL DEFAULT 100,
+  max_ips        int NOT NULL DEFAULT 10000,
+  last_fetch_at  timestamptz,
+  last_count     int NOT NULL DEFAULT 0,
+  last_error     text NOT NULL DEFAULT '',
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

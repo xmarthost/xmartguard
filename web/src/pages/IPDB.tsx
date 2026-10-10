@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Database, Globe2, RefreshCw, Search, ShieldBan, Trash2, Users as UsersIcon, Zap } from 'lucide-react';
+import { CheckCircle2, Database, Globe2, KeyRound, RefreshCw, Search, ShieldBan, Trash2, Users as UsersIcon, XCircle, Zap } from 'lucide-react';
 import { api } from '../api';
 import { useApi } from '../hooks';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, StatCard } from '../components/ui';
-import { Card, Pager, Tabs, isIPorCIDR, useAction } from '../components/controls';
+import { Card, Pager, Tabs, Toggle, isIPorCIDR, useAction } from '../components/controls';
 import { WorldMap, countryName, flag } from '../components/WorldMap';
 
 interface Summary {
@@ -60,6 +60,166 @@ const SOURCE_BADGE: Record<string, string> = {
   feed: 'bg-purple-50 text-purple-700',
 };
 
+interface AbuseState {
+  key_set: boolean;
+  key_hint: string;
+  enabled: boolean;
+  confidence: number;
+  max_ips: number;
+  last_fetch_at: string | null;
+  last_count: number;
+  last_error: string;
+  listed: number;
+  every_hours: number;
+}
+
+interface AbuseTest {
+  ok: boolean;
+  error?: string;
+  remaining?: number;
+  limit?: number;
+}
+
+/** Master: the operator's AbuseIPDB key; its blacklist joins the IPDB of every server. */
+function AbuseIPDBCard({ onChanged }: { onChanged: () => void }) {
+  const st = useApi<AbuseState>('/api/ipdb/abuseipdb', 60_000);
+  const { run, busy } = useAction();
+  const [key, setKey] = useState('');
+  const [test, setTest] = useState<AbuseTest | null>(null);
+  const d = st.data;
+  const save = (body: Record<string, unknown>, ok: string) =>
+    run(() => api<AbuseState>('PUT', '/api/ipdb/abuseipdb', body), ok).then((r) => {
+      if (r) {
+        setKey('');
+        st.reload();
+        onChanged();
+        // The first download runs in the background: show its result shortly.
+        setTimeout(() => st.reload(), 8000);
+      }
+    });
+  return (
+    <Card
+      title="AbuseIPDB"
+      desc={`Adds AbuseIPDB's blacklist (the most reported attackers worldwide) to the IPDB of every server, in every account. Downloaded every ${d?.every_hours ?? 6} hours; the key stays on the portal.`}
+      right={
+        d?.key_set ? (
+          d.last_error ? (
+            <span className="flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-red-600">
+              <XCircle className="h-4 w-4" /> Error
+            </span>
+          ) : d.enabled ? (
+            <span className="flex items-center gap-1 whitespace-nowrap text-xs font-semibold text-green-600">
+              <CheckCircle2 className="h-4 w-4" /> Connected
+            </span>
+          ) : (
+            <span className="text-xs font-semibold text-slate-500">Off</span>
+          )
+        ) : (
+          <span className="whitespace-nowrap text-xs font-semibold text-slate-400">Not set</span>
+        )
+      }
+    >
+      {!d ? (
+        <PageLoader />
+      ) : (
+        <div className="space-y-4 text-sm">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="min-w-[260px] flex-1">
+              <span className="mb-1 block text-xs font-medium text-slate-500">API key {d.key_set && <span className="font-mono">(saved: {d.key_hint})</span>}</span>
+              <div className="relative">
+                <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  className="input pl-9 font-mono"
+                  type="password"
+                  autoComplete="off"
+                  placeholder={d.key_set ? 'Enter a new key to replace it' : 'Paste your AbuseIPDB API key'}
+                  value={key}
+                  onChange={(e) => {
+                    setKey(e.target.value.trim());
+                    setTest(null);
+                  }}
+                />
+              </div>
+            </label>
+            <button
+              className="btn-outline"
+              disabled={busy || (!key && !d.key_set)}
+              onClick={() => void run(() => api<AbuseTest>('POST', '/api/ipdb/abuseipdb/test', { api_key: key })).then((r) => r && setTest(r))}
+            >
+              Test connection
+            </button>
+            <button className="btn-primary" disabled={busy || !key} onClick={() => void save({ api_key: key, enabled: true }, 'AbuseIPDB key saved; downloading the list')}>
+              Save key
+            </button>
+            {d.key_set && (
+              <button
+                className="btn-outline text-red-600"
+                disabled={busy}
+                onClick={() => confirm('Remove the AbuseIPDB key? Its addresses leave the IPDB on every server.') && void save({ api_key: '' }, 'AbuseIPDB key removed')}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {test && (
+            <p className={`rounded-lg px-3 py-2 ${test.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'}`}>
+              {test.ok
+                ? `Connected: AbuseIPDB accepted the key${test.remaining !== undefined ? ` (${test.remaining.toLocaleString()} of ${test.limit?.toLocaleString() ?? '?'} daily checks left)` : ''}.`
+                : `Not connected: ${test.error}`}
+            </p>
+          )}
+          {d.key_set && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                  <span>Use on all servers</span>
+                  <Toggle on={d.enabled} disabled={busy} onChange={(v) => void save({ enabled: v }, v ? 'AbuseIPDB on' : 'AbuseIPDB off')} />
+                </label>
+                <label className="rounded-lg border border-slate-200 px-3 py-2">
+                  <span className="block text-xs text-slate-500">Minimum confidence</span>
+                  <select className="input mt-1" value={d.confidence} disabled={busy} onChange={(e) => void save({ confidence: Number(e.target.value) }, 'Saved')}>
+                    <option value={100}>100% (free plan)</option>
+                    <option value={90}>90% (paid plans)</option>
+                    <option value={75}>75% (paid plans)</option>
+                  </select>
+                </label>
+                <label className="rounded-lg border border-slate-200 px-3 py-2">
+                  <span className="block text-xs text-slate-500">Addresses to download</span>
+                  <select className="input mt-1" value={d.max_ips} disabled={busy} onChange={(e) => void save({ max_ips: Number(e.target.value) }, 'Saved')}>
+                    <option value={10000}>10,000 (free plan)</option>
+                    <option value={100000}>100,000 (Basic)</option>
+                    <option value={500000}>500,000 (Premium)</option>
+                  </select>
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
+                <span>
+                  <b>{d.listed.toLocaleString()}</b> AbuseIPDB addresses in the IPDB
+                  {d.last_fetch_at ? ` · last download ${ago(d.last_fetch_at)}` : ' · first download pending'}
+                </span>
+                <button
+                  className="btn-outline px-2.5 py-1 text-xs"
+                  disabled={busy || !d.enabled}
+                  title="Uses one of the daily downloads (5 a day on the free plan)"
+                  onClick={() =>
+                    void run(() => api<{ count: number; error?: string }>('POST', '/api/ipdb/abuseipdb/refresh'), (r) => (r.error ? `AbuseIPDB: ${r.error}` : `${r.count.toLocaleString()} addresses downloaded`)).then(() => {
+                      st.reload();
+                      onChanged();
+                    })
+                  }
+                >
+                  <RefreshCw className="h-3.5 w-3.5" /> Download now
+                </button>
+              </div>
+              {d.last_error && <p className="rounded-lg bg-red-50 px-3 py-2 text-red-700">Last download failed: {d.last_error}</p>}
+            </>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function IPDBPage() {
   const sum = useApi<Summary>('/api/ipdb/summary', 30_000);
   const live = useApi<{ events: LiveEvent[] }>('/api/ipdb/live', 5_000);
@@ -92,6 +252,8 @@ export default function IPDBPage() {
         <StatCard icon={<Zap />} value={`${s.reports_24h} / ${s.ips_24h}`} label="Reports / new IPs (24 h)" />
         <StatCard icon={<UsersIcon />} value={`${synced} / ${s.servers.length}`} label="Servers protected" accent={synced === s.servers.length ? 'text-green-600' : 'text-amber-600'} />
       </div>
+
+      {s.can_manage && <AbuseIPDBCard onChanged={() => sum.reload()} />}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card title="Attack origins" desc="Traffic dropped by the IPDB on your servers, last 30 days">
