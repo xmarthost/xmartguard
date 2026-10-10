@@ -1133,6 +1133,13 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		v, _ := a.Firewall.IPDB.Snapshot()
 		res := map[string]any{"enabled": cfg.Enabled, "report": cfg.Report, "version": v, "reports": reports, "hits": hits}
+		// Visitors who proved they are people: taken off the shared list
+		// (portals that send since_probe know the field).
+		if in.SinceProbe != nil {
+			if res["solved"], err = a.Firewall.TakeSolved(500); err != nil {
+				return nil, err
+			}
+		}
 		if in.SinceProbe != nil {
 			res["probes"], res["probe_cursor"] = probes, max(probeCursor, *in.SinceProbe)
 		}

@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -20,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -300,5 +302,64 @@ func TestCentralRedirect(t *testing.T) {
 		if w.Code != 302 || w.Header().Get("Location") != want {
 			t.Errorf("%s: %d %q", target, w.Code, w.Header().Get("Location"))
 		}
+	}
+}
+
+// solveWork does what the page script does.
+func solveWork(work string) string {
+	for n := 0; ; n++ {
+		a := strconv.Itoa(n)
+		if leadingZeroBits(sha256.Sum256([]byte(work+":"+a))) >= WorkBits {
+			return a
+		}
+	}
+}
+
+func TestCheckboxWork(t *testing.T) {
+	s, solved := newServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(body), "I&#39;m not a robot") && !strings.Contains(string(body), "I'm not a robot") {
+		t.Fatalf("no checkbox:\n%s", body)
+	}
+	work := regexp.MustCompile(`name="pow" value="([^"]+)"`).FindStringSubmatch(string(body))[1]
+	if !strings.Contains(string(body), "bits= 17 ,") {
+		t.Fatal("difficulty not in the script")
+	}
+	answer := solveWork(work)
+	if s.checkWork("127.0.0.2", work, answer) {
+		t.Fatal("work accepted from another address")
+	}
+	// A wrong number is refused; the right one unblocks.
+	bad := "0"
+	if bad == answer {
+		bad = "1"
+	}
+	res, _ = http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"pow": {work}, "nonce": {bad}, "back": {"/"}})
+	res.Body.Close()
+	if len(*solved) != 0 {
+		t.Fatal("wrong work accepted")
+	}
+	res, _ = http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"pow": {work}, "nonce": {answer}, "back": {"/shop/"}})
+	body, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if len(*solved) != 1 || !strings.Contains(string(body), "24 hours") {
+		t.Fatalf("solve: %v %s", *solved, body)
+	}
+	// "image" shows only the digits and does not take work.
+	if _, err := s.Settings.Patch([]byte(`{"captcha":{"provider":"image"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	res, _ = http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"pow": {work}, "nonce": {answer}})
+	body, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if len(*solved) != 1 || strings.Contains(string(body), "I&#39;m not a robot") {
+		t.Fatalf("image mode took work: %v", *solved)
 	}
 }

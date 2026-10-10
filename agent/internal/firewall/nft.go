@@ -71,6 +71,8 @@ const (
 	LogPrefixDeny    = "XG-DENY "
 	LogPrefixTempBan = "XG-TBAN "
 	LogPrefixCountry = "XG-CTRY "
+	// LogPrefixIPDBCaptcha samples IPDB web connections sent to the CAPTCHA.
+	LogPrefixIPDBCaptcha = "XG-ICAP "
 	// LogRate is the maximum number of samples per second per rule.
 	LogRate = 10
 )
@@ -178,6 +180,13 @@ func (r Ruleset) Render() string {
 		}
 		b.WriteString("\t\tdrop\n\t}\n")
 	}
+	if cp := r.Captcha; cp != nil && cp.IPDB {
+		b.WriteString("\tchain captcha_ipdb {\n")
+		if r.LogIPDB {
+			fmt.Fprintf(&b, "\t\tlimit rate %d/second burst %d packets log prefix \"%s\" level debug\n", LogRate, LogRate*2, LogPrefixIPDBCaptcha)
+		}
+		b.WriteString("\t\taccept\n\t}\n")
+	}
 	if cp := r.Captcha; cp != nil {
 		b.WriteString("\tchain captcha {\n\t\ttype nat hook prerouting priority dstnat - 5; policy accept;\n")
 		// Allowed addresses (e.g. after solving the CAPTCHA) reach the site.
@@ -191,9 +200,11 @@ func (r Ruleset) Render() string {
 			if cp.IPDB {
 				sets = append(sets, "ipdb"+fam[1])
 			}
+			// The port first: a set lookup counts on the IPDB set's elements,
+			// so other traffic must not reach it here.
 			for _, st := range sets {
-				fmt.Fprintf(&b, "\t\t%s saddr @%s tcp dport 80 redirect to :%d\n", fam[0], st, cp.HTTPPort)
-				fmt.Fprintf(&b, "\t\t%s saddr @%s tcp dport 443 redirect to :%d\n", fam[0], st, cp.HTTPSPort)
+				fmt.Fprintf(&b, "\t\ttcp dport 80 %s saddr @%s redirect to :%d\n", fam[0], st, cp.HTTPPort)
+				fmt.Fprintf(&b, "\t\ttcp dport 443 %s saddr @%s redirect to :%d\n", fam[0], st, cp.HTTPSPort)
 			}
 		}
 		b.WriteString("\t}\n")
@@ -212,6 +223,19 @@ func (r Ruleset) Render() string {
 	}
 	if cp := r.Captcha; cp != nil {
 		// Only connections the captcha chain redirected reach these ports from banned addresses.
+		// IPDB web visitors sent to the CAPTCHA are blocked from the site:
+		// count and sample their new connections like IPDB drops. Redirected
+		// and not temporarily banned means IPDB-listed; looking the address up
+		// in the IPDB set again would count its entries twice.
+		if cp.IPDB {
+			if cp.TempBan {
+				for _, fam := range [][2]string{{"ip", "4"}, {"ip6", "6"}} {
+					fmt.Fprintf(&b, "\t\tct state new ct status dnat tcp dport { %d, %d } %s saddr != @tempban%s counter jump captcha_ipdb comment \"xg-ipdb\"\n", cp.HTTPPort, cp.HTTPSPort, fam[0], fam[1])
+				}
+			} else {
+				fmt.Fprintf(&b, "\t\tct state new ct status dnat tcp dport { %d, %d } counter jump captcha_ipdb comment \"xg-ipdb\"\n", cp.HTTPPort, cp.HTTPSPort)
+			}
+		}
 		fmt.Fprintf(&b, "\t\tct status dnat tcp dport { %d, %d } accept\n", cp.HTTPPort, cp.HTTPSPort)
 	}
 	jump := func(match, chain, comment string) {

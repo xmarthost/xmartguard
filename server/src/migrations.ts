@@ -537,4 +537,18 @@ DELETE FROM ai_fp WHERE sha256 IN (SELECT sha256 FROM upd);
 ALTER TABLE servers ADD COLUMN ipdb_probe_cursor bigint NOT NULL DEFAULT 0;
 `,
   },
+  {
+    version: '018_ipdb_cleared',
+    sql: `
+-- Visitors behind an IPDB-listed address who solved the CAPTCHA: the
+-- address leaves the shared list until it is reported again (feeds: until
+-- 'until').
+CREATE TABLE ipdb_cleared (
+  ip          inet PRIMARY KEY,
+  server_id   uuid REFERENCES servers(id) ON DELETE SET NULL,
+  cleared_at  timestamptz NOT NULL DEFAULT now(),
+  until       timestamptz NOT NULL
+);
+`,
+  },
 ];

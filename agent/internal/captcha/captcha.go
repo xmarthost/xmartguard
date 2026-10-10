@@ -3,9 +3,11 @@
 // HTTPS traffic here; solving the challenge lifts the ban for that address
 // and allows it for a while.
 //
-// The built-in challenge needs no third party: a distorted PNG of digits
-// generated on the server. Cloudflare Turnstile or Google reCAPTCHA v2 can
-// be used instead when their keys are configured.
+// The built-in challenge needs no third party: an "I'm not a robot" box that
+// makes the browser do a small proof of work (SHA-256), with a distorted PNG
+// of digits for browsers without JavaScript ("image" shows only the digits).
+// Cloudflare Turnstile or Google reCAPTCHA v2 can be used instead when their
+// keys are configured.
 package captcha
 
 import (
@@ -343,6 +345,10 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 	case "turnstile", "recaptcha":
 		ok = s.verifyProvider(r.Context(), cfg, ip, r.PostForm)
 	default:
+		if cfg.Provider != "image" && r.PostForm.Get("pow") != "" {
+			ok = s.checkWork(ip, r.PostForm.Get("pow"), r.PostForm.Get("nonce"))
+			break
+		}
 		want, valid := s.open(ip, r.PostForm.Get("id"))
 		// Challenges expire after 5 minutes; the attempt limit bounds guessing.
 		ok = valid && want != "" && strings.TrimSpace(r.PostForm.Get("answer")) == want
@@ -375,7 +381,18 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 	// Close the redirected connection so the next request goes to the site.
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = doneTmpl.Execute(w, map[string]any{"Back": back, "Minutes": cfg.AllowMinutes})
+	_ = doneTmpl.Execute(w, map[string]any{"Back": back, "For": duration(cfg.AllowMinutes)})
+}
+
+// duration reads an allow time in minutes ("60 minutes", "24 hours").
+func duration(minutes int) string {
+	if minutes <= 0 {
+		minutes = 60
+	}
+	if minutes >= 120 && minutes%60 == 0 {
+		return strconv.Itoa(minutes/60) + " hours"
+	}
+	return strconv.Itoa(minutes) + " minutes"
 }
 
 // gatePassed sets the pass cookie and sends the visitor back to the login
@@ -438,10 +455,7 @@ func (s *Server) gatePage(w http.ResponseWriter, r *http.Request, ip, back, msg 
 		host = h
 	}
 	data := map[string]any{"IP": ip, "Msg": msg, "Back": safeBack(back), "Provider": cfg.Provider, "SiteKey": cfg.SiteKey, "Host": host, "Gate": true}
-	if cfg.Provider != "turnstile" && cfg.Provider != "recaptcha" {
-		id, _ := s.newChallenge(ip)
-		data["ID"] = id
-	}
+	s.challenge(data, cfg, ip)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = pageTmpl.Execute(w, data)
 }
@@ -477,6 +491,19 @@ func (s *Server) verifyProvider(ctx context.Context, cfg settings.Captcha, ip st
 	return json.NewDecoder(http.MaxBytesReader(nil, res.Body, 1<<16)).Decode(&out) == nil && out.Success
 }
 
+// challenge adds the built-in challenges to a page: the digits image, and
+// the proof of work behind the "I'm not a robot" box.
+func (s *Server) challenge(data map[string]any, cfg settings.Captcha, ip string) {
+	if cfg.Provider == "turnstile" || cfg.Provider == "recaptcha" {
+		return
+	}
+	id, _ := s.newChallenge(ip)
+	data["ID"] = id
+	if cfg.Provider != "image" {
+		data["Work"], data["Bits"] = s.newWork(ip), WorkBits
+	}
+}
+
 func (s *Server) page(w http.ResponseWriter, r *http.Request, ip, msg string) {
 	cfg := s.Settings.Get().Captcha
 	back := r.URL.RequestURI()
@@ -487,10 +514,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, ip, msg string) {
 		back = "/"
 	}
 	data := map[string]any{"IP": ip, "Msg": msg, "Back": back, "Provider": cfg.Provider, "SiteKey": cfg.SiteKey, "Host": r.Host}
-	if cfg.Provider != "turnstile" && cfg.Provider != "recaptcha" {
-		id, _ := s.newChallenge(ip)
-		data["ID"] = id
-	}
+	s.challenge(data, cfg, ip)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	_ = pageTmpl.Execute(w, data)
@@ -509,6 +533,10 @@ p b{overflow-wrap:anywhere}
 img{display:block;width:100%;max-width:260px;height:auto;border-radius:8px;border:1px solid #e2e8f0;margin:12px 0}
 input[type=text]{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:18px;letter-spacing:4px}
 button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:8px;background:#1e2a5a;color:#fff;font-size:15px;cursor:pointer}
+.box{display:flex;align-items:center;gap:12px;margin:14px 0 4px;padding:16px;border:1px solid #cbd5e1;border-radius:10px;background:#f8fafc;cursor:pointer;font-size:16px;user-select:none}
+.box input{width:22px;height:22px;margin:0;cursor:pointer}.box span{flex:1}
+.spin{width:18px;height:18px;border:3px solid #cbd5e1;border-top-color:#1e2a5a;border-radius:50%;display:none;animation:r .8s linear infinite}@keyframes r{to{transform:rotate(360deg)}}
+.box.busy .spin{display:block}.box.done{border-color:#16a34a;background:#f0fdf4}
 .e{background:#fef2f2;color:#991b1b;padding:8px 10px;border-radius:8px;font-size:13px}.f{margin-top:18px;font-size:12px;color:#94a3b8}
 </style></head><body><div class="c">
 <h1>Security check</h1>
@@ -519,10 +547,17 @@ button{margin-top:12px;width:100%;padding:11px;border:0;border-radius:8px;backgr
 <input type="hidden" name="back" value="{{.Back}}">{{if .Gate}}<input type="hidden" name="gate" value="1">{{end}}
 {{if eq .Provider "turnstile"}}<div class="cf-turnstile" data-sitekey="{{.SiteKey}}"></div>
 {{else if eq .Provider "recaptcha"}}<div class="g-recaptcha" data-sitekey="{{.SiteKey}}"></div>
+{{else if .Work}}<input type="hidden" name="pow" value="{{.Work}}"><input type="hidden" name="nonce" value="">
+<label class="box" id="xgbox"><input type="checkbox" id="xgcheck"><span id="xgtext">I'm not a robot</span><i class="spin" id="xgspin"></i></label>
+<noscript><style>.box{display:none}</style><input type="hidden" name="id" value="{{.ID}}">
+<img src="/.xpguard/captcha.png?id={{.ID}}" alt="Type the digits shown" width="260" height="90">
+<input type="text" name="answer" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="Digits in the image">
+<button type="submit">Continue</button></noscript>
+<script>` + workJS + `</script>
 {{else}}<input type="hidden" name="id" value="{{.ID}}">
 <img src="/.xpguard/captcha.png?id={{.ID}}" alt="Type the digits shown" width="260" height="90">
 <input type="text" name="answer" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="Digits in the image" required autofocus>{{end}}
-<button type="submit">Continue</button>
+{{if not .Work}}<button type="submit">Continue</button>{{end}}
 </form>
 <p class="f">Protected by xPGuard</p>
 </div></body></html>`))
@@ -532,5 +567,5 @@ var doneTmpl = template.Must(template.New("d").Parse(`<!doctype html>
 <meta http-equiv="refresh" content="3;url={{.Back}}"><title>Thank you</title>
 <style>body{font-family:system-ui,sans-serif;background:#f1f5f9;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
 .c{background:#fff;border-radius:14px;padding:28px;max-width:420px;box-shadow:0 10px 30px #0f172a1a}</style></head>
-<body><div class="c"><h2>Thank you</h2><p>Your address is allowed for the next {{.Minutes}} minutes. Taking you back…</p>
+<body><div class="c"><h2>Thank you</h2><p>Your address is allowed for the next {{.For}}. Taking you back…</p>
 <p><a href="{{.Back}}">Continue</a></p></div></body></html>`))

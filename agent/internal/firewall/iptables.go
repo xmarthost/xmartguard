@@ -232,12 +232,13 @@ const (
 	ChainDeny    = "XPGUARD_DENY"
 	ChainTempBan = "XPGUARD_TBAN"
 	ChainCountry = "XPGUARD_CTRY"
+	ChainIPDBCap = "XPGUARD_ICAP" // IPDB web visitors sent to the CAPTCHA: sample and accept
 	ChainOut     = "XPGUARD_OUT"
 	ChainCaptcha = "XPGUARD_CAPTCHA" // nat table
 )
 
 func allChains() []string {
-	return []string{ChainMain, ChainDoS, ChainIPDB, ChainDeny, ChainTempBan, ChainCountry, ChainOut}
+	return []string{ChainMain, ChainDoS, ChainIPDB, ChainIPDBCap, ChainDeny, ChainTempBan, ChainCountry, ChainOut}
 }
 
 // Chains of versions before the xPGuard name (XMARTGUARD*): removed once
@@ -327,7 +328,22 @@ func renderRules(r Ruleset, v6 bool) string {
 			}
 		}
 	}
+	if r.LogIPDB {
+		fmt.Fprintf(&b, "-A %s -m limit --limit %d/sec --limit-burst %d -j LOG --log-prefix \"%s\" --log-level 7\n", ChainIPDBCap, LogRate, LogRate*2, LogPrefixIPDBCaptcha)
+	}
+	fmt.Fprintf(&b, "-A %s -j ACCEPT\n", ChainIPDBCap)
 	if cp := r.Captcha; cp != nil {
+		// IPDB web visitors sent to the CAPTCHA are blocked from the site:
+		// count and sample their new connections like IPDB drops. Redirected
+		// and not temporarily banned means IPDB-listed; matching the IPDB set
+		// again would count its entries twice.
+		if cp.IPDB && len(r.IPDB) > 0 {
+			notBanned := ""
+			if cp.TempBan {
+				notBanned = " -m set ! --match-set xg_tban" + sfx + " src"
+			}
+			jump(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -m conntrack --ctstate NEW -m conntrack --ctstate DNAT%s", cp.HTTPPort, cp.HTTPSPort, notBanned), "xg-ipdb", ChainIPDBCap)
+		}
 		// Only redirected connections from banned addresses reach these ports.
 		add(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -m conntrack --ctstate DNAT -j ACCEPT", cp.HTTPPort, cp.HTTPSPort))
 	}

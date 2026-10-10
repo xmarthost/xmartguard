@@ -20,6 +20,7 @@ interface ConnEvent {
   proto: string;
   country: string;
   entry: string;
+  action?: string; // 'captcha': web traffic sent to the CAPTCHA page instead of the site
 }
 
 interface Live {
@@ -265,7 +266,13 @@ export default function ServerIPDB() {
                       {e.dst_port ? ` : ${e.dst_port}` : ''}
                     </span>
                     <span className="text-xs text-slate-500 tabular-nums">{fmtClock(e.at)}</span>
-                    <span className="text-xs font-semibold text-green-600">● BLOCKED</span>
+                    {e.action === 'captcha' ? (
+                      <span className="text-xs font-semibold text-amber-600" title="Web traffic sent to the CAPTCHA page instead of the website">
+                        ● CAPTCHA
+                      </span>
+                    ) : (
+                      <span className="text-xs font-semibold text-green-600">● BLOCKED</span>
+                    )}
                   </div>
                 ))}
               </div>

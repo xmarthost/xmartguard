@@ -277,6 +277,25 @@ describe('agent end-to-end', () => {
     expect(h.ipdb.entries).toContain('203.0.113.50');
     expect(h.ipdb.entries).toContain('203.0.113.61');
 
+    // A person behind 203.0.113.61 solved the CAPTCHA: off the shared list,
+    // until a server reports the address again.
+    const db2 = new DatabaseSync(path.join(stateDir, 'agent.db'));
+    db2.exec('PRAGMA busy_timeout = 5000');
+    db2.prepare('INSERT INTO ipdb_solved (ip, at) VALUES (?, ?)').run('203.0.113.61', now + 1);
+    db2.close();
+    await h.ipdb.syncServer(serverId);
+    await h.ipdb.rebuild();
+    expect(h.ipdb.entries).not.toContain('203.0.113.61');
+    expect(h.ipdb.entries).toContain('203.0.113.50');
+    expect((await h.pool.query("SELECT count(*)::int AS n FROM ipdb_cleared WHERE ip = '203.0.113.61'")).rows[0].n).toBe(1);
+    const db3 = new DatabaseSync(path.join(stateDir, 'agent.db'));
+    db3.exec('PRAGMA busy_timeout = 5000');
+    for (let i = 0; i < 3; i++) db3.prepare('INSERT INTO fw_events (ip, reason, source, created_at, expires_at, status) VALUES (?,?,?,?,?,?)').run('203.0.113.61', 'brute force again', 'bruteforce', now + 10, now + 3600, 'blocked');
+    db3.close();
+    await h.ipdb.syncServer(serverId);
+    await h.ipdb.rebuild();
+    expect(h.ipdb.entries).toContain('203.0.113.61');
+
     // Second round: the agent's list is stale, so the portal pushes it.
     await h.ipdb.syncServer(serverId);
     expect(fs.readFileSync(path.join(stateDir, 'ipdb.txt'), 'utf8')).toContain('203.0.113.50');

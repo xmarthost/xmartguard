@@ -273,6 +273,35 @@ func (m *Manager) TakePendingHits(limit int) ([]IPDBHit, error) {
 	return out, nil
 }
 
+// IPDBSolved is an IPDB-listed address whose visitor solved the CAPTCHA.
+type IPDBSolved struct {
+	IP string `json:"ip"`
+	At int64  `json:"at"`
+}
+
+// TakeSolved returns the addresses that solved the CAPTCHA since the last
+// sync and forgets them.
+func (m *Manager) TakeSolved(limit int) ([]IPDBSolved, error) {
+	rows, err := m.DB.Query(`SELECT ip, at FROM ipdb_solved ORDER BY at LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := []IPDBSolved{}
+	for rows.Next() {
+		var s IPDBSolved
+		if err := rows.Scan(&s.IP, &s.At); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	rows.Close()
+	for _, s := range out {
+		_, _ = m.DB.Exec(`DELETE FROM ipdb_solved WHERE ip = ? AND at = ?`, s.IP, s.At)
+	}
+	return out, nil
+}
+
 // IPDBStatus summarises the IPDB for dashboards and the panel plugins.
 type IPDBStatus struct {
 	Enabled   bool             `json:"enabled"`

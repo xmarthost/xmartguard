@@ -518,7 +518,7 @@ func Defaults() Settings {
 			Captcha: false, TrustedServices: true, TrustedDisabled: []string{}, TCPIn: DefaultTCPIn, UDPIn: DefaultUDPIn, TCPOut: DefaultTCPOut, UDPOut: DefaultUDPOut,
 		},
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12, EximRBLs: true, PhishingFilter: true},
-		IPDB:       IPDB{Enabled: true, Report: true, Log: true},
+		IPDB:       IPDB{Enabled: true, Report: true, Log: true, Captcha: true},
 		CMS: CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 72, ScheduleVersion: cmsScheduleVersion, Vulns: true,
 			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 1},
 		OSM: OSM{Enabled: true, PerMinute: 50, PerHour: 300, Action: "notify", CheckSubjects: true,
@@ -533,7 +533,7 @@ func Defaults() Settings {
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
 			UserOutdated: "never", ExcludeUsers: []string{},
 		},
-		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 60, HTTPPort: 7780, HTTPSPort: 7743, CentralMinutes: 720},
+		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 1440, HTTPPort: 7780, HTTPSPort: 7743, CentralMinutes: 720},
 		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true, RestoreClean: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
 		Cron:      CronMonitor{Enabled: true, Disable: true, WhitelistUsers: []string{}},
@@ -918,7 +918,7 @@ func validate(s Settings) error {
 		}
 	}
 	switch s.Captcha.Provider {
-	case "builtin":
+	case "builtin", "image":
 	case "turnstile", "recaptcha":
 		if s.Captcha.SiteKey == "" || s.Captcha.SecretKey == "" {
 			return fmt.Errorf("the %s CAPTCHA needs a site key and a secret key", s.Captcha.Provider)

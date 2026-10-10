@@ -132,6 +132,10 @@ CREATE TABLE IF NOT EXISTS ipdb_hits (
   last_seen   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ipdb_hits_last ON ipdb_hits(last_seen);
+CREATE TABLE IF NOT EXISTS ipdb_solved (   -- IPDB-listed visitors who solved the CAPTCHA, not yet sent to the portal
+  ip  TEXT PRIMARY KEY,
+  at  INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ipdb_country (
   day      TEXT NOT NULL,
   country  TEXT NOT NULL,
@@ -341,6 +345,8 @@ var columnMigrations = []string{
 	`ALTER TABLE fw_rules ADD COLUMN proto TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE fw_rules ADD COLUMN ports TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE fw_rules ADD COLUMN dir TEXT NOT NULL DEFAULT ''`,
+	// Live monitor: IPDB web visitors sent to the CAPTCHA instead of dropped.
+	`ALTER TABLE conn_log ADD COLUMN action TEXT NOT NULL DEFAULT ''`,
 }
 
 // addColumn runs one ALTER TABLE ... ADD COLUMN. "duplicate column" means

@@ -50,6 +50,9 @@ export function entryText(cidr: string): string {
   return cidr.replace(/\/(32|128)$/, '');
 }
 
+/** Days a CAPTCHA-solved address stays off the list while public feeds still name it. */
+export const CLEARED_DAYS = 30;
+
 interface SyncResult {
   enabled?: boolean;
   version?: string;
@@ -58,6 +61,8 @@ interface SyncResult {
   probes?: { id: number; ip: string; source: string; reason: string; at: number }[];
   probe_cursor?: number;
   hits?: { entry: string; country: string; hits: number; last_seen: number }[];
+  /** IPDB-listed addresses whose visitor solved the CAPTCHA (0.21.17 agents). */
+  solved?: { ip: string; at: number }[];
 }
 
 /**
@@ -187,6 +192,7 @@ export class IPDBService {
       );
     }
     await this.pool.query('DELETE FROM ipdb_entries WHERE expires_at IS NOT NULL AND expires_at < now()');
+    await this.pool.query('DELETE FROM ipdb_cleared WHERE until < now()');
     await this.pool.query("DELETE FROM ipdb_reports WHERE created_at < now() - interval '90 days'");
     await this.pool.query("DELETE FROM ipdb_hits WHERE day < current_date - 90");
 
@@ -206,6 +212,10 @@ export class IPDBService {
       `SELECT e.cidr::text AS cidr, e.country FROM ipdb_entries e
         WHERE NOT EXISTS (SELECT 1 FROM ipdb_whitelist w WHERE w.cidr >>= e.cidr OR e.cidr >>= w.cidr)
           AND NOT (e.cidr >>= ANY($1::inet[]))
+          -- Solved the CAPTCHA (single addresses; manual entries stay): off
+          -- the list until reported again, feeds until the clearing ends.
+          AND NOT EXISTS (SELECT 1 FROM ipdb_cleared k WHERE k.ip::cidr = e.cidr AND e.source <> 'manual'
+                            AND (e.source = 'feed' OR NOT EXISTS (SELECT 1 FROM ipdb_reports r WHERE r.ip = k.ip AND r.reported_at > k.cleared_at)))
         ORDER BY (e.source = 'manual') DESC, e.last_seen DESC
         LIMIT $2`,
       [await this.protectedIPs(), c.ipdbMaxEntries],
@@ -321,6 +331,19 @@ export class IPDBService {
             hits.map((h) => (Number.isFinite(h.last_seen) ? h.last_seen : Date.now() / 1000)),
           ],
         );
+      }
+      // A person proved they are behind the address: it leaves the list
+      // until a server reports it again (public feeds: for CLEARED_DAYS).
+      const solved = (data.solved ?? []).filter((s) => s && reportable(String(s.ip)));
+      if (solved.length) {
+        await this.pool.query(
+          `INSERT INTO ipdb_cleared (ip, server_id, cleared_at, until)
+           SELECT x.ip, $1, to_timestamp(x.at), to_timestamp(x.at) + make_interval(days => $4)
+             FROM unnest($2::inet[], $3::float8[]) AS x(ip, at)
+           ON CONFLICT (ip) DO UPDATE SET server_id = excluded.server_id, cleared_at = excluded.cleared_at, until = excluded.until`,
+          [serverId, solved.map((s) => String(s.ip)), solved.map((s) => (Number.isFinite(s.at) ? Math.min(s.at, Date.now() / 1000) : Date.now() / 1000)), CLEARED_DAYS],
+        );
+        this.dirty = true;
       }
       await this.pool.query('UPDATE servers SET ipdb_cursor = $2, ipdb_probe_cursor = $3, ipdb_synced_at = now() WHERE id = $1', [serverId, cursor, probeCursor]);
       if (data.enabled && this.version && data.version !== this.version) {

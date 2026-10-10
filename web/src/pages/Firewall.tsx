@@ -72,7 +72,7 @@ interface FwSettings {
 }
 
 interface CaptchaSettings {
-  provider: 'builtin' | 'turnstile' | 'recaptcha';
+  provider: 'builtin' | 'image' | 'turnstile' | 'recaptcha';
   site_key: string;
   secret_key: string;
   allow_minutes: number;
@@ -1018,13 +1018,14 @@ export function FirewallPage() {
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 The portal's CAPTCHA page (Overview » CAPTCHA Page) is off, so this server shows its own page, set up below.
               </p>
-              <Row title="Check" desc="Built-in image challenge, Cloudflare Turnstile or Google reCAPTCHA v2">
+              <Row title="Check" desc="Built-in one-click box (the browser proves it in a second or two), the built-in image of digits, Cloudflare Turnstile or Google reCAPTCHA v2">
                 <select className="input" value={cap.provider} disabled={!isAdmin} onChange={(e) => setCap({ ...cap, provider: e.target.value as CaptchaSettings['provider'] })}>
-                  <option value="builtin">Built-in (no third party)</option>
+                  <option value="builtin">Built-in: one click "I'm not a robot" (no third party)</option>
+                  <option value="image">Built-in: type the digits of an image</option>
                   <option value="turnstile">Cloudflare Turnstile</option>
                   <option value="recaptcha">Google reCAPTCHA v2</option>
                 </select>
-                {cap.provider !== 'builtin' && (
+                {(cap.provider === 'turnstile' || cap.provider === 'recaptcha') && (
                   <>
                     <input className="input" placeholder="Site key" value={cap.site_key} onChange={(e) => setCap({ ...cap, site_key: e.target.value })} />
                     <input className="input" placeholder="Secret key" value={cap.secret_key} onChange={(e) => setCap({ ...cap, secret_key: e.target.value })} />

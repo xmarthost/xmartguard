@@ -702,6 +702,13 @@ func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 		}
 	}
 	m.lift(c)
+	// A person behind an IPDB-listed address: the portal takes it off the
+	// shared list on its next sync (a new attack report lists it again).
+	if m.IPDB != nil {
+		if entry, _ := m.IPDB.Lookup(c); entry != "" {
+			_, _ = m.DB.Exec(`INSERT INTO ipdb_solved (ip, at) VALUES (?, ?) ON CONFLICT(ip) DO UPDATE SET at = excluded.at`, c, store.Now())
+		}
+	}
 	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempban' AND cidr = ?`, c)
 	_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'captcha' WHERE ip = ? AND status = 'blocked'`, c)
 	if whitelisted {

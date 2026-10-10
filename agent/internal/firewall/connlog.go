@@ -22,6 +22,8 @@ var logKinds = map[string]string{
 	LogPrefixDeny:    "deny",
 	LogPrefixTempBan: "tempban",
 	LogPrefixCountry: "country",
+	// Listed in the IPDB, web traffic sent to the CAPTCHA (action "captcha").
+	LogPrefixIPDBCaptcha: "ipdb",
 }
 
 // ConnEvent is one sampled dropped connection.
@@ -36,6 +38,7 @@ type ConnEvent struct {
 	Proto   string `json:"proto"`
 	Country string `json:"country"`
 	Entry   string `json:"entry"`
+	Action  string `json:"action,omitempty"` // "captcha": sent to the CAPTCHA page, not dropped
 }
 
 // ParseKernelLog extracts a dropped connection from a kernel log message
@@ -50,6 +53,9 @@ func ParseKernelLog(msg string) (ConnEvent, bool) {
 	for prefix, kind := range logKinds {
 		if strings.HasPrefix(msg, prefix) {
 			ev.Kind = kind
+			if prefix == LogPrefixIPDBCaptcha {
+				ev.Action = "captcha"
+			}
 			break
 		}
 	}
@@ -145,12 +151,26 @@ func (m *Manager) storeConnEvents(ctx context.Context, events <-chan ConnEvent) 
 			batch = batch[:0]
 			return
 		}
+		var httpPort, httpsPort int
+		if m.Settings != nil {
+			c := m.Settings.Get().Captcha
+			httpPort, httpsPort = c.HTTPPort, c.HTTPSPort
+		}
 		for _, ev := range batch {
 			if m.IPDB != nil && ev.Kind == "ipdb" {
 				ev.Entry, ev.Country = m.IPDB.Lookup(ev.Src)
 			}
-			_, _ = tx.Exec(`INSERT INTO conn_log (at, kind, src, src_port, dst, dst_port, proto, country, entry) VALUES (?,?,?,?,?,?,?,?,?)`,
-				ev.At, ev.Kind, ev.Src, ev.SrcPort, ev.Dst, ev.DstPort, ev.Proto, ev.Country, ev.Entry)
+			// The kernel logs the redirected port: show the one the visitor asked for.
+			if ev.Action == "captcha" {
+				switch ev.DstPort {
+				case httpPort:
+					ev.DstPort = 80
+				case httpsPort:
+					ev.DstPort = 443
+				}
+			}
+			_, _ = tx.Exec(`INSERT INTO conn_log (at, kind, src, src_port, dst, dst_port, proto, country, entry, action) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+				ev.At, ev.Kind, ev.Src, ev.SrcPort, ev.Dst, ev.DstPort, ev.Proto, ev.Country, ev.Entry, ev.Action)
 		}
 		_ = tx.Commit()
 		batch = batch[:0]
@@ -204,7 +224,7 @@ func (m *Manager) ConnEvents(f ConnFilter) ([]ConnEvent, int, error) {
 	if err := m.DB.QueryRow(`SELECT count(*) FROM conn_log WHERE `+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := m.DB.Query(`SELECT id, at, kind, src, src_port, dst, dst_port, proto, country, entry FROM conn_log WHERE `+cond+
+	rows, err := m.DB.Query(`SELECT id, at, kind, src, src_port, dst, dst_port, proto, country, entry, action FROM conn_log WHERE `+cond+
 		` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -213,7 +233,7 @@ func (m *Manager) ConnEvents(f ConnFilter) ([]ConnEvent, int, error) {
 	out := []ConnEvent{}
 	for rows.Next() {
 		var e ConnEvent
-		if err := rows.Scan(&e.ID, &e.At, &e.Kind, &e.Src, &e.SrcPort, &e.Dst, &e.DstPort, &e.Proto, &e.Country, &e.Entry); err != nil {
+		if err := rows.Scan(&e.ID, &e.At, &e.Kind, &e.Src, &e.SrcPort, &e.Dst, &e.DstPort, &e.Proto, &e.Country, &e.Entry, &e.Action); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, e)

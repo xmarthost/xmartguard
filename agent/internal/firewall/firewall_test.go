@@ -101,7 +101,8 @@ func TestRenderIsValidNFT(t *testing.T) {
 	}
 	script := rs.Render()
 	for _, want := range []string{"delete table inet xpguard", "@deny4 counter jump drop_deny", "update @dos4", "198.51.100.9 timeout 3600s",
-		"tcp dport { 22, 80, 8000-8100 } accept", "chain output", "redirect to :7780", "ct status dnat tcp dport { 7780, 7743 } accept"} {
+		"tcp dport { 22, 80, 8000-8100 } accept", "chain output", "redirect to :7780", "ct status dnat tcp dport { 7780, 7743 } accept",
+		"ip saddr != @tempban4 counter jump captcha_ipdb comment \"xg-ipdb\"", "log prefix \"XG-ICAP \""} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script missing %q", want)
 		}
@@ -356,6 +357,22 @@ func TestRenderIPTables(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
 	}
+	// IPDB web visitors sent to the CAPTCHA are counted as IPDB blocks and sampled.
+	rs.Captcha.IPDB = true
+	cap4 := renderRules(rs, false)
+	for _, want := range []string{
+		`-A XPGUARD -p tcp -m multiport --dports 7780,7743 -m conntrack --ctstate NEW -m conntrack --ctstate DNAT -m set ! --match-set xg_tban4 src -m comment --comment "xg-ipdb" -j XPGUARD_ICAP`,
+		`-A XPGUARD_ICAP -m limit --limit 10/sec --limit-burst 20 -j LOG --log-prefix "XG-ICAP " --log-level 7`,
+		`-A XPGUARD_ICAP -j ACCEPT`,
+	} {
+		if !strings.Contains(cap4, want) {
+			t.Errorf("missing %q in\n%s", want, cap4)
+		}
+	}
+	if strings.Index(cap4, "-j XPGUARD_ICAP") > strings.Index(cap4, "--ctstate DNAT -j ACCEPT") {
+		t.Error("CAPTCHA connections accepted before they are counted")
+	}
+	rs.Captcha.IPDB = false
 	// 14 items with 5 ranges = 19 multiport slots: split into two rules.
 	if n := strings.Count(out, "-A XPGUARD -p tcp -m multiport --dports"); n != 3 { // 2 + captcha rule
 		t.Errorf("multiport chunks: %d\n%s", n, out)
@@ -500,6 +517,9 @@ func TestParseKernelLog(t *testing.T) {
 	if !ok || ev.Kind != "ipdb" || ev.Src != "217.138.222.66" || ev.Dst != "74.50.90.186" || ev.SrcPort != 33050 || ev.DstPort != 8443 || ev.Proto != "TCP" {
 		t.Fatalf("%+v %v", ev, ok)
 	}
+	if ev, ok := ParseKernelLog("XG-ICAP IN=eth0 SRC=217.138.222.66 DST=74.50.90.186 PROTO=TCP SPT=33050 DPT=7743"); !ok || ev.Kind != "ipdb" || ev.Action != "captcha" {
+		t.Fatalf("captcha sample %+v", ev)
+	}
 	if _, ok := ParseKernelLog("[UFW BLOCK] IN=eth0 SRC=1.2.3.4"); ok {
 		t.Fatal("foreign log line parsed")
 	}
@@ -531,14 +551,21 @@ func TestConnLogFromKernel(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	f, _ := os.OpenFile(kmsg, os.O_APPEND|os.O_WRONLY, 0)
 	f.WriteString("4,2,2,-;XG-IPDB IN=eth0 OUT= SRC=217.138.222.66 DST=192.0.2.1 PROTO=TCP SPT=40000 DPT=22\n")
+	// A web visitor sent to the CAPTCHA: shown on the port it asked for.
+	// (/dev/kmsg returns one record per read; a plain file does not.)
+	time.Sleep(1500 * time.Millisecond)
+	f.WriteString("4,3,3,-;XG-ICAP IN=eth0 OUT= SRC=217.138.222.67 DST=192.0.2.1 PROTO=TCP SPT=40001 DPT=7743\n")
 	f.Close()
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		live := m.IPDBLive(0)
-		if len(live.Events) == 1 {
-			e := live.Events[0]
-			if e.Src != "217.138.222.66" || e.Country != "GB" || e.Entry != "217.138.222.0/24" || e.DstPort != 22 {
+		if len(live.Events) == 2 {
+			e, c := live.Events[1], live.Events[0]
+			if e.Src != "217.138.222.66" || e.Country != "GB" || e.Entry != "217.138.222.0/24" || e.DstPort != 22 || e.Action != "" {
 				t.Fatalf("event %+v", e)
+			}
+			if c.Src != "217.138.222.67" || c.DstPort != 443 || c.Action != "captcha" || c.Country != "GB" {
+				t.Fatalf("captcha event %+v", c)
 			}
 			if len(live.Minutes) < 10 || len(live.Hourly) < 24 {
 				t.Fatalf("timelines %d %d", len(live.Minutes), len(live.Hourly))
@@ -646,6 +673,26 @@ func TestCaptchaAndPortFilterOnKernel(t *testing.T) {
 		}
 		if out, err := in("curl", "-s", "-m", "3", "http://10.99.0.1:8081/"); err != nil || string(out) != "site" {
 			t.Fatalf("listed port blocked: %v %q", err, out)
+		}
+		// IPDB-listed with the IPDB CAPTCHA: web traffic reaches the CAPTCHA
+		// and counts as IPDB blocks (the hourly chart), not as nothing.
+		m.IPDB = &IPDB{}
+		m.IPDB.Replace("v1", []string{"10.99.0.2"})
+		if _, err := m.Settings.Patch([]byte(`{"ipdb":{"enabled":true,"captcha":true}}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Apply(); err != nil {
+			t.Fatal(err)
+		}
+		before := m.Backend().Counters()["xg-ipdb"]
+		if out, err := in("curl", "-s", "-m", "3", "http://10.99.0.1/"); err != nil || string(out) != "captcha-page" {
+			t.Fatalf("IPDB captcha redirect: %v %q\n%s", err, out, kernelDump(m))
+		}
+		if after := m.Backend().Counters()["xg-ipdb"]; after != before+1 {
+			t.Fatalf("IPDB CAPTCHA connection counted %d times, want 1\n%s", after-before, kernelDump(m))
+		}
+		if hits := m.Backend().IPDBCounters()["10.99.0.2"]; hits == 0 || hits > 2 {
+			t.Fatalf("entry counter %d\n%s", hits, kernelDump(m))
 		}
 	})
 }
