@@ -54,6 +54,9 @@ interface SyncResult {
   enabled?: boolean;
   version?: string;
   reports?: { id: number; ip: string; source: string; reason: string; at: number }[];
+  /** Scanners the agent's WAF refused (0.21.17 agents), with their own cursor. */
+  probes?: { id: number; ip: string; source: string; reason: string; at: number }[];
+  probe_cursor?: number;
   hits?: { entry: string; country: string; hits: number; last_seen: number }[];
 }
 
@@ -100,7 +103,8 @@ export class IPDBService {
     this.timers.push(setTimeout(tick, 5_000));
     const feeds = () => this.refreshFeeds().catch((err) => this.log.error({ err }, 'ipdb feeds failed'));
     this.timers.push(setTimeout(feeds, 30_000));
-    this.timers.push(setInterval(feeds, 12 * 3600_000));
+    // Attacker feeds change by the hour (blocklist.de keeps 48 hours).
+    this.timers.push(setInterval(feeds, 2 * 3600_000));
   }
 
   stop(): void {
@@ -268,15 +272,22 @@ export class IPDBService {
     this.syncing.add(serverId);
     try {
       const { rows } = await this.pool.query(
-        "SELECT account_id, ipdb_cursor, ipdb_version FROM servers WHERE id = $1 AND status = 'active'",
+        "SELECT account_id, ipdb_cursor, ipdb_probe_cursor, ipdb_version FROM servers WHERE id = $1 AND status = 'active'",
         [serverId],
       );
       const srv = rows[0];
       if (!srv) return;
-      const data = (await this.hub.command(serverId, 'ipdb.sync', { since: Number(srv.ipdb_cursor) }, 60_000)) as SyncResult;
-      const reports = (data.reports ?? []).filter((r) => typeof r?.id === 'number' && reportable(String(r.ip)));
+      const data = (await this.hub.command(
+        serverId,
+        'ipdb.sync',
+        { since: Number(srv.ipdb_cursor), since_probe: Number(srv.ipdb_probe_cursor) },
+        60_000,
+      )) as SyncResult;
+      const valid = (r: { id?: unknown; ip?: unknown }) => typeof r?.id === 'number' && reportable(String(r.ip));
+      const reports = [...(data.reports ?? []).filter(valid), ...(data.probes ?? []).filter(valid)];
       let cursor = Number(srv.ipdb_cursor);
       for (const r of data.reports ?? []) if (typeof r?.id === 'number' && r.id > cursor) cursor = r.id;
+      const probeCursor = Number.isFinite(data.probe_cursor) ? Math.max(Number(data.probe_cursor), Number(srv.ipdb_probe_cursor)) : Number(srv.ipdb_probe_cursor);
       if (reports.length) {
         await this.pool.query(
           `INSERT INTO ipdb_reports (ip, server_id, account_id, source, reason, reported_at)
@@ -311,7 +322,7 @@ export class IPDBService {
           ],
         );
       }
-      await this.pool.query('UPDATE servers SET ipdb_cursor = $2, ipdb_synced_at = now() WHERE id = $1', [serverId, cursor]);
+      await this.pool.query('UPDATE servers SET ipdb_cursor = $2, ipdb_probe_cursor = $3, ipdb_synced_at = now() WHERE id = $1', [serverId, cursor, probeCursor]);
       if (data.enabled && this.version && data.version !== this.version) {
         await this.hub.command(serverId, 'ipdb.apply', { version: this.version, entries: this.entries }, 180_000);
         await this.pool.query('UPDATE servers SET ipdb_version = $2 WHERE id = $1', [serverId, this.version]);

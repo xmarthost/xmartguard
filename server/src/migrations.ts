@@ -529,4 +529,12 @@ WITH fam AS (
 DELETE FROM ai_fp WHERE sha256 IN (SELECT sha256 FROM upd);
 `,
   },
+  {
+    version: '017_ipdb_probes',
+    sql: `
+-- Scanners the agents' WAF refused are reported to the IPDB too, with
+-- their own cursor (waf_events ids on the agent).
+ALTER TABLE servers ADD COLUMN ipdb_probe_cursor bigint NOT NULL DEFAULT 0;
+`,
+  },
 ];

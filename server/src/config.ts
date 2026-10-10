@@ -143,7 +143,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ipdbWindowDays: int(env.IPDB_WINDOW_DAYS, 7),
     ipdbTtlDays: int(env.IPDB_TTL_DAYS, 30),
     ipdbMaxEntries: int(env.IPDB_MAX_ENTRIES, 200_000),
-    ipdbFeeds: (env.IPDB_FEEDS ?? 'https://www.spamhaus.org/drop/drop_v4.json,https://www.spamhaus.org/drop/drop_v6.json')
+    // Spamhaus DROP (hijacked networks), blocklist.de (addresses that
+    // attacked its members' servers in the last 48 hours: SSH, mail, FTP,
+    // web logins, Apache), CINS Army (bad actors seen by its sensors) and
+    // Emerging Threats' compromised hosts. All free to use.
+    ipdbFeeds: (
+      env.IPDB_FEEDS ??
+      'https://www.spamhaus.org/drop/drop_v4.json,https://www.spamhaus.org/drop/drop_v6.json,https://lists.blocklist.de/lists/all.txt,https://cinsscore.com/list/ci-badguys.txt,https://rules.emergingthreats.net/blockrules/compromised-ips.txt'
+    )
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean),

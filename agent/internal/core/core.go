@@ -1106,16 +1106,25 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	// ---- IPDB (called by the portal's sync loop, not by users)
 	h["ipdb.sync"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
-			Since int64 `json:"since"`
+			Since      int64  `json:"since"`
+			SinceProbe *int64 `json:"since_probe"`
 		}](p)
 		if err != nil {
 			return nil, err
 		}
 		cfg := a.Settings.Get().IPDB
 		reports := []firewall.IPDBReport{}
+		probes := []firewall.IPDBReport{}
+		var probeCursor int64
 		if cfg.Report {
 			if reports, err = a.Firewall.IPDBReports(in.Since, 1000); err != nil {
 				return nil, err
+			}
+			// Scanners the WAF refused (portals that send since_probe).
+			if in.SinceProbe != nil {
+				if probes, probeCursor, err = a.Firewall.IPDBProbeReports(*in.SinceProbe, 2000); err != nil {
+					return nil, err
+				}
 			}
 		}
 		hits, err := a.Firewall.TakePendingHits(2000)
@@ -1123,7 +1132,11 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			return nil, err
 		}
 		v, _ := a.Firewall.IPDB.Snapshot()
-		return map[string]any{"enabled": cfg.Enabled, "report": cfg.Report, "version": v, "reports": reports, "hits": hits}, nil
+		res := map[string]any{"enabled": cfg.Enabled, "report": cfg.Report, "version": v, "reports": reports, "hits": hits}
+		if in.SinceProbe != nil {
+			res["probes"], res["probe_cursor"] = probes, max(probeCursor, *in.SinceProbe)
+		}
+		return res, nil
 	}
 	h["ipdb.apply"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {

@@ -497,3 +497,90 @@ func (m *Manager) IPDBLive(sinceID int64) IPDBLive {
 	}
 	return out
 }
+
+// probeRules are the WAF rules only scanners and exploit tools trip (not a
+// visitor's mistake): sensitive files, PHP in uploads and static folders,
+// WordPress user enumeration and core-file probes, scanner tools, requests
+// without a User-Agent, fake browsers, web shells, exploit probes and the
+// virtual patches. Their addresses are shared with the IPDB, like the
+// automatic bans: other servers drop them before they scan there.
+const probeRules = `rule_id IN (7700201, 7700303, 7700304, 7700307, 7700308, 7700505, 7700501, 7700506)
+	OR rule_id BETWEEN 7700301 AND 7700302 OR rule_id BETWEEN 7700305 AND 7700312 OR rule_id BETWEEN 7700321 AND 7700329
+	OR rule_id BETWEEN 7700601 AND 7700609 OR rule_id BETWEEN 7701001 AND 7701099`
+
+// cdnRanges: Cloudflare's published networks. Behind a CDN the web server
+// may log the CDN's address instead of the visitor's: never reported.
+var cdnRanges = []string{"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+	"190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32"}
+
+// maxProbesPerIP caps how often one address is reported per sync: three
+// reports list it on the portal; more add nothing.
+const maxProbesPerIP = 3
+
+// IPDBProbeReports returns addresses the WAF refused on scanner-only rules
+// (waf_events id > since), at most maxProbesPerIP per address, and the
+// cursor to send next time. This server, its fleet, the portal, trusted
+// services and whitelisted addresses are never reported.
+func (m *Manager) IPDBProbeReports(since int64, limit int) ([]IPDBReport, int64, error) {
+	rows, err := m.DB.Query(`SELECT id, ip, msg, at FROM waf_events
+		WHERE id > ? AND action LIKE 'Access denied%' AND (`+probeRules+`) ORDER BY id LIMIT ?`, since, limit*4)
+	if err != nil {
+		return nil, since, err
+	}
+	type ev struct {
+		id, at  int64
+		ip, msg string
+	}
+	var evs []ev
+	cursor := since
+	for rows.Next() {
+		var e ev
+		if rows.Scan(&e.id, &e.ip, &e.msg, &e.at) == nil {
+			evs = append(evs, e)
+			cursor = max(cursor, e.id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, since, err
+	}
+	allowed := map[string]bool{}
+	var nets []string
+	nets = append(nets, cdnRanges...)
+	for _, r := range mustRules(m) {
+		if (r.Kind == KindAllow || r.Kind == KindIgnore || r.Kind == KindTempAllow) && r.Inbound() {
+			nets = append(nets, r.CIDR)
+		}
+	}
+	skip := func(ip string) bool {
+		if v, ok := allowed[ip]; ok {
+			return v
+		}
+		c, err := ParseAddr(ip)
+		s := err != nil || strings.Contains(c, "/") || m.isProtected(c) || m.trustedService(c) != ""
+		for _, n := range nets {
+			if s {
+				break
+			}
+			s = Contains(n, c)
+		}
+		allowed[ip] = s
+		return s
+	}
+	per := map[string]int{}
+	out := []IPDBReport{}
+	for _, e := range evs {
+		if len(out) >= limit || per[e.ip] >= maxProbesPerIP || skip(e.ip) {
+			continue
+		}
+		per[e.ip]++
+		msg := strings.TrimPrefix(e.msg, "xPGuard - ")
+		if len(msg) > 150 {
+			msg = msg[:150]
+		}
+		out = append(out, IPDBReport{ID: e.id, IP: e.ip, Source: "waf-probe", Reason: "WAF: " + msg, At: e.at})
+	}
+	return out, cursor, nil
+}

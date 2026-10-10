@@ -262,13 +262,20 @@ describe('agent end-to-end', () => {
     ins.run('198.51.100.3', 'manual block', 'manual', now, 0, 'blocked');
     db.prepare('INSERT INTO ipdb_hits (entry, country, hits, pending, first_seen, last_seen) VALUES (?,?,?,?,?,?)')
       .run('192.0.2.77', 'NL', 9, 9, now, now);
+    // Scanners the WAF refused are shared too (at most 3 reports per IP), not CRS scores.
+    const waf = db.prepare('INSERT INTO waf_events (at, ip, rule_id, msg, action) VALUES (?,?,?,?,?)');
+    for (let i = 0; i < 5; i++) waf.run(now, '203.0.113.61', 7700201, 'xPGuard - Access to sensitive file blocked', 'Access denied with code 403 (phase 1)');
+    waf.run(now, '203.0.113.62', 949110, 'Inbound Anomaly Score Exceeded', 'Access denied with code 403 (phase 2)');
     db.close();
 
     await h.ipdb.syncServer(serverId);
     const rep = await h.pool.query('SELECT host(ip) AS ip, source FROM ipdb_reports WHERE server_id = $1', [serverId]);
-    expect(rep.rows.map((r) => r.ip).sort()).toEqual(['203.0.113.50', '203.0.113.50', '203.0.113.50']);
+    expect(rep.rows.filter((r) => r.source !== 'waf-probe').map((r) => r.ip)).toEqual(['203.0.113.50', '203.0.113.50', '203.0.113.50']);
+    expect(rep.rows.filter((r) => r.source === 'waf-probe').map((r) => r.ip)).toEqual(['203.0.113.61', '203.0.113.61', '203.0.113.61']);
+    expect(Number((await h.pool.query('SELECT ipdb_probe_cursor FROM servers WHERE id = $1', [serverId])).rows[0].ipdb_probe_cursor)).toBeGreaterThan(0);
     await h.ipdb.rebuild();
     expect(h.ipdb.entries).toContain('203.0.113.50');
+    expect(h.ipdb.entries).toContain('203.0.113.61');
 
     // Second round: the agent's list is stale, so the portal pushes it.
     await h.ipdb.syncServer(serverId);
