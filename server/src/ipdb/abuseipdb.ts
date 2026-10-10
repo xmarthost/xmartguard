@@ -13,10 +13,24 @@ export function setAbuseIPDBApi(url: string): void {
   ABUSEIPDB_API = url;
 }
 
-/** Feed name on the IPDB entries it adds. */
+/** Feed names on the IPDB entries it adds: the blacklist, and addresses our servers reported that a check confirmed. */
 export const ABUSEIPDB_NOTE = 'abuseipdb';
-/** Hours between downloads: the free plan allows 5 blacklist downloads a day. */
-export const ABUSEIPDB_EVERY_HOURS = 6;
+export const ABUSEIPDB_CHECK_NOTE = 'abuseipdb-check';
+/** Days an address a check confirmed stays listed (a new report and check renews it). */
+export const ABUSEIPDB_CHECK_DAYS = 7;
+/** Share of the daily checks the portal uses (the rest is left for the Test button and spare). */
+export const ABUSEIPDB_CHECK_SHARE = 0.8;
+
+/**
+ * Time between blacklist downloads, from the plan's daily downloads
+ * (X-RateLimit-Limit of the blacklist endpoint): the free plan's 5 give
+ * every 6 hours, larger plans down to every hour. One download a day is
+ * kept spare for "Download now".
+ */
+export function downloadEveryMs(dailyDownloads: number): number {
+  const n = Math.max(2, dailyDownloads || 5) - 1;
+  return Math.max(3600_000, Math.ceil((24 * 3600_000) / n));
+}
 
 export interface AbuseIPDBConfig {
   api_key: string;
@@ -26,11 +40,37 @@ export interface AbuseIPDBConfig {
   last_fetch_at: Date | null;
   last_count: number;
   last_error: string;
+  /** Daily blacklist downloads and checks of the plan (from AbuseIPDB's answers). */
+  blacklist_limit: number;
+  check_limit: number;
+  /** Check new attackers our servers report; list those scoring at least check_min. */
+  check_enabled: boolean;
+  check_min: number;
+  checks_day: string;
+  checks_today: number;
 }
 
+const COLUMNS = 'api_key, enabled, confidence, max_ips, last_fetch_at, last_count, last_error, blacklist_limit, check_limit, check_enabled, check_min, checks_today';
+
 export async function loadAbuseIPDB(pool: Pool): Promise<AbuseIPDBConfig> {
-  const { rows } = await pool.query('SELECT api_key, enabled, confidence, max_ips, last_fetch_at, last_count, last_error FROM ipdb_abuseipdb WHERE id = 1');
-  return rows[0] ?? { api_key: '', enabled: true, confidence: 100, max_ips: 10000, last_fetch_at: null, last_count: 0, last_error: '' };
+  const { rows } = await pool.query(`SELECT ${COLUMNS}, checks_day::text AS checks_day FROM ipdb_abuseipdb WHERE id = 1`);
+  return (
+    rows[0] ?? {
+      api_key: '',
+      enabled: true,
+      confidence: 100,
+      max_ips: 10000,
+      last_fetch_at: null,
+      last_count: 0,
+      last_error: '',
+      blacklist_limit: 5,
+      check_limit: 1000,
+      check_enabled: true,
+      check_min: 75,
+      checks_day: '',
+      checks_today: 0,
+    }
+  );
 }
 
 export function keyHint(key: string): string {
@@ -68,25 +108,58 @@ export async function testAbuseIPDB(key: string): Promise<TestResult> {
     if (!res.ok) return { ok: false, error: await apiError(res) };
     const body = (await res.json().catch(() => null)) as { data?: { ipAddress?: string } } | null;
     if (!body?.data?.ipAddress) return { ok: false, error: 'unexpected answer from AbuseIPDB' };
-    const num = (h: string) => (res.headers.get(h) !== null && Number.isFinite(Number(res.headers.get(h))) ? Number(res.headers.get(h)) : undefined);
-    return { ok: true, remaining: num('x-ratelimit-remaining'), limit: num('x-ratelimit-limit') };
+    return { ok: true, remaining: header(res, 'x-ratelimit-remaining'), limit: header(res, 'x-ratelimit-limit') };
   } catch (err) {
     return { ok: false, error: `AbuseIPDB cannot be reached: ${(err as Error).message}` };
   }
 }
 
-/** Downloads the blacklist (one address per line). */
-export async function fetchAbuseIPDB(key: string, confidence: number, maxIPs: number): Promise<{ ips: string[]; error?: string }> {
+function header(res: Response, name: string): number | undefined {
+  const v = res.headers.get(name);
+  return v !== null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : undefined;
+}
+
+/** Downloads the blacklist (one address per line); limit is the plan's daily downloads. */
+export async function fetchAbuseIPDB(key: string, confidence: number, maxIPs: number): Promise<{ ips: string[]; error?: string; limit?: number }> {
   try {
     const res = await call(`/blacklist?confidenceMinimum=${confidence}&limit=${maxIPs}`, key, 'text/plain');
-    if (!res.ok) return { ips: [], error: await apiError(res) };
+    const limit = header(res, 'x-ratelimit-limit');
+    if (!res.ok) return { ips: [], error: await apiError(res), limit };
     const ips = (await res.text())
       .slice(0, 50 << 20)
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean);
-    return { ips };
+    return { ips, limit };
   } catch (err) {
     return { ips: [], error: `AbuseIPDB cannot be reached: ${(err as Error).message}` };
+  }
+}
+
+export interface CheckResult {
+  score?: number;
+  whitelisted?: boolean;
+  country?: string;
+  /** The plan's daily checks and how many are left (rate-limit headers). */
+  limit?: number;
+  remaining?: number;
+  error?: string;
+  /** The daily limit is reached: stop checking until tomorrow. */
+  exhausted?: boolean;
+}
+
+/** Looks one address up (reports of the last 30 days). */
+export async function checkAbuseIPDB(key: string, ip: string): Promise<CheckResult> {
+  try {
+    const res = await call(`/check?ipAddress=${encodeURIComponent(ip)}&maxAgeInDays=30`, key, 'application/json');
+    const limit = header(res, 'x-ratelimit-limit');
+    const remaining = header(res, 'x-ratelimit-remaining');
+    if (!res.ok) return { error: await apiError(res), limit, remaining, exhausted: res.status === 429 || res.status === 401 };
+    const body = (await res.json().catch(() => null)) as { data?: { abuseConfidenceScore?: number; isWhitelisted?: boolean; countryCode?: string } } | null;
+    const d = body?.data;
+    if (!d || typeof d.abuseConfidenceScore !== 'number') return { error: 'unexpected answer from AbuseIPDB', limit, remaining };
+    return { score: d.abuseConfidenceScore, whitelisted: !!d.isWhitelisted, country: d.countryCode ?? '', limit, remaining };
+  } catch (err) {
+    return { error: `AbuseIPDB cannot be reached: ${(err as Error).message}` };
   }
 }

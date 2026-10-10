@@ -6,12 +6,26 @@ import type { Config } from '../config.js';
 import type { AgentHub } from '../agents/hub.js';
 import { versionLess } from '../agents/release.js';
 import type { GeoDB } from './geo.js';
-import { ABUSEIPDB_EVERY_HOURS, ABUSEIPDB_NOTE, fetchAbuseIPDB, loadAbuseIPDB } from './abuseipdb.js';
+import {
+  ABUSEIPDB_CHECK_DAYS,
+  ABUSEIPDB_CHECK_NOTE,
+  ABUSEIPDB_CHECK_SHARE,
+  ABUSEIPDB_NOTE,
+  checkAbuseIPDB,
+  downloadEveryMs,
+  fetchAbuseIPDB,
+  loadAbuseIPDB,
+} from './abuseipdb.js';
 import { MAIL_MIN_AGENT, syncMail } from '../routes/mail.js';
 import { eachLimit, single } from '../agents/limit.js';
 
 /** Agents older than this do not implement the ipdb.* commands. */
 export const IPDB_MIN_AGENT = '0.3.0';
+/** Agents that take the list in parts, and the entries per part (well under 4 MB). */
+export const IPDB_PARTS_AGENT = '0.21.20';
+export const IPDB_PART_SIZE = 50_000;
+/** Shortest time between automatic list rebuilds (each one is sent to every server). */
+export const REBUILD_EVERY_MS = 5 * 60_000;
 /** Agents that take the fleet whitelist (fleet.set). */
 export const FLEET_MIN_AGENT = '0.16.2';
 
@@ -72,6 +86,8 @@ interface SyncResult {
  */
 export class IPDBService {
   version = '';
+  /** The version before the current one: servers holding it are still protected (they get the new one within minutes). */
+  prevVersion = '';
   entries: string[] = [];
   builtAt = 0;
   private dirty = true;
@@ -99,7 +115,11 @@ export class IPDBService {
     if (!this.cfg.ipdbSync) return;
     const tick = single(async () => {
       try {
-        if (this.dirty || Date.now() - this.builtAt > 10 * 60_000) await this.rebuild();
+        // New reports change the list all the time: it is rebuilt (and sent
+        // to every server) at most every REBUILD_EVERY_MS; operator changes
+        // rebuild at once through their own routes.
+        const age = Date.now() - this.builtAt;
+        if ((this.dirty && age > REBUILD_EVERY_MS) || age > 10 * 60_000) await this.rebuild();
         await this.syncAll();
       } catch (err) {
         this.log.error({ err }, 'ipdb tick failed');
@@ -112,7 +132,12 @@ export class IPDBService {
     // Attacker feeds change by the hour (blocklist.de keeps 48 hours).
     this.timers.push(setInterval(feeds, 2 * 3600_000));
     // AbuseIPDB: checked often, downloaded every ABUSEIPDB_EVERY_HOURS.
-    const abuse = () => this.refreshAbuseIPDB().catch((err) => this.log.error({ err: (err as Error).message }, 'abuseipdb failed'));
+    // AbuseIPDB: checked often, downloaded as the plan allows; new attackers
+    // checked every 15 minutes (96 rounds a day share the daily checks).
+    const abuse = single(async () => {
+      await this.refreshAbuseIPDB().catch((err) => this.log.error({ err: (err as Error).message }, 'abuseipdb failed'));
+      await this.checkAbuseIPDBSuspects(96).catch((err) => this.log.error({ err: (err as Error).message }, 'abuseipdb checks failed'));
+    });
     this.timers.push(setTimeout(abuse, 45_000));
     this.timers.push(setInterval(abuse, 15 * 60_000));
   }
@@ -147,7 +172,8 @@ export class IPDBService {
   }
 
   async ensureBuilt(): Promise<void> {
-    if (!this.builtAt || this.dirty) await this.rebuild();
+    // Built once; later changes wait for the next scheduled rebuild.
+    if (!this.builtAt) await this.rebuild();
   }
 
   /** Recomputes community entries and the distributed list. */
@@ -227,7 +253,9 @@ export class IPDBService {
     );
     const lines = rows.map((r) => `${entryText(r.cidr)} ${r.country || ''}`.trim()).sort();
     this.entries = lines;
-    this.version = crypto.createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16);
+    const version = crypto.createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16);
+    if (version !== this.version) this.prevVersion = this.version;
+    this.version = version;
     this.builtAt = Date.now();
   }
 
@@ -278,7 +306,28 @@ export class IPDBService {
     await eachLimit(conns, 8, (c) =>
       this.syncServer(c.serverId).catch((err) => this.log.warn({ serverId: c.serverId, err: (err as Error).message }, 'ipdb sync failed')),
     );
-    if (this.dirty) await this.rebuild();
+  }
+
+  /**
+   * Sends the list to one agent. An agent message is at most 4 MB, so agents
+   * that take parts (IPDB_PARTS_AGENT) get it IPDB_PART_SIZE entries at a time.
+   */
+  private async pushList(serverId: string): Promise<void> {
+    const version = this.version;
+    const entries = this.entries;
+    const agent = this.hub.connections().find((c) => c.serverId === serverId)?.version ?? '';
+    if (entries.length <= IPDB_PART_SIZE || versionLess(agent, IPDB_PARTS_AGENT)) {
+      // An older agent drops its connection on a message over 4 MB (and then
+      // could not update itself either): it keeps its list until it updates.
+      const bytes = entries.reduce((n, e) => n + e.length + 3, 64);
+      if (bytes > 3_800_000) throw new Error(`agent ${agent || '?'} cannot take a list this large; it gets it after updating`);
+      await this.hub.command(serverId, 'ipdb.apply', { version, entries }, 180_000);
+      return;
+    }
+    const parts = Math.ceil(entries.length / IPDB_PART_SIZE);
+    for (let part = 0; part < parts; part++) {
+      await this.hub.command(serverId, 'ipdb.apply', { version, part, parts, entries: entries.slice(part * IPDB_PART_SIZE, (part + 1) * IPDB_PART_SIZE) }, 180_000);
+    }
   }
 
   /** Pulls reports and hits from one agent and pushes the list if it is stale. */
@@ -352,7 +401,7 @@ export class IPDBService {
       }
       await this.pool.query('UPDATE servers SET ipdb_cursor = $2, ipdb_probe_cursor = $3, ipdb_synced_at = now() WHERE id = $1', [serverId, cursor, probeCursor]);
       if (data.enabled && this.version && data.version !== this.version) {
-        await this.hub.command(serverId, 'ipdb.apply', { version: this.version, entries: this.entries }, 180_000);
+        await this.pushList(serverId);
         await this.pool.query('UPDATE servers SET ipdb_version = $2 WHERE id = $1', [serverId, this.version]);
       } else if (data.version && data.version !== srv.ipdb_version) {
         await this.pool.query('UPDATE servers SET ipdb_version = $2 WHERE id = $1', [serverId, data.version]);
@@ -382,22 +431,25 @@ export class IPDBService {
   }
 
   /**
-   * AbuseIPDB blacklist (the operator's API key), every ABUSEIPDB_EVERY_HOURS
-   * or now when forced. The last download time is kept in the database, so
+   * AbuseIPDB blacklist (the operator's API key), as often as the plan's
+   * daily downloads allow (downloadEveryMs), or now when forced. The last download time is kept in the database, so
    * portal restarts never use up the daily downloads. A removed or disabled
    * key takes its addresses off the list.
    */
   async refreshAbuseIPDB(force = false): Promise<{ count: number; error?: string; skipped?: boolean }> {
     const c = await loadAbuseIPDB(this.pool);
     if (!c.api_key || !c.enabled) {
-      const { rowCount } = await this.pool.query("DELETE FROM ipdb_entries WHERE source = 'feed' AND note = $1", [ABUSEIPDB_NOTE]);
+      const { rowCount } = await this.pool.query("DELETE FROM ipdb_entries WHERE source = 'feed' AND note IN ($1, $2)", [ABUSEIPDB_NOTE, ABUSEIPDB_CHECK_NOTE]);
       if (rowCount) this.dirty = true;
       return { count: 0, skipped: true };
     }
-    if (!force && c.last_fetch_at && Date.now() - new Date(c.last_fetch_at).getTime() < ABUSEIPDB_EVERY_HOURS * 3600_000) {
+    if (!force && c.last_fetch_at && Date.now() - new Date(c.last_fetch_at).getTime() < downloadEveryMs(c.blacklist_limit)) {
       return { count: c.last_count, skipped: true };
     }
     const got = await fetchAbuseIPDB(c.api_key, c.confidence, c.max_ips);
+    if (got.limit && got.limit !== c.blacklist_limit) {
+      await this.pool.query('UPDATE ipdb_abuseipdb SET blacklist_limit = $1 WHERE id = 1', [got.limit]);
+    }
     const cidrs = got.error ? [] : parseFeed(got.ips.join('\n'));
     if (got.error || !cidrs.length) {
       const error = got.error ?? 'AbuseIPDB returned an empty list';
@@ -409,6 +461,75 @@ export class IPDBService {
     await this.replaceFeed(ABUSEIPDB_NOTE, cidrs, `AbuseIPDB (confidence ${c.confidence}%+)`);
     await this.pool.query("UPDATE ipdb_abuseipdb SET last_fetch_at = now(), last_count = $1, last_error = '' WHERE id = 1", [cidrs.length]);
     return { count: cidrs.length };
+  }
+
+  /**
+   * Checks attackers our servers reported in the last day that are not
+   * listed yet (an address reported once or by one server waits for more
+   * reports otherwise). One scoring at least check_min joins the list for
+   * ABUSEIPDB_CHECK_DAYS. Uses ABUSEIPDB_CHECK_SHARE of the plan's daily
+   * checks, spread over the day; an address is checked again after 3 days.
+   */
+  async checkAbuseIPDBSuspects(runsPerDay = 96): Promise<{ checked: number; listed: number; error?: string }> {
+    const c = await loadAbuseIPDB(this.pool);
+    if (!c.api_key || !c.enabled || !c.check_enabled) {
+      const { rowCount } = await this.pool.query("DELETE FROM ipdb_entries WHERE source = 'feed' AND note = $1", [ABUSEIPDB_CHECK_NOTE]);
+      if (rowCount) this.dirty = true;
+      return { checked: 0, listed: 0 };
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    let used = c.checks_day === today ? c.checks_today : 0;
+    const daily = Math.floor(c.check_limit * ABUSEIPDB_CHECK_SHARE);
+    const budget = Math.min(daily - used, Math.max(1, Math.ceil(daily / runsPerDay)));
+    if (budget <= 0) return { checked: 0, listed: 0 };
+    const { rows } = await this.pool.query(
+      `SELECT host(r.ip) AS ip FROM ipdb_reports r
+        WHERE r.created_at > now() - interval '1 day'
+          AND NOT EXISTS (SELECT 1 FROM ipdb_entries e WHERE e.cidr = r.ip::cidr)
+          AND NOT EXISTS (SELECT 1 FROM ipdb_abuse_checks k WHERE k.ip = r.ip AND k.checked_at > now() - interval '3 days')
+          AND NOT EXISTS (SELECT 1 FROM ipdb_whitelist w WHERE w.cidr >>= r.ip)
+          AND NOT (r.ip <<= ANY($2::inet[]))
+        GROUP BY r.ip ORDER BY count(*) DESC, max(r.created_at) DESC LIMIT $1`,
+      [budget, await this.protectedIPs()],
+    );
+    let checked = 0;
+    let listed = 0;
+    let error: string | undefined;
+    let limit = c.check_limit;
+    for (const { ip } of rows) {
+      const r = await checkAbuseIPDB(c.api_key, ip);
+      if (r.limit) limit = r.limit;
+      if (r.error) {
+        error = r.error;
+        if (r.exhausted) {
+          used = daily; // nothing more today
+          break;
+        }
+        continue;
+      }
+      checked++;
+      await this.pool.query(
+        'INSERT INTO ipdb_abuse_checks (ip, score) VALUES ($1, $2) ON CONFLICT (ip) DO UPDATE SET score = excluded.score, checked_at = now()',
+        [ip, r.score],
+      );
+      if (!r.whitelisted && (r.score ?? 0) >= c.check_min) {
+        const { rowCount } = await this.pool.query(
+          `INSERT INTO ipdb_entries (cidr, source, country, reason, note, expires_at)
+           VALUES ($1::inet::cidr, 'feed', $2, $3, $4, now() + make_interval(days => $5))
+           ON CONFLICT (cidr) DO NOTHING`,
+          [ip, r.country || this.geo.lookup(ip), `AbuseIPDB score ${r.score}% (attacked our servers)`, ABUSEIPDB_CHECK_NOTE, ABUSEIPDB_CHECK_DAYS],
+        );
+        if (rowCount) listed++;
+      }
+    }
+    await this.pool.query(
+      `UPDATE ipdb_abuseipdb SET checks_day = $1::date, checks_today = $2, check_limit = $3 WHERE id = 1`,
+      [today, Math.min(used + checked, daily), limit],
+    );
+    await this.pool.query("DELETE FROM ipdb_abuse_checks WHERE checked_at < now() - interval '30 days'");
+    if (listed) this.dirty = true;
+    if (error) this.log.warn({ err: error }, 'abuseipdb check failed');
+    return { checked, listed, error };
   }
 
   /** Downloads the configured public feeds and merges them as 'feed' entries. */

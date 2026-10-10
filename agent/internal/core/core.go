@@ -1145,10 +1145,20 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return res, nil
 	}
+	// A large list comes in parts (a message is at most 4 MB): they are
+	// collected and the list is applied once all parts of a version arrived.
+	var ipdbParts struct {
+		sync.Mutex
+		version string
+		parts   [][]string
+		got     int
+	}
 	h["ipdb.apply"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
 			Version string   `json:"version"`
 			Entries []string `json:"entries"`
+			Part    int      `json:"part"`
+			Parts   int      `json:"parts"`
 		}](p)
 		if err != nil {
 			return nil, err
@@ -1156,7 +1166,32 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		if in.Version == "" {
 			return nil, errors.New("version is required")
 		}
-		n, err := a.Firewall.ApplyIPDB(in.Version, in.Entries)
+		entries := in.Entries
+		if in.Parts > 1 {
+			if in.Parts > 1000 || in.Part < 0 || in.Part >= in.Parts {
+				return nil, errors.New("invalid part")
+			}
+			ipdbParts.Lock()
+			if ipdbParts.version != in.Version || len(ipdbParts.parts) != in.Parts {
+				ipdbParts.version, ipdbParts.parts, ipdbParts.got = in.Version, make([][]string, in.Parts), 0
+			}
+			if ipdbParts.parts[in.Part] == nil {
+				ipdbParts.got++
+			}
+			ipdbParts.parts[in.Part] = append([]string{}, in.Entries...)
+			if ipdbParts.got < in.Parts {
+				got := ipdbParts.got
+				ipdbParts.Unlock()
+				return map[string]any{"received": got, "parts": in.Parts, "version": in.Version}, nil
+			}
+			entries = nil
+			for _, part := range ipdbParts.parts {
+				entries = append(entries, part...)
+			}
+			ipdbParts.version, ipdbParts.parts, ipdbParts.got = "", nil, 0
+			ipdbParts.Unlock()
+		}
+		n, err := a.Firewall.ApplyIPDB(in.Version, entries)
 		return map[string]any{"entries": n, "version": in.Version}, err
 	}
 	h["ipdb.status"] = func(context.Context, json.RawMessage) (any, error) {

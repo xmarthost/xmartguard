@@ -142,7 +142,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ipdbMinReports: int(env.IPDB_MIN_REPORTS, 3),
     ipdbWindowDays: int(env.IPDB_WINDOW_DAYS, 7),
     ipdbTtlDays: int(env.IPDB_TTL_DAYS, 30),
-    ipdbMaxEntries: int(env.IPDB_MAX_ENTRIES, 200_000),
+    ipdbMaxEntries: int(env.IPDB_MAX_ENTRIES, 800_000), // agents hold up to 1,048,576 per family
     // Spamhaus DROP (hijacked networks), blocklist.de (addresses that
     // attacked its members' servers in the last 48 hours: SSH, mail, FTP,
     // web logins, Apache), CINS Army (bad actors seen by its sensors) and

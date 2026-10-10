@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { Pool } from '../db.js';
 import { audit, hasRole, requireRole, type SessionUser } from '../auth.js';
 import { entryText, parseCidr, type IPDBService } from '../ipdb/service.js';
-import { ABUSEIPDB_EVERY_HOURS, keyHint, loadAbuseIPDB, testAbuseIPDB } from '../ipdb/abuseipdb.js';
+import { ABUSEIPDB_CHECK_SHARE, downloadEveryMs, keyHint, loadAbuseIPDB, testAbuseIPDB } from '../ipdb/abuseipdb.js';
 import { signedPayload } from '../agent-sign.js';
 
 const Paging = z.object({
@@ -101,7 +101,7 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
       countries: countries.rows.map((r) => ({ country: r.country, hits: Number(r.hits), ips: r.ips })),
       daily: daily.rows.map((r) => ({ day: r.day, hits: Number(r.hits) })),
       top: top.rows.map((r) => ({ ...r, hits: Number(r.hits) })),
-      servers: servers.rows.map((r) => ({ ...r, synced: r.ipdb_version === ipdb.version && !!ipdb.version })),
+      servers: servers.rows.map((r) => ({ ...r, synced: !!ipdb.version && !!r.ipdb_version && (r.ipdb_version === ipdb.version || r.ipdb_version === ipdb.prevVersion) })),
       geoip: ipdb.geo.size > 0,
       can_manage: await isOperator(user),
     };
@@ -269,7 +269,10 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
   // portal and is shown only as a hint.
   const abuseState = async () => {
     const c = await loadAbuseIPDB(pool);
-    const { rows } = await pool.query("SELECT count(*)::int AS n FROM ipdb_entries WHERE source = 'feed' AND note = 'abuseipdb'");
+    const { rows } = await pool.query(
+      "SELECT count(*) FILTER (WHERE note = 'abuseipdb')::int AS n, count(*) FILTER (WHERE note = 'abuseipdb-check')::int AS checked FROM ipdb_entries WHERE source = 'feed'",
+    );
+    const today = new Date().toISOString().slice(0, 10);
     return {
       key_set: c.api_key !== '',
       key_hint: keyHint(c.api_key),
@@ -280,7 +283,14 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
       last_count: c.last_count,
       last_error: c.last_error,
       listed: rows[0].n,
-      every_hours: ABUSEIPDB_EVERY_HOURS,
+      every_minutes: Math.round(downloadEveryMs(c.blacklist_limit) / 60_000),
+      blacklist_limit: c.blacklist_limit,
+      check_limit: c.check_limit,
+      check_budget: Math.floor(c.check_limit * ABUSEIPDB_CHECK_SHARE),
+      check_enabled: c.check_enabled,
+      check_min: c.check_min,
+      checks_today: c.checks_day === today ? c.checks_today : 0,
+      check_listed: rows[0].checked,
     };
   };
   const AbuseKey = z.string().trim().regex(/^[A-Za-z0-9]{40,120}$/, 'an AbuseIPDB API key is 80 letters and digits');
@@ -298,6 +308,8 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
         enabled: z.boolean().optional(),
         confidence: z.number().int().min(25).max(100).optional(),
         max_ips: z.number().int().min(1000).max(500_000).optional(),
+        check_enabled: z.boolean().optional(),
+        check_min: z.number().int().min(25).max(100).optional(),
       })
       .safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid request' });
@@ -308,14 +320,16 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
       // A new key is saved only once AbuseIPDB accepts it.
       const t = await testAbuseIPDB(next.api_key);
       if (!t.ok) return reply.code(400).send({ error: `AbuseIPDB: ${t.error}` });
+      // The plan's daily checks, as AbuseIPDB reports them.
+      if (t.limit) next.check_limit = t.limit;
     }
     const listChanged = keyChanged || next.enabled !== cur.enabled || next.confidence !== cur.confidence || next.max_ips !== cur.max_ips;
     await pool.query(
-      `INSERT INTO ipdb_abuseipdb (id, api_key, enabled, confidence, max_ips) VALUES (1, $1, $2, $3, $4)
-       ON CONFLICT (id) DO UPDATE SET api_key = $1, enabled = $2, confidence = $3, max_ips = $4, updated_at = now(),
+      `INSERT INTO ipdb_abuseipdb (id, api_key, enabled, confidence, max_ips, check_enabled, check_min, check_limit) VALUES (1, $1, $2, $3, $4, $6, $7, $8)
+       ON CONFLICT (id) DO UPDATE SET api_key = $1, enabled = $2, confidence = $3, max_ips = $4, check_enabled = $6, check_min = $7, check_limit = $8, updated_at = now(),
          last_fetch_at = CASE WHEN $5 THEN NULL ELSE ipdb_abuseipdb.last_fetch_at END,
          last_error = CASE WHEN $5 THEN '' ELSE ipdb_abuseipdb.last_error END`,
-      [next.api_key, next.enabled, next.confidence, next.max_ips, listChanged],
+      [next.api_key, next.enabled, next.confidence, next.max_ips, listChanged, next.check_enabled, next.check_min, next.check_limit],
     );
     await audit(pool, {
       accountId: req.user!.accountId,
@@ -326,6 +340,7 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
     });
     // Download (or drop) the list in the background; servers get it on their next sync.
     if (listChanged) void ipdb.refreshAbuseIPDB(true).then(() => ipdb.rebuild()).catch(() => undefined);
+    else if (next.check_enabled !== cur.check_enabled) void ipdb.checkAbuseIPDBSuspects().then(() => ipdb.rebuild()).catch(() => undefined);
     return abuseState();
   });
 

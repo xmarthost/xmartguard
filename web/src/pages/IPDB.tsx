@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { CheckCircle2, Database, Globe2, KeyRound, RefreshCw, Search, ShieldBan, Trash2, Users as UsersIcon, XCircle, Zap } from 'lucide-react';
@@ -70,8 +70,17 @@ interface AbuseState {
   last_count: number;
   last_error: string;
   listed: number;
-  every_hours: number;
+  every_minutes: number;
+  blacklist_limit: number;
+  check_limit: number;
+  check_budget: number;
+  check_enabled: boolean;
+  check_min: number;
+  checks_today: number;
+  check_listed: number;
 }
+
+const every = (min: number) => (min >= 120 && min % 60 === 0 ? `${min / 60} hours` : min >= 60 ? `${Math.round(min / 6) / 10} hours` : `${min} minutes`);
 
 interface AbuseTest {
   ok: boolean;
@@ -100,7 +109,7 @@ function AbuseIPDBCard({ onChanged }: { onChanged: () => void }) {
   return (
     <Card
       title="AbuseIPDB"
-      desc={`Adds AbuseIPDB's blacklist (the most reported attackers worldwide) to the IPDB of every server, in every account. Downloaded every ${d?.every_hours ?? 6} hours; the key stays on the portal.`}
+      desc={`Adds AbuseIPDB's blacklist (the most reported attackers worldwide) to the IPDB of every server, in every account. Downloaded as often as your plan allows; the key stays on the portal.`}
       right={
         d?.key_set ? (
           d.last_error ? (
@@ -128,9 +137,16 @@ function AbuseIPDBCard({ onChanged }: { onChanged: () => void }) {
               <span className="mb-1 block text-xs font-medium text-slate-500">API key {d.key_set && <span className="font-mono">(saved: {d.key_hint})</span>}</span>
               <div className="relative">
                 <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                {/* A text box masked with CSS, not type=password: browsers fill
+                    password boxes with the saved portal login. */}
                 <input
                   className="input pl-9 font-mono"
-                  type="password"
+                  type="text"
+                  name="abuseipdb-api-key"
+                  style={{ WebkitTextSecurity: key ? 'disc' : 'none' } as CSSProperties}
+                  spellCheck={false}
+                  data-lpignore="true"
+                  data-1p-ignore="true"
                   autoComplete="off"
                   placeholder={d.key_set ? 'Enter a new key to replace it' : 'Paste your AbuseIPDB API key'}
                   value={key}
@@ -195,7 +211,8 @@ function AbuseIPDBCard({ onChanged }: { onChanged: () => void }) {
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2">
                 <span>
                   <b>{d.listed.toLocaleString()}</b> AbuseIPDB addresses in the IPDB
-                  {d.last_fetch_at ? ` · last download ${ago(d.last_fetch_at)}` : ' · first download pending'}
+                  {d.last_fetch_at ? ` · last download ${ago(d.last_fetch_at)}` : ' · first download pending'} · every {every(d.every_minutes)}
+                  {` (${d.blacklist_limit} downloads a day on your plan)`}
                 </span>
                 <button
                   className="btn-outline px-2.5 py-1 text-xs"
@@ -212,6 +229,34 @@ function AbuseIPDBCard({ onChanged }: { onChanged: () => void }) {
                 </button>
               </div>
               {d.last_error && <p className="rounded-lg bg-red-50 px-3 py-2 text-red-700">Last download failed: {d.last_error}</p>}
+              <div className="rounded-lg border border-slate-200 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-navy-900">Check new attackers with AbuseIPDB</div>
+                    <p className="text-xs text-slate-500">
+                      Attackers our servers report are looked up on AbuseIPDB; those it scores high are blocked on every server at once (for 7 days), instead of
+                      waiting for more reports. Uses up to {d.check_budget.toLocaleString()} of your {d.check_limit.toLocaleString()} daily checks, spread over the day.
+                    </p>
+                  </div>
+                  <Toggle on={d.check_enabled} disabled={busy || !d.enabled} onChange={(v) => void save({ check_enabled: v }, v ? 'Checks on' : 'Checks off')} />
+                </div>
+                {d.check_enabled && (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500">Block from score</span>
+                      <select className="input w-auto py-1" value={d.check_min} disabled={busy} onChange={(e) => void save({ check_min: Number(e.target.value) }, 'Saved')}>
+                        <option value={50}>50%</option>
+                        <option value={75}>75%</option>
+                        <option value={90}>90%</option>
+                        <option value={100}>100%</option>
+                      </select>
+                    </label>
+                    <span className="text-slate-600">
+                      Today: <b>{d.checks_today.toLocaleString()}</b> checked · <b>{d.check_listed.toLocaleString()}</b> blocked by checks (last 7 days)
+                    </span>
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>

@@ -569,4 +569,25 @@ CREATE TABLE ipdb_abuseipdb (
 );
 `,
   },
+  {
+    version: '020_abuseipdb_checks',
+    sql: `
+-- AbuseIPDB by plan: daily blacklist downloads and checks as AbuseIPDB
+-- reports them, and checks of new attackers our servers report.
+ALTER TABLE ipdb_abuseipdb
+  ADD COLUMN blacklist_limit int NOT NULL DEFAULT 5,
+  ADD COLUMN check_limit int NOT NULL DEFAULT 1000,
+  ADD COLUMN check_enabled boolean NOT NULL DEFAULT true,
+  ADD COLUMN check_min int NOT NULL DEFAULT 75,
+  ADD COLUMN checks_day date,
+  ADD COLUMN checks_today int NOT NULL DEFAULT 0;
+-- Addresses already checked (not checked again for a few days).
+CREATE TABLE ipdb_abuse_checks (
+  ip          inet PRIMARY KEY,
+  score       int NOT NULL,
+  checked_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ipdb_abuse_checks_at ON ipdb_abuse_checks (checked_at);
+`,
+  },
 ];

@@ -303,6 +303,23 @@ describe('agent end-to-end', () => {
     expect(st.body.version).toBe(h.ipdb.version);
     expect(st.body.entries).toBeGreaterThanOrEqual(1);
 
+    // A list larger than one agent message (4 MB) arrives in parts.
+    await h.pool.query(
+      `INSERT INTO ipdb_entries (cidr, source, reason, note)
+       SELECT ('45.' || (i >> 16) || '.' || ((i >> 8) & 255) || '.' || (i & 255))::cidr, 'feed', 'test', 'big-test'
+         FROM generate_series(1, 320000) AS i`,
+    );
+    await h.ipdb.rebuild();
+    expect(h.ipdb.entries.length).toBeGreaterThan(320000);
+    expect(JSON.stringify(h.ipdb.entries).length).toBeGreaterThan(4 << 20);
+    await h.ipdb.syncServer(serverId);
+    const big = await cmd('ipdb.status');
+    expect(big.body.version).toBe(h.ipdb.version);
+    expect(big.body.entries).toBe(h.ipdb.entries.length);
+    await h.pool.query("DELETE FROM ipdb_entries WHERE note = 'big-test'");
+    await h.ipdb.rebuild();
+    await h.ipdb.syncServer(serverId);
+
     const sum = await c.req('GET', '/api/ipdb/summary');
     expect(sum.body.listed).toBe(h.ipdb.entries.length);
     expect(sum.body.servers.find((x: { id: string }) => x.id === serverId).synced).toBe(true);
