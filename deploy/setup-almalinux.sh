@@ -2,11 +2,15 @@
 # One-shot xPGuard PORTAL setup for AlmaLinux / Rocky / RHEL / CloudLinux 9.
 #
 #   bash setup-almalinux.sh --domain app.xpguard.org --email you@example.com [--branch BRANCH] [--token GITHUB_TOKEN]
-#                           [--captcha-domain captcha.xpguard.org | none]
+#                           [--captcha-domain verify.example.net | none]
 #
-# The CAPTCHA page for suspicious visitors of the websites' login pages is
-# served by the portal on its own domain, by default captcha.<parent domain>
-# (app.xpguard.org -> captcha.xpguard.org). Point that name at this server.
+# The CAPTCHA page for blocked and suspicious visitors of the websites is
+# served by the portal on its own domain. Use a SEPARATE domain bought only
+# for it (like cPGuard's recaptcha.cloud), never a name under the portal's
+# or the company's domain: Google Safe Browsing flags pages that ask
+# visitors of other websites to "verify", and a flag hits the whole domain.
+# Point that name at this server. Once given, the domain is remembered by
+# later runs; without one, captcha.<parent domain> is used (with a warning).
 #
 # The AI scanner uses free AI APIs (Google Gemini, Groq, OpenRouter, ...)
 # whose keys are added in the portal under "AI Scanner"; no model runs on
@@ -61,11 +65,21 @@ else
   MODE=caddy
 fi
 echo "mode: $MODE"
+if [ -z "$CAPTCHA_DOMAIN" ] && [ -f "$DIR/deploy/.env" ]; then
+  # The domain an earlier run was given.
+  CAPTCHA_DOMAIN=$(sed -n 's/^CAPTCHA_DOMAIN=//p' "$DIR/deploy/.env" | tail -1)
+fi
 if [ -z "$CAPTCHA_DOMAIN" ]; then
   # captcha.<parent domain>, when the portal runs on a subdomain.
   if [ "$(tr -cd . <<<"$DOMAIN" | wc -c)" -ge 2 ]; then CAPTCHA_DOMAIN="captcha.${DOMAIN#*.}"; else CAPTCHA_DOMAIN=none; fi
 fi
 [ "$CAPTCHA_DOMAIN" = "$DOMAIN" ] && CAPTCHA_DOMAIN=none
+PARENT="${DOMAIN#*.}"
+if [ "$CAPTCHA_DOMAIN" != none ] && { [ "$CAPTCHA_DOMAIN" = "$PARENT" ] || [[ "$CAPTCHA_DOMAIN" == *."$PARENT" ]]; }; then
+  printf '\n\033[1;33mWARNING: the CAPTCHA page (%s) is under %s.\033[0m\n' "$CAPTCHA_DOMAIN" "$PARENT"
+  echo "  Google may flag it as social engineering and warn on all of $PARENT (website, billing, portal)."
+  echo "  Buy a separate domain for it and run again with --captcha-domain <that domain>."
+fi
 
 step "Checking DNS for $DOMAIN"
 MYIP=$(curl -4 -fsS --max-time 10 https://api.ipify.org || true)

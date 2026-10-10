@@ -169,6 +169,15 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
   const viewer = { preHandler: requirePlatform('viewer') };
   const admin = { preHandler: requirePlatform('admin') };
   const pageUrl = `${cfg.captchaUrl}/v`;
+  // A new CAPTCHA domain (setup --captcha-domain): a new version, so every
+  // server picks up the new address instead of sending visitors to the old one.
+  void pool
+    .query(
+      `UPDATE captcha_config SET version = version + 1, config = jsonb_set(config, '{url_seen}', to_jsonb($1::text)), updated_at = now()
+        WHERE coalesce(config->>'url_seen', '') <> $1`,
+      [pageUrl],
+    )
+    .catch(() => undefined);
   turnstile.url = cfg.turnstileVerifyUrl;
   const captchaHost = (() => {
     try {
