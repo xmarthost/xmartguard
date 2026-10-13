@@ -138,7 +138,7 @@ func (s *Server) sync() {
 // after every response (HTTP/2: GOAWAY) sends the next request to the site.
 func HTTPServer(port int, h http.Handler) *http.Server {
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: h, ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 5 * time.Second}
+		ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 5 * time.Second, ConnContext: connContext}
 	srv.SetKeepAlivesEnabled(false)
 	return srv
 }
@@ -193,10 +193,23 @@ func (s *Server) tooMany(ip string) bool {
 
 // ServeHTTP answers every path: the challenge page, the image and the answer.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	// Only a person in a browser is asked to solve the check (passthrough.go).
+	if !strings.HasPrefix(r.URL.Path, pathPrefix) && !strings.HasPrefix(r.URL.Path, legacyPrefix) {
+		if MachinePath(r) {
+			if !serveFromSite(w, r) {
+				blockedText(w, ip)
+			}
+			return
+		}
+		if !BrowserPage(r) {
+			blockedText(w, ip)
+			return
+		}
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
-	ip := clientIP(r)
 	if to := s.centralURL(r, ip); to != "" {
 		http.Redirect(w, r, to, http.StatusFound)
 		return

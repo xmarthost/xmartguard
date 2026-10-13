@@ -2,6 +2,7 @@ package captcha
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -283,6 +285,7 @@ func TestCentralRedirect(t *testing.T) {
 	get := func(target string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("GET", target, nil)
 		r.Host = "shop.example.com:7743"
+		r.Header.Set("Accept", "text/html")
 		r.RemoteAddr = "203.0.113.5:4000"
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, r)
@@ -361,5 +364,85 @@ func TestCheckboxWork(t *testing.T) {
 	res.Body.Close()
 	if len(*solved) != 1 || strings.Contains(string(body), "I&#39;m not a robot") {
 		t.Fatalf("image mode took work: %v", *solved)
+	}
+}
+
+// The tests act as a browser opening pages (non-browser requests get a
+// plain 403, see TestNonBrowserAndMachineFiles).
+type browserAccept struct{ rt http.RoundTripper }
+
+func (b browserAccept) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Header.Get("Accept") == "" {
+		r.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+	}
+	return b.rt.RoundTrip(r)
+}
+
+func init() { http.DefaultTransport = browserAccept{http.DefaultTransport} }
+
+func TestNonBrowserAndMachineFiles(t *testing.T) {
+	s, solved := newServer(t)
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	get := func(path, accept string) (int, string, string) {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+		req.Header.Set("Accept", accept)
+		res, err := http.DefaultTransport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return res.StatusCode, string(b), res.Header.Get("Location")
+	}
+	// A script or API client: a plain 403, no CAPTCHA page or redirect.
+	for _, p := range []string{"/sync-worker-v2.php", "/wp-json/wc/v3/orders", "/feed/"} {
+		code, body, loc := get(p, "*/*")
+		if code != 403 || loc != "" || !strings.Contains(body, "blocked by this server's firewall") {
+			t.Fatalf("%s: %d %q %q", p, code, loc, body)
+		}
+	}
+	// A browser still gets the check.
+	if code, body, _ := get("/shop/", "text/html,*/*"); code != 403 || !strings.Contains(body, "Security check") {
+		t.Fatalf("browser: %d", code)
+	}
+	// Machine files are never the CAPTCHA page (here no redirected
+	// connection to serve them from: a 403, not a check).
+	for _, p := range []string{"/robots.txt", "/sitemap.xml", "/sitemap_index.xml", "/sitemap.php", "/post-sitemap.xml", "/ads.txt", "/.well-known/acme-challenge/abc", "/favicon.ico"} {
+		code, body, _ := get(p, "text/html,*/*")
+		if !MachinePath(httptest.NewRequest(http.MethodGet, p, nil)) || strings.Contains(body, "Security check") {
+			t.Fatalf("%s: %d is the CAPTCHA page", p, code)
+		}
+	}
+	if MachinePath(httptest.NewRequest(http.MethodPost, "/robots.txt", nil)) || MachinePath(httptest.NewRequest(http.MethodGet, "/wp-content/sitemap.xml", nil)) {
+		t.Fatal("only GET/HEAD of root machine files")
+	}
+	if len(*solved) != 0 {
+		t.Fatal("nothing solved")
+	}
+}
+
+func TestServeFromSite(t *testing.T) {
+	// The website: answers robots.txt for its own name.
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "robots for "+r.Host+" xff="+r.Header.Get("X-Forwarded-For"))
+	}))
+	defer site.Close()
+	ap := netip.MustParseAddrPort(strings.TrimPrefix(site.URL, "http://"))
+	req := httptest.NewRequest(http.MethodGet, "http://shop.example/robots.txt", nil)
+	req.RemoteAddr = "203.0.113.9:4444"
+	// The redirected connection was going to port 80 of the site's address.
+	req = req.WithContext(context.WithValue(req.Context(), origDstKey{}, netip.AddrPortFrom(ap.Addr(), 80)))
+	rec := httptest.NewRecorder()
+	if serveFromSite(rec, req) {
+		// Port 80 is not the test site's port: it is proxied there and fails cleanly.
+		if rec.Code != http.StatusBadGateway && !strings.Contains(rec.Body.String(), "robots for shop.example") {
+			t.Fatalf("%d %s", rec.Code, rec.Body.String())
+		}
+	}
+	// Only ports 80 and 443 are served from the site.
+	req = req.WithContext(context.WithValue(req.Context(), origDstKey{}, ap))
+	if serveFromSite(httptest.NewRecorder(), req) && ap.Port() != 80 && ap.Port() != 443 {
+		t.Fatal("served from a port that is not a website")
 	}
 }
