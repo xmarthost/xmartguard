@@ -236,7 +236,10 @@ func TestSoftBlockWithCRS(t *testing.T) {
 	weak := "/?s=1%27%20or%20%271%27%3D%271" // one rule (942100), score 5
 	weakBody := "s=1%27%20or%20%271%27%3D%271"
 	strong := "/?q=%3Cscript%3Ealert(document.cookie)%3C%2Fscript%3E" // several rules
-	get := func(host, uri string, hdr ...string) int { return sendBody(t, host, "GET", uri, "", "", hdr...) }
+	// Page views of a browser (it accepts HTML); scripts are checked below.
+	get := func(host, uri string, hdr ...string) int {
+		return sendBody(t, host, "GET", uri, "", "", append([]string{"Accept: text/html,application/xhtml+xml,*/*;q=0.8"}, hdr...)...)
+	}
 	post := func(hdr ...string) int {
 		return sendBody(t, "shop.example.com", "POST", "/contact/", "application/x-www-form-urlencoded", weakBody, hdr...)
 	}
@@ -248,6 +251,7 @@ func TestSoftBlockWithCRS(t *testing.T) {
 	}
 	check("weak signal, clean visitor: CAPTCHA", get("shop.example.com", weak), 302)
 	check("weak signal behind Cloudflare: CAPTCHA", get("shop.example.com", weak, "CF-Connecting-IP: 198.51.100.9"), 302)
+	check("weak signal from a script (not a browser): 403, no CAPTCHA", get("shop.example.com", weak, "Accept: */*"), 403)
 	check("weak signal in a POST: refused", post(), 403)
 	check("real attack: refused", get("shop.example.com", strong), 403)
 	check("normal page", get("shop.example.com", "/?s=shoes"), 200)

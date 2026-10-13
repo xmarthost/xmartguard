@@ -88,10 +88,14 @@ func TestCentralRuleOnApache(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	accept := "text/html,application/xhtml+xml,*/*;q=0.8"
 	get := func(path string) (int, string) {
 		req, _ := http.NewRequest("GET", "http://127.0.0.1"+path, nil)
 		req.Host = "shop.example.com"
 		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) Firefox/130.0")
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
 		res, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -107,6 +111,14 @@ func TestCentralRuleOnApache(t *testing.T) {
 	if code, _ := get("/xg-ok.html"); code != 200 {
 		t.Fatalf("suspect on another page: %d", code)
 	}
+	// Not a browser (xmlrpc-style clients, scripts, no Accept at all): a 403, no redirect.
+	for _, a := range []string{"*/*", "application/json", ""} {
+		accept = a
+		if code, loc := get("/wp-login.php"); code != 403 || loc != "" {
+			t.Fatalf("non-browser suspect (Accept %q): %d %q", a, code, loc)
+		}
+	}
+	accept = "text/html,*/*"
 	// Solved: on the pass list.
 	central.Pass = []string{"127.0.0.1"}
 	if !m.CentralChanged() {

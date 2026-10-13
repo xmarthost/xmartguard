@@ -91,7 +91,9 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 	pw(`SecRule TX:xg_soft "@eq 1" "id:%d,phase:2,t:none,redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI},log,msg:'xPGuard - weak attack signal: visitor sent to the CAPTCHA (Total Score: %%{%s})',tag:'xpguard/captcha',chain"`,
 		IDSoftCaptcha, c.URL, c.ServerID, strings.ToLower(score))
 	pw(`  SecRule %s "@ge %d" "t:none,chain"`, score, in)
-	pw(`  SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "t:none"`)
+	pw(`  SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "t:none,chain"`)
+	// Only a browser opening a page; scripts get the CRS 403 below.
+	pw(`  SecRule REQUEST_HEADERS:Accept "@contains text/html" "t:none,t:lowercase"`)
 	pw(`SecRule TX:xg_soft "@eq 1" "id:%d,phase:2,t:none,deny,status:403,log,msg:'xPGuard - Inbound Anomaly Score Exceeded (Total Score: %%{%s})',tag:'xpguard/crs',chain"`,
 		IDSoftDeny, strings.ToLower(score))
 	pw(`  SecRule %s "@ge %d" "t:none"`, score, in)

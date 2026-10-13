@@ -85,6 +85,9 @@ const (
 	IDGateNoCookie  = 7700902
 	IDGateBadCookie = 7700903
 	IDCentralGate   = 7700904
+	// IDCentralNoBrowser: a suspicious address that is not a browser opening
+	// a page (xmlrpc.php posts, scripts) gets a 403, not the CAPTCHA page.
+	IDCentralNoBrowser = 7700906
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -602,12 +605,26 @@ func Render(c settings.WAF, o Options) string {
 		// has not solved the CAPTCHA yet is sent to the portal's page with
 		// this server, its address, the site and the page it asked for (the
 		// page last: it may hold "&"). Logged, not counted as an attack.
-		w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI},log,msg:'xPGuard - suspicious visitor sent to the CAPTCHA',tag:'xpguard/captcha',chain"`,
-			strings.Join(urls, "|"), IDCentralGate, ct.URL, ct.ServerID)
-		if !ct.All {
-			w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+		// Only a browser opening a page (it accepts HTML) is sent to the
+		// CAPTCHA page; bots and scripts (xmlrpc.php posts) get a 403.
+		gateRule := func(id int, action, msg, browser string) {
+			w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,%s,log,msg:'%s',tag:'xpguard/captcha',chain"`,
+				strings.Join(urls, "|"), id, action, msg)
+			if !ct.All {
+				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+			}
+			if browser == "" {
+				w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileCaptchaPass)
+				return
+			}
+			w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaPass)
+			w(`  SecRule REQUEST_HEADERS:Accept "%s" "t:none,t:lowercase"`, browser)
 		}
-		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileCaptchaPass)
+		gateRule(IDCentralGate, fmt.Sprintf("redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI}", ct.URL, ct.ServerID),
+			"xPGuard - suspicious visitor sent to the CAPTCHA", "@contains text/html")
+		// After the redirect: whatever it did not send away (also requests
+		// without an Accept header) is not a browser.
+		gateRule(IDCentralNoBrowser, "deny,status:403", "xPGuard - suspicious visitor blocked (not a browser)", "")
 	}
 	if c.Webshell {
 		rule(IDWebshell, `SecRule REQUEST_FILENAME "@rx /(?:%s)[0-9]?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell request blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(WebshellNames), "|"), IDWebshell)
