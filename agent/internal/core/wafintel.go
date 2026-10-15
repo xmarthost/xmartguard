@@ -137,7 +137,7 @@ func (a *Agent) storeIntel(in *waf.Intel) error {
 	}
 	a.central.applyMu.Lock()
 	defer a.central.applyMu.Unlock()
-	return a.WAF.Apply()
+	return a.WAF.ApplyBackground()
 }
 
 // syncIntel sends new reports and fetches the fleet intelligence.

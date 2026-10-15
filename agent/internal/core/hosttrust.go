@@ -129,7 +129,7 @@ func (a *Agent) proxyListLoop(ctx context.Context) {
 		case <-time.After(2 * time.Hour):
 		}
 		if a.WAF.BlockedListChanged() || a.WAF.ExemptListChanged() {
-			if err := a.WAF.Apply(); err != nil {
+			if err := a.WAF.ApplyBackground(); err != nil {
 				a.Log.Warn("WAF proxy IP list refresh failed", "err", err)
 			}
 		}
@@ -155,7 +155,7 @@ func (a *Agent) refreshTrusted(ctx context.Context) {
 		}
 	}
 	if a.WAF.TrustedListChanged() {
-		if err := a.WAF.Apply(); err != nil {
+		if err := a.WAF.ApplyBackground(); err != nil {
 			a.Log.Warn("WAF reload after trusted services refresh failed", "err", err)
 		}
 	}

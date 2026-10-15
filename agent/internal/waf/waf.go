@@ -74,7 +74,6 @@ type Manager struct {
 	reloadMu   sync.Mutex
 	lastReload time.Time
 	deferred   *time.Timer
-	now        atomic.Bool // the next Apply reloads without waiting (ApplyNow)
 }
 
 // Status is shown in the portal.
@@ -400,15 +399,30 @@ func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
 // own (when enabled) plus the OWASP CRS and custom rules from the
 // portal's WAF Rule Sets. If the web server rejects the extra rule sets,
 // they are left out so xPGuard's rules keep protecting the sites.
-// ApplyNow applies like Apply, and address list changes do not wait for
-// the reload gap: for changes someone made (settings, the Apply button).
-func (m *Manager) ApplyNow() error {
-	m.now.Store(true)
-	defer m.now.Store(false)
-	return m.Apply()
-}
+// When a change reloads the web server (see install).
+type applyMode int
 
-func (m *Manager) Apply() error {
+const (
+	// modeNormal: rules apply at once; address lists wait for the gap.
+	modeNormal applyMode = iota
+	// modeNow: changes someone made (settings, the Apply button).
+	modeNow
+	// modeBackground: periodic refreshes (lists, learned exclusions,
+	// fleet intelligence): even rule changes wait for the gap.
+	modeBackground
+)
+
+// Apply writes the rules and reloads the web server when they changed.
+func (m *Manager) Apply() error { return m.apply(modeNormal) }
+
+// ApplyNow applies at once, without waiting for the reload gap.
+func (m *Manager) ApplyNow() error { return m.apply(modeNow) }
+
+// ApplyBackground applies a periodic refresh: the web server reloads only
+// when the last reload is old enough.
+func (m *Manager) ApplyBackground() error { return m.apply(modeBackground) }
+
+func (m *Manager) apply(mode applyMode) error {
 	t := Detect()
 	cfg := m.Settings.Get().WAF
 	extra, extraFiles, states := m.extras(t)
@@ -468,7 +482,7 @@ func (m *Manager) Apply() error {
 		for k, v := range extraFiles {
 			bots[strings.TrimPrefix(k, m.RulesDir+"/")] = v
 		}
-		err = m.install(t, rules+extra, bots)
+		err = m.installMode(t, rules+extra, bots, mode)
 		if err != nil && extra != "" {
 			for i := range states {
 				if states[i].State == "active" {
@@ -477,7 +491,7 @@ func (m *Manager) Apply() error {
 			}
 			extra = ""
 			if cfg.Enabled {
-				err = m.install(t, rules, m.listFiles(cfg))
+				err = m.installMode(t, rules, m.listFiles(cfg), mode)
 			} else {
 				err = m.uninstall(t)
 			}
@@ -858,7 +872,7 @@ func (m *Manager) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			if m.Settings.Get().WAF.Enabled {
-				_ = m.Apply()
+				_ = m.ApplyBackground()
 			}
 		}
 	}

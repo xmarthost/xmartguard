@@ -342,7 +342,7 @@ func (a *Agent) centralLoop(ctx context.Context) {
 		a.pullCentralConfig(ctx)
 		if a.WAF.CentralChanged() {
 			a.central.applyMu.Lock()
-			if err := a.WAF.Apply(); err != nil {
+			if err := a.WAF.ApplyBackground(); err != nil {
 				a.Log.Warn("CAPTCHA list refresh failed", "err", err)
 			}
 			a.central.applyMu.Unlock()

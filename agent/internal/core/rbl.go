@@ -61,7 +61,7 @@ func (a *Agent) torLoop(ctx context.Context) {
 		lastTry = time.Time{}
 		if a.WAF.BlockedListChanged() || a.WAF.CentralChanged() {
 			a.central.applyMu.Lock()
-			if err := a.WAF.Apply(); err != nil {
+			if err := a.WAF.ApplyBackground(); err != nil {
 				a.Log.Warn("WAF reload after the Tor list update failed", "err", err)
 			}
 			a.central.applyMu.Unlock()
@@ -81,10 +81,11 @@ func (a *Agent) wafLearnLoop(ctx context.Context) {
 			return
 		case <-time.After(2 * time.Minute):
 		}
-		reload := false
+		reload, now := false, false
 		if off := strings.Join(waf.CPanelModsecOff(), ","); off != lastOff {
+			// A customer switched ModSecurity in cPanel: apply at once.
 			lastOff = off
-			reload = true
+			reload, now = true, true
 		}
 		if time.Since(lastLearn) >= time.Hour {
 			lastLearn = time.Now()
@@ -95,8 +96,12 @@ func (a *Agent) wafLearnLoop(ctx context.Context) {
 			reload = reload || changed
 		}
 		if reload {
+			apply := a.WAF.ApplyBackground
+			if now {
+				apply = a.WAF.Apply
+			}
 			a.central.applyMu.Lock()
-			if err := a.WAF.Apply(); err != nil {
+			if err := apply(); err != nil {
 				a.Log.Warn("WAF reload failed", "err", err)
 			}
 			a.central.applyMu.Unlock()

@@ -40,6 +40,7 @@ const GROUPS: [string, string, string][] = [
   ['cdn', 'CDN & website firewalls', 'Cloudflare, QUIC.cloud (LiteSpeed), Fastly, Bunny, CloudFront, Sucuri, Imperva: every visitor of a proxied site arrives from these addresses, so blocking one would take the site offline.'],
   ['monitor', 'Uptime monitors', 'Uptime checks, so a site is not reported down because the firewall blocked the monitor.'],
   ['payment', 'Payments', 'Order confirmations from Stripe and PayPal.'],
+  ['mail', 'Mail relays', 'MailBaby and other outbound mail relays: never blocked, and trusted by cPanel greylisting so their mail is not delayed.'],
   ['wordpress', 'WordPress', 'Jetpack / WordPress.com, WordPress.org updates and WooCommerce.com.'],
   ['vendor', 'Hosting vendors', 'cPanel, LiteSpeed, CloudLinux / Imunify, Softaculous and Malware.Expert license and update servers.'],
   ['custom', 'Your list', 'Addresses you added below.'],

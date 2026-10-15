@@ -116,6 +116,13 @@ func (a *Agent) runMailGuard(ctx context.Context) mail.EximGuardStatus {
 		_ = store.SetKV(a.DB, kvEximOurs, string(b))
 	}
 	a.mailGuard.Store(&st)
+	if fw := a.Settings.Get().Firewall; fw.TrustedServices && a.Trusted != nil {
+		if n, err := mail.SyncGreylistTrusted(ctx, a.Trusted.MailRelays(fw.TrustedDisabled)); n > 0 {
+			a.Log.Info("mail relays added to cPanel greylisting trusted hosts", "networks", n)
+		} else if err != nil {
+			a.Log.Debug("greylisting trusted hosts not updated", "err", err)
+		}
+	}
 	switch {
 	case st.Error != "":
 		a.Log.Warn("Exim mail protection not applied", "err", st.Error)

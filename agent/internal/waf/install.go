@@ -333,6 +333,10 @@ func writeIfChanged(path, content string, mode os.FileMode) error {
 // Install writes the rules and reloads the web server if the config is valid.
 // It returns the include file written, or an error explaining what failed.
 func (m *Manager) install(t Target, rules string, botFiles map[string]string) error {
+	return m.installMode(t, rules, botFiles, modeNormal)
+}
+
+func (m *Manager) installMode(t Target, rules string, botFiles map[string]string, mode applyMode) error {
 	if t.IncludeFile == "" || !t.ModSec {
 		return nil // nothing to hook into; the portal shows WAF unavailable
 	}
@@ -400,28 +404,35 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 		return nil
 	}
 	// Every change reloads the web server, and LiteSpeed restarts for it.
-	// Address lists change all day (bans, the IPDB, CAPTCHA suspects):
-	// they wait until the last reload is old enough, so a busy server is
-	// not restarted every few minutes. Rules and settings apply at once.
-	// A visitor who solved the CAPTCHA is sent back when this returns, so
-	// that reload is never put off: it only waits out a short gap (passes
-	// arriving meanwhile share the reload).
-	if listsOnly && len(stale) == 0 && !m.lastReload.IsZero() && !m.now.Swap(false) {
-		gap := ListReloadGap(t.LiteSpeed, urgent)
-		if wait := gap - time.Since(m.lastReload); wait > 0 {
-			if urgent {
-				time.Sleep(wait)
-			} else {
-				if m.deferred == nil {
-					m.deferred = time.AfterFunc(wait+time.Second, func() {
-						m.reloadMu.Lock()
-						m.deferred = nil
-						m.reloadMu.Unlock()
-						_ = m.Apply()
-					})
-				}
-				return nil
+	// Address lists change all day (bans, the IPDB, CAPTCHA suspects), and
+	// periodic refreshes (learned exclusions, fleet intelligence) come on
+	// their own: they wait until the last reload is old enough, so a busy
+	// server is not restarted every few minutes. Changes someone made apply
+	// at once. A visitor who solved the CAPTCHA is sent back when this
+	// returns, so that reload is never put off: it only waits out a short
+	// gap (passes arriving meanwhile share the reload).
+	wait := func(gap time.Duration) time.Duration {
+		if m.lastReload.IsZero() || len(stale) > 0 || mode == modeNow {
+			return 0
+		}
+		return gap - time.Since(m.lastReload)
+	}
+	switch {
+	case listsOnly && urgent:
+		if w := wait(ListReloadGap(t.LiteSpeed, true)); w > 0 {
+			time.Sleep(w)
+		}
+	case listsOnly || mode == modeBackground:
+		if w := wait(ListReloadGap(t.LiteSpeed, false)); w > 0 {
+			if m.deferred == nil {
+				m.deferred = time.AfterFunc(w+time.Second, func() {
+					m.reloadMu.Lock()
+					m.deferred = nil
+					m.reloadMu.Unlock()
+					_ = m.ApplyBackground()
+				})
 			}
+			return nil
 		}
 	}
 	rollback := func() {
@@ -497,9 +508,9 @@ var ListReloadGap = func(liteSpeed, captchaPass bool) time.Duration {
 	case captchaPass:
 		return 10 * time.Second
 	case liteSpeed:
-		return 30 * time.Minute
+		return 2 * time.Hour
 	default:
-		return 5 * time.Minute
+		return 15 * time.Minute
 	}
 }
 

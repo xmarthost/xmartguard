@@ -138,6 +138,14 @@ var Services = []Service{
 	{ID: "paypal", Name: "PayPal IPN / webhooks", Group: "payment",
 		Hosts: []string{"ipnpb.paypal.com", "notify.paypal.com", "api.paypal.com", "ipn.sandbox.paypal.com"}},
 
+	// Outbound mail relays (smarthosts) that hosting servers send through
+	// and receive from: never blocked, and trusted by cPanel's greylisting.
+	{ID: "mailbaby", Name: "MailBaby (mail relay)", Group: "mail",
+		Builtin: []string{"162.220.160.0/28", "68.168.211.160/28", "66.45.233.16/29", "209.159.153.232/29", "208.73.205.248/29",
+			"67.217.63.248/29", "199.231.189.152/29", "64.20.38.24/29", "174.138.190.32/29", "64.20.36.192/29", "199.231.189.96/29",
+			"206.72.200.40/29", "66.45.229.224/28", "174.138.180.168/29", "174.138.180.160/29", "174.138.180.152/29", "67.217.53.0/24",
+			"205.209.127.0/24", "68.168.210.0/24", "205.209.124.0/24"}},
+
 	// WordPress and hosting vendors (updates, licenses, remote management).
 	{ID: "jetpack", Name: "Jetpack / WordPress.com", Group: "wordpress",
 		Builtin: []string{"122.248.245.244/32", "54.217.201.243/32", "54.232.116.4/32", "192.0.80.0/20", "192.0.96.0/20", "192.0.112.0/20", "195.234.108.0/22"}},
@@ -542,6 +550,24 @@ func (s *Store) Match(ip string, disabled []string) string {
 		}
 	}
 	return ""
+}
+
+// MailRelays returns the enabled mail relay services' addresses by name
+// (cPanel greylisting trusts them).
+func (s *Store) MailRelays(disabled []string) map[string][]string {
+	off := map[string]bool{}
+	for _, d := range disabled {
+		off[d] = true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string][]string{}
+	for _, svc := range Services {
+		if svc.Group == "mail" && !off[svc.ID] && len(s.state[svc.ID].CIDRs) > 0 {
+			out[svc.Name] = clean(s.state[svc.ID].CIDRs)
+		}
+	}
+	return out
 }
 
 // Official reports whether a service's list came from its provider (not

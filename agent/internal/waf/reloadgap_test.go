@@ -109,11 +109,22 @@ func TestAddressListsWaitForTheReloadGap(t *testing.T) {
 	}
 	m.deferred.Stop()
 	// Changes someone made (ApplyNow) do not wait.
-	m.now.Store(true)
-	if err := m.install(tg, "SecRule B", lists("192.0.2.9\n", "127.0.0.2\n")); err != nil {
+	if err := m.installMode(tg, "SecRule B", lists("192.0.2.9\n", "127.0.0.2\n"), modeNow); err != nil {
 		t.Fatal(err)
 	}
 	if reloads() != 4 {
 		t.Fatalf("ApplyNow waited (%d restarts)", reloads())
 	}
+	// Periodic refreshes (learned exclusions, fleet intelligence) wait even
+	// when the rules changed.
+	if err := m.installMode(tg, "SecRule C", lists("192.0.2.9\n", "127.0.0.2\n"), modeBackground); err != nil {
+		t.Fatal(err)
+	}
+	if reloads() != 4 {
+		t.Fatalf("a background refresh restarted LiteSpeed (%d restarts)", reloads())
+	}
+	if m.deferred == nil {
+		t.Fatal("no reload scheduled for the background refresh")
+	}
+	m.deferred.Stop()
 }
