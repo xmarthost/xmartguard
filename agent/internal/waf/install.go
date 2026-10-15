@@ -134,6 +134,32 @@ var cpanelModSecFiles = []string{
 	"/etc/apache2/conf.d/modsec2.conf", "/etc/apache2/conf.d/modsec/modsec2.conf", "/etc/apache2/conf.d/modsec2.user.conf",
 }
 
+// procRoot is /proc (tests point it elsewhere).
+var procRoot = "/proc"
+
+// LiteSpeedRunning reports whether LiteSpeed Web Server is running (its
+// processes are named litespeed or lshttpd; Apache's are httpd).
+func LiteSpeedRunning() bool {
+	entries, err := os.ReadDir(procRoot)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name()[0] < '0' || e.Name()[0] > '9' {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(procRoot, e.Name(), "comm"))
+		if err != nil {
+			continue
+		}
+		switch strings.TrimSpace(string(b)) {
+		case "litespeed", "lshttpd", "openlitespeed":
+			return true
+		}
+	}
+	return false
+}
+
 // Detect finds the local web server and how to hook ModSecurity into it.
 func Detect() Target {
 	// LiteSpeed / OpenLiteSpeed read ModSecurity rules too.
@@ -171,8 +197,9 @@ func Detect() Target {
 		t.Engine = engineSetting("/etc/apache2/conf.d/modsec2.conf", "/etc/apache2/conf.d/modsec/*.conf")
 		// LiteSpeed Enterprise on cPanel reads the same Apache includes but
 		// logs ModSecurity to its own error log and must be restarted to
-		// load changed rules.
-		if exists("/usr/local/lsws/bin/lswsctrl") {
+		// load changed rules. Installed is not enough: a server switched
+		// back to Apache (an expired LiteSpeed licence) keeps the files.
+		if exists("/usr/local/lsws/bin/lswsctrl") && LiteSpeedRunning() {
 			t.WebServer = "LiteSpeed (cPanel)"
 			t.LiteSpeed = true
 			t.ErrorLogs = append([]string{"/usr/local/lsws/logs/error.log"}, t.ErrorLogs...)

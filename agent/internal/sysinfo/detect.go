@@ -102,16 +102,41 @@ func ControlPanel() string {
 	return "standalone"
 }
 
-// WebServer detects the primary web server.
+// running reports whether a process with one of these names runs.
+func running(names ...string) bool {
+	entries, err := os.ReadDir(p("proc"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Name() == "" || e.Name()[0] < '0' || e.Name()[0] > '9' {
+			continue
+		}
+		b, err := os.ReadFile(p("proc", e.Name(), "comm"))
+		if err != nil {
+			continue
+		}
+		for _, n := range names {
+			if strings.TrimSpace(string(b)) == n {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// WebServer detects the primary web server. LiteSpeed counts only while it
+// runs: a cPanel server switched back to Apache (an expired LiteSpeed
+// licence) keeps LiteSpeed's files.
 func WebServer() string {
+	apache := exists("usr", "sbin", "httpd") || exists("usr", "sbin", "apache2") || exists("usr", "local", "apache", "bin", "httpd")
 	switch {
-	case exists("usr", "local", "lsws", "bin", "lshttpd"):
+	case exists("usr", "local", "lsws", "bin", "lshttpd") && (!apache || running("litespeed", "lshttpd", "openlitespeed")):
 		if exists("usr", "local", "lsws", "bin", "openlitespeed") {
 			return "openlitespeed"
 		}
 		return "litespeed"
-	case exists("usr", "sbin", "httpd"), exists("usr", "sbin", "apache2"),
-		exists("usr", "local", "apache", "bin", "httpd"):
+	case apache:
 		return "apache"
 	case exists("usr", "sbin", "nginx"):
 		return "nginx"
