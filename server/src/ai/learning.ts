@@ -33,9 +33,15 @@ export interface FlaggedFile {
 }
 
 /** Signatures of malware families where a wrong "clean" is costly. */
-const RISKY_SIG = /backdoor|dropper|webshell|web_shell|uploader|ai\.learned|globalsdispatch/i;
-/** Where real plugins and themes never put code: PHP or archives here are droppers. */
-const RISKY_PATH = /(?:^|\/)wp-content\/(?:mu-plugins\/[^/]+\.php$|uploads\/.*\.(?:php\d?|phtml|phar|pht|inc|zip)$)/i;
+const RISKY_SIG = /backdoor|dropper|webshell|web_shell|uploader|ai\.learned|globalsdispatch|compressedpayload/i;
+/**
+ * Where real plugins and themes never put code: PHP or archives in uploads,
+ * mu-plugins, WordPress drop-ins (loaded on every page), hidden folders in
+ * a website, and wp-admin/user or wp-admin/network files WordPress does not
+ * ship (a file manager hidden as wp-admin/user/cgi.php).
+ */
+const RISKY_PATH =
+  /(?:(?:^|\/)wp-content\/(?:mu-plugins\/[^/]+\.php$|uploads\/.*\.(?:php\d?|phtml|phar|pht|inc|zip)$|(?:db|object-cache|advanced-cache)\.php$)|\/(?:wp-content|public_html)\/(?:[^/]+\/)*\.(?!well-known\/)[^/]+\/|\/wp-admin\/(?:user|network)\/(?!(?:about|admin|credits|freedoms|index|menu|privacy|profile|user-edit|contribute|edit|settings|setup|site-info|site-new|site-settings|site-themes|site-users|sites|theme-editor|theme-install|themes|update-core|update|upgrade|user-new|users|plugin-editor|plugin-install|plugins)\.php$)[^/]+\.php$)/i;
 /** A family with this many malicious verdicts, and four times more than clean ones, is not cleared by one "clean". */
 export const FAMILY_MIN_MALICIOUS = 20;
 

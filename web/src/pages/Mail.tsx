@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Ban, FileText, Globe, RefreshCw, Search, ShieldCheck, Trash2, Unlock } from 'lucide-react';
+import { Ban, Clock, FileText, Gauge, Globe, RefreshCw, Search, Send, ShieldCheck, Trash2, Unlock, Users } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader, StatCard } from '../components/ui';
 import { Modal, Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
@@ -17,6 +17,93 @@ interface OSMEvent {
   count: number;
   action: string;
   user: string;
+}
+
+interface SenderStat {
+  sender: string;
+  source: string;
+  user: string;
+  day: number;
+  hour: number;
+  rcpts: number;
+  last_at: number;
+  exceeded: boolean;
+}
+
+interface OSMStats {
+  log: string;
+  log_found: boolean;
+  enabled: boolean;
+  per_minute: number;
+  per_hour: number;
+  since: number;
+  total: number;
+  senders: number;
+  last_message: number;
+  top: SenderStat[];
+}
+
+/** What the monitor sees: every sender of the last 24 hours, not only those over a limit. */
+function OutgoingSummary({ serverId }: { serverId: string }) {
+  const s = useAgent<OSMStats>(serverId, 'osm.stats', { limit: 25 }, 30_000);
+  if (!s.data) return s.error ? <ErrorBox message={s.error} /> : <SectionLoader />;
+  const d = s.data;
+  return (
+    <div className="space-y-3">
+      {!d.log_found && (
+        <div className="card border-amber-200 bg-amber-50 text-sm text-amber-800">
+          The mail log {d.log} was not found: the monitor starts as soon as Exim writes it.
+        </div>
+      )}
+      {d.log_found && !d.enabled && (
+        <div className="card border-amber-200 bg-amber-50 text-sm text-amber-800">
+          The monitor is switched off in Settings » Outgoing Spam Monitor: mail is counted, but no limit is enforced.
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard icon={<Send className="h-6 w-6" />} label="Messages sent (24h)" value={d.total.toLocaleString()} />
+        <StatCard icon={<Users className="h-6 w-6" />} label="Senders (24h)" value={d.senders.toLocaleString()} />
+        <StatCard icon={<Gauge className="h-6 w-6" />} label="Limits per sender" value={`${d.per_minute}/min · ${d.per_hour}/h`} />
+        <StatCard icon={<Clock className="h-6 w-6" />} label="Last message" value={d.last_message ? fmtTime(d.last_message) : '—'} />
+      </div>
+      <div className="card overflow-x-auto p-0">
+        <div className="border-b border-slate-100 px-4 py-3 text-sm font-medium">
+          Busiest senders, last 24 hours <span className="font-normal text-slate-500">(counting since {fmtTime(d.since)})</span>
+        </div>
+        {d.top.length === 0 ? (
+          <Empty text="No outgoing mail in the last 24 hours" />
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
+              <tr>
+                <th className="px-4 py-2">Sender</th>
+                <th className="px-2">Source</th>
+                <th className="px-2 text-right">24h</th>
+                <th className="px-2 text-right">This hour</th>
+                <th className="px-2 text-right">Recipients</th>
+                <th className="px-2">Last message</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {d.top.map((x) => (
+                <tr key={x.sender + x.source}>
+                  <td className="px-4 py-2 break-all">
+                    {x.sender}
+                    {x.user && <div className="text-xs text-slate-500">account {x.user}</div>}
+                  </td>
+                  <td className="px-2 py-2 text-xs break-all">{x.source}</td>
+                  <td className="px-2 py-2 text-right">{x.day.toLocaleString()}</td>
+                  <td className={`px-2 py-2 text-right ${x.exceeded ? 'font-semibold text-red-700' : ''}`}>{x.hour.toLocaleString()}</td>
+                  <td className="px-2 py-2 text-right">{x.rcpts.toLocaleString()}</td>
+                  <td className="px-2 py-2 text-xs whitespace-nowrap text-slate-500">{fmtTime(x.last_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function SearchBox({ onSearch }: { onSearch: (q: string) => void }) {
@@ -55,7 +142,7 @@ export function OutgoingSpam() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="h-title">Outgoing Spam Monitor</h1>
-          <p className="text-sm text-slate-500">Senders that exceeded the outgoing mail limits (Settings » Outgoing Spam Monitor).</p>
+          <p className="text-sm text-slate-500">Outgoing mail of the last 24 hours, and senders that exceeded the limits (Settings » Outgoing Spam Monitor).</p>
         </div>
         <div className="flex gap-2">
           <SearchBox onSearch={(q) => (setOffset(0), setQuery(q))} />
@@ -75,11 +162,13 @@ export function OutgoingSpam() {
           )}
         </div>
       </div>
+      {id && <OutgoingSummary serverId={id} />}
+      <h2 className="text-sm font-semibold text-slate-700">Limit violations</h2>
       <div className="card overflow-x-auto p-0">
         {!list.data ? (
           list.error ? <ErrorBox message={list.error} /> : <SectionLoader />
         ) : list.data.events.length === 0 ? (
-          <Empty text="No outgoing spam detected" />
+          <Empty text="No sender exceeded the limits" />
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">

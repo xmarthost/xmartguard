@@ -22,6 +22,27 @@ const (
 	maxZipTotal   = 64 << 20 // all members read
 )
 
+// backupDirs are where backup plugins keep their archives (UpdraftPlus,
+// Backup Migration, All-in-One WP Migration, WPvivid, Duplicator,
+// BackWPup): copies of the whole site, never run by the web server. The
+// site's live files are scanned themselves.
+var backupDirs = []string{"/wp-content/updraft/", "/wp-content/ai1wm-backups/", "/wp-content/wpvivid", "/wp-content/backups-dup-lite/",
+	"/wp-content/backups-dup-pro/", "/wp-content/uploads/backwpup", "/wp-content/backup-db/"}
+
+// backupArchive reports a zip in a backup plugin's folder.
+func backupArchive(file string) bool {
+	for _, d := range backupDirs {
+		if strings.Contains(file, d) {
+			return true
+		}
+	}
+	// Backup Migration: wp-content/backup-migration-<random>/backups/.
+	if i := strings.Index(file, "/wp-content/backup-migration-"); i >= 0 {
+		return strings.Contains(file[i:], "/backups/")
+	}
+	return false
+}
+
 // scanZip returns the first confident detection inside a zip archive.
 func scanZip(file string, size int64) *Detection {
 	if size > maxZipSize {

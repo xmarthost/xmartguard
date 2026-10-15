@@ -105,6 +105,12 @@ type Scanner struct {
 	// Cleared reports content (by SHA-256) the AI scanner or an
 	// administrator found clean; it is not flagged again.
 	Cleared func(sha256 string) bool
+	// Unconfirmed reports a clean verdict that does not hold for this file
+	// (cleared only by the AI, for a signature that nearly always catches
+	// real malware or a place where malware hides): the file is flagged
+	// again for an administrator to decide. signature is "" before the
+	// content is checked.
+	Unconfirmed func(sha256, path, signature string) bool
 
 	mu      sync.Mutex
 	cancels map[int64]context.CancelFunc
@@ -393,6 +399,15 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		return nil, ErrTrusted
 	}
 	var content []byte
+	// Content found clean whose verdict depends on what matches it (see
+	// Unconfirmed): checked again once a signature matched.
+	clearedSum := ""
+	final := func(d *Detection) (*Detection, error) {
+		if d != nil && clearedSum != "" && s.isCleared(clearedSum, path, d.Signature) {
+			return nil, ErrTrusted
+		}
+		return d, nil
+	}
 	if ScriptExts[ext] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
 		var err error
 		if content, err = os.ReadFile(path); err != nil {
@@ -414,8 +429,12 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 		if s.Cleared != nil {
 			sum := sha256.Sum256(content)
-			if s.Cleared(hex.EncodeToString(sum[:])) {
+			hs := hex.EncodeToString(sum[:])
+			if s.isCleared(hs, path, "") {
 				return nil, ErrTrusted
+			}
+			if s.Cleared(hs) {
+				clearedSum = hs
 			}
 		}
 	}
@@ -433,7 +452,7 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			if content == nil && s.clearedFile(path) {
 				return nil, ErrTrusted
 			}
-			return &Detection{CatVirus, label}, nil
+			return final(&Detection{CatVirus, label})
 		}
 	}
 	if content != nil {
@@ -441,19 +460,19 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			return binaryCheck(path, content)
 		}
 		if d := analyze(ext, content); d != nil {
-			return capHeuristic(path, ext, d), nil
+			return final(capHeuristic(path, ext, d))
 		}
 		if r := Match(ext, content); r != nil {
-			return &Detection{r.Category, r.Name}, nil
+			return final(&Detection{r.Category, r.Name})
 		}
 		// ClamAV-format databases (installed ClamAV, subscriptions).
 		if d := clamCheck(content); d != nil {
-			return d, nil
+			return final(d)
 		}
 		// Byte patterns from public feeds (Linux Malware Detect): reported
 		// as suspicious so the AI scanner confirms them first.
 		if name := feedPatterns.Match(content); name != "" {
-			return &Detection{CatSuspicious, "LMD." + name}, nil
+			return final(&Detection{CatSuspicious, "LMD." + name})
 		}
 		return nil, nil
 	}
@@ -461,6 +480,9 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		return nil, nil // larger than the size limit
 	}
 	if ext == ".zip" {
+		if backupArchive(path) {
+			return nil, nil
+		}
 		d := scanZip(path, info.Size())
 		if d != nil && s.clearedFile(path) {
 			return nil, ErrTrusted
@@ -493,7 +515,15 @@ func (s *Scanner) clearedFile(path string) bool {
 		return false
 	}
 	sum := sha256File(path)
-	return sum != "" && s.Cleared(sum)
+	return sum != "" && s.isCleared(sum, path, "")
+}
+
+// isCleared: a clean verdict for this content that holds for this file.
+func (s *Scanner) isCleared(sum, path, signature string) bool {
+	if s.Cleared == nil || !s.Cleared(sum) {
+		return false
+	}
+	return s.Unconfirmed == nil || !s.Unconfirmed(sum, path, signature)
 }
 
 // binaryCheck flags executables inside web-accessible directories.
@@ -547,7 +577,7 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 	// The AI scanner's (or an administrator's) clean verdict is final for this
 	// exact content, whatever the file type and however it was found: it is
 	// not recorded or quarantined again until the file changes.
-	if sum != "" && s.Cleared != nil && s.Cleared(sum) {
+	if sum != "" && s.isCleared(sum, path, d.Signature) {
 		return Finding{}, errExists
 	}
 	f := Finding{ScanID: scanID, Source: source, Path: path, Category: d.Category, Signature: d.Signature,

@@ -234,7 +234,7 @@ var (
 	// A miner is started (new CoinHive.Anonymous(...)) or loaded from a
 	// mining pool's script; libraries that only list miner names (browser
 	// fingerprinting, ad blocker detection) are not miners.
-	reJSMiner    = regexp.MustCompile(`(?i)(?:new\s+(?:CoinHive|CoinImp|CRLT|deepMiner|JSECoin|Client)\s*\.\s*(?:Anonymous|User|Init|Token)\s*\(|src\s*=\s*["'][^"']*(?:coinhive|coin-hive|cryptoloot|crypto-loot|webmine\.pro|coinimp|jsecoin)[^"']*\.js)`)
+	reJSMiner    = regexp.MustCompile(`(?i)(?:new\s+(?:(?:CoinHive|CoinImp|CRLT|deepMiner|JSECoin)\s*\.\s*(?:Anonymous|User|Init|Token)|Client\s*\.\s*Anonymous)\s*\(|src\s*=\s*["'][^"']*(?:coinhive|coin-hive|cryptoloot|crypto-loot|webmine\.pro|coinimp|jsecoin)[^"']*\.js)`)
 	reJSHexBlob  = regexp.MustCompile(`(?:\\x[0-9A-Fa-f]{2}){80,}`)
 	reJSDocWrite = regexp.MustCompile(`(?i)document\.write\s*\(\s*unescape\s*\(`)
 )

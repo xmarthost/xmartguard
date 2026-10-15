@@ -590,4 +590,35 @@ CREATE TABLE ipdb_abuse_checks (
 CREATE INDEX ipdb_abuse_checks_at ON ipdb_abuse_checks (checked_at);
 `,
   },
+  {
+    version: '021_distrust_hidden_and_families',
+    sql: `
+-- 016 again, with the places malware hides that it missed (hidden folders in
+-- a website, wp-content drop-ins, files WordPress does not ship in
+-- wp-admin/user and wp-admin/network): the AI cleared fake plugins of the
+-- GlobalsDispatch family and a file manager in wp-admin/user. Their "clean"
+-- becomes "suspicious" (an administrator decides) on every server.
+WITH fam AS (
+  SELECT match FROM ai_kb
+   WHERE match ~* '(backdoor|dropper|webshell|web_shell|uploader|ai\\.learned|globalsdispatch|compressedpayload)'
+   GROUP BY match
+  HAVING count(*) FILTER (WHERE verdict = 'malicious') >= 20
+     AND count(*) FILTER (WHERE verdict = 'clean') * 4 <= count(*) FILTER (WHERE verdict = 'malicious')
+), risky AS (
+  SELECT DISTINCT sha256 FROM ai_fp
+   WHERE path ~* '(/(wp-content|public_html)/([^/]+/)*\\.(?!well-known/)[^/]+/|wp-content/(db|object-cache|advanced-cache)\\.php$|wp-content/uploads/.*\\.(php[0-9]?|phtml|phar|pht|inc|zip)$|wp-content/mu-plugins/[^/]+\\.php$)'
+      OR (path ~* '/wp-admin/(user|network)/[^/]+\\.php$' AND path !~* '/wp-admin/(user|network)/(about|admin|credits|freedoms|index|menu|privacy|profile|user-edit|contribute|edit|settings|setup|site-info|site-new|site-settings|site-themes|site-users|sites|theme-editor|theme-install|themes|update-core|update|upgrade|user-new|users|plugin-editor|plugin-install|plugins)\\.php$')
+), bad AS (
+  SELECT sha256 FROM ai_kb WHERE verdict = 'clean' AND NOT overridden
+     AND (match IN (SELECT match FROM fam) OR sha256 IN (SELECT sha256 FROM risky))
+), upd AS (
+  UPDATE ai_kb SET verdict = 'suspicious', confidence = LEAST(confidence, 60),
+         reason = left('Not restored: the AI found it clean, but it is a malware family or sits where malware hides; an administrator decides. AI: ' || reason, 600),
+         updated_at = now(), seq = nextval(pg_get_serial_sequence('ai_kb', 'seq'))
+   WHERE sha256 IN (SELECT sha256 FROM bad)
+  RETURNING sha256
+)
+DELETE FROM ai_fp WHERE sha256 IN (SELECT sha256 FROM upd);
+`,
+  },
 ];

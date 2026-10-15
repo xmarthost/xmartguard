@@ -293,6 +293,16 @@ func (a *Analyzer) AnalyzeBatch(ctx context.Context, jobs []Job) ([]Verdict, err
 		}
 		out[i].SHA256, out[i].At = jobs[i].SHA256, store.Now()
 		out[i].Confidence, out[i].Reason = clamp(out[i].Confidence), truncate(out[i].Reason, 600)
+		where := jobs[i].Origin
+		if where == "" {
+			where = jobs[i].Path
+		}
+		if why := Untrusted(where, jobs[i].Signature); out[i].Verdict == Clean && why != "" && out[i].Confidence >= ClearMinConfidence {
+			// Not enough to put the file back or teach the fleet: an
+			// administrator decides.
+			out[i].Confidence = ClearMinConfidence - 30
+			out[i].Reason = truncate("[needs an administrator: "+why+"] "+out[i].Reason, 600)
+		}
 		if st, serr := os.Stat(jobs[i].Path); serr == nil {
 			out[i].Size = st.Size()
 		}
@@ -375,9 +385,10 @@ const ClearMinConfidence = 90
 // cleared caches the SHA-256 of files the AI (on any server) or an
 // administrator found clean, for the scanner's per-file check.
 var cleared struct {
-	mu  sync.RWMutex
-	db  *sql.DB
-	set map[string]bool
+	mu    sync.RWMutex
+	db    *sql.DB
+	set   map[string]bool
+	admin map[string]bool // cleared by an administrator
 }
 
 func isClearedVerdict(v Verdict) bool {
@@ -385,18 +396,32 @@ func isClearedVerdict(v Verdict) bool {
 }
 
 func loadCleared(db *sql.DB) {
-	set := map[string]bool{}
-	rows, err := db.Query(`SELECT sha256 FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND source IN ('ai','fleet','admin')`, ClearMinConfidence)
+	set, admin := map[string]bool{}, map[string]bool{}
+	// Content one of the untrusted signatures caught stays flagged unless an
+	// administrator cleared it (the AI and the fleet were wrong about it).
+	rows, err := db.Query(`SELECT sha256, source FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND source IN ('ai','fleet','admin')
+		AND (source = 'admin' OR sha256 NOT IN (SELECT sha256 FROM findings WHERE sha256 != '' AND signature IN (`+untrustedSigList()+`)))`, ClearMinConfidence)
 	if err == nil {
 		for rows.Next() {
-			var s string
-			if rows.Scan(&s) == nil {
+			var s, src string
+			if rows.Scan(&s, &src) == nil {
 				set[s] = true
+				admin[s] = src == SourceAdmin
 			}
 		}
 		rows.Close()
 	}
-	cleared.db, cleared.set = db, set
+	cleared.db, cleared.set, cleared.admin = db, set, admin
+}
+
+// AdminCleared reports content an administrator restored or marked clean.
+func AdminCleared(db *sql.DB, sha string) bool {
+	if !IsCleared(db, sha) {
+		return false
+	}
+	cleared.mu.RLock()
+	defer cleared.mu.RUnlock()
+	return cleared.admin[sha]
 }
 
 // IsCleared reports whether content with this SHA-256 was found clean.
@@ -417,6 +442,9 @@ func IsCleared(db *sql.DB, sha string) bool {
 }
 
 func noteCleared(db *sql.DB, v Verdict) {
+	if isClearedVerdict(v) && v.Source != SourceAdmin && untrustedHash(db, v.SHA256) {
+		v.Confidence = 0 // not cleared: see loadCleared
+	}
 	cleared.mu.Lock()
 	defer cleared.mu.Unlock()
 	if cleared.db != db || cleared.set == nil {
@@ -424,7 +452,9 @@ func noteCleared(db *sql.DB, v Verdict) {
 	}
 	if isClearedVerdict(v) {
 		cleared.set[v.SHA256] = true
+		cleared.admin[v.SHA256] = v.Source == SourceAdmin
 	} else {
 		delete(cleared.set, v.SHA256)
+		delete(cleared.admin, v.SHA256)
 	}
 }

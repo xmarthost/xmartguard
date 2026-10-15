@@ -137,6 +137,10 @@ type Monitor struct {
 	mu      sync.Mutex
 	counts  map[string][]time.Time
 	flagged map[string]time.Time // key|interval -> last event (one event per window)
+	stats   map[string]*senderStat
+	since   time.Time // oldest message counted in the summary
+	started time.Time
+	lastMsg time.Time
 }
 
 func (o *Monitor) init() {
@@ -145,6 +149,8 @@ func (o *Monitor) init() {
 	if o.counts == nil {
 		o.counts = map[string][]time.Time{}
 		o.flagged = map[string]time.Time{}
+		o.stats = map[string]*senderStat{}
+		o.started = time.Now()
 	}
 }
 
@@ -165,6 +171,7 @@ func (o *Monitor) Run(ctx context.Context) {
 		case <-time.After(10 * time.Minute):
 		}
 	}
+	o.Seed(LogPath)
 	lines := make(chan string, 1024)
 	go logtail.Follow(ctx, LogPath, lines)
 	var lastCWD string
@@ -241,13 +248,16 @@ func SubjectIssue(subject string, patterns []string) string {
 // Observe counts one message and raises events when thresholds are crossed.
 func (o *Monitor) Observe(m Message) {
 	o.init()
-	cfg := o.Settings.Get().OSM
-	if !cfg.Enabled || o.whitelisted(cfg, m) {
-		return
-	}
 	now := m.At
 	if now.IsZero() {
 		now = time.Now()
+	}
+	o.mu.Lock()
+	o.count(m, now)
+	o.mu.Unlock()
+	cfg := o.Settings.Get().OSM
+	if !cfg.Enabled || o.whitelisted(cfg, m) {
+		return
 	}
 	k := m.key()
 	o.mu.Lock()

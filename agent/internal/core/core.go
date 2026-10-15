@@ -115,6 +115,14 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Scanner.OnReinfection = a.onReinfection
 	a.Scanner.OnClean = func(path string, _ os.FileInfo) { a.AI.EnqueueNew(path) }
 	a.Scanner.Cleared = func(sha string) bool { return ai.IsCleared(db, sha) }
+	a.Scanner.Unconfirmed = func(sha, path, sig string) bool {
+		if ai.AdminCleared(db, sha) {
+			return false
+		}
+		// Before the content is checked the signature is unknown: check it,
+		// the verdict is applied when a signature matched.
+		return sig == "" || ai.Untrusted(path, sig) != ""
+	}
 	plugins := &wpcore.Plugins{CacheDir: filepath.Join(store.StateDir(), "cms", "plugin-checksums")}
 	var pluginsOnce sync.Once
 	a.Scanner.KnownGoodPath = func(path string, sum [16]byte) bool {
@@ -1386,6 +1394,12 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		evs, total, err := a.OSM.Events(f)
 		return map[string]any{"events": evs, "total": total}, err
 	}
+	h["osm.stats"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, _ := decode[struct {
+			Limit int `json:"limit"`
+		}](p)
+		return a.OSM.Summary(in.Limit), nil
+	}
 	h["osm.transaction"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
 			MsgID string `json:"msg_id"`
@@ -1727,6 +1741,10 @@ func (a *Agent) clearFalsePositive(j ai.Job, v ai.Verdict) {
 	}
 	f, err := a.Scanner.Get(j.FindingID)
 	if err != nil || (f.Status != "quarantined" && f.Status != "disabled" && f.Status != "detected") {
+		return
+	}
+	if why := ai.Untrusted(f.Path, f.Signature); why != "" {
+		a.Log.Info("AI found a file clean, left for an administrator", "path", f.Path, "signature", f.Signature, "why", why)
 		return
 	}
 	if err := a.Scanner.ClearAs(f.ID, scanner.StatusAIRestored); err != nil {

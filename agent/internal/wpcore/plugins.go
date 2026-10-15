@@ -53,10 +53,20 @@ var (
 	rePluginName    = regexp.MustCompile(`(?mi)^[ \t/*#@]*Plugin Name:`)
 )
 
-// pluginOf splits .../wp-content/plugins/<slug>/<rel>.
+// pluginDirs are folders holding plugins: the plugins themselves, the copy
+// WordPress keeps while it updates one (upgrade-temp-backup) and the old
+// versions UpdraftPlus keeps after its own update. Copies are verified like
+// the plugin: by its version's official checksums.
+var pluginDirs = []string{"/wp-content/plugins/", "/wp-content/upgrade-temp-backup/plugins/", "/wp-content/updraft/plugins-old/"}
+
+// pluginOf splits .../wp-content/plugins/<slug>/<rel> (or a copy's folder).
 func pluginOf(path string) (dir, slug, rel string) {
-	const marker = "/wp-content/plugins/"
-	i := strings.LastIndex(path, marker)
+	marker, i := "", -1
+	for _, m := range pluginDirs {
+		if j := strings.LastIndex(path, m); j > i {
+			marker, i = m, j
+		}
+	}
 	if i < 0 {
 		return "", "", ""
 	}

@@ -33,6 +33,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'cms.sites': { role: 'viewer', mutates: false },
   'db.findings': { role: 'viewer', mutates: false },
   'osm.events': { role: 'viewer', mutates: false },
+  'osm.stats': { role: 'viewer', mutates: false },
   'osm.transaction': { role: 'viewer', mutates: false },
   'domainrep.get': { role: 'viewer', mutates: false },
   'suspend.list': { role: 'viewer', mutates: false },
