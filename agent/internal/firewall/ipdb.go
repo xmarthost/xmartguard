@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"bufio"
+	"bytes"
 	"database/sql"
 	"fmt"
 	"net/netip"
@@ -612,4 +613,91 @@ func (m *Manager) IPDBProbeReports(since int64, limit int) ([]IPDBReport, int64,
 		out = append(out, IPDBReport{ID: e.id, IP: e.ip, Source: "waf-probe", Reason: "WAF: " + msg, At: e.at})
 	}
 	return out, cursor, nil
+}
+
+// WebIPDBEntries are the IPDB entries the WAF acts on (POST block, CAPTCHA
+// suspects, stricter CRS threshold): the IPDB without the whitelisted
+// countries. A whitelisted country is a full whitelist: shared mobile and
+// broadband addresses of such a country often appear on public blocklists,
+// and their real users must not be refused.
+func (m *Manager) WebIPDBEntries() []string {
+	return m.WithoutWhitelistedCountries(m.IPDBEntries())
+}
+
+// WithoutWhitelistedCountries drops the addresses and networks of the
+// whitelisted countries (Firewall » Whitelisted countries) from a list.
+func (m *Manager) WithoutWhitelistedCountries(list []string) []string {
+	if len(list) == 0 || m.Geo == nil || m.Settings == nil {
+		return list
+	}
+	codes := m.Settings.Get().Firewall.IgnoredCountries
+	if len(codes) == 0 {
+		return list
+	}
+	return withoutRanges(list, m.Geo.CIDRs(codes))
+}
+
+// addrRange is an inclusive address range (16-byte form).
+type addrRange struct{ lo, hi [16]byte }
+
+// withoutRanges drops the entries whose first address falls in one of the
+// networks (sorted ranges, binary search: fast for 100,000s of entries).
+func withoutRanges(entries, networks []string) []string {
+	var rs []addrRange
+	for _, n := range networks {
+		p, err := netip.ParsePrefix(strings.TrimSpace(n))
+		if err != nil {
+			a, err2 := netip.ParseAddr(strings.TrimSpace(n))
+			if err2 != nil {
+				continue
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+		p = p.Masked()
+		lo := p.Addr().As16()
+		hi := lo
+		bits := p.Bits()
+		if p.Addr().Is4() {
+			bits += 96
+		}
+		for i := bits; i < 128; i++ {
+			hi[i/8] |= 1 << (7 - i%8)
+		}
+		rs = append(rs, addrRange{lo, hi})
+	}
+	if len(rs) == 0 {
+		return entries
+	}
+	sort.Slice(rs, func(i, j int) bool { return bytes.Compare(rs[i].lo[:], rs[j].lo[:]) < 0 })
+	// Merge overlaps so a search finds the one candidate range.
+	merged := rs[:1]
+	for _, r := range rs[1:] {
+		last := &merged[len(merged)-1]
+		if bytes.Compare(r.lo[:], last.hi[:]) <= 0 {
+			if bytes.Compare(r.hi[:], last.hi[:]) > 0 {
+				last.hi = r.hi
+			}
+			continue
+		}
+		merged = append(merged, r)
+	}
+	out := entries[:0:0]
+	for _, e := range entries {
+		s := e
+		if i := strings.IndexByte(s, '/'); i >= 0 {
+			s = s[:i]
+		}
+		a, err := netip.ParseAddr(s)
+		if err != nil {
+			out = append(out, e)
+			continue
+		}
+		k := a.As16()
+		i := sort.Search(len(merged), func(i int) bool { return bytes.Compare(merged[i].lo[:], k[:]) > 0 }) - 1
+		if i >= 0 && bytes.Compare(k[:], merged[i].hi[:]) <= 0 {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }

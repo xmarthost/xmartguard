@@ -204,7 +204,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
 		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, ExemptIPs: a.wafExemptIPs, VerifiedBots: a.wafVerifiedBots,
-		IPDBIPs: a.Firewall.IPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, Intel: a.wafIntel,
+		IPDBIPs: a.Firewall.WebIPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, Intel: a.wafIntel,
 		Gate: func() *waf.Gate {
 			cur := a.Settings.Get()
 			// While the portal's CAPTCHA page is on, it serves the login

@@ -125,6 +125,10 @@ func (a *Agent) centralSuspects() []string {
 		}
 		out = append(out, ip)
 	}
+	// Whitelisted countries are a full whitelist: never sent to the check.
+	if a.Firewall != nil {
+		out = a.Firewall.WithoutWhitelistedCountries(out)
+	}
 	sort.Strings(out)
 	return out
 }
@@ -155,14 +159,18 @@ func (a *Agent) centralPassList() []string {
 
 // centralPass lets ip through the CAPTCHA for the configured time and
 // reloads the WAF (one reload covers every pass added before it starts).
-func (a *Agent) centralPass(ip string) error {
-	if net.ParseIP(ip) == nil {
-		return fmt.Errorf("invalid address %q", ip)
+func (a *Agent) centralPass(ips ...string) error {
+	for _, ip := range ips {
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("invalid address %q", ip)
+		}
 	}
 	minutes := a.Settings.Get().Captcha.CentralMinutes
 	a.central.mu.Lock()
 	m := a.centralPassMap()
-	m[net.ParseIP(ip).String()] = time.Now().Add(time.Duration(minutes) * time.Minute).Unix()
+	for _, ip := range ips {
+		m[net.ParseIP(ip).String()] = time.Now().Add(time.Duration(minutes) * time.Minute).Unix()
+	}
 	b, _ := json.Marshal(m)
 	err := store.SetKV(a.DB, kvCentralPass, string(b))
 	a.central.gen++
@@ -376,6 +384,12 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		in, err := decode[struct {
 			IP   string `json:"ip"`
 			Host string `json:"host"`
+			// Also: the address the visitor solved the check from. Mobile
+			// networks (CGNAT) reach different sites from different
+			// addresses: without it the next request to the site can come
+			// from an address that is still sent to the check, again and
+			// again.
+			Also string `json:"also"`
 		}](p)
 		if err != nil {
 			return nil, err
@@ -383,10 +397,16 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if !a.siteHere(in.IP, in.Host) {
 			return nil, fmt.Errorf("%s is not a website on this server", in.Host)
 		}
-		if err := a.centralPass(in.IP); err != nil {
+		ips := []string{in.IP}
+		if in.Also != "" && in.Also != in.IP && net.ParseIP(in.Also) != nil {
+			ips = append(ips, in.Also)
+		}
+		if err := a.centralPass(ips...); err != nil {
 			return nil, err
 		}
-		a.centralLiftBan(in.IP)
+		for _, ip := range ips {
+			a.centralLiftBan(ip)
+		}
 		return map[string]any{"ok": true, "minutes": a.Settings.Get().Captcha.CentralMinutes}, nil
 	}
 }

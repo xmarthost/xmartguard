@@ -130,6 +130,14 @@ func TestCentralCaptchaAgent(t *testing.T) {
 	if l := a.centralPassList(); len(l) != 1 || l[0] != "198.51.100.7" {
 		t.Fatalf("pass list %v", l)
 	}
+	// Mobile networks: the address the check was solved from passes too.
+	p, _ := json.Marshal(map[string]string{"ip": "198.51.100.7", "host": "shop.example.com", "also": "203.0.113.77"})
+	if _, err := h["captcha.pass"](ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	if l := a.centralPassList(); len(l) != 2 || l[0] != "198.51.100.7" || l[1] != "203.0.113.77" {
+		t.Fatalf("pass list with the solving address %v", l)
+	}
 	// Expired passes drop out.
 	store.SetKV(a.DB, kvCentralPass, `{"198.51.100.7":1}`)
 	if l := a.centralPassList(); len(l) != 0 {

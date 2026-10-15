@@ -104,14 +104,18 @@ var Catalog = []RuleInfo{
 	{IDWPAjaxExcl, "exclusions", "Allow code and HTML in admin-ajax.php / admin-post.php requests of logged-in users sent from the admin screens (editor saves)", "allow"},
 	{IDWPRestExcl, "exclusions", "Allow code and HTML in writes to WordPress core REST routes (posts, pages, blocks, templates, media…; WordPress checks the user's rights)", "allow"},
 	{IDWPRestMethods, "exclusions", "Allow the HTTP methods (PUT, PATCH, DELETE) and method override headers of the WordPress REST API (Elementor, WooCommerce block checkout)", "allow"},
-	{IDWCStoreExcl, "exclusions", "WooCommerce block cart and checkout (Store API): PHP-injection rules skip it (addresses and order notes are stored, never run)", "allow"},
-	{IDHostingBase, "exclusions", "Hosting defaults: comments and reviews in Urdu, Arabic or with emoji (941310), crawlers' Accept charset (920600) and JSON in cookies (942550) are not attacks", "allow"},
+	{IDWCStoreExcl, "exclusions", "WooCommerce cart and checkout (Store API and ?wc-ajax=): PHP-injection rules skip it (addresses and order notes are stored, never run)", "allow"},
+	{IDHostingBase, "exclusions", "Hosting defaults: comments and reviews in Urdu, Arabic or with emoji (941310), crawlers' Accept charset (920600) and JSON sent by shop, tracking and consent plugins (942550) are not attacks", "allow"},
 	{IDCPanelPaths, "exclusions", "cPanel pages reached by the server address (mail autodiscover/autoconfig, suspended page, AutoSSL): numeric Host allowed", "allow"},
 	{IDCPanelServices, "exclusions", "cPanel service subdomains (cpanel., webmail., whm., webdisk., cpcalendars., cpcontacts.): not inspected, cPanel checks their logins", "allow"},
 	{IDCPanelMailCfg, "exclusions", "Mail client setup requests answered by cPanel (cgi-sys/autodiscover.cgi, autoconfig.cgi)", "allow"},
 	{IDDeviceIclock, "exclusions", "Attendance and access-control devices posting to /iclock/ (ZKTeco push protocol)", "allow"},
 	{IDStaticCookies, "exclusions", "Images, styles and scripts: the cookies sent with them are not checked for injections", "allow"},
 	{IDWPCommentText, "exclusions", "WordPress comments and WooCommerce reviews: the text, name and website are not checked for SQL injection (WordPress stores them safely; XSS is still checked)", "allow"},
+	{IDPasswordArgs, "exclusions", "Password fields of login and sign-up forms are not checked for PHP injection (passwords are hashed, never run; SQL and XSS rules still check them)", "allow"},
+	{IDWPCustomizer, "exclusions", "WordPress customizer preview of a logged-in user (unsaved CSS and HTML widgets): injection rules skip it", "allow"},
+	{IDThemeColorCSS, "exclusions", "Theme colour stylesheets built by PHP (css/color.php?primary_color=F7931A) are allowed in css folders", "allow"},
+	{IDSiteBeacons, "exclusions", "Meta Conversions API bridge (?ob=open-bridge/events) and Optimization Detective page measurements", "allow"},
 	{IDAdminPanel, "exclusions", "Admin areas of other web apps (SMM panels, Laravel, CodeIgniter): saves from the same admin area with a session skip injection rules", "allow"},
 	{IDUploadMalware, "upload_scan", "Scan uploaded files with the xPGuard malware engine", "block"},
 	{IDUploadPHP, "block_php_upload", "Block uploads of PHP files through web forms", "block"},
@@ -471,7 +475,9 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
 		}
 		if !off[IDRestUsers] {
-			w(`SecRule REQUEST_URI "@rx (?:/wp-json/wp/v2/users|[?&]rest_route=/wp/v2/users)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - WordPress REST user list blocked',tag:'xpguard/wordpress',chain"`, IDRestUsers)
+			// Not /users/me: the block editor asks who is logged in (WordPress
+			// answers 401 to visitors). RE2-safe: no lookahead (Coraza).
+			w(`SecRule REQUEST_URI "@rx (?:/wp-json/+wp/v2/+users|[?&]rest_route=/*wp/v2/+users)(?:$|[^/]|/+(?:$|[^m]|m(?:$|[^e])|me[^/?&#]))" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - WordPress REST user list blocked',tag:'xpguard/wordpress',chain"`, IDRestUsers)
 			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
 		}
 		// WordPress never runs the PHP files of wp-includes and of

@@ -116,6 +116,23 @@ func TestExclusionsWithCRS(t *testing.T) {
 		{"SMM panel admin imports services", "smm.example.com", "POST", "/admin/api-services/ajax_services_add", form, "name=" + urlEncode("TikTok | Views 🔥 <b>New</b>") + "&desc=" + urlEncode(adsense), []string{"Cookie: PHPSESSID=abc", "Referer: https://smm.example.com/admin/api-services"}, 200},
 		{"Admin POST from another site stays inspected", "smm.example.com", "POST", "/admin/api-services/ajax_services_add", form, "desc=" + urlEncode(adsense), []string{"Cookie: PHPSESSID=abc", "Referer: https://evil.example.net/admin/x"}, 403},
 		{"Admin POST without a session stays inspected", "smm.example.com", "POST", "/admin/api-services/ajax_services_add", form, "desc=" + urlEncode(adsense), []string{"Referer: https://smm.example.com/admin/api-services"}, 403},
+		// Blocked for visitors from a whitelisted country, and for everyone else too (WAF logs of two live servers).
+		{"WooCommerce classic checkout (wc-ajax)", "shop.example.com", "POST", "/?wc-ajax=update_order_review", form, "security=abc&post_data=" + urlEncode("billing_first_name=Ali&order_comments=Please passthru the parcel to reception, phpinfo desk"), nil, 200},
+		{"Cart fragments with JSON", "shop.example.com", "POST", "/?wc-ajax=get_refreshed_fragments", form, "time=1&data=" + urlEncode(`{"ids":"[12,13]","url":"/shop/?p=1"}`), nil, 200},
+		{"Shop tracking JSON", "shop.example.com", "POST", "/wp-json/commercekit/v1/track/impressions", form, "ids=" + urlEncode(`{"ids":"[12,13]","url":"/shop/?p=1"}`), nil, 200},
+		{"Password with $ and brackets (WHMCS admin login)", "shop.example.com", "POST", "/client-area/admin/dologin.php", form, "username=admin&password=" + urlEncode("Kh$an(2026)!"), nil, 200},
+		{"Customizer preview of a logged-in user", "shop.example.com", "POST", "/product/toy/?customize_changeset_uuid=6bbcb5ac-be4e-401b-95a1-e58ad5000001&customize_autosaved=on", form, "customized=" + urlEncode(`{"custom_html":"`+adsense+`"}`), []string{cookie}, 200},
+		{"Customizer preview without login stays inspected", "shop.example.com", "POST", "/product/toy/?customize_changeset_uuid=6bbcb5ac-be4e-401b-95a1-e58ad5000001", form, "customized=" + urlEncode(adsense), nil, 403},
+		{"Block editor autosave with page HTML", "shop.example.com", "POST", "/wp-json/wp/v2/pages/104/autosaves?_locale=user", json, `{"content":"<meta name=\"x\" content=\"y\"><p>Hi</p>"}`, []string{cookie}, 200},
+		{"Meta Conversions API bridge (sendBeacon)", "shop.example.com", "POST", "/?ob=open-bridge/events", "text/plain;charset=UTF-8", `{"event":"PageView"}`, nil, 200},
+		{"Theme colour stylesheet", "shop.example.com", "GET", "/assets/theme/theme3/frontend/css/color.php?primary_color=F7931A", "", "", nil, 200},
+		{"WordPress theme colour stylesheet", "shop.example.com", "GET", "/wp-content/themes/acuasafe/assets/css/color.php?main_color=0f172a&ver=7.1.3", "", "", nil, 200},
+		{"color.php without a colour stays blocked", "shop.example.com", "GET", "/assets/theme/theme3/frontend/css/color.php?file=list", "", "", nil, 403},
+		{"Block editor asks who is logged in", "shop.example.com", "GET", "/wp-json/wp/v2/users/me?context=edit&_locale=user", "", "", nil, 200},
+		{"REST user list stays blocked", "shop.example.com", "GET", "/wp-json/wp/v2/users?per_page=100&_fields=slug", "", "", nil, 403},
+		{"REST user list, rest_route form", "shop.example.com", "GET", "/?rest_route=/wp/v2/users&per_page=100&_fields=slug", "", "", nil, 403},
+		{"REST user list hidden behind /users/me", "shop.example.com", "GET", "/?rest_route=/wp/v2/users/me&rest_route=/wp/v2/users", "", "", nil, 403},
+		{"REST user by number stays blocked", "shop.example.com", "GET", "/wp-json/wp/v2/users/1", "", "", nil, 403},
 		{"Bare Mozilla/5.0 API client with credentials", "shop.example.com", "GET", "/wp-json/wp/v2/pages", "", "", []string{"User-Agent: Mozilla/5.0", "Authorization: Basic YWRtaW46eHh4eCB4eHh4"}, 200},
 	}
 	for _, c := range cases {
@@ -136,7 +153,7 @@ func TestExclusionsWithCRS(t *testing.T) {
 		t.Fatal("per-site exclusion applied outside its path")
 	}
 	// Control: without the exclusion the ticket's request is blocked.
-	m.Settings.Patch([]byte(`{"waf":{"disabled_rules":[7700010,7700013,7700014,7700015,7700016,7700017,7700018]}}`))
+	m.Settings.Patch([]byte(`{"waf":{"disabled_rules":[7700010,7700012,7700013,7700014,7700015,7700016,7700017,7700018,7700023,7700024,7700025,7700026]}}`))
 	if err := m.Apply(); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +173,12 @@ func TestExclusionsWithCRS(t *testing.T) {
 		}
 	}
 	for _, c := range cases {
-		if strings.Contains(c.name, "Urdu") || strings.Contains(c.name, "consent cookie") || strings.Contains(c.name, "SMM panel") || strings.Contains(c.name, "robots.txt") {
+		proves := false
+		for _, n := range []string{"Urdu", "consent cookie", "SMM panel", "robots.txt", "classic checkout", "Cart fragments", "Shop tracking",
+			"Password with", "Customizer preview of", "editor autosave", "Meta Conversions", "colour stylesheet"} {
+			proves = proves || strings.Contains(c.name, n)
+		}
+		if proves && c.name != "ViserLab colour stylesheet" {
 			if got := sendBody(t, c.host, c.method, c.uri, c.ctype, c.body, c.hdr...); got != 403 {
 				t.Errorf("%s passes even without the hosting defaults (%d)", c.name, got)
 			}

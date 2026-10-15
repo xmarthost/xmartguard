@@ -116,9 +116,11 @@ describe('CAPTCHA page for suspicious visitors', () => {
     const ok = await verify({ ...p, token: 'good-token' });
     expect(ok.status).toBe(200);
     expect(ok.body.redirect).toBe('https://shop.example.com/wp-login.php?redirect_to=/wp-admin/&reauth=1');
-    expect(passes).toEqual([{ ip: '203.0.113.5', host: 'shop.example.com' }]);
-    // A dual-stack visitor reaching this page over IPv6 is fine.
+    expect(passes).toEqual([{ ip: '203.0.113.5', host: 'shop.example.com', also: '' }]);
+    // A dual-stack visitor reaching this page over IPv6 is fine; the server
+    // lets both addresses through (mobile networks change the address too).
     expect((await verify({ ...p, token: 'good-token' }, '2001:db8::5')).status).toBe(200);
+    expect(passes[1]).toEqual({ ip: '203.0.113.5', host: 'shop.example.com', also: '2001:db8::5' });
     // The server refuses a site it does not host.
     agentError = 'evil.example is not a website on this server';
     expect((await verify({ ...p, h: 'evil.example', token: 'good-token' })).status).toBe(403);

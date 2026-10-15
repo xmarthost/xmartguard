@@ -337,7 +337,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         return reply.code(503).send({ error: "The website's server cannot be reached right now. Please try again in a minute." });
       }
       try {
-        await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h }, 90_000);
+        // Also the address the visitor solved it from: on mobile networks
+        // (CGNAT) the next request to the site may come from that one.
+        await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip }, 90_000);
       } catch (e) {
         await record(accountId, p.s, p.ip, p.h, 'rejected');
         req.log.warn({ err: (e as Error).message, server: p.s, host: p.h }, 'captcha pass refused');

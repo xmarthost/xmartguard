@@ -35,7 +35,10 @@ const (
 	// and catch no attack the others miss: 941310 (UTF-8 text such as Urdu,
 	// Arabic or emoji in comments, reviews and forms looks like "malformed
 	// US-ASCII"), 920600 (search engines and feed readers send a charset in
-	// Accept) and 942550 on cookies (consent and shop plugins keep JSON there).
+	// Accept) and 942550 (PostgreSQL JSON operators: it fires on the JSON
+	// that cart fragments, shop tracking, consent logs, statistics and the
+	// customizer send; the libinjection and other SQL rules still check
+	// the same fields).
 	IDHostingBase = 7700015
 	// IDCPanelPaths: cPanel's own pages (mail autodiscover/autoconfig for
 	// Outlook and Thunderbird, suspended page, AutoSSL checks) are reached by
@@ -68,6 +71,22 @@ const (
 	// IDDeviceIclock: attendance and access-control devices (ZKTeco "push"
 	// protocol) post their logs to /iclock/ with their own content type.
 	IDDeviceIclock = 7700022
+	// IDPasswordArgs: passwords are compared or hashed, never run as PHP;
+	// the PHP-injection rules skip them (a password with "$x(" is not code).
+	// The SQL and XSS rules still check them.
+	IDPasswordArgs = 7700023
+	// IDWPCustomizer: the WordPress customizer previews unsaved theme
+	// settings (CSS, HTML widgets) on the site's own pages for a logged-in
+	// user; WordPress checks the right to customize.
+	IDWPCustomizer = 7700024
+	// IDThemeColorCSS: themes and scripts that build their colour
+	// stylesheet with PHP (css/color.php?primary_color=F7931A).
+	IDThemeColorCSS = 7700025
+	// IDSiteBeacons: requests well-known plugins send by themselves:
+	// Meta's Conversions API bridge (?ob=open-bridge/events, sent with
+	// sendBeacon's text/plain) and the WordPress Performance team's
+	// Optimization Detective (url-metrics:store, page measurements as JSON).
+	IDSiteBeacons = 7700026
 	// IDCPanelOff: websites whose ModSecurity the account switched off in
 	// cPanel » ModSecurity. Apache already honours that for its virtual host;
 	// this makes it certain for every rule set and on LiteSpeed.
@@ -126,6 +145,11 @@ func removeTagTargets(target string) string {
 	return strings.Join(ctl, ",")
 }
 
+// passwordArgs are the password fields of common login and sign-up forms
+// (WordPress, WHMCS, cPanel apps, Laravel and other PHP applications).
+var passwordArgs = []string{"password", "password2", "passwd", "pass", "pass1", "pass2", "pwd", "user_pass",
+	"confirm_password", "password_confirmation", "new_password", "current_password", "old_password", "account_password"}
+
 // adminSegments name the admin area of a web application (wp-admin has its
 // own exclusions).
 const adminSegments = `(?:admin|administrator|adminpanel|admin-panel|backend|dashboard|panel)`
@@ -139,7 +163,7 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	tags := removeTags()
 	w("# Ordinary hosting traffic the OWASP CRS misreads (xPGuard hosting defaults).")
 	if !off[IDHostingBase] {
-		w(`SecAction "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=941310,ctl:ruleRemoveById=920600,ctl:ruleRemoveTargetById=942550;REQUEST_COOKIES"`, IDHostingBase)
+		w(`SecAction "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=941310,ctl:ruleRemoveById=920600,ctl:ruleRemoveById=942550"`, IDHostingBase)
 	}
 	if !off[IDCPanelServices] {
 		w(`SecRule SERVER_NAME "@rx ^(?:cpanel|whm|webmail|webdisk|cpcalendars|cpcontacts)\." "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleEngine=Off"`, IDCPanelServices)
@@ -151,7 +175,9 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`SecRule REQUEST_FILENAME "@rx ^/+iclock/+(?:cdata|getrequest|devicecmd|registry|push|ping|querydata|fdata)(?:\.aspx|\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=930130,ctl:ruleRemoveById=942550"`, IDDeviceIclock)
 	}
 	if !off[IDCPanelPaths] {
-		w(`SecRule REQUEST_FILENAME "@rx ^/+(?:cgi-sys/|\.well-known/|autodiscover/autodiscover\.xml$|mail/config-v1\.1\.xml$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920350"`, IDCPanelPaths)
+		// cPanel's own pages and images on every site (img-sys/ and the error
+		// page): CRS 930130 reads "sys/" in /img-sys/ as a Linux system file.
+		w(`SecRule REQUEST_FILENAME "@rx ^/+(?:cgi-sys/|img-sys/|cp_errordocument\.shtml$|\.well-known/|autodiscover/autodiscover\.xml$|mail/config-v1\.1\.xml$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920350,ctl:ruleRemoveById=930130"`, IDCPanelPaths)
 	}
 	if !off[IDStaticCookies] {
 		w(`SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDStaticCookies)
@@ -159,6 +185,22 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	}
 	if !off[IDWPCommentText] {
 		w(`SecRule REQUEST_FILENAME "@rx /wp-comments-post\.php$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:comment,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:author,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:url"`, IDWPCommentText)
+	}
+	if !off[IDPasswordArgs] {
+		var ctl []string
+		for _, a := range passwordArgs {
+			ctl = append(ctl, "ctl:ruleRemoveTargetByTag=attack-injection-php;ARGS:"+a)
+		}
+		w(`SecAction "id:%d,phase:1,pass,nolog,%s"`, IDPasswordArgs, strings.Join(ctl, ","))
+	}
+	if !off[IDThemeColorCSS] {
+		w(`SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDThemeColorCSS)
+		w(`  SecRule REQUEST_FILENAME "@rx /css/+[a-z0-9_-]*colou?rs?[a-z0-9_-]*\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
+		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDStaticPHP, IDPHPInAssets)
+	}
+	if !off[IDSiteBeacons] {
+		w(`SecRule ARGS_GET:ob "@streq open-bridge/events" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420"`, IDSiteBeacons)
+		w(`SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)optimization-detective/v1/+url-metrics:store(?:[?&]|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920250,ctl:ruleRemoveById=920270"`, IDSiteBeacons+1000)
 	}
 	if !off[IDAdminPanel] {
 		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDAdminPanel)
@@ -179,14 +221,20 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@gt 0" "t:none,%s"`, tags)
 	}
 	if !off[IDWPRestExcl] {
+		// 921130 reads the <meta http-equiv> of saved page HTML as response splitting.
 		w(`SecRule REQUEST_METHOD "@rx ^(?:POST|PUT|PATCH)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDWPRestExcl)
-		w(`  SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wp/v2/+(?:%s)(?:[/?&]|$)" "t:none,t:urlDecodeUni,t:lowercase,%s"`, strings.Join(quoteAll(wpRestRoutes), "|"), tags)
+		w(`  SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wp/v2/+(?:%s)(?:[/?&]|$)" "t:none,t:urlDecodeUni,t:lowercase,%s,ctl:ruleRemoveById=921130"`, strings.Join(quoteAll(wpRestRoutes), "|"), tags)
+	}
+	if !off[IDWPCustomizer] {
+		w(`SecRule ARGS_GET:customize_changeset_uuid "@rx ^[0-9a-f-]{36}$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, IDWPCustomizer)
+		w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@gt 0" "t:none,%s"`, tags)
 	}
 	if !off[IDWPRestMethods] {
 		w(`SecRule REQUEST_URI "@rx (?:/wp-json/|[?&]rest_route=)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=911100,%s"`, IDWPRestMethods, overrideTargets())
 	}
 	if !off[IDWCStoreExcl] {
-		w(`SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wc/store/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveByTag=attack-injection-php"`, IDWCStoreExcl)
+		// Also the classic cart and checkout (?wc-ajax=update_order_review, checkout).
+		w(`SecRule REQUEST_URI "@rx (?:(?:/wp-json/+|[?&]rest_route=/*)wc/store/|[?&]wc-ajax=)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveByTag=attack-injection-php"`, IDWCStoreExcl)
 	}
 	writeExcl := func(id int, e settings.RuleExclusion) {
 		ctl := fmt.Sprintf("ctl:ruleRemoveById=%d", e.Rule)
@@ -252,7 +300,7 @@ func domainRx(d string) string {
 
 // allowRule reports xPGuard's exclusion rules (they let requests through).
 func allowRule(id int) bool {
-	return (id >= IDWPAdminExcl && id <= IDAdminPanel) || id == IDEditorCookie || id == IDEditorAuth || id == IDAutodiscover
+	return (id >= IDWPAdminExcl && id <= 7700029) || id == IDEditorCookie || id == IDEditorAuth || id == IDAutodiscover
 }
 
 // RenderExclusionsOnly is the rules file when xPGuard's own rules are off
