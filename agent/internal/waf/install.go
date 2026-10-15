@@ -377,7 +377,10 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 			}
 		}
 	}
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
 	changed := len(stale) > 0
+	listsOnly, urgent := true, false
 	for path, body := range files {
 		old, err := os.ReadFile(path)
 		if err == nil {
@@ -385,10 +388,41 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 		}
 		if err != nil || string(old) != body {
 			changed = true
+			base := filepath.Base(path)
+			if filepath.Dir(path) != filepath.Clean(dir) || !addressLists[base] {
+				listsOnly = false
+			} else if base == FileCaptchaPass && addsLines(string(old), body) {
+				urgent = true // a visitor just solved the CAPTCHA
+			}
 		}
 	}
 	if !changed {
 		return nil
+	}
+	// Every change reloads the web server, and LiteSpeed restarts for it.
+	// Address lists change all day (bans, the IPDB, CAPTCHA suspects):
+	// they wait until the last reload is old enough, so a busy server is
+	// not restarted every few minutes. Rules and settings apply at once.
+	// A visitor who solved the CAPTCHA is sent back when this returns, so
+	// that reload is never put off: it only waits out a short gap (passes
+	// arriving meanwhile share the reload).
+	if listsOnly && len(stale) == 0 && !m.lastReload.IsZero() && !m.now.Swap(false) {
+		gap := ListReloadGap(t.LiteSpeed, urgent)
+		if wait := gap - time.Since(m.lastReload); wait > 0 {
+			if urgent {
+				time.Sleep(wait)
+			} else {
+				if m.deferred == nil {
+					m.deferred = time.AfterFunc(wait+time.Second, func() {
+						m.reloadMu.Lock()
+						m.deferred = nil
+						m.reloadMu.Unlock()
+						_ = m.Apply()
+					})
+				}
+				return nil
+			}
+		}
 	}
 	rollback := func() {
 		for path := range files {
@@ -426,16 +460,61 @@ func (m *Manager) install(t Target, rules string, botFiles map[string]string) er
 		rollback()
 		return fmt.Errorf("web server rejected the WAF rules (rolled back): %s", strings.TrimSpace(out))
 	}
-	if out, err := m.runTimeout(t.reload, 120*time.Second); err != nil {
+	m.lastReload = time.Now()
+	// LiteSpeed only loads changed ModSecurity rules on a (graceful)
+	// restart, and on cPanel restartsrv_httpd restarts LiteSpeed too: one
+	// restart, never two in a row (a second restart while the first is
+	// still starting can leave LiteSpeed down).
+	reload := t.reload
+	if t.LiteSpeed && !t.Plain {
+		reload = liteSpeedRestart
+	}
+	if out, err := m.runTimeout(reload, 120*time.Second); err != nil {
 		return fmt.Errorf("WAF rules written but reload failed: %s", strings.TrimSpace(out))
 	}
-	// LiteSpeed only loads changed ModSecurity rules on a (graceful) restart.
-	if t.LiteSpeed && !t.Plain {
-		if out, err := m.runTimeout([]string{"/usr/local/lsws/bin/lswsctrl", "restart"}, 120*time.Second); err != nil {
-			return fmt.Errorf("WAF rules written but LiteSpeed restart failed: %s", strings.TrimSpace(out))
+	return nil
+}
+
+// liteSpeedRestart restarts LiteSpeed gracefully (tests replace it).
+var liteSpeedRestart = []string{"/usr/local/lsws/bin/lswsctrl", "restart"}
+
+// addressLists are the WAF's address files: they change on their own
+// (bans, IPDB, CAPTCHA, Tor), not because rules or settings changed.
+// The whitelist, trusted and exempt lists are not here: they change when
+// someone edits them, and apply at once.
+var addressLists = map[string]bool{FileBlockedIPs: true, FileIPDBIPs: true, FileTorIPs: true,
+	FileCaptchaSuspects: true, FileCaptchaPass: true, FileStrictIPs: true}
+
+// ListReloadGap is the least time between two reloads for address list
+// changes: LiteSpeed restarts its server processes on every reload, Apache
+// only re-reads its configuration. A visitor who solved the CAPTCHA waits
+// the least (the portal waits 90 seconds for the server). Tests set it to
+// zero.
+var ListReloadGap = func(liteSpeed, captchaPass bool) time.Duration {
+	switch {
+	case captchaPass && liteSpeed:
+		return time.Minute
+	case captchaPass:
+		return 10 * time.Second
+	case liteSpeed:
+		return 30 * time.Minute
+	default:
+		return 5 * time.Minute
+	}
+}
+
+// addsLines reports whether next has a line that cur does not.
+func addsLines(cur, next string) bool {
+	have := map[string]bool{}
+	for _, l := range strings.Split(cur, "\n") {
+		have[l] = true
+	}
+	for _, l := range strings.Split(next, "\n") {
+		if l != "" && !have[l] {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // remove deletes the include and rules and reloads.

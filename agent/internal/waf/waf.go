@@ -68,6 +68,13 @@ type Manager struct {
 	SelfTestWait time.Duration
 	// NoSelfTest disables the self-test (unit tests without a web server).
 	NoSelfTest bool
+
+	// One web server reload at a time, and address lists not more often
+	// than ListReloadGap allows (see install).
+	reloadMu   sync.Mutex
+	lastReload time.Time
+	deferred   *time.Timer
+	now        atomic.Bool // the next Apply reloads without waiting (ApplyNow)
 }
 
 // Status is shown in the portal.
@@ -393,6 +400,14 @@ func ToggleRule(c settings.WAF, id int, on bool) (map[string]any, error) {
 // own (when enabled) plus the OWASP CRS and custom rules from the
 // portal's WAF Rule Sets. If the web server rejects the extra rule sets,
 // they are left out so xPGuard's rules keep protecting the sites.
+// ApplyNow applies like Apply, and address list changes do not wait for
+// the reload gap: for changes someone made (settings, the Apply button).
+func (m *Manager) ApplyNow() error {
+	m.now.Store(true)
+	defer m.now.Store(false)
+	return m.Apply()
+}
+
 func (m *Manager) Apply() error {
 	t := Detect()
 	cfg := m.Settings.Get().WAF

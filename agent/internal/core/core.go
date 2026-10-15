@@ -760,7 +760,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		// Trusted services changed: the WAF's trusted list follows.
 		if wafChanged(beforeWAF, next.WAF) || a.WAF.TrustedListChanged() || gateChanged {
-			if err := a.WAF.Apply(); err != nil {
+			if err := a.WAF.ApplyNow(); err != nil {
 				return map[string]any{"settings": masked(next), "warning": err.Error()}, nil
 			}
 		}
@@ -1317,7 +1317,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return res, nil
 	}
 	h["waf.apply"] = func(context.Context, json.RawMessage) (any, error) {
-		return a.WAF.Status(), a.WAF.Apply()
+		return a.WAF.Status(), a.WAF.ApplyNow()
 	}
 
 	// ---- CMS + database scanner

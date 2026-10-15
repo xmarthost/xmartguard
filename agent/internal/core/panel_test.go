@@ -18,12 +18,15 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/local"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
+	"github.com/xmarthost/xmartguard/agent/internal/waf"
 )
 
 // When re-executed as another user, the test binary acts as a socket client.
 func TestMain(m *testing.M) {
 	// Tests run as root: their files are root's.
 	scanner.ScanRootFiles = true
+	// Tests check WAF address lists right after changing them.
+	waf.ListReloadGap = func(bool, bool) time.Duration { return 0 }
 	if req := os.Getenv("XG_HELPER_CALL"); req != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
