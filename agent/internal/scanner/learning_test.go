@@ -34,3 +34,50 @@ func TestFingerprintJSIsNotAMiner(t *testing.T) {
 		t.Fatal("CoinHive miner not flagged")
 	}
 }
+
+// A customer's own PHP application (a website backup zip, 2026-10-16):
+// ordinary code the heuristics took for backdoors.
+func TestOwnApplicationCode(t *testing.T) {
+	clean := map[string]string{
+		"variable before ( in a string": `<?php
+$type = $_GET['type'] ?? 'attendance';
+$name = trim($_POST['name'] ?? '');
+audit_log('report.export', 'report', $type, "Exported $type (monthly) as CSV");
+notify_admins($db, 'user.registered', "$name ($email) just created an account.");
+`,
+		"WebSocket client writing frames to a socket": `<?php
+$symbol = preg_replace('/[^A-Za-z0-9_]/', '', (string)($_GET['symbol'] ?? 'R_100'));
+$socket = stream_socket_client('tls://ws.example.com:443');
+function ws_send($socket, $message) {
+    $payload = json_encode($message); $length = strlen($payload); $frame = chr(0x81);
+    if ($length < 126) $frame .= chr($length | 0x80); else $frame .= chr(126 | 0x80) . pack('n', $length);
+    fwrite($socket, $frame . $payload);
+}
+$on = $_GET['cb'] ?? '';
+$handler = function ($x) { return $x; };
+echo $handler($symbol);
+`,
+		"Cloudflare email-protection decoder": `<?php
+function cfemail_decode(string $hex): string {
+    $k = hexdec(substr($hex, 0, 2)); $out = '';
+    for ($i = 2; $i < strlen($hex); $i += 2) $out .= chr(hexdec(substr($hex, $i, 2)) ^ $k);
+    return $out;
+}
+$q = $_GET['q'] ?? '';
+$uniq = fn(array $a) => array_values(array_unique($a));
+print_r($uniq([cfemail_decode($q)]));
+`,
+	}
+	for name, src := range clean {
+		if v := analyzePHP([]byte(src)); v != nil {
+			t.Errorf("%s: flagged %s", name, v.signature)
+		}
+	}
+	// The real thing stays flagged.
+	if v := analyzePHP([]byte("<?php\n$f = $_GET['f'];\n$f($_GET['a']);\n")); v == nil || v.signature != "PHP.Backdoor.DynamicCall" {
+		t.Errorf("request-named function call: %+v", v)
+	}
+	if v := analyzePHP([]byte("<?php\n$d = '';\nforeach (str_split($_POST['p']) as $c) $d .= chr(ord($c) ^ 7);\nfile_put_contents($_POST['n'], $d);\n")); v == nil {
+		t.Error("decoder writing a request-named file not flagged")
+	}
+}

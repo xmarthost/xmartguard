@@ -96,13 +96,18 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 	if count(reFuncTable) >= 6 && sink {
 		return &verdict{CatVirus, "PHP.Obfuscated.FunctionTable"}
 	}
-	chrBuild := m(reChrBuild)
+	// WebSocket clients build their frame header with chr(len | 0x80): not a decoder.
+	chrBuild := m(reChrBuild) && !onlyFrameHeaders(s)
 	xor := m(reXorChr)
 	// Include of a path produced by a character-building decoder.
 	if chrBuild && m(reDecodedInclude) {
 		return &verdict{CatVirus, "PHP.Loader.DecodedInclude"}
 	}
 	// XOR/char decoders feeding an executor, a dynamic call or request data.
+	// Closures the file defines itself ($uniq = fn(…)) are not dynamic calls.
+	if varFunc && (xor || chrBuild) {
+		varFunc = foreignVarCall(s)
+	}
 	if (xor || chrBuild) && !library && (evalOrAssert || (varFunc && hasInput) || (varFunc && m(reWriteSink))) {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharDecoder"}
 	}

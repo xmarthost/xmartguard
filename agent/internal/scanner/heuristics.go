@@ -33,9 +33,11 @@ var (
 	reHex           = regexp.MustCompile(`\\x[0-9A-Fa-f]{2}`)
 	reOct           = regexp.MustCompile(`\\[0-3][0-7]{2}`)
 	reChr           = regexp.MustCompile(`(?i)\bchr\s*\(`)
-	reConcatChar    = regexp.MustCompile(`['"]\s*\.\s*['"]`)
-	reLongB64       = regexp.MustCompile(`['"][A-Za-z0-9+/]{260,}={0,2}['"]`)
-	reB64Blob       = regexp.MustCompile(`[A-Za-z0-9+/]{120,}={0,2}`)
+	// A file opened for writing (fwrite to a socket is not a dropper).
+	reFileWrite  = regexp.MustCompile(`(?i)\b(?:file_put_contents|move_uploaded_file|copy)\s*\(|\bfopen\s*\([^;]{0,300}?,\s*['"][wacx]`)
+	reConcatChar = regexp.MustCompile(`['"]\s*\.\s*['"]`)
+	reLongB64    = regexp.MustCompile(`['"][A-Za-z0-9+/]{260,}={0,2}['"]`)
+	reB64Blob    = regexp.MustCompile(`[A-Za-z0-9+/]{120,}={0,2}`)
 	// A real statement, not the text "__halt_compiler();" inside a string.
 	reHalt         = regexp.MustCompile(`(?im)(?:^|[;{}\s])__halt_compiler\s*\(\s*\)\s*;`)
 	reGzUncompress = regexp.MustCompile(`(?i)\bgz(?:inflate|uncompress|decode)\s*\(`)
@@ -175,7 +177,8 @@ func analyzePHP(content []byte) *verdict {
 	}
 	// 12. Drop-and-write shell: writes a file from attacker input.
 	// ($_SERVER and writes to php:// streams are request logging, not dropping.)
-	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders >= 1) && nr(reWriteSinkFile, reUserInput, 200) {
+	// Writing to a network socket (a WebSocket or API client) is not a file.
+	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders >= 1) && nr(reWriteSinkFile, reUserInput, 200) && m(reFileWrite) {
 		return &verdict{CatVirus, "PHP.Backdoor.FileDropper"}
 	}
 	// 13. Spam mailer: mail() fed attacker input, in a small standalone script
@@ -282,13 +285,59 @@ func analyzeJS(content []byte) *verdict {
 func taintedCall(s []byte) bool {
 	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
 		name := regexp.QuoteMeta(string(m[1]))
-		// $f(…), not $this->$f(…) or Class::$f(…) (dispatch to own methods).
+		// $f(…), not $this->$f(…) or Class::$f(…) (dispatch to own methods),
+		// and not "Exported $type ($subtitle)" inside a string.
 		re := regexp.MustCompile(`(?:(?:^|[^>:\w$])\$` + name + `\s*\(|(?i:call_user_func(?:_array)?)\s*\(\s*\$` + name + `\b)`)
-		if re.Match(s) {
+		for _, loc := range re.FindAllIndex(s, 50) {
+			// The match may start with the character before "$" (an opening quote).
+			if !inDoubleQuotes(s, loc[0]+bytes.IndexByte(s[loc[0]:loc[1]], '$')) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// inDoubleQuotes reports whether position i of a line is inside a
+// double-quoted string (an odd number of unescaped quotes before it).
+func inDoubleQuotes(s []byte, i int) bool {
+	start := bytes.LastIndexByte(s[:i], '\n') + 1
+	quotes := 0
+	for j := start; j < i; j++ {
+		if s[j] == '"' && (j == 0 || s[j-1] != '\\') {
+			quotes++
+		}
+	}
+	return quotes%2 == 1
+}
+
+var (
+	reVarCallName = regexp.MustCompile(`(?:^|[^>:\w$])\$([a-zA-Z_]\w*)\s*\(`)
+	// $name = function (…) / fn (…) / static fn: a closure the file defines.
+	reClosureAssign = regexp.MustCompile(`(?i)\$([a-zA-Z_]\w*)\s*=\s*(?:static\s+)?(?:function|fn)\s*\(`)
+	// chr(len | 0x80) and chr(126 | 0x80): a WebSocket frame header.
+	reFrameChr = regexp.MustCompile(`(?i)\.=\s*chr\s*\(\s*(?:\$\w+|\d+)\s*\|\s*0x80\s*\)`)
+)
+
+// foreignVarCall reports a call through a variable ($f(…)) that is not a
+// closure defined in the file nor text in a string.
+func foreignVarCall(s []byte) bool {
+	own := map[string]bool{}
+	for _, m := range reClosureAssign.FindAllSubmatch(s, -1) {
+		own[string(m[1])] = true
+	}
+	for _, loc := range reVarCallName.FindAllSubmatchIndex(s, -1) {
+		name := string(s[loc[2]:loc[3]])
+		if !own[name] && !inDoubleQuotes(s, loc[2]) {
 			return true
 		}
 	}
 	return false
+}
+
+// onlyFrameHeaders reports that every ".= chr(…)" builds a WebSocket frame header.
+func onlyFrameHeaders(s []byte) bool {
+	return len(reChrBuild.FindAllIndex(s, -1)) == len(reFrameChr.FindAllIndex(s, -1))
 }
 
 func countMatches(re *regexp.Regexp, s []byte) int { return len(re.FindAllIndex(s, -1)) }
