@@ -113,6 +113,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Scanner = scanner.New(db, st, log)
 	a.Scanner.OnFinding = a.onFinding
 	a.Scanner.OnReinfection = a.onReinfection
+	a.Scanner.OnHtaccessStorm = a.onHtaccessStorm
 	a.Scanner.OnClean = func(path string, _ os.FileInfo) { a.AI.EnqueueNew(path) }
 	a.Scanner.Cleared = func(sha string) bool { return ai.IsCleared(db, sha) }
 	a.Scanner.Unconfirmed = func(sha, path, sig string) bool {

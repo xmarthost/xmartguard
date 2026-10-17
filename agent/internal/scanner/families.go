@@ -19,6 +19,14 @@ var (
 	reSilentLoader = regexp.MustCompile(`(?i)if\s*\(\s*@?\s*(?:is_file|file_exists|is_readable)\s*\(\s*["'][^"']{3,300}["']\s*\)\s*\)\s*\{?\s*@\s*(?:include|require)(?:_once)?\b`)
 	// include/require of an image, archive, font, log or data file.
 	reIncludeNonPHP = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?[^;]{0,200}?\.(?:ico|png|jpe?g|gif|tiff?|bmp|webp|zip|gz|log|dat|tmp|bak|swp|mp3|mp4|pdf|woff2?|ttf|eot)['"]\s*\)?\s*;`)
+	// include/require through a stream wrapper that runs code from inside an
+	// archive, the request body or the address itself: zip://up.jpg#x.php,
+	// data://text/plain;base64,…, php://input.
+	reIncludeWrapper = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?\s*[^;]{0,120}?['"](?:zip|data|expect|compress\.zlib|compress\.bzip2)://|\b(?:include|require)(?:_once)?\b\s*\(?\s*['"]php://(?:input|filter)`)
+	// phar:// includes: a few libraries ship as a .phar and load from it
+	// (and phar stubs, __HALT_COMPILER, include their own contents), so
+	// this alone is only suspicious.
+	reIncludePhar = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?\s*[^;]{0,120}?['"]phar://`)
 	// include/require of a hidden file: ".../.name.php" or ".name.php"
 	// (not a ". '.json.php'" suffix).
 	reIncludeHidden = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?(?:[^;]{0,200}?/|\s*['"])\.[a-z0-9_-][\w.-]*\.(?:php\d?|phtml|inc)['"]\s*\)?\s*;`)
@@ -84,6 +92,12 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 	}
 	if m(reIncludeNonPHP) {
 		return &verdict{CatVirus, "PHP.Loader.IncludeNonPHP"}
+	}
+	if m(reIncludeWrapper) {
+		return &verdict{CatVirus, "PHP.Loader.StreamWrapperInclude"}
+	}
+	if m(reIncludePhar) && !library && !bytes.Contains(s, []byte("__HALT_COMPILER")) && n < 8192 {
+		return &verdict{CatSuspicious, "PHP.Suspicious.PharInclude"}
 	}
 	if m(reIncludeHidden) {
 		if n < 4096 {

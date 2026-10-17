@@ -31,6 +31,19 @@ func (a *Agent) onReinfection(f scanner.Finding) {
 	}
 }
 
+// onHtaccessStorm is called when an attack kit locks many folders of an
+// account with its .htaccess (all PHP refused but its own shells).
+func (a *Agent) onHtaccessStorm(owner string, n int, sample string) {
+	a.Log.Warn("attack kit .htaccess written into many folders", "owner", owner, "files", n, "sample", sample)
+	if a.Settings.Get().Notifications.OnVirus {
+		a.alertAdmin("account taken over: .htaccess lock in many folders",
+			fmt.Sprintf("At least %d .htaccess files of %s were written by an attack kit within minutes (for example %s).\n"+
+				"Kits write them into every folder after a takeover, so that only their own scripts run. The configured scanner action is applied to them; "+
+				"the account's shells, passwords and plugins need checking too.\n\n%s",
+				n, owner, sample, reinfectionHints(owner, sample)))
+	}
+}
+
 // reinfectionHints lists where a re-created file most likely comes from.
 func reinfectionHints(owner, path string) string {
 	var b strings.Builder

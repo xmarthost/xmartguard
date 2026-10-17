@@ -32,6 +32,9 @@ func analyze(ext string, content []byte) *Detection {
 	if d := phishingKit(ext, content); d != nil {
 		return d
 	}
+	if d := defacement(ext, content); d != nil {
+		return d
+	}
 	switch {
 	case ext == ".js":
 		if v := analyzeJS(content); v != nil {

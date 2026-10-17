@@ -93,6 +93,9 @@ type Scanner struct {
 	OnFinding func(Finding)
 	// OnReinfection is called when a quarantined file keeps coming back.
 	OnReinfection func(Finding)
+	// OnHtaccessStorm is called when an attack kit writes its .htaccess
+	// lock into many folders of one account (the account is taken over).
+	OnHtaccessStorm func(owner string, n int, sample string)
 	// OnClean is called for new or changed code files the realtime scanner
 	// found clean (the AI scanner's "all files" mode).
 	OnClean func(path string, info fs.FileInfo)
@@ -113,6 +116,7 @@ type Scanner struct {
 	Unconfirmed func(sha256, path, signature string) bool
 
 	mu      sync.Mutex
+	storms  map[string]*htStorm
 	cancels map[int64]context.CancelFunc
 	sem     chan struct{}
 	users   map[uint32]string
@@ -705,7 +709,43 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 	if s.OnFinding != nil {
 		s.OnFinding(f)
 	}
+	if strings.HasPrefix(d.Signature, "Htaccess.") {
+		s.noteHtaccess(f.Owner, path, now)
+	}
 	return f, nil
+}
+
+// htStorm counts an account's hacked .htaccess files in a window.
+type htStorm struct {
+	start int64
+	n     int
+}
+
+// HtaccessStormFiles hacked .htaccess files of one account within
+// HtaccessStormWindow seconds raise one alert: kits lock every folder at
+// once, and quarantining file by file does not tell the administrator the
+// account is taken over.
+var (
+	HtaccessStormFiles        = 10
+	HtaccessStormWindow int64 = 600
+)
+
+func (s *Scanner) noteHtaccess(owner, path string, now int64) {
+	s.mu.Lock()
+	if s.storms == nil {
+		s.storms = map[string]*htStorm{}
+	}
+	st := s.storms[owner]
+	if st == nil || now-st.start > HtaccessStormWindow {
+		st = &htStorm{start: now}
+		s.storms[owner] = st
+	}
+	st.n++
+	n := st.n
+	s.mu.Unlock()
+	if n == HtaccessStormFiles && s.OnHtaccessStorm != nil {
+		s.OnHtaccessStorm(owner, n, path)
+	}
 }
 
 var errExists = errors.New("already recorded")
