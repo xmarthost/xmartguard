@@ -548,6 +548,10 @@ func binaryCheck(path string, head []byte) (*Detection, error) {
 			hidden = true
 		}
 	}
+	// npm keeps its tools in node_modules/.bin and .cache folders.
+	if strings.Contains(path, "/node_modules/") {
+		hidden = false
+	}
 	web, wpContent := false, false
 	for i, part := range parts {
 		switch {

@@ -944,7 +944,7 @@ func (m *Manager) tailLogs(ctx context.Context) {
 		m.record(ev)
 		if ev.Category == "login" {
 			m.maybeBan(ev, counter)
-		} else if strings.HasPrefix(ev.Action, "Access denied") {
+		} else if strings.HasPrefix(ev.Action, "Access denied") && !noBanRules[ev.RuleID] {
 			m.maybeBanBlocked(ev, blocks)
 		}
 	}
@@ -999,6 +999,12 @@ func (m *Manager) maybeBan(e Event, c *counter) {
 		m.Firewall.AutoBan(e.IP, "WAF: "+strconv.Itoa(n)+" failed "+name+" logins", "waf")
 	}
 }
+
+// noBanRules block a request but never count toward a ban: shop scrapers
+// come from residential and mobile addresses real visitors share, and a
+// request without browser headers may be another server's integration.
+var noBanRules = map[int]bool{IDShopScrape: true, IDShopScrape + 1000: true, IDCartSpam: true, IDCartSpam + 1000: true,
+	IDNoUAPost: true, IDNoUAPost + 1000: true}
 
 // maybeBanBlocked temporarily bans addresses the WAF keeps blocking
 // ("WAF Temporary IP Ban"): a scanner probing many URLs gets dropped at the

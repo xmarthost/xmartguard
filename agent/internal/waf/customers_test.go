@@ -58,6 +58,8 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		{"Scraper on many filter values", "shop.example.com", "GET", "/shop/?filter_color=yellow,white,orange", "", "", nil, 403},
 		{"Scraper on many filters", "shop.example.com", "GET", "/shop/?filter_color=red&filter_size=xl&filter_brand=acme", "", "", nil, 403},
 		{"Visitor clicking many filter values", "shop.example.com", "GET", "/shop/?filter_color=yellow,white,orange", "", "", []string{"Referer: https://shop.example.com/shop/?filter_color=yellow,white"}, 200},
+		{"Visitor on a no-referrer site clicking many filters", "shop.example.com", "GET", "/shop/?filter_color=red&filter_size=xl&filter_brand=acme", "", "", []string{"Sec-Fetch-Site: same-origin"}, 200},
+		{"Guest's first add-to-cart with a nonce", "shop.example.com", "GET", "/shop/?add-to-cart=55&_wpnonce=f00d", "", "", nil, 200},
 		{"Visitor with cookies on many filters", "shop.example.com", "GET", "/shop/?filter_color=red&filter_size=xl&filter_brand=acme", "", "", []string{"Cookie: _ga=GA1.1.1"}, 200},
 		{"Googlebot on many filter values", "shop.example.com", "GET", "/shop/?filter_color=yellow,white,orange", "", "", []string{"User-Agent: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"}, 200},
 		{"Cart spam: remove and add in one link", "shop.example.com", "GET", "/cart/?remove_item=abc123&add-to-cart=55", "", "", []string{"Cookie: woocommerce_items_in_cart=1"}, 403},

@@ -191,7 +191,6 @@ var (
 		{"Stripe secret key", regexp.MustCompile(`\b(?:sk|rk)_live_[0-9A-Za-z]{20,}`)},
 		{"GitHub token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`)},
 		{"Slack token", regexp.MustCompile(`\bxox[abpr]-[0-9A-Za-z-]{20,}`)},
-		{"Google API key", regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`)},
 		{"private key", regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----`)},
 	}
 	// Files a web server sends as they are (not run): a key in them is
@@ -598,7 +597,9 @@ func (a *Auditor) stuckPHP() []Item {
 		start, _ := strconv.ParseFloat(f[19], 64)
 		age := uptime - start/hz
 		cpu := (utime + stime) / hz
-		if age < 1800 || cpu < 900 || cpu/age < 0.5 {
+		// A LiteSpeed worker serves many requests; only one busy nearly all
+		// the time for half an hour or more is stuck.
+		if age < 1800 || cpu < 1800 || cpu/age < 0.8 {
 			continue
 		}
 		cmd, _ := os.ReadFile(filepath.Join(d, "cmdline"))

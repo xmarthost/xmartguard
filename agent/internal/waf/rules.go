@@ -170,7 +170,7 @@ var Catalog = []RuleInfo{
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
 	{IDCrawlerCart, "bad_bots", "Block crawlers following add-to-cart and wishlist links (each one writes a session and runs the shop uncached)", "block"},
 	{IDShopScrape, "bad_bots", "Block clients without cookies or Referer walking shop filter combinations (3+ values or 3+ filters: scrapers with a browser User-Agent, AI crawlers)", "block"},
-	{IDCartSpam, "bad_bots", "Block cart spam: remove_item with add-to-cart in one link, and cart changes without a session cookie", "block"},
+	{IDCartSpam, "bad_bots", "Block cart spam: remove_item with add-to-cart in one link, and removing cart items without a session cookie", "block"},
 	{IDCrawlerFacets, "bad_bots", "Block crawlers other than search engines on shop filter, sort and page-size URLs (endless uncached combinations)", "block"},
 	{IDRootProbe, "bad_bots", "Block PHP probes on a website's top folder that send neither a User-Agent nor a Referer", "block"},
 	{IDBareMozilla, "bad_bots", "Block the fake User-Agent \"Mozilla/5.0\" with nothing after it (scripts pretending to be a browser)", "block"},
@@ -726,6 +726,9 @@ func Render(c settings.WAF, o Options) string {
 		// with neither cookies nor a Referer are blocked.
 		search := `SecRule REQUEST_HEADERS:User-Agent "!@rx (?:googlebot|bingbot|applebot|yandex|duckduckbot|google-inspectiontool|adsbot-google|mediapartners-google)" "t:none,t:lowercase"`
 		if !off[IDShopScrape] {
+			// A browser moving within the site says so even when the site
+			// sends no Referer (Referrer-Policy: no-referrer).
+			w(`SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDShopScrape+2000, IDShopScrape, IDShopScrape+1000)
 			w(`SecRule ARGS_GET:/^filter_/|ARGS_GET:/^pa_/ "@rx ^[^,]*,[^,]*," "id:%d,phase:1,t:none,t:urlDecodeUni,deny,status:403,log,msg:'xPGuard - Shop filter scraping blocked (no cookies, many filter values)',tag:'xpguard/bot',chain"`, IDShopScrape)
 			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
 			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
@@ -738,7 +741,9 @@ func Render(c settings.WAF, o Options) string {
 		if !off[IDCartSpam] {
 			w(`SecRule &ARGS_GET:remove_item "@ge 1" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Cart spam blocked (remove and add in one link)',tag:'xpguard/bot',chain"`, IDCartSpam)
 			w(`  SecRule ARGS_GET_NAMES "@rx ^add[-_]to[-_]cart$" "t:none,t:lowercase"`)
-			w(`SecRule ARGS_GET_NAMES "@rx ^(?:remove_item|undo_item|add[-_]to[-_]cart)$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Cart change without a session blocked',tag:'xpguard/bot',chain"`, IDCartSpam+1000)
+			// Removing an item needs a cart, and a cart needs the session
+			// cookie. (Not add-to-cart: a guest's first click has no cookie.)
+			w(`SecRule ARGS_GET_NAMES "@rx ^(?:remove_item|undo_item)$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Cart change without a session blocked',tag:'xpguard/bot',chain"`, IDCartSpam+1000)
 			w(`  SecRule &ARGS_GET:_wpnonce "@ge 1" "t:none,chain"`)
 			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none"`)
 		}

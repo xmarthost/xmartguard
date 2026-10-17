@@ -10,6 +10,7 @@ func TestBinaryPlaces(t *testing.T) {
 		"/home/murtajez/murtajez.com/wp-includes/sodium_compat/src/Core/SecretStream/.a1b2c3":                                                      "Binary.ELF.InWordPressCore",
 		"/home/murtajez/murtajez.com/wp-content/plugins/woocommerce/assets/js/.mini-cart-title-items-counter-block/x":                              "Binary.ELF.HiddenInWebsite",
 		"/home/murtajez/murtajez.com/wp-content/plugins/woocommerce/.cache/polkitd":                                                                "Binary.ELF.HiddenInWebsite",
+		"/home/u/public_html/app/node_modules/.bin/esbuild":                                                                                        "Binary.ELF.InWebOrTempDir",
 		"/home/murtajez/murtajez.com/bridgemgr":                                                                                                    "Binary.ELF.InWebOrTempDir",
 		"/home/u/example.com/gdm3":                                                                                                                 "Binary.ELF.FakeSystemService",
 		"/home/u/public_html/wp-content/uploads/kthreadd":                                                                                          "Binary.ELF.FakeSystemService",
