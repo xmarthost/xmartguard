@@ -87,6 +87,12 @@ const (
 	// sendBeacon's text/plain) and the WordPress Performance team's
 	// Optimization Detective (url-metrics:store, page measurements as JSON).
 	IDSiteBeacons = 7700026
+	// IDWHMCSAdmin: WHMCS admin pages (the admin folder has any name).
+	// Admins save HTML on purpose (General Settings, e-mail templates,
+	// ticket replies, product descriptions); saves from the same site with
+	// the WHMCS session cookie skip the injection rules. WHMCS checks the
+	// admin login itself, and these files are not part of the client area.
+	IDWHMCSAdmin = 7700027
 	// IDCPanelOff: websites whose ModSecurity the account switched off in
 	// cPanel » ModSecurity. Apache already honours that for its virtual host;
 	// this makes it certain for every rule set and on LiteSpeed.
@@ -154,6 +160,10 @@ var passwordArgs = []string{"password", "password2", "passwd", "pass", "pass1", 
 // own exclusions).
 const adminSegments = `(?:admin|administrator|adminpanel|admin-panel|backend|dashboard|panel)`
 
+// whmcsAdminFiles are WHMCS admin pages that save content; the client
+// area has none of these names.
+const whmcsAdminFiles = `config[a-z0-9]*|clients[a-z0-9]*|supporttickets|supportannouncements|supportkb|supportdownloads|addonmodules|sendmessage|massmail|invoices|orders|quotes|todolist|utilitieslinktracking|systemactivitylog|systememailsmessagelog`
+
 // staticExts are files a web server sends as they are.
 const staticExts = `(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|css|js|mjs|map|woff2?|ttf|otf|eot|mp4|webm|mp3|ogg|pdf|txt|xml)`
 
@@ -207,6 +217,13 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule REQUEST_FILENAME "@rx (?:^|/)%s/" "t:none,t:urlDecodeUni,t:lowercase,chain"`, adminSegments)
 		w(`  SecRule &REQUEST_COOKIES "@gt 0" "t:none,chain"`)
 		w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?%s/" "t:none,t:lowercase,capture,chain"`, adminSegments)
+		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, tags)
+	}
+	if !off[IDWHMCSAdmin] {
+		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDWHMCSAdmin)
+		w(`  SecRule REQUEST_FILENAME "@rx /[^/]+/+(?:%s)\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`, whmcsAdminFiles)
+		w(`  SecRule REQUEST_COOKIES_NAMES "@rx ^WHMCS[A-Za-z0-9]{6,}$" "t:none,chain"`)
+		w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/" "t:none,t:lowercase,capture,chain"`)
 		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, tags)
 	}
 	w("# Content that is code by design: kept away from injection rules.")

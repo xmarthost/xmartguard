@@ -56,6 +56,9 @@ type Manager struct {
 	// Central is the portal's CAPTCHA page for suspicious visitors (nil or
 	// returning nil = off).
 	Central func() *Central
+	// OnBotBlocked is told about requests the bot lists refused (address
+	// and what matched), so real SEO crawlers can be verified and trusted.
+	OnBotBlocked func(ip, matched string)
 
 	mu       sync.Mutex
 	target   Target
@@ -942,6 +945,9 @@ func (m *Manager) tailLogs(ctx context.Context) {
 			return
 		}
 		m.record(ev)
+		if m.OnBotBlocked != nil && (ev.RuleID == IDBadBots || ev.RuleID == IDSEOBots || ev.RuleID == IDCustomBots) {
+			m.OnBotBlocked(ev.IP, ev.Detail)
+		}
 		if ev.Category == "login" {
 			m.maybeBan(ev, counter)
 		} else if strings.HasPrefix(ev.Action, "Access denied") && !noBanRules[ev.RuleID] {

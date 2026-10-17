@@ -42,6 +42,12 @@ type Service struct {
 	Hosts  []string `json:"hosts,omitempty"` // resolved when there is no list
 	// Builtin is used until a refresh succeeds.
 	Builtin []string `json:"-"`
+	// UA and RDNS verify a crawler without a published list (or between
+	// list refreshes): a request whose User-Agent names it (UA, lower case)
+	// from an address whose reverse DNS name ends in one of RDNS, and
+	// whose name points back to that address, is the real crawler.
+	UA   []string `json:"-"`
+	RDNS []string `json:"-"`
 }
 
 // Services are the built-in trusted services: what hosting security
@@ -73,6 +79,19 @@ var Services = []Service{
 	{ID: "baidu", Name: "Baiduspider (Baidu)", Group: "search",
 		Builtin: []string{"116.179.32.0/24", "116.179.37.0/24", "123.125.71.0/24", "180.76.5.0/24", "180.76.15.0/24",
 			"220.181.108.0/24", "111.206.198.0/24", "111.206.221.0/24", "220.181.124.0/24"}},
+
+	// SEO tools: customers verify their sites with them for backlink and
+	// site audit reports. Fakes with the same User-Agent stay blocked.
+	{ID: "ahrefs", Name: "AhrefsBot and Ahrefs Site Audit (SEO tool)", Group: "seo", Format: "scan",
+		URL:     "https://api.ahrefs.com/v3/public/crawler-ip-ranges",
+		Builtin: []string{"202.8.40.0/22", "5.39.1.224/27", "15.235.27.0/24"},
+		UA:      []string{"ahrefs"}, RDNS: []string{"ahrefs.com", "ahrefs.net"}},
+	{ID: "semrush", Name: "SemrushBot (SEO tool), verified by reverse DNS", Group: "seo",
+		UA: []string{"semrush"}, RDNS: []string{"semrush.com"}},
+	{ID: "moz", Name: "Moz DotBot and rogerbot (SEO tool), verified by reverse DNS", Group: "seo",
+		UA: []string{"dotbot", "rogerbot"}, RDNS: []string{"moz.com"}},
+	{ID: "seranking", Name: "SE Ranking (SEO tool), verified by reverse DNS", Group: "seo",
+		UA: []string{"seranking"}, RDNS: []string{"seranking.com"}},
 
 	// Social networks: link previews when a page is shared.
 	{ID: "meta", Name: "Meta: Facebook, Instagram, WhatsApp link previews (facebookexternalhit)", Group: "social", Format: "radb", URL: "AS32934",
@@ -168,7 +187,7 @@ var Services = []Service{
 // Groups whose addresses the WAF's bot rules also skip. CDN addresses carry
 // every visitor of a proxied site, and AI crawlers follow the "Block AI
 // crawlers" switch, so those two groups are only kept out of bans.
-var wafGroups = map[string]bool{"search": true, "social": true, "monitor": true, "payment": true, "wordpress": true, "vendor": true, "custom": true}
+var wafGroups = map[string]bool{"seo": true, "search": true, "social": true, "monitor": true, "payment": true, "wordpress": true, "vendor": true, "custom": true}
 
 // State is one service's current list.
 type State struct {
@@ -183,8 +202,9 @@ type State struct {
 type Store struct {
 	Path   string // cache file
 	Client *http.Client
-	// Resolve looks host names up (tests override it).
-	Resolve func(ctx context.Context, host string) ([]string, error)
+	// Resolve looks host names up, LookupAddr addresses (tests override them).
+	Resolve    func(ctx context.Context, host string) ([]string, error)
+	LookupAddr func(ctx context.Context, addr string) ([]string, error)
 
 	mu     sync.RWMutex
 	state  map[string]State
@@ -206,7 +226,8 @@ func (s *Store) SetCustom(list []string) {
 // New loads the cache (or the built-in lists).
 func New(path string) *Store {
 	s := &Store{Path: path, Client: &http.Client{Timeout: 30 * time.Second},
-		Resolve: func(ctx context.Context, h string) ([]string, error) { return net.DefaultResolver.LookupHost(ctx, h) }}
+		Resolve:    func(ctx context.Context, h string) ([]string, error) { return net.DefaultResolver.LookupHost(ctx, h) },
+		LookupAddr: func(ctx context.Context, a string) ([]string, error) { return net.DefaultResolver.LookupAddr(ctx, a) }}
 	s.load()
 	return s
 }
@@ -460,6 +481,10 @@ func (s *Store) fetch(ctx context.Context, svc Service) ([]string, string, error
 func (s *Store) Refresh(ctx context.Context) bool {
 	changed := false
 	for _, svc := range Services {
+		// Crawlers known only by reverse DNS keep the addresses verified so far.
+		if svc.URL == "" && len(svc.Hosts) == 0 && len(svc.Builtin) == 0 && len(svc.RDNS) > 0 {
+			continue
+		}
 		raw, src, err := s.fetch(ctx, svc)
 		cidrs := clean(raw)
 		s.mu.Lock()
@@ -481,17 +506,103 @@ func (s *Store) Refresh(ctx context.Context) bool {
 	}
 	s.mu.Lock()
 	s.rebuild()
+	s.mu.Unlock()
+	s.save()
+	return changed
+}
+
+// save writes the lists to the cache file.
+func (s *Store) save() {
+	s.mu.RLock()
 	list := make([]State, 0, len(s.state))
 	for _, x := range s.state {
 		list = append(list, x)
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
 	if b, err := json.Marshal(list); err == nil {
 		_ = os.MkdirAll(filepath.Dir(s.Path), 0o700)
 		_ = os.WriteFile(s.Path, b, 0o600)
 	}
-	return changed
+}
+
+// maxVerified caps the addresses verified for one crawler.
+const maxVerified = 4000
+
+// VerifyCrawler checks an address the WAF blocked for a crawler's
+// User-Agent (ua: the User-Agent or what the rule matched, may be empty):
+// when the address's reverse DNS name belongs to a crawler and points back to the address,
+// the address joins the crawler's trusted list. It returns the service ID
+// when the address was added.
+func (s *Store) VerifyCrawler(ctx context.Context, ip, ua string) string {
+	p := net.ParseIP(ip)
+	if p == nil || s.LookupAddr == nil {
+		return ""
+	}
+	// The crawler the User-Agent names; when the log does not say what
+	// matched (LiteSpeed), every crawler known by reverse DNS.
+	ua = strings.ToLower(ua)
+	var named, all []*Service
+	for i := range Services {
+		if len(Services[i].RDNS) == 0 {
+			continue
+		}
+		all = append(all, &Services[i])
+		for _, t := range Services[i].UA {
+			if strings.Contains(ua, t) {
+				named = append(named, &Services[i])
+			}
+		}
+	}
+	if len(named) == 0 {
+		named = all
+	}
+	if s.Match(ip, nil) != "" {
+		return ""
+	}
+	names, err := s.LookupAddr(ctx, ip)
+	if err != nil {
+		return ""
+	}
+	for _, n := range names {
+		n = strings.ToLower(strings.TrimSuffix(n, "."))
+		var svc *Service
+		for _, c := range named {
+			for _, suf := range c.RDNS {
+				if n == suf || strings.HasSuffix(n, "."+suf) {
+					svc = c
+				}
+			}
+		}
+		if svc == nil {
+			continue
+		}
+		addrs, err := s.Resolve(ctx, n)
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if q := net.ParseIP(a); q != nil && q.Equal(p) {
+				s.mu.Lock()
+				cur := s.state[svc.ID]
+				cur.Service = *svc
+				cur.CIDRs = append(cur.CIDRs, p.String())
+				if len(cur.CIDRs) > maxVerified {
+					cur.CIDRs = cur.CIDRs[len(cur.CIDRs)-maxVerified:]
+				}
+				if cur.Source == "none" || cur.Source == "" {
+					cur.Source = "verified"
+				}
+				cur.Updated = time.Now().Unix()
+				s.state[svc.ID] = cur
+				s.rebuild()
+				s.mu.Unlock()
+				s.save()
+				return svc.ID
+			}
+		}
+	}
+	return ""
 }
 
 // CIDRs returns the addresses of the enabled services (disabled: IDs off)

@@ -224,6 +224,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			return &waf.Gate{Tokens: captcha.GateTokens(gateSecret, time.Now()), HTTPPort: cur.Captcha.HTTPPort, HTTPSPort: cur.Captcha.HTTPSPort}
 		}}
 	a.WAF.Central = a.centralWAF
+	a.WAF.OnBotBlocked = a.onBotBlocked
 	a.CMS = &cms.Manager{Zone: func() *time.Location { return scanner.ScheduleZone(st.Get().Scanner.ScheduleTZ) }, DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
 		Accounts: func() []cms.Account {
 			var out []cms.Account

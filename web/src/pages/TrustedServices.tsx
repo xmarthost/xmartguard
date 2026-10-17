@@ -35,6 +35,7 @@ interface Resp {
 /** Groups in display order, with what they protect. */
 const GROUPS: [string, string, string][] = [
   ['search', 'Search engines', 'Crawlers that index the sites (SEO): Google, Bing, Apple, DuckDuckGo, Yandex, Baidu.'],
+  ['seo', 'SEO tools', 'Ahrefs, Semrush, Moz and SE Ranking crawlers that customers use for backlink and site audit reports. Only the real crawlers: Ahrefs from its official list, the others once their address passes a reverse DNS check. Fakes with the same name stay blocked, and the shop filter and cart rules still apply to them.'],
   ['social', 'Social networks', 'Link previews when a page is shared on Facebook, Instagram, WhatsApp or Telegram.'],
   ['ai', 'AI assistants & MCP', 'ChatGPT, Claude and Perplexity opening pages for their users, and MCP tool calls to servers hosted on the sites. Never banned; the WAF "Block AI crawlers" switch still applies to them.'],
   ['cdn', 'CDN & website firewalls', 'Cloudflare, QUIC.cloud (LiteSpeed), Fastly, Bunny, CloudFront, Sucuri, Imperva: every visitor of a proxied site arrives from these addresses, so blocking one would take the site offline.'],
@@ -47,7 +48,7 @@ const GROUPS: [string, string, string][] = [
 ];
 
 const sourceLabel = (s: string) =>
-  s === 'official' ? 'official list' : s === 'dns' ? 'DNS' : s === 'builtin' ? 'built-in' : s === 'portal' ? 'portal' : '—';
+  s === 'official' ? 'official list' : s === 'dns' ? 'DNS' : s === 'builtin' ? 'built-in' : s === 'portal' ? 'portal' : s === 'verified' ? 'reverse DNS' : '—';
 
 /** Trusted services for every server (Overview » Trusted Services). */
 export default function TrustedServices() {
