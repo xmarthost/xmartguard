@@ -63,6 +63,16 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		{"Cart spam: remove and add in one link", "shop.example.com", "GET", "/cart/?remove_item=abc123&add-to-cart=55", "", "", []string{"Cookie: woocommerce_items_in_cart=1"}, 403},
 		{"Cart change without a session", "shop.example.com", "GET", "/cart/?remove_item=abc123&_wpnonce=f00d", "", "", nil, 403},
 		{"Visitor removing a cart item", "shop.example.com", "GET", "/cart/?remove_item=abc123&_wpnonce=f00d", "", "", []string{"Cookie: woocommerce_items_in_cart=1; wp_woocommerce_session_x=y"}, 200},
+		// XML-RPC under Jetpack's name from outside Jetpack's network.
+		{"Fake Jetpack on XML-RPC", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>wp.getUsersBlogs</methodName></methodCall>`, []string{"User-Agent: Jetpack by WordPress.com"}, 403},
+		{"Jetpack name behind Cloudflare is not judged", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>jetpack.jsonAPI</methodName></methodCall>`, []string{"User-Agent: Jetpack by WordPress.com", "CF-Connecting-IP: 192.0.84.10"}, 200},
+		{"Mobile app on XML-RPC", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>wp.getPosts</methodName></methodCall>`, []string{"User-Agent: wp-android/24.1"}, 200},
+		// POSTs from tools without any browser header.
+		{"POST without User-Agent to a script", "site.example.com", "POST", "/old/includes/up.php", form, "a=1", []string{"User-Agent: "}, 403},
+		{"Payment callback without User-Agent", "site.example.com", "POST", "/modules/gateways/callback/jazzcash.php", form, "a=1", []string{"User-Agent: "}, 200},
+		{"Webhook without User-Agent", "site.example.com", "POST", "/app/webhook.php", form, "a=1", []string{"User-Agent: "}, 200},
+		{"API call without User-Agent", "site.example.com", "POST", "/api/v1/orders.php", form, "a=1", []string{"User-Agent: "}, 200},
+		{"Form post with a session and no User-Agent", "site.example.com", "POST", "/old/includes/save.php", form, "a=1", []string{"User-Agent: ", "Cookie: PHPSESSID=abc"}, 200},
 		{"Stripe settings dump", "shop.example.com", "GET", "/wp-content/woocommerce_stripe_settings.tar.gz", "", "", nil, 403},
 		{"Stripe settings text", "shop.example.com", "GET", "/wp-content/woocommerce_stripe_cc_settings.txt", "", "", nil, 403},
 		{"Options dump", "shop.example.com", "GET", "/wp_options.sql", "", "", nil, 403},

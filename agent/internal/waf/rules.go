@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
+	"github.com/xmarthost/xmartguard/agent/internal/trusted"
 )
 
 // Rule id ranges by category.
@@ -43,10 +44,18 @@ const (
 	IDWPLookalike   = 7700311
 	IDWPUploadsList = 7700312
 	IDWPCachePHP    = 7700313
-	IDStaticPHP     = 7700321
-	IDRepeatDirPHP  = 7700322
-	IDHiddenDirPHP  = 7700323
-	IDDoubleEncode  = 7700324
+	// IDFakeJetpack: XML-RPC requests that call themselves Jetpack from an
+	// address outside Jetpack's network (password guessing hides behind
+	// the name, because sites must keep XML-RPC open for Jetpack).
+	IDFakeJetpack  = 7700314
+	IDStaticPHP    = 7700321
+	IDRepeatDirPHP = 7700322
+	IDHiddenDirPHP = 7700323
+	IDDoubleEncode = 7700324
+	// IDNoUAPost: POSTs to a PHP file with no User-Agent, Referer or cookie
+	// (web shell and exploit tools). Not shared with the IPDB: a
+	// server-to-server call may look the same.
+	IDNoUAPost      = 7700330
 	IDLoginWP       = 7700401
 	IDLoginXMLRPC   = 7700402
 	IDLoginJoomla   = 7700403
@@ -155,6 +164,8 @@ var Catalog = []RuleInfo{
 	{IDStaticPHP, "generic", "Block running PHP files inside images, img, fonts and css folders of any website", "block"},
 	{IDRepeatDirPHP, "generic", "Block PHP requests through repeated folders (/images/images/cache.php), a backdoor search pattern", "block"},
 	{IDHiddenDirPHP, "generic", "Block running PHP files inside hidden folders (/.tmb/, /.trash/), except .well-known", "block"},
+	{IDFakeJetpack, "wordpress", "Block XML-RPC requests that claim to be Jetpack from outside Jetpack's network (not behind a proxy)", "block"},
+	{IDNoUAPost, "bad_bots", "Block POSTs to PHP files with no User-Agent, Referer or cookie (web shell tools), except API, webhook and payment callback paths and trusted services", "block"},
 	{IDDoubleEncode, "generic", "Block double-encoded path traversal (%252e%252e) in the address", "block"},
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
 	{IDCrawlerCart, "bad_bots", "Block crawlers following add-to-cart and wishlist links (each one writes a session and runs the shop uncached)", "block"},
@@ -429,9 +440,9 @@ func Render(c settings.WAF, o Options) string {
 		// The AI crawler rule still applies: Meta's AI crawler
 		// (meta-externalagent) comes from the same network as its link
 		// previews, and the "Block AI crawlers" switch must stop it.
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
 			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDSEOBots, IDCustomBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet,
-			IDGateNoCookie, IDCentralGate, IDSoftCaptcha, IDSoftDeny)
+			IDGateNoCookie, IDCentralGate, IDSoftCaptcha, IDSoftDeny, IDNoUAPost)
 	}
 	// rule writes one of our rules unless it was switched off.
 	rule := func(id int, format string, a ...any) {
@@ -477,6 +488,14 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
 			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Request without User-Agent to a WordPress file blocked',tag:'xpguard/wordpress',chain"`, IDEmptyUAWP+1000)
 			w(`  SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
+		}
+		if !off[IDFakeJetpack] {
+			// Behind Cloudflare or a proxy the address is the proxy's: not checked.
+			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake Jetpack request to XML-RPC blocked',tag:'xpguard/wordpress',chain"`, IDFakeJetpack)
+			w(`  SecRule REQUEST_HEADERS:User-Agent "@contains jetpack" "t:none,t:lowercase,chain"`)
+			w(`  SecRule &REQUEST_HEADERS:CF-Connecting-IP "@eq 0" "t:none,chain"`)
+			w(`  SecRule &REQUEST_HEADERS:X-Forwarded-For "@eq 0" "t:none,chain"`)
+			w(`  SecRule REMOTE_ADDR "!@ipMatch %s" "t:none"`, jetpackIPs())
 		}
 		if !off[IDXMLRPCMulti] {
 			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC multicall blocked',tag:'xpguard/wordpress',chain"`, IDXMLRPCMulti)
@@ -675,6 +694,22 @@ func Render(c settings.WAF, o Options) string {
 		if !off[IDRootProbe] {
 			probe(IDRootProbe, `SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
 			probe(IDRootProbe+1000, `SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
+		}
+		// POSTs to any PHP file from a tool that sends no User-Agent, no
+		// Referer and no cookie. API, webhook and payment callback paths
+		// are left alone: servers call them with bare HTTP clients.
+		if !off[IDNoUAPost] {
+			noUA := func(id int, ua string) {
+				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - POST without User-Agent, Referer or cookie blocked',tag:'xpguard/bot',chain"`, id)
+				w(`  SecRule REQUEST_FILENAME "@rx \.(?:php[0-9]?|phtml)$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
+				w(`  SecRule REQUEST_FILENAME "!@rx (?:/(?:index|wp-cron|xmlrpc|admin-ajax|wp-login|cron|api)\.php$|/(?:api|apis|webhooks?|hooks?|callbacks?|ipn|notify|notifications?|gateways?|payments?|modules/gateways|oauth|cron|rest|v[0-9])/)" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
+				w(`  SecRule REQUEST_FILENAME "!@rx (?:callback|webhook|notify|ipn|hook|return|listener|response|status)[^/]*\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
+				w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
+				w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
+				w(`  %s`, ua)
+			}
+			noUA(IDNoUAPost, `SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
+			noUA(IDNoUAPost+1000, `SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
 		}
 		crawler := `SecRule REQUEST_HEADERS:User-Agent "@rx (?:bot|crawl|spider|slurp|fetcher|scraper)\b" "t:none,t:lowercase%s"`
 		if !off[IDCrawlerCart] {
@@ -904,4 +939,13 @@ func quoteAll(l []string) []string {
 		out[i] = regexp.QuoteMeta(v)
 	}
 	return out
+}
+
+// jetpackIPs is Jetpack's network for @ipMatch (ModSecurity 2 refuses "/32").
+func jetpackIPs() string {
+	var out []string
+	for _, c := range trusted.Builtin("jetpack") {
+		out = append(out, strings.TrimSuffix(c, "/32"))
+	}
+	return strings.Join(out, ",")
 }

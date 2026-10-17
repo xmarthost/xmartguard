@@ -570,6 +570,16 @@ func (s *Store) MailRelays(disabled []string) map[string][]string {
 	return out
 }
 
+// Builtin returns a service's built-in address list.
+func Builtin(id string) []string {
+	for _, svc := range Services {
+		if svc.ID == id {
+			return svc.Builtin
+		}
+	}
+	return nil
+}
+
 // Official reports whether a service's list came from its provider (not
 // the built-in copy).
 func (s *Store) Official(id string) bool {
