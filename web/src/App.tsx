@@ -29,6 +29,7 @@ const FleetDomainReputation = lazy(() => import('./pages/DomainReputation'));
 const CaptchaPage = lazy(() => import('./pages/CaptchaPage'));
 const WafIntel = lazy(() => import('./pages/WafIntel'));
 const SecurityMonitor = lazy(() => import('./pages/SecurityMonitor'));
+const ServerAudit = lazy(() => import('./pages/ServerAudit'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const BotAttacks = lazy(() => import('./pages/WAF').then((m) => ({ default: m.BotAttacks })));
 const WafLogs = lazy(() => import('./pages/WAF').then((m) => ({ default: m.WafLogs })));
@@ -86,6 +87,7 @@ export default function App() {
         <Route path="/servers/:id/ipdb" element={<Protected><ServerIPDB /></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/servers/:id/security-monitor" element={<Protected><SecurityMonitor /></Protected>} />
+        <Route path="/servers/:id/server-audit" element={<Protected><ServerAudit /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected><IPDBPage /></Protected>} />
         <Route path="/ai" element={<Protected><AIScanner /></Protected>} />

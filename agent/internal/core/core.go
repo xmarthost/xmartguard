@@ -288,6 +288,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.hostTrustLoop(ctx)
 	go a.proxyListLoop(ctx)
 	go a.torLoop(ctx)
+	go a.auditLoop(ctx)
 	go a.mailGuardLoop(ctx)
 	go a.wafLearnLoop(ctx)
 	go a.intelLoop(ctx)
@@ -606,6 +607,7 @@ func decode[T any](p json.RawMessage) (T, error) {
 // Handlers returns the command table used by the portal session.
 func (a *Agent) Handlers() map[string]client.Handler {
 	h := map[string]client.Handler{}
+	a.auditHandlers(h)
 
 	h["stats.get"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{

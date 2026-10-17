@@ -4,6 +4,7 @@ import {
   BookOpen, BadgeCheck, ShieldQuestion, Brain,
   Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   CreditCard, LogOut, Mail, Menu, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, X,
+  ClipboardCheck,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { useApi } from '../hooks';
@@ -281,6 +282,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             { to: `${base}/domain-reputation`, label: 'Domain Reputation', icon: <Globe /> },
             { to: `${base}/ip-reputation`, label: 'IP Reputation', icon: <Radar /> },
             { to: `${base}/security-monitor`, label: 'Process & Cron Monitor', icon: <Cpu /> },
+            { to: `${base}/server-audit`, label: 'Server Audit', icon: <ClipboardCheck /> },
           ],
         },
         { label: 'Settings', icon: <Settings />, to: `${base}/settings` },

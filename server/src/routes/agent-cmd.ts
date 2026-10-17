@@ -39,9 +39,11 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'suspend.list': { role: 'viewer', mutates: false },
   'dashboard.get': { role: 'viewer', mutates: false },
   'alerts.get': { role: 'viewer', mutates: false },
+  'audit.get': { role: 'viewer', mutates: false },
   'finding.content': { role: 'operator', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },
+  'audit.run': { role: 'operator', mutates: true },
   'scan.stop': { role: 'operator', mutates: true },
   'scan.delete': { role: 'operator', mutates: true },
   'finding.action': { role: 'operator', mutates: true, timeoutMs: 120_000 },
