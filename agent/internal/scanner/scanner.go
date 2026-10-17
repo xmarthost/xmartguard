@@ -456,7 +456,8 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 	}
 	if content != nil {
-		if ext == "" && IsELF(content) {
+		// A program, whatever it is called (also disguised as an image).
+		if IsELF(content) {
 			return binaryCheck(path, content)
 		}
 		if d := analyze(ext, content); d != nil {
@@ -533,12 +534,78 @@ func binaryCheck(path string, head []byte) (*Detection, error) {
 	if t := elfType(head); t != elfExec && t != elfDyn {
 		return nil, nil
 	}
-	for _, part := range strings.Split(path, "/") {
-		if part == "public_html" || part == "www" || part == "html" || part == "tmp" || part == "shm" {
-			return &Detection{CatBinary, "Binary.ELF.InWebOrTempDir"}, nil
+	parts := strings.Split(path, "/")
+	base := filepath.Base(path)
+	// Hidden: the file or a folder it is in (not the account's own dot
+	// folders such as ~/.local, which hold developer tools).
+	hidden := strings.HasPrefix(base, ".")
+	for i, part := range parts[:len(parts)-1] {
+		if i > homeDepth(parts)+1 && strings.HasPrefix(part, ".") && part != ".well-known" {
+			hidden = true
 		}
 	}
+	web, wpContent := false, false
+	for i, part := range parts {
+		switch {
+		// WordPress core never ships programs: one in wp-includes or
+		// wp-admin is malware (botnet binaries hide there).
+		case part == "wp-includes" || part == "wp-admin":
+			return &Detection{CatVirus, "Binary.ELF.InWordPressCore"}, nil
+		// Some plugins ship image tools (cwebp, jpegtran); a hidden one, or
+		// one named like a system service, is not one of them.
+		case part == "wp-content":
+			web, wpContent = true, true
+		case part == "public_html" || part == "www" || part == "html" || part == "tmp" || part == "shm":
+			web = true
+		// An addon domain's document root: /home/user/example.com/.
+		case i >= 3 && i == homeDepth(parts)+1 && reDomainDir.MatchString(part):
+			web = true
+		}
+	}
+	switch {
+	case web && hidden:
+		return &Detection{CatVirus, "Binary.ELF.HiddenInWebsite"}, nil
+	case web && SystemServiceName(base):
+		return &Detection{CatVirus, "Binary.ELF.FakeSystemService"}, nil
+	case wpContent:
+		return &Detection{CatBinary, "Binary.ELF.InWordPressContent"}, nil
+	case web:
+		return &Detection{CatBinary, "Binary.ELF.InWebOrTempDir"}, nil
+	}
 	return nil, nil
+}
+
+// systemServices are names malware gives its programs to pass for the
+// operating system's own (seen running from wp-content: polkitd, gdm3,
+// kthreadd, journald, networkd, resolved, dbus-daemon).
+var systemServices = map[string]bool{"polkitd": true, "gdm3": true, "gdm": true, "kthreadd": true, "systemd": true, "journald": true,
+	"networkd": true, "resolved": true, "dbus-daemon": true, "avahi-daemon": true, "sshd": true, "crond": true, "cron": true, "rsyslogd": true,
+	"udevd": true, "init": true, "agetty": true, "irqbalance": true, "auditd": true, "kworker": true, "ksoftirqd": true, "kswapd0": true,
+	"migration": true, "watchdogd": true, "atd": true, "bash": true, "sh": true, "httpd": true, "nginx": true, "php-fpm": true, "mysqld": true}
+
+// SystemServiceName reports a program name the operating system uses
+// (systemd-*, kworker/0:1 and similar included).
+func SystemServiceName(name string) bool {
+	n := strings.TrimPrefix(strings.ToLower(name), ".")
+	if i := strings.IndexAny(n, "/:"); i > 0 {
+		n = n[:i]
+	}
+	return systemServices[n] || strings.HasPrefix(n, "systemd-") || strings.HasPrefix(n, "kworker")
+}
+
+// reDomainDir is a folder named like a domain (example.com, shop.example.pk),
+// not a versioned tool (node-v18.17.0-linux-x64, python3.11).
+var reDomainDir = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$`)
+
+// homeDepth is the index of the account folder in /home*/user/... (-1 if
+// the path is not in a home directory).
+func homeDepth(parts []string) int {
+	for i, p := range parts {
+		if i == 1 && strings.HasPrefix(p, "home") {
+			return 2
+		}
+	}
+	return -1
 }
 
 func md5File(path string) string {

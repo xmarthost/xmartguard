@@ -250,6 +250,7 @@ func (a *Agent) Start(ctx context.Context) {
 		case <-ctx.Done():
 		case <-time.After(90 * time.Second):
 			a.maybeMoveUnit(selfPath())
+			ensureServiceWeights()
 		}
 	}()
 	go a.Realtime.Run(ctx)

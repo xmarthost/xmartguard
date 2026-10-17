@@ -88,6 +88,49 @@ type Realtime struct {
 	sweepTook atomic.Int64 // nanoseconds the last sweep took
 	active    atomic.Bool
 	lastErr   atomic.Value // string
+	// lastScan: when each file was last handed to a worker, so a file
+	// rewritten all the time (a cache, a counter) is checked at most once
+	// a RescanGap.
+	lastScan map[string]time.Time
+	// catchUp after an event overflow: one at a time, at most every
+	// CatchUpGap; overflows meanwhile are covered by the next one.
+	catching   atomic.Bool
+	catchMu    sync.Mutex
+	catchFrom  time.Time // oldest change the next catch-up must cover
+	catchLast  time.Time // when the last catch-up started
+	catchTimer *time.Timer
+	skippedLog atomic.Int64
+}
+
+// RescanGap is the least time between two realtime scans of one file.
+var RescanGap = 60 * time.Second
+
+// CatchUpGap is the least time between two catch-up walks after event
+// overflows (each walks every account).
+var CatchUpGap = 10 * time.Minute
+
+// logLike reports files the realtime scanner leaves to the scheduled
+// scans: logs and data files the web server and PHP append to all day
+// (an error_log written on every request would be read again each time).
+func logLike(name string) bool {
+	n := strings.ToLower(name)
+	// A script is always scanned, whatever it is called (shell.log.php).
+	if e := filepath.Ext(n); e != "" && (CodeExts[e] || ScriptExts[e]) && e != ".txt" {
+		return false
+	}
+	switch {
+	case n == "error_log" || n == "debug.log" || n == "access_log":
+		return true
+	case strings.HasSuffix(n, ".log") || strings.HasSuffix(n, "_log") || strings.Contains(n, ".log."):
+		return true
+	case strings.HasPrefix(n, "sess_"):
+		return true
+	case strings.HasSuffix(n, ".sqlite") || strings.HasSuffix(n, "-journal") || strings.HasSuffix(n, "-wal") || strings.HasSuffix(n, "-shm"):
+		return true
+	case strings.HasSuffix(n, ".lock") || strings.HasSuffix(n, ".pid"):
+		return true
+	}
+	return false
 }
 
 // Health reports whether inotify watching is running and, if not, why.
@@ -127,6 +170,8 @@ type RealtimeStats struct {
 	Scanned   int64   `json:"files_scanned"`
 	Swept     int64   `json:"files_swept"`
 	SweepSecs float64 `json:"last_sweep_seconds"`
+	Overflows int64   `json:"queue_overflows"`
+	LogsSkip  int64   `json:"log_writes_skipped"`
 }
 
 // Stats returns the counters (totals since start).
@@ -135,6 +180,7 @@ func (r *Realtime) Stats() RealtimeStats {
 		Watches: r.Watches(), Unwatched: r.Unwatched(),
 		Events: r.events.Load(), Scanned: r.scanned.Load(), Swept: r.swept.Load(),
 		SweepSecs: float64(r.sweepTook.Load()/1e7) / 100,
+		Overflows: r.overflow.Load(), LogsSkip: r.skippedLog.Load(),
 	}
 }
 
@@ -535,6 +581,10 @@ func (r *Realtime) addTree(root string, queueFiles bool) {
 }
 
 func (r *Realtime) queue(path string) {
+	if logLike(filepath.Base(path)) {
+		r.skippedLog.Add(1)
+		return
+	}
 	r.mu.Lock()
 	r.pending[path] = time.Now()
 	r.mu.Unlock()
@@ -555,7 +605,7 @@ func (r *Realtime) handle(buf []byte) {
 		off = end
 		if ev.Mask&inOverflow != 0 {
 			r.overflow.Add(1)
-			go r.catchUp(time.Now().Add(-10 * time.Minute))
+			r.requestCatchUp(time.Now().Add(-10 * time.Minute))
 			continue
 		}
 		name := strings.TrimRight(string(nameBytes), "\x00")
@@ -591,6 +641,35 @@ func (r *Realtime) handle(buf []byte) {
 	}
 }
 
+// requestCatchUp asks for a catch-up covering changes since t. A busy
+// server overflows the event queue again and again: one walk runs at a
+// time, at most every CatchUpGap, and covers every overflow before it.
+func (r *Realtime) requestCatchUp(since time.Time) {
+	r.catchMu.Lock()
+	defer r.catchMu.Unlock()
+	if r.catchFrom.IsZero() || since.Before(r.catchFrom) {
+		r.catchFrom = since
+	}
+	if r.catchTimer != nil {
+		return // one is already waiting
+	}
+	wait := CatchUpGap - time.Since(r.catchLast)
+	if r.catchLast.IsZero() || wait < 0 {
+		wait = 0
+	}
+	r.catchTimer = time.AfterFunc(wait, func() {
+		for !r.catching.CompareAndSwap(false, true) {
+			time.Sleep(time.Second) // the previous walk is still running
+		}
+		defer r.catching.Store(false)
+		r.catchMu.Lock()
+		from := r.catchFrom
+		r.catchFrom, r.catchTimer, r.catchLast = time.Time{}, nil, time.Now()
+		r.catchMu.Unlock()
+		r.catchUp(from)
+	})
+}
+
 // catchUp scans files changed since t after the kernel dropped events.
 func (r *Realtime) catchUp(since time.Time) {
 	lowPriorityThread()
@@ -618,15 +697,32 @@ func (r *Realtime) catchUp(since time.Time) {
 func (r *Realtime) flushPending() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.lastScan == nil {
+		r.lastScan = map[string]time.Time{}
+	}
+	now := time.Now()
 	for p, t := range r.pending {
-		if time.Since(t) < 300*time.Millisecond {
+		if now.Sub(t) < 300*time.Millisecond {
+			continue
+		}
+		// Written again soon after its last scan: wait out the gap (the
+		// latest content is scanned then, once).
+		if last, ok := r.lastScan[p]; ok && now.Sub(last) < RescanGap {
 			continue
 		}
 		select {
 		case r.work <- p:
 			delete(r.pending, p)
+			r.lastScan[p] = now
 		default:
 			return // workers busy: try again on the next flush
+		}
+	}
+	if len(r.lastScan) > 20000 {
+		for p, t := range r.lastScan {
+			if now.Sub(t) >= RescanGap {
+				delete(r.lastScan, p)
+			}
 		}
 	}
 }

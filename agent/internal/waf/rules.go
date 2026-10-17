@@ -66,11 +66,20 @@ const (
 	// shop's filter, sort and page-size combinations (millions of uncached
 	// pages: SEO backlink crawlers overloaded a server this way).
 	IDCrawlerFacets = 7700509
-	IDWebshell      = 7700601
-	IDWebshellDir   = 7700602
-	IDExploitProbe  = 7700603
-	IDMalwareExt    = 7700604
-	IDProxyBlocked  = 7700701
+	// IDShopScrape: clients without cookies (no visitor has none) walking
+	// shop filter combinations: three or more values of a filter, or three
+	// filters at once. Scrapers send a browser User-Agent from residential
+	// proxies and AI crawlers from their own networks, and every such URL
+	// runs the shop's heaviest query uncached.
+	IDShopScrape = 7700510
+	// IDCartSpam: cart links no visitor clicks (remove_item together with
+	// add-to-cart) and cart changes without a session cookie.
+	IDCartSpam     = 7700511
+	IDWebshell     = 7700601
+	IDWebshellDir  = 7700602
+	IDExploitProbe = 7700603
+	IDMalwareExt   = 7700604
+	IDProxyBlocked = 7700701
 	// IPDB and Tor: id+1000 checks the real address behind Cloudflare or a
 	// local proxy, id+2000 Cloudflare's Tor marker.
 	IDIPDBPost = 7700711
@@ -149,6 +158,8 @@ var Catalog = []RuleInfo{
 	{IDDoubleEncode, "generic", "Block double-encoded path traversal (%252e%252e) in the address", "block"},
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
 	{IDCrawlerCart, "bad_bots", "Block crawlers following add-to-cart and wishlist links (each one writes a session and runs the shop uncached)", "block"},
+	{IDShopScrape, "bad_bots", "Block clients without cookies or Referer walking shop filter combinations (3+ values or 3+ filters: scrapers with a browser User-Agent, AI crawlers)", "block"},
+	{IDCartSpam, "bad_bots", "Block cart spam: remove_item with add-to-cart in one link, and cart changes without a session cookie", "block"},
 	{IDCrawlerFacets, "bad_bots", "Block crawlers other than search engines on shop filter, sort and page-size URLs (endless uncached combinations)", "block"},
 	{IDRootProbe, "bad_bots", "Block PHP probes on a website's top folder that send neither a User-Agent nor a Referer", "block"},
 	{IDBareMozilla, "bad_bots", "Block the fake User-Agent \"Mozilla/5.0\" with nothing after it (scripts pretending to be a browser)", "block"},
@@ -415,8 +426,11 @@ func Render(c settings.WAF, o Options) string {
 		// bot cannot solve one, and the preview or the crawl breaks): the
 		// login gate, the central CAPTCHA and soft blocking skip them. A
 		// strong OWASP CRS signal still blocks them.
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
-			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet,
+		// The AI crawler rule still applies: Meta's AI crawler
+		// (meta-externalagent) comes from the same network as its link
+		// previews, and the "Block AI crawlers" switch must stop it.
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDSEOBots, IDCustomBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet,
 			IDGateNoCookie, IDCentralGate, IDSoftCaptcha, IDSoftDeny)
 	}
 	// rule writes one of our rules unless it was switched off.
@@ -671,6 +685,27 @@ func Render(c settings.WAF, o Options) string {
 			w(`SecRule ARGS_GET_NAMES "@rx ^(?:filter_[a-z0-9_-]+|query_type_[a-z0-9_-]+|orderby|min_price|max_price|per_page|rating_filter|product_count|shop_view|pa_[a-z0-9_-]+)$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Crawler on shop filter URLs blocked',tag:'xpguard/bot',chain"`, IDCrawlerFacets)
 			w(`  `+crawler, ",chain")
 			w(`  SecRule REQUEST_HEADERS:User-Agent "!@rx (?:googlebot|bingbot|applebot|yandex|duckduckbot|google-inspectiontool|adsbot-google|mediapartners-google)" "t:none,t:lowercase"`)
+		}
+		// Search engines are exempt (fake ones are blocked by their own rule).
+		// A visitor clicking filters always sends a Referer, so only clients
+		// with neither cookies nor a Referer are blocked.
+		search := `SecRule REQUEST_HEADERS:User-Agent "!@rx (?:googlebot|bingbot|applebot|yandex|duckduckbot|google-inspectiontool|adsbot-google|mediapartners-google)" "t:none,t:lowercase"`
+		if !off[IDShopScrape] {
+			w(`SecRule ARGS_GET:/^filter_/|ARGS_GET:/^pa_/ "@rx ^[^,]*,[^,]*," "id:%d,phase:1,t:none,t:urlDecodeUni,deny,status:403,log,msg:'xPGuard - Shop filter scraping blocked (no cookies, many filter values)',tag:'xpguard/bot',chain"`, IDShopScrape)
+			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
+			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
+			w(`  %s`, search)
+			w(`SecRule &ARGS_GET:/^filter_/ "@ge 3" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Shop filter scraping blocked (no cookies, many filters)',tag:'xpguard/bot',chain"`, IDShopScrape+1000)
+			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
+			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
+			w(`  %s`, search)
+		}
+		if !off[IDCartSpam] {
+			w(`SecRule &ARGS_GET:remove_item "@ge 1" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Cart spam blocked (remove and add in one link)',tag:'xpguard/bot',chain"`, IDCartSpam)
+			w(`  SecRule ARGS_GET_NAMES "@rx ^add[-_]to[-_]cart$" "t:none,t:lowercase"`)
+			w(`SecRule ARGS_GET_NAMES "@rx ^(?:remove_item|undo_item|add[-_]to[-_]cart)$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Cart change without a session blocked',tag:'xpguard/bot',chain"`, IDCartSpam+1000)
+			w(`  SecRule &ARGS_GET:_wpnonce "@ge 1" "t:none,chain"`)
+			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none"`)
 		}
 		if !off[IDBareMozilla] {
 			// Not for logged-in users and API clients (some site tools send it).

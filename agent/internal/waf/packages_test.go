@@ -30,8 +30,20 @@ func TestPackagesRender(t *testing.T) {
 		}
 	}
 	// Trusted services skip the new bot rules too.
-	if !strings.Contains(out, fmt.Sprintf("ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,", IDBadBots, IDFakeSearchBot, IDRootProbe+1000)) {
+	if !strings.Contains(out, fmt.Sprintf("ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,", IDBadBots, IDSEOBots, IDCustomBots, IDFakeSearchBot, IDRootProbe+1000)) {
 		t.Error("trusted services do not skip the probe rules")
+	}
+	// The AI crawler switch still applies to trusted networks (Meta's AI
+	// crawler shares them with link previews).
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, fmt.Sprintf("id:%d,", IDTrusted)) && strings.Contains(l, fmt.Sprintf("-%d,", IDAIBots)) {
+			t.Error("trusted services skip the AI crawler rule")
+		}
+	}
+	for _, id := range []int{IDShopScrape, IDShopScrape + 1000, IDCartSpam, IDCartSpam + 1000} {
+		if !strings.Contains(out, fmt.Sprintf("id:%d,", id)) {
+			t.Errorf("shop rule %d not rendered", id)
+		}
 	}
 	// No verified list, no fake-crawler rule: a real crawler must never be blocked.
 	if strings.Contains(Render(c, Options{Dir: "/r", Trusted: true}), fmt.Sprintf("id:%d,", IDFakeSearchBot)) {

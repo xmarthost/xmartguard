@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -228,6 +229,39 @@ func ShouldKill(level Level, age time.Duration, lifeCPU, recentCPU float64) bool
 	return false
 }
 
+// reKernelThread is a command line shaped like a kernel thread's name
+// ([kworker/0:1]); user programs only look like that to hide.
+var reKernelThread = regexp.MustCompile(`^\[[^\]]{1,40}\]$`)
+
+// reDomainFolder names an addon domain's folder in a home directory.
+var reDomainFolder = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\.[a-z]{2,24}$`)
+
+// websiteFolder reports a path inside a website of the account: public_html,
+// an addon domain's folder (~/example.com/) or WordPress folders.
+func websiteFolder(p, home string) bool {
+	if !strings.HasPrefix(p, home+"/") {
+		return false
+	}
+	rest := strings.TrimPrefix(p, home+"/")
+	first, _, _ := strings.Cut(rest, "/")
+	if first == "public_html" || first == "www" || reDomainFolder.MatchString(first) {
+		return true
+	}
+	return strings.Contains(rest, "/wp-content/") || strings.Contains(rest, "/wp-includes/") || strings.Contains(rest, "/wp-admin/")
+}
+
+// isInterpreter is a shell, perl or python.
+func isInterpreter(exe string) bool {
+	b := filepath.Base(exe)
+	// Not php: a PHP worker keeps running while a deploy replaces its file.
+	for _, n := range []string{"sh", "bash", "dash", "ash", "zsh", "perl", "python"} {
+		if b == n || strings.HasPrefix(b, n) && len(b) > len(n) && (b[len(n)] >= '0' && b[len(n)] <= '9' || b[len(n)] == '.') {
+			return true
+		}
+	}
+	return false
+}
+
 // systemExeDirs hold the programs of installed packages (distribution,
 // cPanel EasyApache, CloudLinux alt-php, LiteSpeed).
 var systemExeDirs = []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt/cpanel", "/opt/alt", "/opt/remi", "/usr/local/lsws", "/opt/plesk"}
@@ -277,6 +311,39 @@ func Assess(p ProcInfo, home string) (string, Level) {
 	if inDevTools(exe, home) {
 		return "", Clean
 	}
+	web := home != "" && websiteFolder(exe, home)
+	argv0 := ""
+	if f := strings.Fields(p.Cmdline); len(f) > 0 {
+		argv0 = f[0]
+	}
+	// A hosting account's program that calls itself a system service or a
+	// kernel thread (polkitd, gdm3, [kthreadd]) is hiding: botnets run so
+	// from wp-content.
+	// (Interpreters too: perl bots rename themselves "[kworker/0:1]".)
+	if reKernelThread.MatchString(strings.TrimSpace(p.Cmdline)) {
+		return "an account's program poses as a kernel thread (" + strings.TrimSpace(p.Cmdline) + ")", Malicious
+	}
+	if !underAny(exe, systemExeDirs) {
+		switch {
+		case web && (scanner.SystemServiceName(filepath.Base(argv0)) || scanner.SystemServiceName(filepath.Base(exe))):
+			return "program in the website folder poses as the system service " + filepath.Base(argv0), Malicious
+		case web && deleted:
+			return "program ran from the website folder and was deleted from disk (malware hides so)", Malicious
+		}
+	}
+	// A shell or script interpreter running a script from the website
+	// folder that no longer exists (watchdogs that respawn malware delete
+	// their own script).
+	if underAny(exe, systemExeDirs) && isInterpreter(exe) && home != "" {
+		for _, a := range strings.Fields(p.Cmdline)[1:] {
+			if strings.HasPrefix(a, home+"/") && websiteFolder(a, home) {
+				if _, err := os.Stat(a); os.IsNotExist(err) {
+					return "runs a deleted script from the website folder (" + a + ")", Malicious
+				}
+				break
+			}
+		}
+	}
 	// An update of a system package (PHP, LiteSpeed's lsphp) replaces the
 	// program while old processes keep running: their program shows as
 	// deleted. Only programs deleted from elsewhere (a temp or home folder,
@@ -289,8 +356,9 @@ func Assess(p ProcInfo, home string) (string, Level) {
 			return "program runs from " + strings.TrimSuffix(d, "/"), Suspicious
 		}
 	}
-	// A compiled program inside the account's website folders.
-	if home != "" && strings.HasPrefix(exe, home+"/") && strings.Contains(exe, "/public_html/") {
+	// A compiled program inside the account's website folders (an addon
+	// domain's folder too).
+	if web {
 		return "program runs from the website folder", Suspicious
 	}
 	if strings.Contains(exe, "/.") && home != "" && strings.HasPrefix(exe, home+"/") {

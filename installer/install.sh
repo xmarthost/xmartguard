@@ -227,6 +227,8 @@ RestartSec=5
 StandardOutput=append:$LOG_DIR/agent.log
 StandardError=append:$LOG_DIR/agent.log
 Nice=5
+CPUWeight=20
+IOWeight=20
 LimitNOFILE=65536
 
 [Install]
