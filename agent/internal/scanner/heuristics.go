@@ -2,9 +2,11 @@ package scanner
 
 import (
 	"bytes"
+	"encoding/hex"
 	"math"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // This file implements xPGuard's own heuristic PHP/JS analyzer. It scores
@@ -246,10 +248,47 @@ var (
 // ICO): an inline picture, as in plugin tests and themes, is not a payload.
 var imageB64 = [][]byte{[]byte("/9j/"), []byte("iVBORw0KGgo"), []byte("R0lGOD"), []byte("UklGR"), []byte("AAABAA")}
 
+// reCodeLike is what makes decoded text code rather than data.
+var reCodeLike = regexp.MustCompile(`(?i)<\?(?:php|=)|<script|\b(?:eval|assert|system|exec|shell_exec|passthru|popen|proc_open|create_function|file_put_contents|fsockopen|base64_decode|gzinflate|gzuncompress|str_rot13|include|require)\s*\(|\$_(?:GET|POST|REQUEST|COOKIE|SERVER|FILES)\b`)
+
+// hexText decodes a blob of hex digits (a hex2bin argument); ok is false
+// when it is not hex.
+func hexText(blob []byte) ([]byte, bool) {
+	b := bytes.TrimRight(blob, "=\"'")
+	if len(b)%2 != 0 {
+		return nil, false
+	}
+	out := make([]byte, hex.DecodedLen(len(b)))
+	if _, err := hex.Decode(out, b); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// readableText reports UTF-8 text without control characters (an XOR or
+// otherwise encrypted payload decodes to binary).
+func readableText(b []byte) bool {
+	if !utf8.Valid(b) {
+		return false
+	}
+	for _, c := range b {
+		if c < 0x20 && c != '\n' && c != '\r' && c != '\t' || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // hasCodeBlob reports a long quoted base64 string that is not an image.
+// A hex string that decodes to plain text or HTML (a licence holder's name
+// as a link) is data, not a payload.
 func hasCodeBlob(s []byte) bool {
 	for _, loc := range reLongB64.FindAllIndex(s, 64) {
 		blob := s[loc[0]+1 : loc[1]]
+		// Plain readable text (not an encrypted blob) without code in it.
+		if txt, ok := hexText(blob[:len(blob)-1]); ok && readableText(txt) && !reCodeLike.Match(txt) {
+			continue
+		}
 		img := false
 		for _, p := range imageB64 {
 			if bytes.HasPrefix(blob, p) {

