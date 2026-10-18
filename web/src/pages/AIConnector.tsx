@@ -127,7 +127,21 @@ export default function AIConnector() {
         )}
       </Card>
 
-      <Card title="Connect Claude">
+      <Card title="Connect Claude with sign-in (recommended)" desc="Works in Claude chat, Claude Desktop and Claude Code (also in the cloud). No token to copy: you approve the connection once, and it keeps working until you revoke it above.">
+        <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-slate-700">
+          <li>
+            In Claude open <b>Settings » Connectors » Add custom connector</b>, name it <b>xPGuard</b> and paste this URL: <code className="break-all">{data?.endpoint}</code>
+          </li>
+          <li>
+            Leave <b>Authentication</b> on <b>OAuth</b> (no client id or secret needed), click <b>Add</b> and then <b>Connect</b>.
+          </li>
+          <li>Sign in to this portal as an owner or admin and click <b>Allow</b>. The connection gets read &amp; write access and is listed above as “(sign-in)”.</li>
+        </ol>
+        <p className="mt-3 text-sm text-slate-500">Claude Code on a computer:</p>
+        <pre className="mt-2 overflow-x-auto rounded-lg bg-navy-900 p-3 text-xs text-slate-100">{`claude mcp add --transport http xpguard ${data?.endpoint ?? ''}`}</pre>
+      </Card>
+
+      <Card title="Connect Claude with a token URL">
         <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-slate-700">
           <li>Create a connector above and copy its URL.</li>
           <li>

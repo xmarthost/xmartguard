@@ -307,7 +307,8 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     const { rows } = await pool.query(
       `UPDATE mcp_tokens t SET last_used_at = now(), calls = calls + 1
          FROM users u
-        WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND u.id = t.created_by AND u.role IN ('owner','admin')
+        WHERE t.token_hash = $1 AND (t.revoked_at IS NULL OR t.revoked_at > now()) AND u.id = t.created_by AND u.role IN ('owner','admin')
+          AND (t.grant_id IS NULL OR EXISTS (SELECT 1 FROM oauth_grants g WHERE g.id = t.grant_id AND g.revoked_at IS NULL))
         RETURNING t.id, t.account_id, t.created_by, t.scope`,
       [sha256(token)],
     );
@@ -375,7 +376,8 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
   async function endpoint(req: FastifyRequest, reply: FastifyReply) {
     const ctx = await authenticate(req);
     if (!ctx) {
-      reply.header('WWW-Authenticate', 'Bearer realm="xpguard"');
+      // Points OAuth clients (Claude Code in the cloud) to the sign-in.
+      reply.header('WWW-Authenticate', `Bearer realm="xpguard", resource_metadata="${cfg.publicUrl}/.well-known/oauth-protected-resource"`);
       return reply.code(401).send({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'invalid or revoked MCP token' } });
     }
     const body = req.body as unknown;
@@ -403,7 +405,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
 
   app.get('/api/mcp/tokens', admin, async (req) => {
     const { rows } = await pool.query(
-      `SELECT t.id, t.label, t.prefix, t.scope, t.last_used_at, t.calls::int AS calls, t.created_at, u.email AS created_by
+      `SELECT t.id, t.label, t.prefix, t.scope, t.last_used_at, t.calls::int AS calls, t.created_at, u.email AS created_by, t.grant_id IS NOT NULL AS oauth
          FROM mcp_tokens t LEFT JOIN users u ON u.id = t.created_by
         WHERE t.account_id = $1 AND t.revoked_at IS NULL ORDER BY t.created_at DESC`,
       [req.user!.accountId],
@@ -426,8 +428,16 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
   app.delete('/api/mcp/tokens/:id', admin, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (!z.string().uuid().safeParse(id).success) return reply.code(404).send({ error: 'not found' });
-    const { rowCount } = await pool.query(`UPDATE mcp_tokens SET revoked_at = now() WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL`, [id, req.user!.accountId]);
-    if (!rowCount) return reply.code(404).send({ error: 'not found' });
+    const { rows } = await pool.query(
+      `UPDATE mcp_tokens SET revoked_at = now() WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL RETURNING grant_id`,
+      [id, req.user!.accountId],
+    );
+    if (!rows[0]) return reply.code(404).send({ error: 'not found' });
+    // An OAuth connection ends whole: no refresh brings it back.
+    if (rows[0].grant_id) {
+      await pool.query(`UPDATE oauth_grants SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, [rows[0].grant_id]);
+      await pool.query(`UPDATE mcp_tokens SET revoked_at = now() WHERE grant_id = $1 AND (revoked_at IS NULL OR revoked_at > now())`, [rows[0].grant_id]);
+    }
     await audit(pool, { accountId: req.user!.accountId, userId: req.user!.id, action: 'mcp.token_revoked', detail: { id }, ip: req.ip });
     return { ok: true };
   });

@@ -33,6 +33,7 @@ import { WPCoreService } from './wpcore/service.js';
 import { SignatureService } from './signatures/service.js';
 import { wpcoreRoutes } from './routes/wpcore.js';
 import { mcpRoutes } from './routes/mcp.js';
+import { oauthRoutes } from './routes/oauth.js';
 import { wafRulesetRoutes } from './routes/waf-rulesets.js';
 import { appearanceRoutes } from './routes/appearance.js';
 import { mailRoutes } from './routes/mail.js';
@@ -115,6 +116,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   fleetRoutes(app, pool, cfg, hub);
   wpcoreRoutes(app, pool, wp, sigs);
   mcpRoutes(app, pool, cfg, hub);
+  oauthRoutes(app, pool, cfg);
   wafRulesetRoutes(app, pool, hub, crs);
   appearanceRoutes(app, pool);
   trustedRoutes(app, pool, hub);
@@ -144,9 +146,9 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
       },
     });
     // SPA fallback for client-side routes. Machine paths (API, downloads,
-    // MCP, /.well-known OAuth discovery) get a real 404 so AI clients see
-    // that no sign-in service exists instead of an HTML page.
-    const machine = ['/api/', '/downloads/', '/mcp', '/.well-known/'];
+    // MCP, OAuth and /.well-known paths) get a real 404 so AI clients never
+    // read an HTML page as an answer.
+    const machine = ['/api/', '/downloads/', '/mcp', '/oauth/', '/.well-known/'];
     app.setNotFoundHandler((req, reply) => {
       // cPanel's error documents (/403.shtml …) fetched through the proxy
       // must stay errors, not turn into the home page with status 200.

@@ -375,6 +375,11 @@ ProxyPreserveHost On
   RewriteCond %{HTTP:Upgrade} =websocket [NC]
   RewriteRule ^/?(api/agent/ws.*)$ ws://127.0.0.1:$PORTAL_PORT/\$1?%{QUERY_STRING} [P,L]
 </IfModule>
+# The AI connector's OAuth discovery goes to the portal (the first matching
+# ProxyPass wins); the rest of /.well-known stays with AutoSSL.
+ProxyPass /.well-known/oauth-protected-resource http://127.0.0.1:$PORTAL_PORT/.well-known/oauth-protected-resource
+ProxyPass /.well-known/oauth-authorization-server http://127.0.0.1:$PORTAL_PORT/.well-known/oauth-authorization-server
+ProxyPass /.well-known/openid-configuration http://127.0.0.1:$PORTAL_PORT/.well-known/openid-configuration
 ProxyPass /.well-known !
 ProxyPass / http://127.0.0.1:$PORTAL_PORT/ upgrade=websocket timeout=3600 keepalive=On
 ProxyPassReverse / http://127.0.0.1:$PORTAL_PORT/

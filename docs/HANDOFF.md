@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.4** (see `VERSION`).
+- Current release: **0.22.5** (see `VERSION`).
 
 ## Working rules
 
@@ -123,6 +123,13 @@ project. It holds the rules, the current state and what is still open.
 
 ## Checking the fleet with the XMart Guard connector
 
+The connector signs in two ways: OAuth (URL `https://app.xpguard.org/mcp`,
+Authentication "OAuth"; needed by Claude Code in the cloud; code in
+`server/src/routes/oauth.ts`) or a token URL `/mcp/<token>` with "No sign-in".
+OAuth access tokens do not expire; revoking on the AI Connector page ends the
+connection. The portal vhost proxies `/.well-known/oauth-*` to Node
+(`deploy/setup-almalinux.sh`).
+
 The portal's MCP connector ("XMart Guard") offers these tools:
 
 - Read: `list_servers`, `fleet_overview`, `server_dashboard`,
@@ -135,7 +142,7 @@ For a status check of every server, start with `fleet_overview` and
 `list_servers`, then run `server_dashboard` on each server. Report:
 
 - online or offline;
-- agent version (old ones should update to 0.22.4);
+- agent version (old ones should update to 0.22.5);
 - service problems and alerts;
 - paused signatures (`agent_command` `scanner.paused`);
 - WAF watch hits (`waf_events` entries starting with "[watch]"; the portal's

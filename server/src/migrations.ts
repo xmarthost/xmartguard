@@ -650,4 +650,42 @@ CREATE INDEX unblock_requests_open ON unblock_requests (status, created_at DESC)
 CREATE INDEX unblock_requests_ip ON unblock_requests (ip, created_at DESC);
 `,
   },
+  {
+    version: '023_mcp_oauth',
+    sql: `
+-- MCP connectors that sign in with OAuth (Claude Code in the cloud and other
+-- clients that do not take a token in the URL). A grant is one approved
+-- connection; its access tokens are rows of mcp_tokens.
+CREATE TABLE oauth_clients (
+  client_id      text PRIMARY KEY,
+  client_name    text NOT NULL DEFAULT '',
+  redirect_uris  text[] NOT NULL,
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE oauth_codes (
+  code_hash       text PRIMARY KEY,
+  client_id       text NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+  account_id      uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  redirect_uri    text NOT NULL,
+  code_challenge  text NOT NULL,
+  scope           text NOT NULL CHECK (scope IN ('read','write')),
+  expires_at      timestamptz NOT NULL,
+  used_at         timestamptz
+);
+CREATE TABLE oauth_grants (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id     text NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+  account_id    uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  user_id       uuid REFERENCES users(id) ON DELETE CASCADE,
+  scope         text NOT NULL CHECK (scope IN ('read','write')),
+  refresh_hash  text NOT NULL UNIQUE,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  revoked_at    timestamptz
+);
+-- An access token replaced by a refresh keeps working for a day (revoked_at
+-- in the future), so a second client session using it is not cut off.
+ALTER TABLE mcp_tokens ADD COLUMN grant_id uuid REFERENCES oauth_grants(id) ON DELETE CASCADE;
+`,
+  },
 ];

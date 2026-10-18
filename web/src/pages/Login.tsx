@@ -27,6 +27,13 @@ export default function Login() {
       })
       .catch(() => {});
   }, [q, user]);
+  // An AI connector's sign-in (/oauth/authorize) comes back here first.
+  const next = q.get('next') ?? '';
+  const oauthNext = next.startsWith('/oauth/authorize?') ? next : '';
+  useEffect(() => {
+    if (user && oauthNext) window.location.replace(oauthNext);
+  }, [user, oauthNext]);
+  if (user && oauthNext) return null;
   if (user) return <Navigate to="/" replace />;
 
   return (
@@ -39,6 +46,7 @@ export default function Login() {
           setError('');
           try {
             await api('POST', '/api/auth/login', { email, password });
+            if (oauthNext) return window.location.replace(oauthNext);
             await refresh();
             nav('/');
           } catch (err: any) {

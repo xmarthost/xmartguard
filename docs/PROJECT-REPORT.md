@@ -156,7 +156,7 @@ Automatic Suspension, Additional, Outgoing Spam, Notifications, About), `AIScann
   never flagged again until it changes — enforced centrally in `scanner.Record`
   for every file type (0.8.1).
 - **AI connector (MCP):** Claude/other AI clients read dashboards, findings, logs;
-  read-write connectors can act (audited). In Claude choose Authentication "No sign-in".
+  read-write connectors can act (audited). Sign-in (OAuth, 0.22.5): add `https://<portal>/mcp` with Authentication "OAuth"; an owner/admin approves once (read & write), the token never expires until revoked. Token URLs (`/mcp/<token>`) with "No sign-in" still work.
 - **Appearance:** 9 ready themes (light/dark) + custom colours, saved for every
   user; persists across sessions (fixed in 0.9.3).
 - **Auto suspension:** suspend cPanel accounts after repeated detections or a
