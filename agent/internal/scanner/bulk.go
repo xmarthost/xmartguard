@@ -24,7 +24,8 @@ const BulkLimit = 100000
 // bulkStatuses are the statuses an action applies to.
 var bulkStatuses = map[string][]string{
 	"restore":    {"quarantined", "disabled"},
-	"quarantine": {"detected"},
+	// Files the AI put back count too: a wrong "clean" is undone in bulk.
+	"quarantine": {"detected", StatusAIRestored},
 }
 
 func (f BulkFilter) where() (string, []any, error) {

@@ -19,6 +19,13 @@ var untrustedSignatures = map[string]bool{
 	"PHP.Backdoor.GlobalsDispatch":         true,
 	"PHP.Obfuscated.CompressedPayload":     true,
 	"Archive.PHP.Backdoor.GlobalsDispatch": true,
+	// The fake-plugin campaign of October 2026 (random three-word plugin
+	// and mu-plugin names, wp-content drop-ins, random .zip copies): the
+	// AI cleared some of its files as "backup" or "audit" plugins.
+	"PHP.Obfuscated.SplitFunctionName":          true,
+	"Archive.PHP.Obfuscated.SplitFunctionName":  true,
+	"PHP.Obfuscated.EvalDecodedPayload":         true,
+	"Archive.PHP.Obfuscated.EvalDecodedPayload": true,
 	// Attack kits lock every folder with an .htaccess that refuses all PHP
 	// but their own file names; the AI reads it as hardening.
 	"Htaccess.Hacked.PHPLock":      true,
@@ -51,6 +58,8 @@ func RiskyPath(path string) string {
 		return "a file in WordPress core folders that is not part of WordPress"
 	case reWPDropIn.MatchString(p):
 		return "a WordPress drop-in (loaded on every page)"
+	case strings.Contains(p, "/wp-content/mu-plugins/"):
+		return "a must-use plugin (loaded on every page, not listed with the plugins)"
 	}
 	// A hidden folder inside a website (not .well-known).
 	for _, root := range []string{"/public_html/", "/wp-content/"} {

@@ -53,7 +53,7 @@ export function BulkFindings({ serverId, signature: sig0 = '', action: act0 = 'r
           <span className="label">Action</span>
           <select className="input" value={action} onChange={(e) => (setAction(e.target.value as 'restore'), changed())}>
             <option value="restore">Restore quarantined / disabled files</option>
-            <option value="quarantine">Quarantine files still waiting (detected)</option>
+            <option value="quarantine">Quarantine files still waiting or restored by the AI</option>
           </select>
         </label>
         <label className="text-sm">

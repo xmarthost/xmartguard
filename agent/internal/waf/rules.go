@@ -707,7 +707,7 @@ func Render(c settings.WAF, o Options) string {
 				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - POST without User-Agent, Referer or cookie blocked',tag:'xpguard/bot',chain"`, id)
 				w(`  SecRule REQUEST_FILENAME "@rx \.(?:php[0-9]?|phtml)$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
 				w(`  SecRule REQUEST_FILENAME "!@rx (?:/(?:index|wp-cron|xmlrpc|admin-ajax|wp-login|cron|api)\.php$|/(?:api|apis|webhooks?|hooks?|callbacks?|ipn|notify|notifications?|gateways?|payments?|modules/gateways|oauth|cron|rest|v[0-9])/)" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
-				w(`  SecRule REQUEST_FILENAME "!@rx (?:callback|webhook|notify|ipn|hook|return|listener|response|status)[^/]*\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
+				w(`  SecRule REQUEST_FILENAME "!@rx (?:callback|webhook|notify|ipn|hook|return|listener|response|status|verify|licen[cs]|activat|validat|heartbeat|register|session|check)[^/]*\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
 				w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
 				w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
 				w(`  %s`, ua)
