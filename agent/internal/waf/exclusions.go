@@ -141,6 +141,10 @@ func removeTags() string {
 	for _, t := range injectionTags {
 		ctl = append(ctl, "ctl:ruleRemoveByTag="+t)
 	}
+	// The same families by id too: some ModSecurity builds (and cPanel's
+	// older CRS packages) do not honour removal by tag, and an admin's save
+	// was then still refused by the XSS rules.
+	ctl = append(ctl, "ctl:ruleRemoveById=930000-934999", "ctl:ruleRemoveById=941000-943999")
 	return strings.Join(ctl, ",")
 }
 
