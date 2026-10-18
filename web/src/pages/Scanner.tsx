@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Database, File, FileCode2, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Settings as Cog, Sparkles, Square, Timer, Trash2 } from 'lucide-react';
+import { Database, File, FileCode2, Layers, FileSearch, FolderSearch, RefreshCw, ScanSearch, Scissors, Settings as Cog, Sparkles, Square, Timer, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { bytes } from '../format';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
@@ -8,6 +8,7 @@ import { Badge, Modal, Pager, agentCall, fmtTime, useAction, useAgent, useToast 
 import { useApi } from '../hooks';
 import { DownloadRange, fetchAll, saveFile } from '../components/DownloadRange';
 import { compact } from '../components/AttackOverview';
+import { BulkFindings, PausedSignatures } from '../components/BulkFindings';
 import type { Server } from '../api';
 
 interface Scan {
@@ -408,6 +409,7 @@ export function ScannerLogs() {
   const [aiRes, setAiRes] = useState<AIResult | null>(null);
   const [viewing, setViewing] = useState<Finding | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [bulk, setBulk] = useState(false);
   const toast = useToast();
   const limit = 25;
   const params = { scan_id: scanId, category, status, q: query, limit, offset, recent: true };
@@ -498,8 +500,15 @@ export function ScannerLogs() {
             <input className="input w-56" placeholder="Type to filter" value={q} onChange={(e) => setQ(e.target.value)} />
           </form>
           <DownloadRange onPick={exportRange} busyText={exporting} />
+          {canAct && (
+            <button className="btn-outline" onClick={() => setBulk(true)}>
+              <Layers className="h-4 w-4" /> Bulk restore
+            </button>
+          )}
         </div>
       </div>
+      {scanId === 0 && <PausedSignatures serverId={id!} canAct={canAct} onChange={list.reload} />}
+      {bulk && <BulkFindings serverId={id!} onClose={() => setBulk(false)} onDone={list.reload} />}
 
       {canAct && sel.length > 0 && (
         <div className="card flex flex-wrap items-center gap-2 p-3">

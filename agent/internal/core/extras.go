@@ -323,6 +323,13 @@ func (a *Agent) alerts() alertSet {
 	if open := a.Scanner.Stats().OpenFindings; open > 0 {
 		add("danger", fmt.Sprintf("%d infected file(s) need action", open), "scanner-logs")
 	}
+	if paused := a.Scanner.Paused(); len(paused) > 0 {
+		var d []string
+		for _, p := range paused {
+			d = append(d, fmt.Sprintf("%s — %d file(s) waiting for review", p.Signature, p.Files))
+		}
+		add("danger", fmt.Sprintf("%d signature%s paused after quarantining too many files", len(paused), plural(len(paused))), "scanner-logs?paused=1", d...)
+	}
 	if cmsCounts.DBInfected > 0 {
 		add("danger", fmt.Sprintf("%d database infection(s)", cmsCounts.DBInfected), "db-scanner")
 	}

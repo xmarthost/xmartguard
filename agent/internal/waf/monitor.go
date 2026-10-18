@@ -162,3 +162,48 @@ func (m *Manager) WatchReport(in *Intel, hours int) []WatchRule {
 	}
 	return rules
 }
+
+// Spike is a rule that suddenly blocks far more than usual.
+type Spike struct {
+	RuleID   int     `json:"rule_id"`
+	Msg      string  `json:"msg"`
+	LastHour int     `json:"last_hour"`
+	Usual    float64 `json:"usual"` // per hour over the week before
+	Hosts    int     `json:"hosts"`
+}
+
+// SpikeMin and SpikeFactor: a rule blocking at least SpikeMin requests in
+// the last hour, SpikeFactor times its usual hourly count, is a spike
+// (a wrong rule or update shows up as one, so does a new attack wave).
+var (
+	SpikeMin    = 200
+	SpikeFactor = 10.0
+)
+
+// Spikes lists the rules blocking unusually much in the last hour.
+func (m *Manager) Spikes() []Spike {
+	now := store.Now()
+	rows, err := m.DB.Query(`SELECT rule_id, count(*), count(DISTINCT host), max(msg) FROM waf_events
+		WHERE at >= ? AND action LIKE 'Access denied%' GROUP BY rule_id HAVING count(*) >= ?`, now-3600, SpikeMin)
+	if err != nil {
+		return nil
+	}
+	var out []Spike
+	for rows.Next() {
+		var s Spike
+		if rows.Scan(&s.RuleID, &s.LastHour, &s.Hosts, &s.Msg) == nil {
+			out = append(out, s)
+		}
+	}
+	rows.Close()
+	kept := out[:0]
+	for _, s := range out {
+		var week int
+		_ = m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE rule_id = ? AND at >= ? AND at < ? AND action LIKE 'Access denied%'`, s.RuleID, now-8*86400, now-3600).Scan(&week)
+		s.Usual = float64(week) / (7*24 + 23)
+		if float64(s.LastHour) >= SpikeFactor*max(s.Usual, 1) {
+			kept = append(kept, s)
+		}
+	}
+	return kept
+}

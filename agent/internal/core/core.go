@@ -114,6 +114,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Scanner.OnFinding = a.onFinding
 	a.Scanner.OnReinfection = a.onReinfection
 	a.Scanner.OnHtaccessStorm = a.onHtaccessStorm
+	a.Scanner.OnSignaturePaused = a.onSignaturePaused
 	a.Scanner.OnClean = func(path string, _ os.FileInfo) { a.AI.EnqueueNew(path) }
 	a.Scanner.Cleared = func(sha string) bool { return ai.IsCleared(db, sha) }
 	a.Scanner.Unconfirmed = func(sha, path, sig string) bool {
@@ -295,6 +296,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.proxyListLoop(ctx)
 	go a.torLoop(ctx)
 	go a.auditLoop(ctx)
+	go a.wafSpikeLoop(ctx)
 	go a.mailGuardLoop(ctx)
 	go a.wafLearnLoop(ctx)
 	go a.intelLoop(ctx)
@@ -1030,6 +1032,38 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	}
 	// finding.content shows a detected file (from quarantine when it was
 	// moved there) with the lines the AI marked as injected.
+	// Bulk restore / quarantine by signature and time, with a preview.
+	h["findings.bulk"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			scanner.BulkFilter
+			Preview bool `json:"preview"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if in.Preview {
+			total, sample, err := a.Scanner.BulkPreview(in.BulkFilter, 200)
+			return map[string]any{"total": total, "sample": sample}, err
+		}
+		r, err := a.Scanner.BulkApply(in.BulkFilter, a.restoreFinding)
+		if err == nil && in.Action == "quarantine" {
+			a.Scanner.Unpause(in.Signature)
+		}
+		return r, err
+	}
+	h["scanner.paused"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"paused": a.Scanner.Paused(), "limit": scanner.SpikeLimit}, nil
+	}
+	h["scanner.unpause"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Signature string `json:"signature"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		a.Scanner.Unpause(in.Signature)
+		return map[string]any{"ok": true}, nil
+	}
 	h["finding.content"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
 			ID int64 `json:"id"`

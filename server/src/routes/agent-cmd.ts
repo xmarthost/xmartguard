@@ -40,6 +40,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'dashboard.get': { role: 'viewer', mutates: false },
   'alerts.get': { role: 'viewer', mutates: false },
   'audit.get': { role: 'viewer', mutates: false },
+  'scanner.paused': { role: 'viewer', mutates: false },
   'finding.content': { role: 'operator', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },
@@ -47,6 +48,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'scan.stop': { role: 'operator', mutates: true },
   'scan.delete': { role: 'operator', mutates: true },
   'finding.action': { role: 'operator', mutates: true, timeoutMs: 120_000 },
+  'findings.bulk': { role: 'operator', mutates: true, timeoutMs: 600_000 },
+  'scanner.unpause': { role: 'operator', mutates: true },
   'fw.add': { role: 'operator', mutates: true },
   'fw.remove': { role: 'operator', mutates: true },
   'fw.unblock': { role: 'operator', mutates: true },

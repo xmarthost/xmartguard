@@ -44,6 +44,16 @@ func (a *Agent) onHtaccessStorm(owner string, n int, sample string) {
 	}
 }
 
+// onSignaturePaused: a signature quarantined too many files at once (more
+// likely a wrong rule than a real outbreak); its new detections only wait.
+func (a *Agent) onSignaturePaused(sig string, n int) {
+	a.Log.Warn("signature paused after a quarantine spike", "signature", sig, "files", n)
+	a.alertAdmin("signature paused: "+sig,
+		fmt.Sprintf("%s quarantined more than %d files within an hour, so it is paused on this server: its new detections are only listed, not moved.\n"+
+			"Check a few of them in Scanner Logs. If they are real malware, quarantine them in bulk (that also unpauses the signature); "+
+			"if not, restore what it quarantined with Bulk restore and report the signature.", sig, n))
+}
+
 // reinfectionHints lists where a re-created file most likely comes from.
 func reinfectionHints(owner, path string) string {
 	var b strings.Builder

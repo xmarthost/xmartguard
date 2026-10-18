@@ -96,6 +96,9 @@ type Scanner struct {
 	// OnHtaccessStorm is called when an attack kit writes its .htaccess
 	// lock into many folders of one account (the account is taken over).
 	OnHtaccessStorm func(owner string, n int, sample string)
+	// OnSignaturePaused is called when a signature quarantined SpikeLimit
+	// files within an hour and is paused (see spike.go).
+	OnSignaturePaused func(signature string, n int)
 	// OnClean is called for new or changed code files the realtime scanner
 	// found clean (the AI scanner's "all files" mode).
 	OnClean func(path string, info fs.FileInfo)
@@ -117,6 +120,7 @@ type Scanner struct {
 
 	mu      sync.Mutex
 	storms  map[string]*htStorm
+	spikes  map[string]*spikeCount
 	cancels map[int64]context.CancelFunc
 	sem     chan struct{}
 	users   map[uint32]string
@@ -814,6 +818,16 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 	// Root's files are never acted on (see ScanRootFiles).
 	if f.Owner == "root" && !ScanRootFiles {
 		action = settings.ActionNotify
+	}
+	if action == settings.ActionQuarantine || action == settings.ActionDisable {
+		if ok, paused := s.spikeAllows(d.Signature); !ok {
+			action = settings.ActionNotify
+			f.Note = NotePaused
+			_, _ = s.DB.Exec(`UPDATE findings SET note = ? WHERE id = ?`, NotePaused, f.ID)
+			if paused && s.OnSignaturePaused != nil {
+				s.OnSignaturePaused(d.Signature, SpikeLimit)
+			}
+		}
 	}
 	switch action {
 	case settings.ActionQuarantine:
