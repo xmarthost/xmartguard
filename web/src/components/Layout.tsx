@@ -4,7 +4,7 @@ import {
   BookOpen, BadgeCheck, ShieldQuestion, Brain,
   Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
   CreditCard, LogOut, Mail, Menu, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, X,
-  ClipboardCheck,
+  ClipboardCheck, Download,
 } from 'lucide-react';
 import { useAuth, can } from '../auth';
 import { useApi } from '../hooks';
@@ -311,6 +311,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           children: [
             { to: '/ai', label: 'AI Scanner', icon: <BrainCircuit /> },
             { to: '/ai-learning', label: 'AI Learning', icon: <Brain /> },
+            { to: '/xpguard-learning', label: 'xPGuard Learning', icon: <Download /> },
             { to: '/ai-connector', label: 'AI Connector', icon: <Cable /> },
           ],
         },

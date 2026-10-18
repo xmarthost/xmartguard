@@ -30,6 +30,7 @@ const CaptchaPage = lazy(() => import('./pages/CaptchaPage'));
 const WafIntel = lazy(() => import('./pages/WafIntel'));
 const SecurityMonitor = lazy(() => import('./pages/SecurityMonitor'));
 const ServerAudit = lazy(() => import('./pages/ServerAudit'));
+const LearningExport = lazy(() => import('./pages/LearningExport'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const BotAttacks = lazy(() => import('./pages/WAF').then((m) => ({ default: m.BotAttacks })));
 const WafLogs = lazy(() => import('./pages/WAF').then((m) => ({ default: m.WafLogs })));
@@ -102,6 +103,7 @@ export default function App() {
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
         <Route path="/all-servers" element={<Protected><CustomerServers /></Protected>} />
         <Route path="/ai-learning" element={<Protected><AILearning /></Protected>} />
+        <Route path="/xpguard-learning" element={<Protected role="admin"><LearningExport /></Protected>} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />
         <Route path="/security" element={<Protected role="admin"><SecurityLogPage /></Protected>} />

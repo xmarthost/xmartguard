@@ -129,6 +129,21 @@ describe('agent end-to-end', () => {
     expect(stats.body.summary.scanner.threats_total).toBe(1);
   });
 
+  it('exports the xPGuard Learning files from the agents', async () => {
+    const r = await fetch(`${h.url}/api/learning/export?kind=detections&hours=1`, { headers: { cookie: c.cookie } });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('content-disposition')).toContain('xpguard-learning-detections-1h-');
+    const text = await r.text();
+    const lines = text.trim().split('\n');
+    expect(lines[0]).toMatch(/^row_type,server,/);
+    expect(lines.some((l) => l.startsWith('server,'))).toBe(true);
+    expect(lines.some((l) => l.startsWith('group,') && l.includes('PHP.Backdoor.'))).toBe(true);
+    expect(lines.some((l) => l.startsWith('example,') && l.includes('x.php'))).toBe(true);
+    const w = await fetch(`${h.url}/api/learning/export?kind=waf&hours=12`, { headers: { cookie: c.cookie } });
+    expect(w.status).toBe(200);
+    expect((await w.text()).split('\n')[0]).toMatch(/^row_type,server,.*rule_id/);
+  });
+
   it('reads and updates settings with validation', async () => {
     const g = await cmd('settings.get');
     expect(g.body.settings.scanner.virus_action).toBe('quarantine');

@@ -614,6 +614,7 @@ func decode[T any](p json.RawMessage) (T, error) {
 func (a *Agent) Handlers() map[string]client.Handler {
 	h := map[string]client.Handler{}
 	a.auditHandlers(h)
+	a.learningHandlers(h)
 
 	h["stats.get"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{
