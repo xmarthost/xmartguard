@@ -241,7 +241,7 @@ func buildMessage(from, to string, e Email) ([]byte, error) {
 	alt, rel := boundary(), boundary()
 	var b bytes.Buffer
 	h := func(k, v string) { b.WriteString(k + ": " + v + "\r\n") }
-	h("From", mime.QEncoding.Encode("utf-8", "xPGuard")+" <"+from+">")
+	h("From", mime.QEncoding.Encode("utf-8", e.brand())+" <"+from+">")
 	h("To", to)
 	h("Subject", mime.QEncoding.Encode("utf-8", strings.ReplaceAll(e.Subject, "\n", " ")))
 	h("Date", time.Now().Format(time.RFC1123Z))

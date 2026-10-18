@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useMatch } from 'react-router-dom';
 import {
-  BookOpen, BadgeCheck, ShieldOff, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
+  BookOpen, BadgeCheck, ShieldOff, Award, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -34,6 +34,7 @@ export default function Layout({ children }: { children: ReactNode }) {
     ? [
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
         { label: 'Dashboard', icon: <LayoutDashboard />, to: base, end: true },
+        { label: 'Website Scores', icon: <Award />, to: `${base}/scores` },
         {
           label: 'Virus Scanner',
           icon: <Bug />,

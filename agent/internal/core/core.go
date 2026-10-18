@@ -763,6 +763,8 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		return a.setSettings(ctx, p, "")
 	}
 	a.historyHandlers(h)
+	a.scoreHandlers(h)
+	a.monthlyHandlers(h)
 
 	a.firewallHandlers(h)
 	return h

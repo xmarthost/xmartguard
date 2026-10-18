@@ -91,6 +91,8 @@ interface NotificationsS {
   user_patches: boolean;
   user_outdated: 'never' | 'weekly' | 'monthly';
   exclude_users: string[];
+  monthly_report?: boolean;
+  brand?: string;
 }
 interface WAFS {
   enabled: boolean;
@@ -1771,6 +1773,22 @@ function NotificationsSection({ serverId, s, meta, admin, busy, onSave }: { serv
       </SettingRow>
       <SettingRow title="Daily Reports" desc="A summary of the last 24 hours every morning">
         <Toggle on={s.daily_report} disabled={dis} onChange={(v) => onSave({ daily_report: v })} />
+      </SettingRow>
+      <SettingRow
+        title="Monthly security report"
+        desc="On the 1st of each month: the whole server's report to you, and to each hosting account owner the attacks stopped and files cleaned on their websites, with each website's security score and what to do for an A."
+      >
+        <Toggle on={!!s.monthly_report} disabled={dis} onChange={(v) => onSave({ monthly_report: v })} />
+      </SettingRow>
+      <SettingRow title="Your brand name" desc="Shown to hosting account owners instead of xPGuard in their emails and reports (white label). Empty: xPGuard.">
+        <input
+          className="input w-56"
+          maxLength={60}
+          defaultValue={s.brand ?? ''}
+          disabled={dis}
+          placeholder="e.g. YourHost Security"
+          onBlur={(e) => e.target.value.trim() !== (s.brand ?? '') && onSave({ brand: e.target.value.trim() })}
+        />
       </SettingRow>
       <h3 className="mt-6 text-base font-semibold text-navy-900">User Notifications</h3>
       <p className="text-sm text-slate-500">Sent to the contact email of the cPanel account.</p>

@@ -42,6 +42,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'audit.get': { role: 'viewer', mutates: false },
   'scanner.paused': { role: 'viewer', mutates: false },
   'settings.history': { role: 'viewer', mutates: false },
+  'sites.scores': { role: 'viewer', mutates: false },
+  'report.monthly': { role: 'viewer', mutates: false, timeoutMs: 60_000 },
   'finding.content': { role: 'operator', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },

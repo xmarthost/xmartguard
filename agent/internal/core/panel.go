@@ -116,6 +116,9 @@ func (a *Agent) userHandlers(u *user.User) map[string]local.Handler {
 		sites, total, err := a.CMS.Sites(f)
 		return map[string]any{"sites": sites, "total": total}, err
 	}
+	h["sites.scores"] = func(context.Context, json.RawMessage) (any, error) {
+		return map[string]any{"sites": a.siteScores(name)}, nil
+	}
 	h["waf.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		f, err := decode[waf.EventFilter](p)
 		if err != nil {

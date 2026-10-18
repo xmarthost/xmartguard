@@ -468,11 +468,17 @@ type Notifications struct {
 	TelegramChat  string `json:"telegram_chat"`
 	DailyReport   bool   `json:"daily_report"`
 	// User notifications go to the cPanel account's contact email.
-	UserInfected   bool     `json:"user_infected"`
-	UserSuspension bool     `json:"user_suspension"`
-	UserPatches    bool     `json:"user_patches"`
-	UserOutdated   string   `json:"user_outdated"` // never | weekly | monthly
-	ExcludeUsers   []string `json:"exclude_users"`
+	UserInfected   bool   `json:"user_infected"`
+	UserSuspension bool   `json:"user_suspension"`
+	UserPatches    bool   `json:"user_patches"`
+	UserOutdated   string `json:"user_outdated"` // never | weekly | monthly
+	// MonthlyReport mails a security report on the 1st of each month: the
+	// whole server to the administrator, and to each hosting account owner
+	// their own websites.
+	MonthlyReport bool `json:"monthly_report"`
+	// Brand is the name account owners see instead of xPGuard (white label).
+	Brand        string   `json:"brand"`
+	ExcludeUsers []string `json:"exclude_users"`
 }
 
 // Settings is the full policy document.
@@ -765,6 +771,10 @@ func normalize(s *Settings) {
 		s.Notifications.SMTPPort = 0
 	}
 	s.Notifications.ExcludeUsers = clean(s.Notifications.ExcludeUsers, false)
+	s.Notifications.Brand = strings.TrimSpace(s.Notifications.Brand)
+	if len(s.Notifications.Brand) > 60 {
+		s.Notifications.Brand = s.Notifications.Brand[:60]
+	}
 	if s.Notifications.UserOutdated == "" {
 		s.Notifications.UserOutdated = "never"
 	}

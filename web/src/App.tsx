@@ -33,6 +33,7 @@ const FleetHealth = lazy(() => import('./pages/FleetHealth'));
 const SecurityEvents = lazy(() => import('./pages/SecurityEvents'));
 const Reputation = lazy(() => import('./pages/Reputation'));
 const AllowList = lazy(() => import('./pages/AllowList'));
+const SiteScores = lazy(() => import('./pages/SiteScores'));
 const Unblock = lazy(() => import('./pages/Unblock'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const CMSThreats = lazy(() => import('./pages/CMS').then((m) => ({ default: m.CMSThreats })));
@@ -88,6 +89,7 @@ export default function App() {
         <Route path="/servers/:id/waf-logs" element={<Protected><SecurityEvents initial="waf" /></Protected>} />
         <Route path="/servers/:id/events" element={<Protected><SecurityEvents /></Protected>} />
         <Route path="/servers/:id/allow" element={<Protected><AllowList /></Protected>} />
+        <Route path="/servers/:id/scores" element={<Protected><SiteScores /></Protected>} />
         <Route path="/servers/:id/bot-attacks" element={<Protected><SecurityEvents initial="bots" /></Protected>} />
         <Route path="/servers/:id/ipdb" element={<Protected><SecurityEvents initial="ipdb" /></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />

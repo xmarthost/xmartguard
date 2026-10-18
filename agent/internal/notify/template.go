@@ -18,6 +18,17 @@ type Email struct {
 	// a hosting account owner.
 	ForAdmin  bool
 	PortalURL string
+	// Brand replaces "xPGuard" in the emails hosting account owners get
+	// (white label); "" keeps xPGuard.
+	Brand string
+}
+
+// brand is the name the reader sees.
+func (e Email) brand() string {
+	if e.Brand != "" && !e.ForAdmin {
+		return e.Brand
+	}
+	return "xPGuard"
 }
 
 // Row is a "label: value" line of an alert.
@@ -111,7 +122,7 @@ var Now = time.Now
 func (e Email) Text() string {
 	var b strings.Builder
 	_, _, label := e.tone()
-	b.WriteString("xPGuard · " + label + " · " + e.Host + "\n")
+	b.WriteString(e.brand() + " · " + label + " · " + e.Host + "\n")
 	b.WriteString(strings.Repeat("=", 48) + "\n\n")
 	for i, a := range e.Alerts {
 		if i > 0 {
@@ -123,7 +134,7 @@ func (e Email) Text() string {
 		b.WriteString(strings.TrimRight(a.Text, "\n") + "\n")
 	}
 	b.WriteString("\n" + strings.Repeat("-", 48) + "\n")
-	b.WriteString("Sent by xPGuard on " + e.Host + " at " + Now().Format("2 Jan 2006 15:04 MST") + ".\n")
+	b.WriteString("Sent by " + e.brand() + " on " + e.Host + " at " + Now().Format("2 Jan 2006 15:04 MST") + ".\n")
 	if e.ForAdmin && e.PortalURL != "" {
 		b.WriteString("Open the portal: " + e.PortalURL + "\n")
 		b.WriteString("Change these alerts in Settings » Notifications.\n")
@@ -152,6 +163,8 @@ func (e Email) HTML() (string, error) {
 		"Time":      Now().Format("2 Jan 2006, 15:04 MST"),
 		"Year":      Now().Year(),
 		"LogoCID":   template.URL("cid:" + logoCID),
+		"Brand":     e.brand(),
+		"White":     e.brand() != "xPGuard",
 	}
 	var b bytes.Buffer
 	if err := emailTmpl.Execute(&b, data); err != nil {
@@ -190,7 +203,7 @@ var emailTmpl = template.Must(template.New("email").Parse(`<!DOCTYPE html>
     <tr><td style="height:5px;line-height:5px;font-size:0;background:#f97316;background-image:linear-gradient(90deg,#f97316,#2563eb);">&nbsp;</td></tr>
     <tr><td class="px" style="padding:22px 32px 18px;border-bottom:1px solid #eef2f7;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td align="left" valign="middle"><img src="{{.LogoCID}}" width="170" height="31" alt="xPGuard" style="display:block;border:0;outline:none;width:170px;height:auto;"></td>
+        <td align="left" valign="middle">{{if .White}}<span style="font:700 20px/1.2 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">{{.Brand}}</span>{{else}}<img src="{{.LogoCID}}" width="170" height="31" alt="xPGuard" style="display:block;border:0;outline:none;width:170px;height:auto;">{{end}}</td>
         <td align="right" valign="middle" style="font:12px/1.4 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#64748b;">Proactive server security</td>
       </tr></table>
     </td></tr>
@@ -224,13 +237,13 @@ var emailTmpl = template.Must(template.New("email").Parse(`<!DOCTYPE html>
     </td></tr>
     {{end}}
     <tr><td class="px" style="padding:18px 32px 22px;background:#0f172a;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-      <p style="margin:0 0 6px;font-size:13px;line-height:1.5;color:#e2e8f0;font-weight:600;">xPGuard &middot; <span style="color:#fb923c;">Proactive server security</span></p>
+      <p style="margin:0 0 6px;font-size:13px;line-height:1.5;color:#e2e8f0;font-weight:600;">{{.Brand}} &middot; <span style="color:#fb923c;">Proactive server security</span></p>
       {{if .ForAdmin}}
       <p style="margin:0;font-size:12px;line-height:1.6;color:#94a3b8;">Sent automatically by the xPGuard agent on {{.Host}}. Choose which alerts you receive in {{if .PortalURL}}<a href="{{.PortalURL}}" style="color:#93c5fd;">the portal</a>{{else}}the portal{{end}} &raquo; Settings &raquo; Notifications.</p>
       {{else}}
       <p style="margin:0;font-size:12px;line-height:1.6;color:#94a3b8;">You receive this because you own a hosting account on {{.Host}}. For help, contact your hosting provider.</p>
       {{end}}
-      <p style="margin:8px 0 0;font-size:11px;line-height:1.5;color:#64748b;">&copy; {{.Year}} xPGuard. This is an automated message; please do not reply.</p>
+      <p style="margin:8px 0 0;font-size:11px;line-height:1.5;color:#64748b;">&copy; {{.Year}} {{.Brand}}. This is an automated message; please do not reply.</p>
     </td></tr>
   </table>
 </td></tr>

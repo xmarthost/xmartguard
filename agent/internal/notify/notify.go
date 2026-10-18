@@ -25,6 +25,8 @@ type Channels struct {
 	SlackWebhook  string
 	TelegramToken string
 	TelegramChat  string
+	// Brand is the white-label name of hosting account owners' emails.
+	Brand string
 }
 
 // Alert is one queued notification.
@@ -107,12 +109,15 @@ func (m *Mailer) Flush() {
 			subj = fmt.Sprintf("%s (+%d more)", subj, len(alerts)-1)
 		}
 		full := "[xPGuard] " + m.Hostname + ": " + subj
+		if to != adminKey && ch.Brand != "" {
+			full = "[" + ch.Brand + "] " + subj
+		}
 		texts := make([]string, len(alerts))
 		for i, a := range alerts {
 			texts[i] = a.Text
 		}
 		body := strings.Join(texts, "\n")
-		msg := Email{Subject: full, Host: m.Hostname, Alerts: alerts, ForAdmin: to == adminKey}
+		msg := Email{Subject: full, Host: m.Hostname, Alerts: alerts, ForAdmin: to == adminKey, Brand: ch.Brand}
 		if to != adminKey {
 			m.deliver(ch.Mail, to, msg)
 			continue

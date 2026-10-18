@@ -17,7 +17,7 @@ import (
 // channels feeds the notifier the extra destinations from settings.
 func (a *Agent) channels() notify.Channels {
 	n := a.Settings.Get().Notifications
-	return notify.Channels{Extra: n.ExtraEmail, Mail: a.mailConfig(), SlackWebhook: n.SlackWebhook, TelegramToken: n.TelegramToken, TelegramChat: n.TelegramChat}
+	return notify.Channels{Extra: n.ExtraEmail, Mail: a.mailConfig(), SlackWebhook: n.SlackWebhook, TelegramToken: n.TelegramToken, TelegramChat: n.TelegramChat, Brand: n.Brand}
 }
 
 // mailConfig is how alert emails are sent (local MTA or SMTP).
@@ -131,6 +131,10 @@ func (a *Agent) reportLoop(ctx context.Context) {
 			if n.DailyReport && store.GetKV(a.DB, "daily_report") != day {
 				_ = store.SetKV(a.DB, "daily_report", day)
 				a.sendDailyReport()
+			}
+			if n.MonthlyReport && now.Day() == 1 && store.GetKV(a.DB, "monthly_report") != day {
+				_ = store.SetKV(a.DB, "monthly_report", day)
+				a.sendMonthlyReports(now)
 			}
 			due := (n.UserOutdated == "weekly" && now.Weekday() == time.Monday) || (n.UserOutdated == "monthly" && now.Day() == 1)
 			if due && store.GetKV(a.DB, "outdated_digest") != day {
