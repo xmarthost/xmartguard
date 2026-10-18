@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,6 +27,12 @@ func (s *Scanner) load(id int64) (row, error) {
 	}
 	return r, err
 }
+
+// ErrFileGone: the file was removed or renamed before an action on it.
+var ErrFileGone = errors.New("file no longer exists")
+
+// NoteGone explains a finding whose file vanished before quarantine.
+const NoteGone = "The file was gone before it could be quarantined (renamed or removed, as malware does with temporary files); the file it became is scanned on its own"
 
 func (s *Scanner) setStatus(id int64, status, qpath string) error {
 	_, err := s.DB.Exec(`UPDATE findings SET status = ?, qpath = ?, note = '', updated_at = ? WHERE id = ?`, status, qpath, store.Now(), id)
@@ -69,7 +76,7 @@ func (s *Scanner) Quarantine(id int64) error {
 	}
 	st, err := os.Lstat(r.path)
 	if err != nil {
-		return fmt.Errorf("file no longer exists: %s", r.path)
+		return fmt.Errorf("%w: %s", ErrFileGone, r.path)
 	}
 	if !st.Mode().IsRegular() {
 		return errors.New("not a regular file")
@@ -288,4 +295,32 @@ func runnableELF(path string) bool {
 	n, _ := io.ReadFull(f, head)
 	t := elfType(head[:n])
 	return t == elfExec || t == elfDyn || t == 0
+}
+
+// CloseVanished closes open findings whose file is gone (temporary files a
+// dropper renamed, files the customer deleted): they wait for no action.
+// Symbolic links and findings with a quarantine copy are left alone.
+func (s *Scanner) CloseVanished() (int, error) {
+	rows, err := s.DB.Query(`SELECT id, path FROM findings WHERE status = 'detected' AND category != 'symlink' AND qpath = ''`)
+	if err != nil {
+		return 0, err
+	}
+	var gone []int64
+	for rows.Next() {
+		var id int64
+		var path string
+		if rows.Scan(&id, &path) != nil {
+			continue
+		}
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+			gone = append(gone, id)
+		}
+	}
+	rows.Close()
+	for _, id := range gone {
+		if _, err := s.DB.Exec(`UPDATE findings SET status = 'deleted', note = ?, updated_at = ? WHERE id = ?`, NoteGone, store.Now(), id); err != nil {
+			return 0, err
+		}
+	}
+	return len(gone), nil
 }

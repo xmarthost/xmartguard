@@ -211,6 +211,25 @@ type reason struct {
 // variable `ARGS:q'" (ModSecurity 2.9) or "… at REQUEST_COOKIES:x.".
 var reMatchVar = regexp.MustCompile("(?:against variable `| at )([A-Z_]+(?::[^ '`]{1,80})?)")
 
+// where is where a rule matched: the variable its log names, else (LiteSpeed
+// names none) the value it logged, cut short.
+func where(e Event) string {
+	if v := matchVar(e.Detail); v != "" {
+		return v
+	}
+	d := strings.TrimSpace(e.Data)
+	if d == "" {
+		return ""
+	}
+	if len(d) > 60 {
+		d = d[:60] + "…"
+	}
+	if e.RuleID == IDContentType || e.RuleID == 920420 {
+		return "Content-Type: " + strings.Trim(d, "|")
+	}
+	return "data: " + d
+}
+
 // matchVar returns the variable a rule matched, "" if the text has none.
 func matchVar(detail string) string {
 	m := reMatchVar.FindStringSubmatch(detail)
@@ -226,7 +245,7 @@ const ScoredPrefix = "Matched rules: "
 
 // addScored adds a rule that scored (not the score rules themselves).
 func addScored(ids []int, id int) []int {
-	if isScoreRule(id) || id < 900000 || id >= 1000000 || len(ids) >= 10 {
+	if isScoreRule(id) || ((id < 900000 || id >= 1000000) && id != IDContentType) || len(ids) >= 10 {
 		return ids
 	}
 	for _, x := range ids {
@@ -270,7 +289,7 @@ func (r *reasons) apply(e Event) Event {
 	rank := attackRank(e.RuleID)
 	if old, ok := r.msg[e.UID]; ok {
 		old.ids = addScored(old.ids, e.RuleID)
-		if v := matchVar(e.Detail); v != "" && old.locs[e.RuleID] == "" {
+		if v := where(e); v != "" && old.locs[e.RuleID] == "" {
 			old.locs[e.RuleID] = v
 		}
 		if rank > old.rank {
@@ -285,7 +304,7 @@ func (r *reasons) apply(e Event) Event {
 	r.ring[r.pos] = e.UID
 	r.pos = (r.pos + 1) % len(r.ring)
 	locs := map[int]string{}
-	if v := matchVar(e.Detail); v != "" {
+	if v := where(e); v != "" {
 		locs[e.RuleID] = v
 	}
 	r.msg[e.UID] = reason{e.Msg, rank, addScored(nil, e.RuleID), locs}

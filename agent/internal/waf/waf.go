@@ -49,6 +49,10 @@ type Manager struct {
 	IPDBIPs   func() []string
 	TorIPs    func() []string
 	RBLExempt func() []string
+	// TrustedCountryIPs are the networks of the whitelisted countries: their
+	// visitors get the relaxed CRS threshold even on the IPDB (shared mobile
+	// and office addresses) and are never sent to the CAPTCHA.
+	TrustedCountryIPs func() []string
 	// Intel is the portal's fleet intelligence (nil or returning nil = none).
 	Intel func() *Intel
 	// Gate is the login-page CAPTCHA for the rules (nil or returning nil = off).
@@ -279,6 +283,12 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 	}
 	return files
 }
+
+// SharedEgressRanges are relays thousands of people share: iCloud Private
+// Relay (Apple's 17.0.0.0/8) and Cloudflare WARP (104.28.0.0/16). One user's
+// abuse puts the address on the IPDB, so it never blocks their POSTs (the
+// CRS still inspects them).
+var SharedEgressRanges = []string{"17.0.0.0/8", "104.28.0.0/16"}
 
 // rblFiles are the address lists of the IPDB POST block and Tor rules.
 func (m *Manager) rblFiles(cfg settings.WAF) map[string]string {
@@ -691,7 +701,7 @@ func (m *Manager) PackageStates() []PackageState {
 //	[msg "..."] ... [id "7700501"] [hostname "site.com"] [uri "/x"] ...
 var (
 	reClient = regexp.MustCompile(`\[client (` + ipPat + `)(?::\d+)?\]`)
-	reField  = regexp.MustCompile(`\[(msg|id|hostname|uri|severity) "((?:[^"\\]|\\.)*)"\]`)
+	reField  = regexp.MustCompile(`\[(msg|id|hostname|uri|severity|data) "((?:[^"\\]|\\.)*)"\]`)
 	reDenied = regexp.MustCompile(`(?:Access denied with code (\d+)|denied by server)`)
 	reMethod = regexp.MustCompile(`\[method "([A-Z]+)"\]`)
 	// LiteSpeed: "[NOTICE] [pid] [T0] [1.2.3.4:51234-3#APVH_example.com:443] [Module:mod_security] ..."
@@ -717,6 +727,9 @@ type Event struct {
 	Detail string `json:"detail"`
 	// UID is ModSecurity's unique_id (dedupes error and audit log copies).
 	UID string `json:"-"`
+	// Data is the rule's logdata (the value it matched, such as a refused
+	// Content-Type), used where the log names no matched variable.
+	Data string `json:"-"`
 }
 
 // Busy servers log thousands of these lines a second, and Go's regexps are
@@ -837,6 +850,8 @@ func ParseLine(line string) (Event, bool) {
 			e.Host = val
 		case "uri":
 			e.URI = val
+		case "data":
+			e.Data = val
 		}
 	}
 	if mm := findAt(line, `[method "`, reMethod, 64); mm != nil {
@@ -1041,10 +1056,10 @@ func policyOnly(e Event) bool {
 	ids := strings.FieldsFunc(rest, func(r rune) bool { return r == ',' || r == ' ' || r == '(' || r == ')' })
 	n := 0
 	for _, id := range ids {
-		if len(id) != 6 || id[0] < '0' || id[0] > '9' {
+		if (len(id) != 6 && id != strconv.Itoa(IDContentType)) || id[0] < '0' || id[0] > '9' {
 			continue
 		}
-		if !strings.HasPrefix(id, "920") {
+		if !strings.HasPrefix(id, "920") && id != strconv.Itoa(IDContentType) {
 			return false
 		}
 		n++

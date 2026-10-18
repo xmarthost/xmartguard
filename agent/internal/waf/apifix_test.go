@@ -1,6 +1,7 @@
 package waf
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -83,5 +84,26 @@ func TestNoCtlOnChainStarters(t *testing.T) {
 		if l := ruleLine(out, id); !strings.Contains(l, ",allow,") {
 			t.Errorf("WHMCS rule %d does not allow: %s", id, l)
 		}
+	}
+}
+
+func TestContentTypePolicy(t *testing.T) {
+	re := regexp.MustCompile(contentTypeRx())
+	for _, ok := range []string{"application/x-www-form-urlencoded; charset=UTF-8", "multipart/form-data; boundary=----WebKitFormBoundaryx", "application/json", "text/plain;charset=UTF-8", " application/csp-report", "application/x-www-form-urlencoded, application/x-www-form-urlencoded"} {
+		if !re.MatchString(strings.ToLower(ok)) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"text/html", "application/x-php", "application/jsonp", "multipart/form-dataX"} {
+		if re.MatchString(bad) {
+			t.Errorf("%q allowed", bad)
+		}
+	}
+	if !policyOnly(Event{Detail: ScoredPrefix + "7700052 (Content-Type: text/html)"}) {
+		t.Error("the content type policy alone must not ban")
+	}
+	e, _ := ParseLine(`[client 1.2.3.4:1] ModSecurity: Warning. [file "/x"] [id "7700052"] [msg "Request content type is not allowed by policy"] [data "text/html"] [uri "/"] [unique_id "U1"]`)
+	if where(e) != "Content-Type: text/html" {
+		t.Errorf("where = %q", where(e))
 	}
 }

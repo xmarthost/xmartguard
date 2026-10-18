@@ -26,7 +26,18 @@ func (a *Agent) rblExempt() []string {
 			}
 		}
 	}
+	out = append(out, waf.SharedEgressRanges...)
+	out = append(out, a.trustedCountryCIDRs()...)
 	return append(out, a.centralPassList()...)
+}
+
+// trustedCountryCIDRs are the networks of the whitelisted countries
+// (Firewall » Whitelisted countries).
+func (a *Agent) trustedCountryCIDRs() []string {
+	if a.Firewall == nil || a.Firewall.Geo == nil {
+		return nil
+	}
+	return a.Firewall.Geo.CIDRs(a.Settings.Get().Firewall.IgnoredCountries)
 }
 
 // torMode is the Tor rule in use (see waf.TorMode).

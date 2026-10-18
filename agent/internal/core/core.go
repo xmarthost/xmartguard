@@ -214,7 +214,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	}}
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
 		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, ExemptIPs: a.wafExemptIPs, VerifiedBots: a.wafVerifiedBots,
-		IPDBIPs: a.Firewall.WebIPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, Intel: a.wafIntel,
+		IPDBIPs: a.Firewall.WebIPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, TrustedCountryIPs: a.trustedCountryCIDRs, Intel: a.wafIntel,
 		Gate: func() *waf.Gate {
 			cur := a.Settings.Get()
 			// While the portal's CAPTCHA page is on, it serves the login
@@ -257,6 +257,13 @@ func (a *Agent) Start(ctx context.Context) {
 		}
 	}()
 	go a.Realtime.Run(ctx)
+	go func() {
+		if n, err := a.Scanner.CloseVanished(); err != nil {
+			a.Log.Warn("closing findings of vanished files failed", "err", err)
+		} else if n > 0 {
+			a.Log.Info("findings of vanished files closed", "count", n)
+		}
+	}()
 	go a.Scanner.WatchNewSites(ctx)
 	go a.Firewall.Run(ctx)
 	go a.Firewall.RunBruteForce(ctx)
@@ -1066,6 +1073,53 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 			a.Scanner.Unpause(in.Signature)
 		}
 		return r, err
+	}
+	// findings.recheck judges quarantined scripts again with the current
+	// engine (false positives fixed since they were caught); nothing changes.
+	// findings.recheck_apply restores the ones it lists, by id.
+	recheck := func(p json.RawMessage) (scanner.RecheckReport, []int64, error) {
+		in, err := decode[struct {
+			Signature string  `json:"signature"`
+			Limit     int     `json:"limit"`
+			IDs       []int64 `json:"ids"`
+		}](p)
+		if err != nil {
+			return scanner.RecheckReport{}, nil, err
+		}
+		// An AI or administrator verdict of malicious keeps the file.
+		keep := func(sha string) bool {
+			v, ok := ai.Cached(a.DB, sha)
+			return ok && v.Verdict == ai.Malicious
+		}
+		rep, err := a.Scanner.Recheck(in.Signature, in.Limit, keep)
+		return rep, in.IDs, err
+	}
+	h["findings.recheck"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		rep, _, err := recheck(p)
+		return rep, err
+	}
+	h["findings.recheck_apply"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		rep, ids, err := recheck(p)
+		if err != nil {
+			return nil, err
+		}
+		want := map[int64]bool{}
+		for _, id := range ids {
+			want[id] = true
+		}
+		var restored []int64
+		var failed []string
+		for _, it := range rep.Clean {
+			if len(want) > 0 && !want[it.ID] {
+				continue
+			}
+			if err := a.restoreFinding(it.ID); err != nil {
+				failed = append(failed, it.Path+": "+err.Error())
+				continue
+			}
+			restored = append(restored, it.ID)
+		}
+		return map[string]any{"restored": restored, "failed": failed}, nil
 	}
 	h["scanner.paused"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{"paused": a.Scanner.Paused(), "limit": scanner.SpikeLimit}, nil

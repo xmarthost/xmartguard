@@ -189,7 +189,7 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`SecRule REQUEST_FILENAME "@rx ^/+cgi-sys/+(?:autodiscover|autoconfig)\.cgi$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,%s,ctl:ruleRemoveById=920350"`, IDCPanelMailCfg, tags)
 	}
 	if !off[IDDeviceIclock] {
-		w(`SecRule REQUEST_FILENAME "@rx ^/+iclock/+(?:cdata|getrequest|devicecmd|registry|push|ping|querydata|fdata)(?:\.aspx|\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=930130,ctl:ruleRemoveById=942550"`, IDDeviceIclock)
+		w(`SecRule REQUEST_FILENAME "@rx ^/+iclock/+(?:cdata|getrequest|devicecmd|registry|push|ping|querydata|fdata)(?:\.aspx|\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=930130,ctl:ruleRemoveById=942550"`, IDDeviceIclock, IDContentType)
 	}
 	if !off[IDCPanelPaths] {
 		// cPanel's own pages and images on every site (img-sys/ and the error
@@ -216,7 +216,7 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDStaticPHP, IDPHPInAssets)
 	}
 	if !off[IDSiteBeacons] {
-		w(`SecRule ARGS_GET:ob "@streq open-bridge/events" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420"`, IDSiteBeacons)
+		w(`SecRule ARGS_GET:ob "@streq open-bridge/events" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=%d"`, IDSiteBeacons, IDContentType)
 		w(`SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)optimization-detective/v1/+url-metrics:store(?:[?&]|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=920250,ctl:ruleRemoveById=920270"`, IDSiteBeacons+1000)
 	}
 	if !off[IDAdminPanel] {
@@ -273,6 +273,10 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	}
 	writeExcl := func(id int, e settings.RuleExclusion) {
 		ctl := fmt.Sprintf("ctl:ruleRemoveById=%d", e.Rule)
+		if e.Rule == 920420 {
+			// xPGuard's content type policy stands in for 920420.
+			ctl += fmt.Sprintf(",ctl:ruleRemoveById=%d", IDContentType)
+		}
 		switch {
 		case e.Domain != "" && e.Path != "":
 			w(`SecRule SERVER_NAME "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, domainRx(e.Domain), id)

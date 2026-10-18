@@ -389,6 +389,37 @@ func TestBlockEditorWithoutCookieWithCRS(t *testing.T) {
 	}
 }
 
+// TestContentTypePolicyWithCRS: xPGuard's content type policy stands in for
+// CRS 920420 (taken out after loading): form posts, multipart uploads and
+// JSON pass, an unknown body type still scores.
+func TestContentTypePolicyWithCRS(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	crsManager(t, src, `{"waf":{"enabled":true}}`, "", nil)
+	for _, c := range []struct {
+		ctype string
+		want  int
+	}{
+		{"application/x-www-form-urlencoded; charset=UTF-8", 200},
+		{"multipart/form-data; boundary=----WebKitFormBoundaryAbC", 200},
+		{"application/json", 200},
+		{"text/html", 403},
+		{"application/x-php", 403},
+	} {
+		body := "a=1"
+		if strings.HasPrefix(c.ctype, "multipart") {
+			body = "------WebKitFormBoundaryAbC\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n1\r\n------WebKitFormBoundaryAbC--\r\n"
+		} else if c.ctype == "application/json" {
+			body = `{"a":1}`
+		}
+		if got := sendBody(t, "shop.example.com", "POST", "/?wc-ajax=update_order_review", c.ctype, body); (got == 403) != (c.want == 403) || got == 0 {
+			t.Errorf("%s: got %d, want %d", c.ctype, got, c.want)
+		}
+	}
+}
+
 func urlEncode(s string) string {
 	var b strings.Builder
 	for _, c := range []byte(s) {

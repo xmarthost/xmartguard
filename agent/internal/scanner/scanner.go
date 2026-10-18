@@ -831,7 +831,14 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 	}
 	switch action {
 	case settings.ActionQuarantine:
-		if err := s.Quarantine(f.ID); err != nil {
+		if err := s.Quarantine(f.ID); errors.Is(err, ErrFileGone) {
+			// A temporary file (tempnam(), then renamed) needs no action:
+			// it is not left open as if it waited for one.
+			f.Status, f.Note = "deleted", NoteGone
+			if _, err := s.DB.Exec(`UPDATE findings SET status = 'deleted', note = ?, updated_at = ? WHERE id = ?`, NoteGone, store.Now(), f.ID); err != nil {
+				s.Log.Warn("marking a vanished file failed", "path", path, "err", err)
+			}
+		} else if err != nil {
 			s.Log.Warn("quarantine failed", "path", path, "err", err)
 		} else {
 			f.Status = "quarantined"

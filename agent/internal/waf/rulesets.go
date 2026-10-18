@@ -295,8 +295,20 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			post += sessionPost()
 			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing; requests from a site's own pages with a session have threshold " + fmt.Sprint(sessionThreshold)
 		}
+		crs4 := !strings.HasPrefix(rs.CRS.Version, "3.")
+		if crs4 {
+			setupText += contentTypeSetup()
+		}
 		files[setup] = setupText
 		fmt.Fprintf(&inc, "\n# OWASP Core Rule Set %s\nInclude %s\nInclude %s\n", rs.CRS.Version, setup, filepath.Join(dir, "rules", "*.conf"))
+		if crs4 {
+			// Taken out once loaded (a configuration directive, which every
+			// engine applies, unlike ctl:ruleRemoveById): 920420 is replaced
+			// by xPGuard's content type policy, and 930140 (files of AI coding
+			// assistants) matched theme files such as content_elements.crush.css;
+			// xPGuard's sensitive files rule covers those folders.
+			inc.WriteString("SecRuleRemoveById 920420 930140\n")
+		}
 		if post != "" {
 			p := filepath.Join(m.RulesDir, "crs-after.conf")
 			files[p] = post

@@ -52,6 +52,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'scan.delete': { role: 'operator', mutates: true },
   'finding.action': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'findings.bulk': { role: 'operator', mutates: true, timeoutMs: 600_000 },
+  'findings.recheck': { role: 'viewer', mutates: false, timeoutMs: 300_000 },
+  'findings.recheck_apply': { role: 'operator', mutates: true, timeoutMs: 600_000 },
   'scanner.unpause': { role: 'operator', mutates: true },
   'settings.rollback': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'fw.add': { role: 'operator', mutates: true },

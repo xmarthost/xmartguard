@@ -20,7 +20,9 @@ const (
 	IDSoftVerified = 7700030 // +1 behind a proxy
 	IDSoftStrict   = 7700032 // +1 behind a proxy
 	IDSoftFlag     = 7700034
-	IDSoftDeny     = 7700036
+	// IDSoftCountry: visitors from a whitelisted country (+1 behind a proxy).
+	IDSoftCountry = 7700054
+	IDSoftDeny    = 7700036
 	// IDSoftTrusted: search engine crawlers and other trusted services
 	// (official address lists) are never sent to the CAPTCHA page.
 	IDSoftTrusted = 7700038
@@ -29,6 +31,8 @@ const (
 	IDSoftCaptcha = 7700905
 	// FileStrictIPs lists the addresses with a bad reputation.
 	FileStrictIPs = "crs-strict-ips.txt"
+	// FileCountryIPs lists the networks of the whitelisted countries.
+	FileCountryIPs = "crs-country-ips.txt"
 )
 
 type softBlockRules struct {
@@ -81,6 +85,15 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, tf, IDSoftTrusted, relaxed)
 	}
 	byAddr(IDSoftStrict, strict, fmt.Sprintf("setvar:tx.xg_strict=1,setvar:tx.inbound_anomaly_score_threshold=%d", in))
+	if m.TrustedCountryIPs != nil {
+		// Whitelisted countries (after the bad-reputation list, so it wins:
+		// mobile and office addresses there are shared by many people).
+		if cidrs := m.TrustedCountryIPs(); len(cidrs) > 0 {
+			cf := filepath.Join(m.RulesDir, FileCountryIPs)
+			files[cf] = AddrFile(cidrs)
+			byAddr(IDSoftCountry, cf, fmt.Sprintf("setvar:!tx.xg_strict,setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d", relaxed))
+		}
+	}
 	w(`SecRule &TX:xg_strict "@eq 0" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDSoftFlag)
 	w(`  SecRule &TX:xg_verified "@eq 0" "t:none,setvar:tx.xg_soft=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, relaxed)
 

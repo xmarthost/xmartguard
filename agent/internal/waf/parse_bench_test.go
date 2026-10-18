@@ -51,6 +51,8 @@ func oldParse(line string) (Event, bool) {
 			e.Host = val
 		case "uri":
 			e.URI = val
+		case "data":
+			e.Data = val
 		}
 	}
 	if mm := reMethod.FindStringSubmatch(line); mm != nil {

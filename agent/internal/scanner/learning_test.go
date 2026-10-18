@@ -57,6 +57,20 @@ $on = $_GET['cb'] ?? '';
 $handler = function ($x) { return $x; };
 echo $handler($symbol);
 `,
+		"ERP config with ZATCA QR codes and its own folders": `<?php
+function get_db() {
+    $db_dir = dirname(DB_PATH);
+    if (!is_dir($db_dir)) { mkdir($db_dir, 0755, true); }
+    if (!is_writable($db_dir)) json_error('The db/ folder is not writable.');
+    foreach (scandir(UPLOAD_PATH) as $f) {}
+}
+function zatca_qr(array $fields) {
+    $tlv = '';
+    foreach ($fields as $tag => $value) { $tlv .= chr($tag); $tlv .= chr(strlen($value)); $tlv .= $value; }
+    file_put_contents(UPLOAD_PATH . 'qr.txt', base64_encode($tlv));
+    return base64_encode($tlv);
+}
+`,
 		"Cloudflare email-protection decoder": `<?php
 function cfemail_decode(string $hex): string {
     $k = hexdec(substr($hex, 0, 2)); $out = '';

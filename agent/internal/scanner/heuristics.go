@@ -376,8 +376,10 @@ var (
 	reVarCallName = regexp.MustCompile(`(?:^|[^>:\w$])\$([a-zA-Z_]\w*)\s*\(`)
 	// $name = function (…) / fn (…) / static fn: a closure the file defines.
 	reClosureAssign = regexp.MustCompile(`(?i)\$([a-zA-Z_]\w*)\s*=\s*(?:static\s+)?(?:function|fn)\s*\(`)
-	// chr(len | 0x80) and chr(126 | 0x80): a WebSocket frame header.
-	reFrameChr = regexp.MustCompile(`(?i)\.=\s*chr\s*\(\s*(?:\$\w+|\d+)\s*\|\s*0x80\s*\)`)
+	// Binary framing, not decoding: chr(len | 0x80) and chr(126 | 0x80) of a
+	// WebSocket frame header, and the tag and length bytes of TLV records
+	// (ZATCA e-invoice QR codes: chr($tag) . chr(strlen($value))).
+	reFrameChr = regexp.MustCompile(`(?i)\.=\s*chr\s*\(\s*(?:(?:\$\w+|\d+)\s*\|\s*0x80\s*\)|\$\w*(?:tag|len|length|size)\w*\s*\)|(?:mb_)?strlen\s*\()`)
 )
 
 // foreignVarCall reports a call through a variable ($f(…)) that is not a

@@ -1,6 +1,10 @@
 package waf
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
 
 // WAF levels (Settings » WAF): how much the OWASP CRS may block.
 //
@@ -23,6 +27,11 @@ const (
 	// (tx.xg_wp_user any login cookie, tx.xg_wp_editor a real one or the
 	// block editor's nonce); the other rules test these variables.
 	IDWPUser = 7700046
+	// IDContentType replaces CRS 920420 (content type not allowed): it reads
+	// the header itself against a fixed list instead of CRS's variable
+	// macros. On a LiteSpeed server CRS refused WooCommerce checkouts,
+	// Contact Form 7, Joomla sign-ups and admin-ajax with plain form posts.
+	IDContentType = 7700052
 	// IDEditorAdmin: a logged-in editor on an address with a bad reputation
 	// saving from their own site's wp-admin.
 	IDEditorAdmin = 7702040
@@ -177,4 +186,22 @@ func wpUserSetup() string {
 		`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,chain"` + "\n" +
 		`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?wp-admin/" "t:none,t:lowercase,capture,chain"` + "\n" +
 		`  SecRule TX:1 "@streq %{REQUEST_HEADERS.Host}" "t:none,t:lowercase,setvar:tx.xg_wp_user=1,setvar:tx.xg_wp_editor=1"` + "\n"
+}
+
+// contentTypeRx is AllowedContentTypes as one regular expression of media
+// types (parameters such as charset or boundary may follow).
+func contentTypeRx() string {
+	var alts []string
+	for _, t := range strings.Fields(AllowedContentTypes) {
+		alts = append(alts, regexp.QuoteMeta(strings.Trim(t, "|")))
+	}
+	return `^\s*(?:` + strings.Join(alts, "|") + `)\s*(?:[;,]|$)`
+}
+
+// contentTypeSetup is the content type policy for CRS 4 (920420 is taken
+// out after the CRS is loaded). It scores like 920420 and logs the header,
+// so a refused type shows in the WAF log.
+func contentTypeSetup() string {
+	return "# Content type policy (xPGuard, in place of CRS 920420).\n" +
+		fmt.Sprintf(`SecRule REQUEST_HEADERS:Content-Type "!@rx %s" "id:%d,phase:2,block,t:none,t:lowercase,msg:'Request content type is not allowed by policy',logdata:'%%{MATCHED_VAR}',tag:'attack-protocol',tag:'xpguard/crs',severity:'CRITICAL',setvar:'tx.inbound_anomaly_score_pl1=+%%{tx.critical_anomaly_score}'"`, contentTypeRx(), IDContentType) + "\n"
 }

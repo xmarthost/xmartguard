@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.6** (see `VERSION`).
+- Current release: **0.22.7** (see `VERSION`).
 
 ## Working rules
 
@@ -89,6 +89,22 @@ project. It holds the rules, the current state and what is still open.
   itself go back to "suggested" (0.22.6); protocol rules (911-921) stay.
 - **CRS settings**: allowed content types (900220) and restricted extensions
   (900240) are set in `agent/internal/waf/level.go`.
+- **Content type policy** (0.22.7): CRS 920420 is removed at config time
+  (`SecRuleRemoveById 920420 930140`) and replaced by our own rule 7700052
+  (`contentTypeSetup`), which scores the same but logs the content type it
+  refused (`logdata`, shown as "Content-Type: …" in WAF logs). The learned
+  920420 exclusions and the iclock and site-beacon rules also remove 7700052.
+  930140 (the dot-file rule) blocked real CSS such as `.crush.css`; the
+  sensitive-files rule covers the AI tool folders instead.
+- **Whitelisted countries in the WAF** (0.22.7): visitors from a
+  whitelisted country (portal, Firewall » Whitelist countries) are treated
+  like verified visitors (rule 7700054, file `crs-country-ips.txt`): no soft
+  block, and CRS blocks only at twice the threshold. They are also exempt
+  from IPDB POST blocks. Real attacks still score above the relaxed
+  threshold.
+- **Shared egress networks** (`waf.SharedEgressRanges`: Apple Private Relay
+  17.0.0.0/8 and 104.28.0.0/16) never get IPDB POST blocks: many real
+  people share each address.
 - **Bans**:
   - Policy-only blocks (only CRS 920xxx rules matched) never ban.
   - IPDB POST blocks (7700711/7701711) never ban.
@@ -99,6 +115,16 @@ project. It holds the rules, the current state and what is still open.
     log "[watch]" instead of blocking.
   - Approval goes through `waf_rule_decisions` and is sent to servers as
     `Intel.Enforce`.
+- **Vanished files** (0.22.7): open findings whose file no longer exists
+  (temp files of a reinfection loop) are closed as deleted at startup and
+  when quarantine finds the file gone (`scanner.CloseVanished`,
+  `ErrFileGone`).
+- **Recheck quarantine** (0.22.7): `agent_command` `findings.recheck`
+  (`signature`, `limit`) runs the current scanner over the quarantined copies
+  and lists the files it would no longer flag. `findings.recheck_apply`
+  (`ids`) restores the listed ones; files the AI cache calls malicious are
+  always kept. Run it after scanner false-positive fixes, and restore only
+  after the owner approves.
 - **Spike guard**: a signature with more than 500 detections in an hour is
   paused (`scanner.paused_signatures`). An admin unpauses it.
 - **AI distrust**: the AI's clean verdict is only advice, never a restore,
@@ -119,10 +145,21 @@ project. It holds the rules, the current state and what is still open.
    active on business600. Affected accounts include biochemi, biggerbr,
    themagi4, akenterp, uitscom and floareaa. Clean these accounts and change
    their passwords (cPanel and WordPress admins).
-3. **920420 on business600**: some hits remain on admin-ajax, xmlrpc,
-   Contact Form 7 and wc-ajax. The content type is not logged yet, so look
-   at it only if customers complain, and log the content type first.
-4. **Not built yet**:
+3. **Content type blocks on business600**: about 800 a day on wc-ajax,
+   admin-ajax, Contact Form 7 and Joomla register. Since 0.22.7 rule 7700052
+   logs the content type: check `waf_events` `rule: 7700052` and add the
+   missing type to `AllowedContentTypes` if it is a real one.
+4. **Still open from the 0.22.6 review**: mrwowea `tg_relay` (920540),
+   hapetsupplies admin-ajax from a Pakistani IP (942100), digimedia-verse.
+5. **Scanner false positives** still to fix (business500 scan 31): spam
+   mailer on app password mailers, AutoPrepend on SureMails `.user.ini`,
+   EncodedPayload on `composer/ca-bundle` and gateway callbacks, vendor
+   tests. Use `findings.recheck` after each fix.
+6. **Reinfection on s5**: uitscom and ebwaccounting re-drop
+   `ridge-compiler-live.php` about every 10 minutes. Clean these accounts
+   (look for the dropper in cron, mu-plugins and the database) and change
+   their passwords.
+7. **Not built yet**:
    - M3: uptime/SSL/domain-expiry monitor (14), file versions (15) and
      cPanel plugin v2 (12).
    - M4: targeted virtual patches (07), DB clean (08), outbound monitor
