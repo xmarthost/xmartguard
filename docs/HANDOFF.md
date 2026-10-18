@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.3** (see `VERSION`).
+- Current release: **0.22.4** (see `VERSION`).
 
 ## Working rules
 
@@ -135,7 +135,7 @@ For a status check of every server, start with `fleet_overview` and
 `list_servers`, then run `server_dashboard` on each server. Report:
 
 - online or offline;
-- agent version (old ones should update to 0.22.3);
+- agent version (old ones should update to 0.22.4);
 - service problems and alerts;
 - paused signatures (`agent_command` `scanner.paused`);
 - WAF watch hits (`waf_events` entries starting with "[watch]"; the portal's

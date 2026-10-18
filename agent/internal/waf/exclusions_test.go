@@ -307,6 +307,47 @@ func TestSoftBlockWithCRS(t *testing.T) {
 	check("other websites keep the WAF", get("xenovatech.co", "/wso.php"), 403)
 }
 
+// TestEditorOnListedAddressWithCRS: a logged-in editor whose shared mobile
+// address is on the IPDB saves an Elementor page with an HTML widget
+// (thebassspot.com, 403 on every save). The save from their own wp-admin
+// passes; the same body without the browser's same-site proof, from another
+// site or with a made-up cookie is still refused.
+func TestEditorOnListedAddressWithCRS(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	crsManager(t, src, `{"waf":{"enabled":true,"wordpress":true,"level":"normal","disabled_rules":[7700010,7700011,7700012,7700013,7700014,7700015]}}`, "", func(m *Manager) {
+		m.IPDBIPs = func() []string { return []string{"127.0.0.1"} }
+		m.Central = func() *Central {
+			return &Central{URL: "https://captcha.xpguard.test/v", ServerID: "49c5f26a-f37e-40e0-9eed-62ef53a8a85a"}
+		}
+	})
+	form := "application/x-www-form-urlencoded"
+	editor := "Cookie: wordpress_logged_in_0123456789abcdef0123456789abcdef=admin%7C1700000000%7Ctok%7Chmac"
+	fake := "Cookie: wordpress_logged_in_x=1"
+	same := "Sec-Fetch-Site: same-origin"
+	own := "Referer: https://shop.example.com/wp-admin/post.php?post=8&action=elementor"
+	widget := `<img src="https://shop.example.com/wp-content/uploads/2026/06/logo.png" alt="" onerror="this.remove();"><script>document.write(document.cookie)</script> $(cat /etc/passwd)`
+	save := "action=elementor_ajax&_nonce=abc&actions=" + urlEncode(`{"save_builder":{"action":"save_builder","data":{"elements":[{"widgetType":"html","settings":{"html":"`+strings.ReplaceAll(widget, `"`, `\"`)+`"}}]}}}`)
+	cases := []struct {
+		name, uri string
+		hdr       []string
+		want      int
+	}{
+		{"Elementor save from own wp-admin", "/wp-admin/admin-ajax.php", []string{editor, same, own}, 200},
+		{"no same-site proof stays blocked", "/wp-admin/admin-ajax.php", []string{editor, own}, 403},
+		{"Referer of another site stays blocked", "/wp-admin/admin-ajax.php", []string{editor, same, "Referer: https://evil.example.net/wp-admin/post.php"}, 403},
+		{"made-up cookie stays blocked", "/wp-admin/admin-ajax.php", []string{fake, same, own}, 403},
+		{"front-end form stays inspected", "/contact/", []string{editor, same, own}, 403},
+	}
+	for _, c := range cases {
+		if got := sendBody(t, "shop.example.com", "POST", c.uri, form, save, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
 func urlEncode(s string) string {
 	var b strings.Builder
 	for _, c := range []byte(s) {

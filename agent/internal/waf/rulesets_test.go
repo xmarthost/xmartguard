@@ -118,6 +118,10 @@ func TestExtrasRenderCRSAndCustom(t *testing.T) {
 	if !strings.Contains(setup, "blocking_paranoia_level=2") || !strings.Contains(setup, "inbound_anomaly_score_threshold=10,") || !strings.Contains(setup, "id:7700040,") {
 		t.Fatalf("setup: %s", setup)
 	}
+	// Editors on an IPDB-listed address saving from their own wp-admin.
+	if i := strings.Index(setup, "id:7702040,"); i < 0 || !strings.Contains(setup[i:], `REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin"`) || !strings.Contains(setup[i:], `"@streq %{REQUEST_HEADERS.Host}"`) {
+		t.Fatalf("setup: %s", setup)
+	}
 	// Apps' own APIs may update and delete (PUT/PATCH/DELETE); mail clients'
 	// Autodiscover requests pass.
 	if !strings.Contains(setup, "tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE") || !strings.Contains(setup, "id:7700042,") {

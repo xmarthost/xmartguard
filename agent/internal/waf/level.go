@@ -19,6 +19,9 @@ import "fmt"
 const (
 	IDEditorCookie = 7700040
 	IDEditorAuth   = 7700041
+	// IDEditorAdmin: a logged-in editor on an address with a bad reputation
+	// saving from their own site's wp-admin.
+	IDEditorAdmin = 7702040
 	// Mail clients (Outlook) asking cPanel for their settings.
 	IDAutodiscover = 7700042
 	// IDSessionHost/IDSessionSite: a request a website's own page sends
@@ -78,7 +81,18 @@ func editorSetup() string {
 		fmt.Sprintf(`SecRule REQUEST_URI "@rx (?:/wp-admin/|/wp-json/|[?&]rest_route=)" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, IDEditorCookie+1000) + "\n" +
 		`  SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_[0-9a-f]{32}$" "t:none,chain"` + "\n" +
 		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n" +
+		// The same editor saving from their own wp-admin page (Elementor's
+		// HTML widget, page builders, code snippets score 35-80): the browser
+		// says the request came from the same site (Sec-Fetch-Site) and the
+		// Referer is this site's wp-admin. Attack tools on that address send
+		// neither, so they keep the stricter threshold above.
+		fmt.Sprintf(`SecRule REQUEST_URI "@rx (?:/wp-admin/|/wp-json/|[?&]rest_route=)" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, IDEditorAdmin) + "\n" +
+		`  SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_[0-9a-f]{32}$" "t:none,chain"` + "\n" +
+		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
+		`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,chain"` + "\n" +
+		`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?wp-admin/" "t:none,t:lowercase,capture,chain"` + "\n" +
+		fmt.Sprintf(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,setvar:tx.xg_soft=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n"
 }
 
 // sessionSetup lifts the threshold for requests a website's own pages send
