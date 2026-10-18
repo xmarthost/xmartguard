@@ -19,7 +19,12 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 	if src == "" {
 		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
 	}
-	m := crsManager(t, src, `{"waf":{"enabled":true,"level":"normal","wordpress":true,"generic":true,"bad_bots":true,"sensitive_files":true}}`, "off", nil)
+	// The new rules (shop scraping, cart spam, POST without User-Agent) as
+	// approved in the portal; watching, they let these requests through.
+	approved := func(m *Manager) {
+		m.Intel = func() *Intel { return &Intel{Enforce: []int{IDShopScrape, IDCartSpam, IDNoUAPost}} }
+	}
+	m := crsManager(t, src, `{"waf":{"enabled":true,"level":"normal","wordpress":true,"generic":true,"bad_bots":true,"sensitive_files":true}}`, "off", approved)
 	form, json := "application/x-www-form-urlencoded", "application/json"
 	if st := m.Status(); st.Error != "" {
 		t.Fatalf("WAF error: %s", st.Error)
@@ -45,6 +50,12 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		hdr                                  []string
 		want                                 int
 	}{
+		// Analytics beacons (navigator.sendBeacon) send text/plain.
+		{"Analytics beacon to /hit", "gold.example.com", "POST", "/hit", "text/plain;charset=UTF-8", `{"p":"/","r":"","w":1280}`, []string{"Referer: https://gold.example.com/"}, 200},
+		{"Analytics beacon to /api/a", "shop.example.pk", "POST", "/api/a", "text/plain;charset=UTF-8", `{"e":"pageview"}`, nil, 200},
+		{"CSP report", "shop.example.pk", "POST", "/csp-report", "application/csp-report", `{"csp-report":{}}`, nil, 200},
+		{"Broken font link ending in .com", "shop.example.pk", "GET", "/fonts.googleapis.com", "", "", nil, 200},
+		{"Database dump still refused", "shop.example.pk", "GET", "/backup.sql", "", "", nil, 403},
 		{"Editor without session or own page is blocked (baseline)", "ssc.example.pk", "POST", "/alms/Teacher/Editing.php", form, editor, nil, 403},
 		{"Editor saving from its own page with a session", "ssc.example.pk", "POST", "/alms/Teacher/Editing.php", form, editor, []string{sess, self}, 200},
 		{"Same save sent from another site", "ssc.example.pk", "POST", "/alms/Teacher/Editing.php", form, editor, []string{sess, "Referer: https://evil.example.net/alms/Teacher/Editing.php"}, 403},

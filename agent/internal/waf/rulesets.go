@@ -270,8 +270,16 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			// Websites' own APIs (Laravel, Node, ERP apps, the WordPress REST
 			// API) update and delete with PUT, PATCH and DELETE; CRS allows
 			// only GET, HEAD, POST and OPTIONS by default (rule 911100).
-			"SecAction \"id:900200,phase:1,pass,t:none,nolog,setvar:'tx.allowed_methods=%s'\"\n",
-			rs.CRS.Version, filepath.Join(dir, "crs-setup.conf.example"), plVar, pl, in, out, AllowedMethods)
+			"SecAction \"id:900200,phase:1,pass,t:none,nolog,setvar:'tx.allowed_methods=%s'\"\n"+
+			// Browsers send analytics beacons (navigator.sendBeacon: /hit,
+			// /api/a …) and CSP reports as text/plain or octet-stream,
+			// which CRS 4 refuses (rule 920420): every page view of a real
+			// visitor was blocked and, counted, got the visitor banned.
+			"SecAction \"id:900220,phase:1,pass,t:none,nolog,setvar:'tx.allowed_request_content_type=%s'\"\n"+
+			// .com (DOS programs, never on a Linux host) matched broken
+			// links like /fonts.googleapis.com that themes request.
+			"SecAction \"id:900240,phase:1,pass,t:none,nolog,setvar:'tx.restricted_extensions=%s'\"\n",
+			rs.CRS.Version, filepath.Join(dir, "crs-setup.conf.example"), plVar, pl, in, out, AllowedMethods, AllowedContentTypes, RestrictedExtensions)
 		crs.Detail = fmt.Sprintf("paranoia level %d, anomaly threshold %d", pl, in)
 		post := ""
 		if sb, ok := m.softBlock(rs.CRS, in); ok {

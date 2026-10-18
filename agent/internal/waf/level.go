@@ -116,6 +116,20 @@ func sessionPost() string {
 // AllowedMethods are the HTTP methods the OWASP CRS lets through.
 const AllowedMethods = "GET HEAD POST OPTIONS PUT PATCH DELETE"
 
+// AllowedContentTypes is CRS 4's list with what browsers and APIs send in
+// normal use: text/plain (sendBeacon, fetch with a string body),
+// application/octet-stream, CSP and Reporting API reports, GraphQL and
+// CloudEvents.
+const AllowedContentTypes = "|application/x-www-form-urlencoded| |multipart/form-data| |multipart/related| |text/xml| |application/xml| |application/soap+xml| " +
+	"|application/json| |application/reports+json| |application/csp-report| |text/plain| |application/octet-stream| |application/graphql| " +
+	"|application/cloudevents+json| |application/cloudevents-batch+json| |application/x-ndjson|"
+
+// RestrictedExtensions is CRS's list without .com (see rulesets.go).
+const RestrictedExtensions = ".ani/ .asa/ .asax/ .ascx/ .backup/ .bak/ .bat/ .cdx/ .cer/ .cfg/ .cmd/ .compositefont/ .config/ .conf/ .crt/ .cs/ .csproj/ .csr/ " +
+	".dat/ .db/ .dbf/ .dist/ .dll/ .dos/ .dpkg-dist/ .drv/ .gadget/ .hta/ .htr/ .htw/ .ida/ .idc/ .idq/ .inc/ .inf/ .ini/ .jse/ .key/ .licx/ .lnk/ .log/ " +
+	".mdb/ .msc/ .ocx/ .old/ .pass/ .pdb/ .pfx/ .pif/ .pem/ .pol/ .prf/ .printer/ .pwd/ .rdb/ .rdp/ .reg/ .resources/ .resx/ .scr/ .sct/ .shs/ .sql/ " +
+	".swp/ .sys/ .tlb/ .tmp/ .url/ .vb/ .vbe/ .vbs/ .vbproj/ .vsdisco/ .vxd/ .webinfo/ .ws/ .wsc/ .wsf/ .wsh/ .xsd/ .xsx/"
+
 // autodiscoverSetup lets mail clients' Autodiscover requests through:
 // Outlook POSTs an XML document (<Autodiscover><Request><EMailAddress>…)
 // to /autodiscover/autodiscover.xml, which the CRS XSS rules (941100,

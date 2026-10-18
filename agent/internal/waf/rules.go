@@ -91,6 +91,10 @@ const (
 	IDIPDBPost = 7700711
 	IDTorPost  = 7700712
 	IDTorBlock = 7700713
+	// IDIPDBPostAPI: API calls (an Authorization, API key or signature
+	// header) skip the IPDB POST rule: integrations call from data-center
+	// addresses that share IPDB-listed networks.
+	IDIPDBPostAPI = 7700714
 	// Virtual patches: known plugin vulnerabilities blocked at the WAF.
 	IDVPGravitySMTP = 7701001
 	IDVPFileManager = 7701002
@@ -794,6 +798,8 @@ func Render(c settings.WAF, o Options) string {
 		}
 	}
 	if c.IPDBPost && !off[IDIPDBPost] {
+		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+			reAPIHeader.String(), IDIPDBPostAPI, IDIPDBPost, IDIPDBPost+1000)
 		rblRule(IDIPDBPost, true, FileIPDBIPs, "POST from an IPDB-listed address blocked", "")
 	}
 	switch TorMode(c.TorAction, o.Central != nil && o.Gate == nil) {
@@ -949,3 +955,7 @@ func quoteAll(l []string) []string {
 	}
 	return out
 }
+
+// reAPIHeader: header names (lowercase) of authenticated API calls and
+// signed webhooks; such calls skip the IPDB POST rule.
+var reAPIHeader = regexp.MustCompile(`^(?:authorization|x-api-key|api-key|apikey|x-auth-token|x-access-token|x-[a-z0-9-]*-(?:token|key|hmac[a-z0-9-]*)|[a-z0-9-]*signature[a-z0-9-]*)$`)

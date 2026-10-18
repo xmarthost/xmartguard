@@ -964,7 +964,7 @@ func (m *Manager) tailLogs(ctx context.Context) {
 		}
 		if ev.Category == "login" {
 			m.maybeBan(ev, counter)
-		} else if strings.HasPrefix(ev.Action, "Access denied") && !noBanRules[ev.RuleID] {
+		} else if strings.HasPrefix(ev.Action, "Access denied") && !noBanRules[ev.RuleID] && !policyOnly(ev) {
 			m.maybeBanBlocked(ev, blocks)
 		}
 	}
@@ -1024,7 +1024,33 @@ func (m *Manager) maybeBan(e Event, c *counter) {
 // come from residential and mobile addresses real visitors share, and a
 // request without browser headers may be another server's integration.
 var noBanRules = map[int]bool{IDShopScrape: true, IDShopScrape + 1000: true, IDCartSpam: true, IDCartSpam + 1000: true,
-	IDNoUAPost: true, IDNoUAPost + 1000: true}
+	IDNoUAPost: true, IDNoUAPost + 1000: true,
+	// The address is only refused POSTs: a ban would cut a shared or API
+	// address off the whole website.
+	IDIPDBPost: true, IDIPDBPost + 1000: true}
+
+// policyOnly: an OWASP CRS block from protocol and policy rules only
+// (920xxx: content type, file extension, header limits). Browsers and APIs
+// break those in normal use (a beacon, a broken font link), so the request
+// is refused but the address is never banned for it.
+func policyOnly(e Event) bool {
+	rest, ok := strings.CutPrefix(e.Detail, ScoredPrefix)
+	if !ok {
+		return false
+	}
+	ids := strings.FieldsFunc(rest, func(r rune) bool { return r == ',' || r == ' ' || r == '(' || r == ')' })
+	n := 0
+	for _, id := range ids {
+		if len(id) != 6 || id[0] < '0' || id[0] > '9' {
+			continue
+		}
+		if !strings.HasPrefix(id, "920") {
+			return false
+		}
+		n++
+	}
+	return n > 0
+}
 
 // maybeBanBlocked temporarily bans addresses the WAF keeps blocking
 // ("WAF Temporary IP Ban"): a scanner probing many URLs gets dropped at the
