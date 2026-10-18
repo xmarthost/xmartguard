@@ -633,6 +633,21 @@ CREATE TABLE waf_rule_decisions (
   updated_at  timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (account_id, rule_id)
 );
+
+-- "Why am I blocked?": visitors ask to be unblocked from the portal's page.
+CREATE TABLE unblock_requests (
+  id          bigserial PRIMARY KEY,
+  ip          inet NOT NULL,
+  site        text NOT NULL,
+  email       text NOT NULL DEFAULT '',
+  message     text NOT NULL DEFAULT '',
+  status      text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'rejected')),
+  handled_by  uuid,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX unblock_requests_open ON unblock_requests (status, created_at DESC);
+CREATE INDEX unblock_requests_ip ON unblock_requests (ip, created_at DESC);
 `,
   },
 ];

@@ -1,12 +1,13 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, ChevronDown, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
+import { Bell, Bug, CheckCircle2, ChevronDown, History, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
 import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
 import { LearnedExclusions, RuleExclusionsEditor, type LearnedExclusion, type RuleExclusion } from '../components/RuleExclusions';
+import { SettingsHistory } from '../components/SettingsHistory';
 
 interface ScannerS {
   enabled: boolean;
@@ -199,7 +200,7 @@ const SCHEDULE_TZS: [string, string][] = [
 ];
 const tzLabel = (tz?: string) => (SCHEDULE_TZS.find(([v]) => v === (tz || 'Asia/Karachi'))?.[1] ?? tz ?? 'PKT');
 
-type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'additional' | 'notifications' | 'about';
+type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'additional' | 'notifications' | 'history' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
@@ -209,6 +210,7 @@ const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[]
   { v: 'additional', l: 'Additional Settings', icon: <Wrench className="h-4 w-4" /> },
   { v: 'osm', l: 'Outgoing Spam Monitor', icon: <Mail className="h-4 w-4" /> },
   { v: 'notifications', l: 'Notifications', icon: <Bell className="h-4 w-4" /> },
+  { v: 'history', l: 'History & Undo', icon: <History className="h-4 w-4" /> },
   { v: 'about', l: 'About', icon: <Info className="h-4 w-4" /> },
 ];
 
@@ -284,6 +286,7 @@ export default function SettingsPage() {
         {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
         {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
         {section === 'notifications' && <NotificationsSection serverId={id!} s={st.notifications} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
+        {section === 'history' && <SettingsHistory serverId={id!} admin={admin} onRolledBack={res.reload} />}
         {section === 'about' && <About serverId={id!} />}
       </div>
     </div>

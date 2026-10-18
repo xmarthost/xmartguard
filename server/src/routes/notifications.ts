@@ -17,7 +17,7 @@ export interface Notification {
   details: string[];
 }
 
-interface AgentAlert {
+export interface AgentAlert {
   level?: string;
   text?: string;
   link?: string;
@@ -26,26 +26,27 @@ interface AgentAlert {
 
 const CACHE_MS = 60_000;
 
+// Every open portal tab asks each minute; the agents are asked at most once a minute.
+const cache = new Map<string, { at: number; alerts: AgentAlert[] }>();
+
+/** A server's dashboard alerts (cached for a minute). */
+export async function serverAlerts(hub: AgentHub, id: string, version: string): Promise<AgentAlert[]> {
+  const hit = cache.get(id);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.alerts;
+  const r = versionLess(version, ALERTS_MIN_AGENT)
+    ? ((await hub.command(id, 'dashboard.get', { days: 7 }, 20_000)) as { alerts?: AgentAlert[] })
+    : ((await hub.command(id, 'alerts.get', {}, 15_000)) as { alerts?: AgentAlert[] });
+  const alerts = Array.isArray(r?.alerts) ? r.alerts : [];
+  cache.set(id, { at: Date.now(), alerts });
+  return alerts;
+}
+
 /**
  * The header bell: what the servers' dashboards show as alerts, for every
  * server (or one, inside a server), plus servers that are offline.
  */
 export function notificationRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): void {
   const viewer = { preHandler: requireRole('viewer') };
-  // Every open portal tab asks each minute; the agents are asked at most once a minute.
-  const cache = new Map<string, { at: number; alerts: AgentAlert[] }>();
-
-  async function serverAlerts(id: string, version: string): Promise<AgentAlert[]> {
-    const hit = cache.get(id);
-    if (hit && Date.now() - hit.at < CACHE_MS) return hit.alerts;
-    const r = versionLess(version, ALERTS_MIN_AGENT)
-      ? ((await hub.command(id, 'dashboard.get', { days: 7 }, 20_000)) as { alerts?: AgentAlert[] })
-      : ((await hub.command(id, 'alerts.get', {}, 15_000)) as { alerts?: AgentAlert[] });
-    const alerts = Array.isArray(r?.alerts) ? r.alerts : [];
-    cache.set(id, { at: Date.now(), alerts });
-    return alerts;
-  }
-
   app.get('/api/notifications', viewer, async (req) => {
     const q = req.query as { server?: string };
     const params: unknown[] = [req.user!.accountId];
@@ -59,7 +60,7 @@ export function notificationRoutes(app: FastifyInstance, pool: Pool, hub: AgentH
       const base = { server_id: String(r.id), hostname: String(r.hostname) };
       if (!hub.isOnline(r.id)) return [{ ...base, level: 'danger', text: 'Server is offline: the agent is not connected', link: '', details: [] }];
       try {
-        const alerts = await serverAlerts(String(r.id), String(r.agent_version ?? ''));
+        const alerts = await serverAlerts(hub, String(r.id), String(r.agent_version ?? ''));
         return alerts.map((a) => ({
           ...base,
           level: a.level === 'danger' || a.level === 'warning' ? a.level : 'info',

@@ -245,6 +245,12 @@ CREATE TABLE IF NOT EXISTS kv (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings_history (   -- the settings before each change, for rollback
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  at       INTEGER NOT NULL,
+  summary  TEXT NOT NULL,
+  before   TEXT NOT NULL
+);
 `
 
 // Open opens (and migrates) the database at <state>/agent.db.

@@ -41,6 +41,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'alerts.get': { role: 'viewer', mutates: false },
   'audit.get': { role: 'viewer', mutates: false },
   'scanner.paused': { role: 'viewer', mutates: false },
+  'settings.history': { role: 'viewer', mutates: false },
   'finding.content': { role: 'operator', mutates: false },
 
   'scan.start': { role: 'operator', mutates: true },
@@ -50,6 +51,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'finding.action': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'findings.bulk': { role: 'operator', mutates: true, timeoutMs: 600_000 },
   'scanner.unpause': { role: 'operator', mutates: true },
+  'settings.rollback': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'fw.add': { role: 'operator', mutates: true },
   'fw.remove': { role: 'operator', mutates: true },
   'fw.unblock': { role: 'operator', mutates: true },

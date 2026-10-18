@@ -760,6 +760,19 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}, nil
 	}
 	h["settings.set"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		return a.setSettings(ctx, p, "")
+	}
+	a.historyHandlers(h)
+
+	a.firewallHandlers(h)
+	return h
+}
+
+// setSettings applies a settings change (the portal's Settings pages, a
+// rollback) and remembers the settings before it.
+func (a *Agent) setSettings(ctx context.Context, p json.RawMessage, summary string) (any, error) {
+	{
+		a.recordSettings(p, summary)
 		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB
 		beforeWAF, beforeCaptcha := a.Settings.Get().WAF, a.Settings.Get().Captcha
 		beforeScan := a.Settings.Get().Scanner
@@ -790,8 +803,9 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return map[string]any{"settings": masked(next)}, nil
 	}
+}
 
-	// ---- firewall
+func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 	h["fw.list"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct{ Kind string }](p)
 		if err != nil {
@@ -1596,7 +1610,6 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}
 		return map[string]any{"url": next, "changed": true}, nil
 	}
-	return h
 }
 
 // checkPortalURL accepts a new portal address only when it answers as a

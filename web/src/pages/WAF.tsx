@@ -8,7 +8,7 @@ import { Pager, agentCall, fmtTime, useAction, useAgent } from '../components/co
 import { useServerName } from './Scanner';
 import { DownloadRange, fetchAll, saveFile } from '../components/DownloadRange';
 
-interface WafEvent {
+export interface WafEvent {
   id: number;
   at: number;
   ip: string;
@@ -287,7 +287,7 @@ function rulesOf(e: WafEvent): number[] {
 
 /** "Allow on this site": switches the rules that blocked a request off for
  *  its website (and optionally only its path), not for every website. */
-function AllowDialog({ serverId, ev, onClose }: { serverId: string; ev: WafEvent; onClose: () => void }) {
+export function AllowDialog({ serverId, ev, onClose }: { serverId: string; ev: WafEvent; onClose: () => void }) {
   const candidates = rulesOf(ev);
   const [rules, setRules] = useState<number[]>(candidates);
   const [scope, setScope] = useState<'path' | 'site'>(uriPath(ev.uri) && uriPath(ev.uri) !== '/' ? 'path' : 'site');

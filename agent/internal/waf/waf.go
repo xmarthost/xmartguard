@@ -1047,8 +1047,11 @@ type EventFilter struct {
 	User     string `json:"-"`
 	Category string `json:"category"`
 	Query    string `json:"q"`
-	Limit    int    `json:"limit"`
-	Offset   int    `json:"offset"`
+	// IP and Host match exactly (Host also with or without www.).
+	IP     string `json:"ip"`
+	Host   string `json:"host"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
 	// Since keeps hits from this time on; BeforeID pages through an export
 	// without repeats while new hits arrive.
 	Since    int64 `json:"since"`
@@ -1069,6 +1072,12 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 	}
 	if f.BeforeID > 0 {
 		where, args = append(where, "id < ?"), append(args, f.BeforeID)
+	}
+	if f.IP != "" {
+		where, args = append(where, "ip = ?"), append(args, f.IP)
+	}
+	if h := strings.TrimPrefix(strings.ToLower(f.Host), "www."); h != "" {
+		where, args = append(where, "(host = ? OR host = ?)"), append(args, h, "www."+h)
 	}
 	if f.Query != "" {
 		where, args = append(where, "(ip LIKE ? OR host LIKE ? OR uri LIKE ? OR msg LIKE ?)"),

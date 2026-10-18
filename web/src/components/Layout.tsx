@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useMatch } from 'react-router-dom';
 import {
-  BookOpen, BadgeCheck, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
+  BookOpen, BadgeCheck, ShieldOff, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -74,6 +74,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
         { label: 'All Servers', icon: <Users />, to: '/all-servers' },
+        { label: 'Fleet Health', icon: <Activity />, to: '/fleet' },
+        { label: 'Why blocked?', icon: <ShieldOff />, to: '/blocks' },
         {
           label: 'Web Protection',
           icon: <ShieldHalf />,
@@ -102,6 +104,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         // Customers: their servers and account; master settings are the provider's.
         { label: 'Overview', icon: <LayoutDashboard />, to: '/', end: true },
         { label: 'Server List', icon: <ServerIcon />, to: '/servers', end: true },
+        { label: 'Fleet Health', icon: <Activity />, to: '/fleet' },
+        { label: 'Why blocked?', icon: <ShieldOff />, to: '/blocks' },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
         { label: 'AI Connector', icon: <Cable />, to: '/ai-connector' },
         { label: 'Subscription', icon: <CreditCard />, to: '/subscription' },

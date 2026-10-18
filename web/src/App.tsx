@@ -30,6 +30,9 @@ const CaptchaPage = lazy(() => import('./pages/CaptchaPage'));
 const SecurityMonitor = lazy(() => import('./pages/SecurityMonitor'));
 const ServerAudit = lazy(() => import('./pages/ServerAudit'));
 const LearningCenter = lazy(() => import('./pages/LearningCenter'));
+const BlockLookup = lazy(() => import('./pages/BlockLookup'));
+const FleetHealth = lazy(() => import('./pages/FleetHealth'));
+const Unblock = lazy(() => import('./pages/Unblock'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const BotAttacks = lazy(() => import('./pages/WAF').then((m) => ({ default: m.BotAttacks })));
 const WafLogs = lazy(() => import('./pages/WAF').then((m) => ({ default: m.WafLogs })));
@@ -65,6 +68,9 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/unblock" element={<Suspense fallback={<PageLoader />}><Unblock /></Suspense>} />
+        <Route path="/blocks" element={<Protected><BlockLookup /></Protected>} />
+        <Route path="/fleet" element={<Protected><FleetHealth /></Protected>} />
         <Route path="/set-password" element={<SetPassword />} />
         <Route path="/subscription" element={<Protected><Subscription /></Protected>} />
         <Route path="/" element={<Protected><Overview /></Protected>} />

@@ -24,6 +24,8 @@ import { massRoutes } from './routes/mass.js';
 import { aiRoutes } from './routes/ai.js';
 import { aiLearningRoutes } from './routes/ai-learning.js';
 import { learningExportRoutes } from './routes/learning-export.js';
+import { blockRoutes } from './routes/blocks.js';
+import { fleetRoutes } from './routes/fleet.js';
 import { GeoDB, initGeo } from './ipdb/geo.js';
 import { IPDBService } from './ipdb/service.js';
 import { AIGateway } from './ai/gateway.js';
@@ -109,6 +111,8 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   aiRoutes(app, pool, ai, hub);
   aiLearningRoutes(app, pool, hub);
   learningExportRoutes(app, pool, hub);
+  blockRoutes(app, pool, hub);
+  fleetRoutes(app, pool, cfg, hub);
   wpcoreRoutes(app, pool, wp, sigs);
   mcpRoutes(app, pool, cfg, hub);
   wafRulesetRoutes(app, pool, hub, crs);
