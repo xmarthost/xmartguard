@@ -1,48 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link, NavLink, useLocation, useMatch, useNavigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { useMatch } from 'react-router-dom';
 import {
-  BookOpen, BadgeCheck, ShieldQuestion, Brain,
-  Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, ArrowLeft, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, ChevronDown, FileWarning, ListX, Radar, Flame, Gauge, KeyRound, LayoutDashboard, Layers, LifeBuoy,
-  CreditCard, LogOut, Mail, Menu, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, X,
-  ClipboardCheck, Download,
+  BookOpen, BadgeCheck, ShieldQuestion, Brain, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck, Download,
 } from 'lucide-react';
-import { useAuth, can } from '../auth';
+import { useAuth } from '../auth';
 import { useApi } from '../hooks';
 import type { Server } from '../api';
-import { Logo } from './ui';
-import { Avatar } from './Avatar';
 import ModernLayout from './ModernLayout';
-import { useUiStyle } from '../useUiStyle';
 
 interface NavItem {
   to: string;
   label: string;
   icon: ReactNode;
   end?: boolean;
-}
-
-function NavGroup({ title, items, onNavigate }: { title?: string; items: NavItem[]; onNavigate: () => void }) {
-  return (
-    <div className="mb-4">
-      {title && <div className="mb-1 px-4 text-[11px] font-semibold tracking-wider text-white/40 uppercase">{title}</div>}
-      {items.map((it) => (
-        <NavLink
-          key={it.to}
-          to={it.to}
-          end={it.end}
-          onClick={onNavigate}
-          className={({ isActive }) =>
-            `mx-2 my-0.5 flex items-center gap-3 rounded-l-full rounded-r-lg px-4 py-2.5 text-sm transition ${
-              isActive ? 'bg-white font-medium text-navy-900' : 'text-white/80 hover:bg-white/10 hover:text-white'
-            }`
-          }
-        >
-          <span className="h-5 w-5 [&>svg]:h-5 [&>svg]:w-5">{it.icon}</span>
-          {it.label}
-        </NavLink>
-      ))}
-    </div>
-  );
 }
 
 interface RailEntry {
@@ -53,198 +23,10 @@ interface RailEntry {
   children?: NavItem[];
 }
 
-/**
- * The desktop sidebar: an icon rail that widens when the mouse is over it;
- * groups open their pages in a flyout to the right.
- */
-function Rail({ entries, bottom }: { entries: RailEntry[]; bottom: RailEntry[] }) {
-  const loc = useLocation();
-  const [open, setOpen] = useState<string | null>(null);
-  // Hover intent: expand only when the pointer rests on the rail, not when it
-  // passes over it on the way to something near the left edge (a checkbox).
-  const [expanded, setExpanded] = useState(false);
-  const timer = useRef<number | undefined>(undefined);
-  // Expand 250 ms after the pointer entered the rail. Small movements do not
-  // restart the wait (that made it feel slow); moving to the rail's right
-  // edge (next to page checkboxes) or leaving it cancels it.
-  const cancel = () => {
-    window.clearTimeout(timer.current);
-    timer.current = undefined;
-  };
-  const enter = (e: React.MouseEvent) => {
-    if (expanded) return;
-    if (e.clientX > 64) return cancel();
-    if (timer.current === undefined) {
-      timer.current = window.setTimeout(() => {
-        timer.current = undefined;
-        setExpanded(true);
-      }, 250);
-    }
-  };
-  const leave = () => {
-    cancel();
-    setExpanded(false);
-    setOpen(null);
-  };
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  const isActive = (e: RailEntry) =>
-    e.children ? e.children.some((c) => loc.pathname === c.to || loc.pathname.startsWith(c.to + '/')) : e.end ? loc.pathname === e.to : loc.pathname === e.to || loc.pathname.startsWith(e.to + '/');
-  const item = (e: RailEntry) => {
-    const active = isActive(e);
-    const cls = `relative mx-2 my-1 flex h-12 items-center gap-4 rounded-l-full rounded-r-2xl px-5 text-sm transition ${
-      active ? 'bg-white font-medium text-navy-900' : 'text-white/80 hover:bg-white/10 hover:text-white'
-    }`;
-    const body = (
-      <>
-        <span className="h-5 w-5 shrink-0 [&>svg]:h-5 [&>svg]:w-5">{e.icon}</span>
-        <span className={`whitespace-nowrap transition-opacity duration-150 ${expanded ? 'opacity-100' : 'opacity-0'}`}>{e.label}</span>
-      </>
-    );
-    if (!e.children) {
-      return (
-        <NavLink key={e.label} to={e.to!} end={e.end} className={cls} onMouseEnter={() => setOpen(null)}>
-          {body}
-        </NavLink>
-      );
-    }
-    return (
-      <div key={e.label} className="relative" onMouseEnter={() => setOpen(e.label)}>
-        <div className={`${cls} cursor-default`}>
-          {body}
-          {expanded && open === e.label && <span className="absolute top-1/2 -right-2 -translate-y-1/2 border-y-8 border-r-8 border-y-transparent border-r-navy-800" />}
-        </div>
-        {expanded && open === e.label && (
-          <div className="absolute top-0 left-full z-40 ml-0 w-64 rounded-2xl bg-navy-800 p-3 shadow-2xl">
-            {e.children.map((c) => (
-              <NavLink
-                key={c.to}
-                to={c.to}
-                end={c.end}
-                onClick={() => setOpen(null)}
-                className={({ isActive: a }) =>
-                  `flex items-center gap-3 rounded-full px-4 py-2.5 text-sm transition ${a ? 'bg-white/15 font-medium text-white' : 'text-white/85 hover:bg-white/10 hover:text-white'}`
-                }
-              >
-                <span className="h-4 w-4 [&>svg]:h-4 [&>svg]:w-4">{c.icon}</span>
-                {c.label}
-              </NavLink>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-  return (
-    <aside
-      className={`fixed top-16 bottom-0 left-0 z-30 hidden flex-col bg-gradient-to-b from-navy-900 to-navy-700 py-4 transition-[width] duration-200 md:flex ${
-        expanded ? 'w-60 shadow-2xl' : 'w-20'
-      }`}
-      onMouseEnter={enter}
-      onMouseMove={enter}
-      onMouseLeave={leave}
-    >
-      <nav className="flex-1">{entries.map(item)}</nav>
-      <div className="border-t border-white/10 pt-3">{bottom.map(item)}</div>
-    </aside>
-  );
-}
-
-function JumpToServer() {
-  const [q, setQ] = useState('');
-  const [open, setOpen] = useState(false);
-  const nav = useNavigate();
-  const { data } = useApi<{ servers: Server[] }>(open ? '/api/servers' : null);
-  const matches = (data?.servers ?? [])
-    .filter((s) => !q || s.hostname.toLowerCase().includes(q.toLowerCase()) || s.primary_ip.includes(q))
-    .slice(0, 8);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const close = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false);
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, []);
-  return (
-    <div ref={box} className="relative hidden w-80 md:block">
-      <input
-        className="w-full rounded-lg border border-white/10 bg-navy-950/60 px-4 py-2 text-sm text-white outline-none placeholder:text-white/50 focus:border-white/30"
-        placeholder="jump to server..."
-        value={q}
-        onFocus={() => setOpen(true)}
-        onChange={(e) => setQ(e.target.value)}
-      />
-      {open && (
-        <div className="absolute top-11 right-0 left-0 z-30 overflow-hidden rounded-lg bg-white shadow-xl">
-          {matches.length === 0 ? (
-            <div className="px-4 py-3 text-sm text-slate-500">No servers found</div>
-          ) : (
-            matches.map((s) => (
-              <button
-                key={s.id}
-                className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm hover:bg-slate-50"
-                onClick={() => {
-                  setOpen(false);
-                  setQ('');
-                  nav(`/servers/${s.id}`);
-                }}
-              >
-                <span className="font-medium text-navy-900">{s.hostname}</span>
-                <span className="text-xs text-slate-400">{s.primary_ip}</span>
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UserMenu() {
-  const { user, logout } = useAuth();
-  const [open, setOpen] = useState(false);
-  const nav = useNavigate();
-  if (!user) return null;
-  return (
-    <div className="relative">
-      <button className="flex items-center gap-2 text-sm text-white" onClick={() => setOpen((o) => !o)}>
-        <Avatar email={user.email} name={user.name} size={32} />
-        <span className="hidden sm:inline">{user.name || user.email}</span>
-        <ChevronDown className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute top-11 right-0 z-30 w-56 overflow-hidden rounded-lg bg-white py-1 text-sm shadow-xl" onMouseLeave={() => setOpen(false)}>
-          <div className="border-b px-4 py-2 text-xs text-slate-500">
-            {user.email}
-            <div className="capitalize">{user.role}</div>
-          </div>
-          {can(user, 'owner') && (
-            <Link className="flex items-center gap-2 px-4 py-2 hover:bg-slate-50" to="/users" onClick={() => setOpen(false)}>
-              <Users className="h-4 w-4" /> Users
-            </Link>
-          )}
-          <Link className="flex items-center gap-2 px-4 py-2 hover:bg-slate-50" to="/account" onClick={() => setOpen(false)}>
-            <KeyRound className="h-4 w-4" /> Account
-          </Link>
-          <button
-            className="flex w-full items-center gap-2 px-4 py-2 text-left text-red-600 hover:bg-slate-50"
-            onClick={async () => {
-              await logout();
-            }}
-          >
-            <LogOut className="h-4 w-4" /> Logout
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function Layout({ children }: { children: ReactNode }) {
-  const style = useUiStyle();
-  const [mobileOpen, setMobileOpen] = useState(false);
   const serverMatch = useMatch('/servers/:id/*');
   const serverId = serverMatch?.params.id && serverMatch.params.id !== 'add' ? serverMatch.params.id : null;
   const { data } = useApi<{ server: Server }>(serverId ? `/api/servers/${serverId}` : null);
-  const close = () => setMobileOpen(false);
   const platform = useAuth().user?.platform !== false;
 
   const base = `/servers/${serverId}`;
@@ -331,50 +113,9 @@ export default function Layout({ children }: { children: ReactNode }) {
     { label: 'Knowledge Base', icon: <BookOpen />, to: '/kb' },
     { label: 'Support', icon: <LifeBuoy />, to: '/support' },
   ];
-  if (style === 'modern') {
-    return (
-      <ModernLayout entries={entries} bottom={bottom}>
-        {children}
-      </ModernLayout>
-    );
-  }
-
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-4 bg-gradient-to-r from-navy-900 to-navy-700 px-4 md:px-6">
-        <div className="flex items-center gap-3">
-          <button className="text-white md:hidden" onClick={() => setMobileOpen((o) => !o)} aria-label="menu">
-            {mobileOpen ? <X /> : <Menu />}
-          </button>
-          <Link to="/">
-            <Logo light />
-          </Link>
-          {serverId && data?.server && <span className="ml-4 hidden text-sm text-white/70 lg:inline">{data.server.hostname}</span>}
-        </div>
-        <div className="flex items-center gap-5">
-          <JumpToServer />
-          <UserMenu />
-        </div>
-      </header>
-      <div className="flex flex-1">
-        {/* Desktop: a slim icon rail that opens on hover (like cPGuard). */}
-        <Rail entries={entries} bottom={bottom} />
-        {/* Mobile: full drawer. */}
-        <aside
-          className={`fixed top-16 bottom-0 z-30 w-64 overflow-y-auto bg-gradient-to-b from-navy-900 to-navy-700 pt-4 transition-transform md:hidden ${
-            mobileOpen ? 'translate-x-0' : '-translate-x-full'
-          }`}
-        >
-          {[...entries, ...bottom].map((e) =>
-            e.children ? (
-              <NavGroup key={e.label} title={e.label} onNavigate={close} items={e.children} />
-            ) : (
-              <NavGroup key={e.label} onNavigate={close} items={[{ to: e.to!, label: e.label, icon: e.icon, end: e.end }]} />
-            ),
-          )}
-        </aside>
-        <main className="min-w-0 flex-1 p-4 md:ml-20 md:p-6">{children}</main>
-      </div>
-    </div>
+    <ModernLayout entries={entries} bottom={bottom}>
+      {children}
+    </ModernLayout>
   );
 }

@@ -194,7 +194,7 @@ function ServerCard({ x, onChange }: { x: Info_; onChange: () => void }) {
             <Tag className="h-4 w-4" /> No tags assigned
           </span>
         )}
-        {can(user, 'operator') && <TagEditor server={s} onSaved={onChange} modern />}
+        {can(user, 'operator') && <TagEditor server={s} onSaved={onChange} />}
       </div>
     </div>
   );

@@ -12,7 +12,7 @@ afterAll(async () => h.close());
 describe('appearance', () => {
   it('defaults to navy and is readable before sign-in', async () => {
     const r = await new Client(h.url).req('GET', '/api/appearance');
-    expect(r.body.appearance).toEqual({ theme: 'navy', mode: 'light' });
+    expect(r.body.appearance).toEqual({ theme: 'navy', mode: 'light', style: 'modern' });
   });
 
   it('lets an admin save a theme for everyone', async () => {
@@ -22,12 +22,12 @@ describe('appearance', () => {
     expect((await c.req('PUT', '/api/appearance', { theme: 'custom', mode: 'dark', sidebar: '#123456', accent: 'red' })).status).toBe(400);
     expect((await c.req('PUT', '/api/appearance', { theme: 'custom', mode: 'dark', sidebar: '#123456', accent: '#ff8800' })).status).toBe(200);
     const anon = await new Client(h.url).req('GET', '/api/appearance');
-    expect(anon.body.appearance).toEqual({ theme: 'custom', mode: 'dark', sidebar: '#123456', accent: '#ff8800' });
+    expect(anon.body.appearance).toEqual({ theme: 'custom', mode: 'dark', sidebar: '#123456', accent: '#ff8800', style: 'modern' });
   });
 
-  it('saves the page style (classic or modern)', async () => {
+  it('switches saves of the retired Classic style to Modern', async () => {
     expect((await c.req('PUT', '/api/appearance', { theme: 'navy', mode: 'light', style: 'fancy' })).status).toBe(400);
-    expect((await c.req('PUT', '/api/appearance', { theme: 'navy', mode: 'light', style: 'modern' })).status).toBe(200);
+    expect((await c.req('PUT', '/api/appearance', { theme: 'navy', mode: 'light', style: 'classic' })).status).toBe(200);
     const r = await new Client(h.url).req('GET', '/api/appearance');
     expect(r.body.appearance).toEqual({ theme: 'navy', mode: 'light', style: 'modern' });
   });

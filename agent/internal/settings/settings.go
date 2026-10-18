@@ -345,12 +345,17 @@ func CleanExclusions(in []RuleExclusion) []RuleExclusion {
 // DefaultBotList is the Bad Bot blocker's starting list: crawlers, scrapers
 // and tools hosting companies commonly refuse. Matched case-insensitively
 // as part of the User-Agent.
-var DefaultBotList = []string{"AhrefsBot", "Anonymizer", "Attributor", "Baidu", "Bandit", "BatchFTP", "Bigfoot", "Black.Hole",
+var DefaultBotList = []string{"AhrefsBot", "Anonymizer", "Attributor", "Bandit", "BatchFTP", "Bigfoot", "Black.Hole",
 	"Bork-edition", "DataCha0s", "Deepnet Explorer", "desktopsmiley", "DigExt", "feedfinder", "gamingharbor", "heritrix",
 	"ia_archiver", "Indy Library", "Jakarta", "juicyaccess", "larbin", "linkdex", "Missigua", "MRSPUTNIK", "Nutch",
-	"panscient", "plaNETWORK", "Snapbot", "Sogou", "TinEye", "TwengaBot", "Twitturly", "User-Agent", "Viewzi",
-	"WebCapture", "XX", "Yandex", "YebolBot", "MJ12bot", "masscan", "RSSingBot", "Scanbot", "betaBot", "DotBot",
+	"panscient", "plaNETWORK", "Snapbot", "TinEye", "TwengaBot", "Twitturly", "Viewzi",
+	"WebCapture", "YebolBot", "MJ12bot", "masscan", "RSSingBot", "Scanbot", "betaBot", "DotBot",
 	"SemrushBot", "FeedFetcher", "seoscanners.net", "Moreover", "ltx71", "inboundlinks.win", "sitebot"}
+
+// retiredBots were in the starting list once and are taken out of saved
+// lists: real search engines (Yandex, Baidu, Sogou) and parts of a
+// User-Agent so short that ordinary browsers matched ("XX", "User-Agent").
+var retiredBots = map[string]bool{"yandex": true, "baidu": true, "sogou": true, "xx": true, "user-agent": true}
 
 // SEOCrawlers are the aggressive SEO crawlers of the older "Block SEO
 // crawlers" switch; they now live in the Bad Bot blocker list.
@@ -685,6 +690,13 @@ func normalize(s *Settings) {
 	// Custom bots of older versions join the Bad Bot blocker list.
 	s.WAF.BotList = foldUnique(append(s.WAF.BotList, s.WAF.CustomBots...))
 	s.WAF.CustomBots = []string{}
+	kept := s.WAF.BotList[:0]
+	for _, b := range s.WAF.BotList {
+		if !retiredBots[strings.ToLower(b)] {
+			kept = append(kept, b)
+		}
+	}
+	s.WAF.BotList = kept
 	// "Block SEO crawlers" duplicated the Bad Bot blocker: its crawlers join
 	// the list (only while the blocker is on, so nothing stops being blocked).
 	if s.WAF.SEOBots && s.WAF.BotBlocker {

@@ -34,6 +34,16 @@ func TestSEOCrawlersJoinBotList(t *testing.T) {
 	}
 }
 
+// Real search engines and too-short parts of a User-Agent leave saved lists.
+func TestRetiredBotsLeaveSavedLists(t *testing.T) {
+	s := Defaults()
+	s.WAF.BotList = []string{"AhrefsBot", "Yandex", "XX", "user-agent", "Baidu", "Sogou", "MyScraper"}
+	normalize(&s)
+	if !slices.Equal(s.WAF.BotList, []string{"AhrefsBot", "MyScraper"}) {
+		t.Fatalf("got %v", s.WAF.BotList)
+	}
+}
+
 // cPGuard's default scanner lists reach new and existing servers once; an
 // entry the administrator removes is not added again.
 func TestScannerListDefaults(t *testing.T) {

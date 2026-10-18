@@ -61,12 +61,12 @@ func TestRenderRespectsSettings(t *testing.T) {
 	}
 	// Bad Bot blocker list and proxy IP check.
 	files := BotFiles(c)
-	for _, b := range []string{"AhrefsBot\n", "seoscanners.net\n", "Yandex\n"} {
+	for _, b := range []string{"AhrefsBot\n", "seoscanners.net\n", "MJ12bot\n"} {
 		if !strings.Contains(files[FileCustomBots], b) {
 			t.Errorf("bot list missing %q", b)
 		}
 	}
-	if strings.Count(strings.ToLower(files[FileCustomBots]), "yandex\n") != 1 {
+	if strings.Count(strings.ToLower(files[FileCustomBots]), "mj12bot\n") != 1 {
 		t.Error("duplicate bot entries")
 	}
 	c.ProxyIPCheck = true

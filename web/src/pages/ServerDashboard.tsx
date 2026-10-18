@@ -1,16 +1,14 @@
 import { Fragment, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Activity, Check, ChevronLeft, Copy, Cpu, HardDrive, Info, MemoryStick, MoreVertical, Network, RefreshCw, Search } from 'lucide-react';
+import { Activity, Check, ChevronLeft, Copy, Cpu, HardDrive, MemoryStick, MoreVertical, Network, RefreshCw, Search } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ago, bytes, duration, panelName, pct } from '../format';
 import { Bar, ErrorBox, PageLoader, StatusDot } from '../components/ui';
 import { Modal, agentCall, useAction } from '../components/controls';
-import AttackOverview from '../components/AttackOverview';
 import ModernOverview from '../components/ModernOverview';
 import { PanelMark, StatusPill } from '../components/ModernBits';
-import { useUiStyle } from '../useUiStyle';
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -126,7 +124,6 @@ function CopyIP({ ip }: { ip: string }) {
 }
 
 export default function ServerDashboard() {
-  const style = useUiStyle();
   const { id } = useParams();
   const { user } = useAuth();
   const nav = useNavigate();
@@ -149,118 +146,59 @@ export default function ServerDashboard() {
     </Link>
   );
 
-  if (style === 'modern') {
-    return (
-      <div className="space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4 lg:flex-nowrap">
-          <div className="flex w-full min-w-0 items-start gap-2 sm:w-auto sm:items-center sm:gap-3 lg:flex-1">
-            <Link to="/servers" className="-ml-1 shrink-0 rounded-lg p-1 text-slate-700 hover:bg-white" aria-label="All servers">
-              <ChevronLeft className="h-6 w-6" />
-            </Link>
-            <span className="hidden shrink-0 sm:block">
-              <PanelMark panel={s.control_panel} big />
-            </span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                {/* Long hostnames wrap after a dot on phones. */}
-                <h1 className="min-w-0 text-lg leading-snug font-bold [overflow-wrap:anywhere] text-slate-900 sm:text-xl sm:leading-tight 2xl:text-[26px]" title={s.hostname}>
-                  {s.hostname.split('.').map((part, i, all) => (
-                    <Fragment key={i}>
-                      {part}
-                      {i < all.length - 1 && (
-                        <>
-                          .<wbr />
-                        </>
-                      )}
-                    </Fragment>
-                  ))}
-                </h1>
-                <StatusPill online={s.online} />
-              </div>
-              <div className="mt-1 flex items-center gap-2 text-sm text-slate-500">
-                <span>{s.primary_ip}</span>
-                <CopyIP ip={s.primary_ip} />
-                {!s.online && <span>· last seen {ago(s.last_seen_at)}</span>}
-              </div>
-            </div>
-          </div>
-          <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3 lg:shrink-0">
-            <span className="hidden text-slate-500 xl:inline">View</span>
-            <select className="input min-w-0 flex-1 sm:w-36 sm:flex-none" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-              <option value={7}>7 Days</option>
-              <option value={30}>30 Days</option>
-              <option value={90}>90 Days</option>
-            </select>
-            {can(user, 'operator') && (
-              <button className="btn-primary shrink-0" disabled={!s.online || busy} onClick={quickScan}>
-                <Search className="h-4 w-4" /> Quick Scan
-              </button>
-            )}
-            <button className="btn-outline shrink-0 px-2.5" title="Server information" onClick={() => setInfo(true)}>
-              <MoreVertical className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
-        {update}
-        <ModernOverview serverId={s.id} online={s.online} days={days} setDays={setDays} />
-        {info && <ServerInfo s={s} onClose={() => setInfo(false)} />}
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="w-full min-w-0 sm:w-auto sm:max-w-full">
-          <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
-            <Link to="/servers" className="shrink-0 text-navy-900 hover:text-blue-700" aria-label="All servers">
-              <ChevronLeft className="h-6 w-6" />
-            </Link>
-            {/* Long hostnames: smaller on phones; if still too long they
-                wrap after a dot instead of widening the page. */}
-            <h1 className="h-title min-w-0 !text-[14px] min-[400px]:!text-base !leading-snug [overflow-wrap:anywhere] sm:!text-2xl" title={s.hostname}>
-              {s.hostname.split('.').map((part, i, all) => (
-                <Fragment key={i}>
-                  {part}
-                  {i < all.length - 1 && (
-                    <>
-                      .<wbr />
-                    </>
-                  )}
-                </Fragment>
-              ))}
-            </h1>
-            <button className="shrink-0 text-navy-800 hover:text-blue-700" title="Server information" onClick={() => setInfo(true)}>
-              <Info className="h-5 w-5" />
-            </button>
-          </div>
-          <div className="mt-1 ml-8 flex items-center gap-3 text-sm text-slate-500">
-            <span>{s.primary_ip}</span>
-            {!s.online && (
-              <>
-                <StatusDot online={false} /> <span>last seen {ago(s.last_seen_at)}</span>
-              </>
-            )}
+      <div className="flex flex-wrap items-center justify-between gap-4 lg:flex-nowrap">
+        <div className="flex w-full min-w-0 items-start gap-2 sm:w-auto sm:items-center sm:gap-3 lg:flex-1">
+          <Link to="/servers" className="-ml-1 shrink-0 rounded-lg p-1 text-slate-700 hover:bg-white" aria-label="All servers">
+            <ChevronLeft className="h-6 w-6" />
+          </Link>
+          <span className="hidden shrink-0 sm:block">
+            <PanelMark panel={s.control_panel} big />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {/* Long hostnames wrap after a dot on phones. */}
+              <h1 className="min-w-0 text-lg leading-snug font-bold [overflow-wrap:anywhere] text-slate-900 sm:text-xl sm:leading-tight 2xl:text-[26px]" title={s.hostname}>
+                {s.hostname.split('.').map((part, i, all) => (
+                  <Fragment key={i}>
+                    {part}
+                    {i < all.length - 1 && (
+                      <>
+                        .<wbr />
+                      </>
+                    )}
+                  </Fragment>
+                ))}
+              </h1>
+              <StatusPill online={s.online} />
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-sm text-slate-500">
+              <span>{s.primary_ip}</span>
+              <CopyIP ip={s.primary_ip} />
+              {!s.online && <span>· last seen {ago(s.last_seen_at)}</span>}
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-slate-500">View</span>
-          <select className="input w-36" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+        <div className="flex w-full items-center gap-2 sm:w-auto sm:gap-3 lg:shrink-0">
+          <span className="hidden text-slate-500 xl:inline">View</span>
+          <select className="input min-w-0 flex-1 sm:w-36 sm:flex-none" value={days} onChange={(e) => setDays(Number(e.target.value))}>
             <option value={7}>7 Days</option>
             <option value={30}>30 Days</option>
             <option value={90}>90 Days</option>
           </select>
           {can(user, 'operator') && (
-            <button className="btn-primary" disabled={!s.online || busy} onClick={quickScan}>
+            <button className="btn-primary shrink-0" disabled={!s.online || busy} onClick={quickScan}>
               <Search className="h-4 w-4" /> Quick Scan
             </button>
           )}
+          <button className="btn-outline shrink-0 px-2.5" title="Server information" onClick={() => setInfo(true)}>
+            <MoreVertical className="h-5 w-5" />
+          </button>
         </div>
       </div>
-
       {update}
-
-      <AttackOverview serverId={s.id} online={s.online} days={days} />
+      <ModernOverview serverId={s.id} online={s.online} days={days} setDays={setDays} />
       {info && <ServerInfo s={s} onClose={() => setInfo(false)} />}
     </div>
   );

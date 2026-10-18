@@ -15,13 +15,13 @@ export const Appearance = z.object({
   // Only for theme "custom".
   sidebar: Hex.optional(),
   accent: Hex.optional(),
-  // The page style: "classic" (dark sidebar, the default) or "modern"
-  // (light sidebar with labels, white header, tinted icon cards).
-  style: z.enum(['classic', 'modern']).optional(),
+  // The page style. Only Modern is left: saves that still say "classic"
+  // read (and save) as Modern.
+  style: z.enum(['classic', 'modern']).optional().transform(() => 'modern' as const),
 });
 export type Appearance = z.infer<typeof Appearance>;
 
-export const DEFAULT_APPEARANCE: Appearance = { theme: 'navy', mode: 'light' };
+export const DEFAULT_APPEARANCE: Appearance = { theme: 'navy', mode: 'light', style: 'modern' };
 
 export function appearanceRoutes(app: FastifyInstance, pool: Pool): void {
   // Public: the login page is themed too. The platform account's choice
