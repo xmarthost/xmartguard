@@ -82,6 +82,8 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		{"Visitor removing a cart item", "shop.example.com", "GET", "/cart/?remove_item=abc123&_wpnonce=f00d", "", "", []string{"Cookie: woocommerce_items_in_cart=1; wp_woocommerce_session_x=y"}, 200},
 		// WHMCS admin (the admin folder has its own name) saving General Settings.
 		{"WHMCS admin saving settings", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{whmcsSess, "Referer: https://my.example.com/MANZ00R/configgeneral.php"}, 200},
+		{"WHMCS admin save without a Referer (strict Referrer-Policy)", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{whmcsSess, "Sec-Fetch-Site: same-origin"}, 200},
+		{"WHMCS admin save posted from another site", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{whmcsSess, "Sec-Fetch-Site: cross-site"}, 403},
 		{"Same save without the WHMCS session", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{"Referer: https://my.example.com/MANZ00R/configgeneral.php"}, 403},
 		{"Same save sent from another site", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{whmcsSess, "Referer: https://evil.example.net/x"}, 403},
 		{"Client area post with the WHMCS session stays checked", "my.example.com", "POST", "/submitticket.php", form, whmcs, []string{whmcsSess, "Referer: https://my.example.com/submitticket.php"}, 403},
