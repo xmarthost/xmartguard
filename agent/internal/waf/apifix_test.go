@@ -60,3 +60,28 @@ func TestCRSAllowsBeaconsAndCom(t *testing.T) {
 		t.Fatal(RestrictedExtensions)
 	}
 }
+
+// A ctl action on the first rule of a chain runs as soon as that rule
+// matches (every POST), not when the whole chain does: never render one.
+// WHMCS admin saves are let through with allow (honoured by LiteSpeed too).
+func TestNoCtlOnChainStarters(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled, c.IPDBPost = true, true
+	out := Render(c, Options{Dir: "/r", Trusted: true})
+	inChain := false
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "SecRule ") || strings.HasPrefix(l, "SecAction ") {
+			if strings.Contains(l, ",chain\"") && strings.Contains(l, "ctl:") && !inChain {
+				t.Errorf("ctl on a chain starter: %s", l)
+			}
+			inChain = strings.Contains(l, ",chain\"")
+		} else if strings.HasPrefix(strings.TrimSpace(l), "SecRule ") {
+			inChain = strings.Contains(l, ",chain\"")
+		}
+	}
+	for _, id := range []int{IDWHMCSAdmin, IDWHMCSAdminFetch} {
+		if l := ruleLine(out, id); !strings.Contains(l, ",allow,") {
+			t.Errorf("WHMCS rule %d does not allow: %s", id, l)
+		}
+	}
+}

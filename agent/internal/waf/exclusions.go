@@ -226,17 +226,22 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, tags)
 	}
 	if !off[IDWHMCSAdmin] {
-		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDWHMCSAdmin)
+		// A logged-in admin's save from its own page is let through whole
+		// (allow): LiteSpeed's ModSecurity does not reliably honour taking
+		// single rules out, and General Settings saves HTML, IP lists and
+		// tracking code in many fields at once. WHMCS checks the admin
+		// login and its own CSRF token.
+		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,allow,nolog,chain"`, IDWHMCSAdmin)
 		w(`  SecRule REQUEST_FILENAME "@rx /[^/]+/+(?:%s)\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`, whmcsAdminFiles)
 		w(`  SecRule REQUEST_COOKIES_NAMES "@rx ^whmcs[a-z0-9]{6,}$" "t:none,t:lowercase,chain"`)
 		w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/" "t:none,t:lowercase,capture,chain"`)
-		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, tags)
+		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,ctl:ruleEngine=Off,%s"`, tags)
 		// Browsers sending no Referer (a strict Referrer-Policy, privacy
 		// add-ons) still say the form came from the same site.
-		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDWHMCSAdminFetch)
+		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,allow,nolog,chain"`, IDWHMCSAdminFetch)
 		w(`  SecRule REQUEST_FILENAME "@rx /[^/]+/+(?:%s)\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`, whmcsAdminFiles)
 		w(`  SecRule REQUEST_COOKIES_NAMES "@rx ^whmcs[a-z0-9]{6,}$" "t:none,t:lowercase,chain"`)
-		w(`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,%s"`, tags)
+		w(`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,ctl:ruleEngine=Off,%s"`, tags)
 	}
 	w("# Content that is code by design: kept away from injection rules.")
 	if !off[IDWPAdminExcl] {
