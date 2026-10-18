@@ -318,6 +318,8 @@ func renderRules(r Ruleset, v6 bool) string {
 		add(fmt.Sprintf(`%s -m comment --comment "%s" -j %s`, match, comment, chain))
 	}
 	add("-i lo -j RETURN")
+	// Answers to connections the server opened (third-party APIs) pass.
+	add("-m conntrack --ctdir REPLY -j RETURN")
 	add("-m set --match-set xg_allow" + sfx + " src -j RETURN")
 	add("-m set --match-set xg_tallow" + sfx + " src -j RETURN")
 	// Whitelist entries limited to a protocol or ports.

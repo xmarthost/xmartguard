@@ -211,6 +211,11 @@ func (r Ruleset) Render() string {
 	}
 	b.WriteString("\tchain input {\n\t\ttype filter hook input priority filter - 5; policy accept;\n")
 	b.WriteString("\t\tiifname \"lo\" accept\n")
+	// Answers to connections the server opened itself (a site calling a
+	// third-party API, DNS, updates) are never dropped: cloud addresses of
+	// API providers land on the IPDB and ban lists, and a dropped answer
+	// hangs the request until the site's workers run out.
+	b.WriteString("\t\tct direction reply accept\n")
 	b.WriteString("\t\tip saddr @allow4 accept\n\t\tip6 saddr @allow6 accept\n")
 	b.WriteString("\t\tip saddr @tempallow4 accept\n\t\tip6 saddr @tempallow6 accept\n")
 	// Whitelist entries limited to a protocol or ports.

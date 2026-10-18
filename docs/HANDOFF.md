@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.8** (see `VERSION`).
+- Current release: **0.22.9** (see `VERSION`).
 
 ## Working rules
 
@@ -102,6 +102,12 @@ project. It holds the rules, the current state and what is still open.
   block, and CRS blocks only at twice the threshold. They are also exempt
   from IPDB POST blocks. Real attacks still score above the relaxed
   threshold.
+- **Answers to the server's own connections** (0.22.9): the firewall
+  accepts reply packets (`ct direction reply` / `--ctdir REPLY`) before the
+  IPDB, deny, ban and country drops. Before, a site calling a third-party
+  API whose cloud address was on the IPDB (seen on business200:
+  54.215.31.113, AWS, answering from port 443) never got the answer, and
+  the site hung. `TestAnswersFromListedAddressesOnKernel` covers it.
 - **Real and fake crawlers** (0.22.8): the bot rules (bad bots, SEO, AI
   crawlers, Bad Bot blocker list) block a crawler name only when the
   visitor is not a trusted service and never on `/robots.txt`. Trusted
