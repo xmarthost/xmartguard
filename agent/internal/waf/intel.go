@@ -278,7 +278,7 @@ func renderPatch(w func(string, ...any), p PortalPatch) {
 		conds = append(conds, match("REQUEST_HEADERS:"+p.Header.Name, *p.Header))
 	}
 	if p.LoggedOut {
-		conds = append(conds, `SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none`)
+		conds = append(conds, `SecRule &TX:xg_wp_user "@eq 0" "t:none`)
 	}
 	for i, c := range conds {
 		switch {

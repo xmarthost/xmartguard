@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.5** (see `VERSION`).
+- Current release: **0.22.6** (see `VERSION`).
 
 ## Working rules
 
@@ -75,7 +75,18 @@ project. It holds the rules, the current state and what is still open.
   `TestNoCtlOnChainStarters` guards this.
 - **LiteSpeed's ModSecurity** does not reliably honour rule removal (by tag,
   ID range or "Allow on this site"). Use a disruptive `allow` instead; the
-  WHMCS admin-save rules 7700027 and 7700028 work this way.
+  WHMCS admin-save rules 7700027 and 7700028 work this way. Raising the
+  anomaly threshold with `setvar` does work there (soft blocking proves it).
+- **Logged-in WordPress users** are marked once, at the top of the rules
+  (`wpUserSetup`, ids 7700046-7700049 and 7701046): `tx.xg_wp_user` (any
+  login cookie) and `tx.xg_wp_editor` (a real 32-hex login cookie, or the
+  block editor's `X-WP-Nonce` sent same-origin from the site's own
+  wp-admin). Rules test these variables, never
+  `&REQUEST_COOKIES_NAMES:/…/` (on LiteSpeed, editors were not recognised
+  and their saves got 403; fixed in 0.22.6).
+- **Learned exclusions**: only an administrator switches one on
+  (`Accepted`). Attack-rule exclusions the old "auto" mode switched on by
+  itself go back to "suggested" (0.22.6); protocol rules (911-921) stay.
 - **CRS settings**: allowed content types (900220) and restricted extensions
   (900240) are set in `agent/internal/waf/level.go`.
 - **Bans**:
@@ -138,11 +149,20 @@ The portal's MCP connector ("XMart Guard") offers these tools:
 - Change: `agent_command`, `start_scan`, `finding_action`,
   `update_settings`, `mark_file`.
 
+`waf_events` filters (0.22.6): `blocked` (403s only), `rule`, `ip`, `host`,
+`hours`, `q`, `limit` up to 500, and `before_id` to page back. Results are
+compact JSON; a list too long for one answer is shortened and carries
+`truncated.next_before_id`. `agent_command` `waf.events` takes the same
+fields (`since` as a Unix time instead of `hours`).
+
+Quick check for real editors refused: `waf_events` with `q: "_locale=user"`
+(only the block editor sends it) and `blocked: true` on every server.
+
 For a status check of every server, start with `fleet_overview` and
 `list_servers`, then run `server_dashboard` on each server. Report:
 
 - online or offline;
-- agent version (old ones should update to 0.22.5);
+- agent version (old ones should update to the current release);
 - service problems and alerts;
 - paused signatures (`agent_command` `scanner.paused`);
 - WAF watch hits (`waf_events` entries starting with "[watch]"; the portal's

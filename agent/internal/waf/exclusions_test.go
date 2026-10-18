@@ -175,7 +175,9 @@ func TestExclusionsWithCRS(t *testing.T) {
 	for _, c := range cases {
 		proves := false
 		for _, n := range []string{"Urdu", "consent cookie", "SMM panel", "robots.txt", "classic checkout", "Cart fragments", "Shop tracking",
-			"Password with", "Customizer preview of", "editor autosave", "Meta Conversions", "colour stylesheet"} {
+			"Password with", "Customizer preview of", "editor autosave", "colour stylesheet"} {
+			// Not "Meta Conversions": its text/plain beacon is an allowed
+			// content type for every site since 0.22.0.
 			proves = proves || strings.Contains(c.name, n)
 		}
 		if proves && c.name != "ViserLab colour stylesheet" {
@@ -343,6 +345,45 @@ func TestEditorOnListedAddressWithCRS(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := sendBody(t, "shop.example.com", "POST", c.uri, form, save, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestBlockEditorWithoutCookieWithCRS: on LiteSpeed servers logged-in
+// editors were not recognised by their cookie (Rank Math, page and menu
+// saves and the block editor's user list got 403). The block editor's own
+// REST calls are also known by its nonce, sent same-origin from the site's
+// wp-admin; the same request without that proof is still refused.
+func TestBlockEditorWithoutCookieWithCRS(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	crsManager(t, src, `{"waf":{"enabled":true,"wordpress":true,"level":"normal","disabled_rules":[7700010,7700011,7700012,7700013,7700014,7700015]}}`, "", nil)
+	nonce := "X-WP-Nonce: 0a1b2c3d4e"
+	same := "Sec-Fetch-Site: same-origin"
+	own := "Referer: https://shop.example.com/wp-admin/post.php?post=12&action=edit"
+	page := `{"content":"<!-- wp:html --><div onmouseover=\"alert(document.cookie)\"><script>track()</script></div><!-- /wp:html -->","title":"\\u0645\\u0643\\u0629"}`
+	users := "/wp-json/wp/v2/users?context=view&per_page=100&_fields=id%2Cname&capabilities%5B0%5D=edit_theme_options&_locale=user"
+	cases := []struct {
+		name, method, uri, body string
+		hdr                     []string
+		want                    int
+	}{
+		{"page save from own wp-admin", "POST", "/wp-json/wp/v2/pages/12?_locale=user", page, []string{nonce, same, own}, 200},
+		{"user list of the block editor", "GET", users, "", []string{nonce, same, own}, 200},
+		{"no same-site proof stays blocked", "POST", "/wp-json/wp/v2/pages/12?_locale=user", page, []string{nonce, own}, 403},
+		{"Referer of another site stays blocked", "POST", "/wp-json/wp/v2/pages/12?_locale=user", page, []string{nonce, same, "Referer: https://evil.example.net/wp-admin/post.php"}, 403},
+		{"no nonce stays blocked", "POST", "/wp-json/wp/v2/pages/12?_locale=user", page, []string{same, own}, 403},
+		{"user list for visitors stays blocked", "GET", users, "", nil, 403},
+	}
+	for _, c := range cases {
+		ctype := ""
+		if c.body != "" {
+			ctype = "application/json"
+		}
+		if got := sendBody(t, "shop.example.com", c.method, c.uri, ctype, c.body, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {
 			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
 		}
 	}

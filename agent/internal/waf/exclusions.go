@@ -177,6 +177,7 @@ const staticExts = `(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|css|js|mjs|map|woff2?
 // and the portal's per-site rule exclusions.
 func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, dyn Dynamic) {
 	tags := removeTags()
+	w("%s", strings.TrimSuffix(wpUserSetup(), "\n"))
 	w("# Ordinary hosting traffic the OWASP CRS misreads (xPGuard hosting defaults).")
 	if !off[IDHostingBase] {
 		w(`SecAction "id:%d,phase:1,pass,nolog,ctl:ruleRemoveById=941310,ctl:ruleRemoveById=920600,ctl:ruleRemoveById=942550"`, IDHostingBase)
@@ -247,12 +248,12 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	if !off[IDWPAdminExcl] {
 		w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:[^/]+\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,chain"`, IDWPAdminExcl)
 		w(`  SecRule REQUEST_FILENAME "!@rx /(?:admin-ajax|admin-post|async-upload)\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
-		w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@gt 0" "t:none,%s"`, tags)
+		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, tags)
 	}
 	if !off[IDWPAjaxExcl] {
 		w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:admin-ajax|admin-post)\.php$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,chain"`, IDWPAjaxExcl)
 		w(`  SecRule REQUEST_HEADERS:Referer "@contains /wp-admin/" "t:none,t:lowercase,chain"`)
-		w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@gt 0" "t:none,%s"`, tags)
+		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, tags)
 	}
 	if !off[IDWPRestExcl] {
 		// 921130 reads the <meta http-equiv> of saved page HTML as response splitting.
@@ -261,7 +262,7 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	}
 	if !off[IDWPCustomizer] {
 		w(`SecRule ARGS_GET:customize_changeset_uuid "@rx ^[0-9a-f-]{36}$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, IDWPCustomizer)
-		w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@gt 0" "t:none,%s"`, tags)
+		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, tags)
 	}
 	if !off[IDWPRestMethods] {
 		w(`SecRule REQUEST_URI "@rx (?:/wp-json/|[?&]rest_route=)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=911100,%s"`, IDWPRestMethods, overrideTargets())

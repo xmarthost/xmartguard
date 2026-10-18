@@ -1082,6 +1082,10 @@ type EventFilter struct {
 	// without repeats while new hits arrive.
 	Since    int64 `json:"since"`
 	BeforeID int64 `json:"before_id"`
+	// Blocked keeps refused requests only (not logged or watched ones);
+	// Rule keeps one rule's hits.
+	Blocked bool `json:"blocked"`
+	Rule    int  `json:"rule"`
 }
 
 // Events lists ModSecurity hits, newest first.
@@ -1101,6 +1105,12 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 	}
 	if f.IP != "" {
 		where, args = append(where, "ip = ?"), append(args, f.IP)
+	}
+	if f.Blocked {
+		where = append(where, "action LIKE 'Access denied%'")
+	}
+	if f.Rule > 0 {
+		where, args = append(where, "rule_id = ?"), append(args, f.Rule)
 	}
 	if h := strings.TrimPrefix(strings.ToLower(f.Host), "www."); h != "" {
 		where, args = append(where, "(host = ? OR host = ?)"), append(args, h, "www."+h)

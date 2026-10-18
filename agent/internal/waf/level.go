@@ -19,6 +19,10 @@ import "fmt"
 const (
 	IDEditorCookie = 7700040
 	IDEditorAuth   = 7700041
+	// IDWPUser marks a request of a logged-in WordPress user once, early
+	// (tx.xg_wp_user any login cookie, tx.xg_wp_editor a real one or the
+	// block editor's nonce); the other rules test these variables.
+	IDWPUser = 7700046
 	// IDEditorAdmin: a logged-in editor on an address with a bad reputation
 	// saving from their own site's wp-admin.
 	IDEditorAdmin = 7702040
@@ -71,7 +75,7 @@ func editorSetup() string {
 	set := fmt.Sprintf(`SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold)
 	return "# Logged-in WordPress users editing their site (xPGuard WAF level).\n" +
 		fmt.Sprintf(`SecRule REQUEST_URI "@rx (?:/wp-admin/|/wp-json/|[?&]rest_route=)" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, IDEditorCookie) + "\n" +
-		`  SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_[0-9a-f]{32}$" "t:none,chain"` + "\n  " + set + "\n" +
+		`  SecRule TX:xg_wp_editor "@eq 1" "t:none,chain"` + "\n  " + set + "\n" +
 		fmt.Sprintf(`SecRule REQUEST_URI "@rx (?:/wp-json/|[?&]rest_route=)" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, IDEditorAuth) + "\n" +
 		`  SecRule REQUEST_HEADERS:Authorization "@rx ^(?:basic|bearer)\s+\S{8,}" "t:none,t:lowercase,chain"` + "\n  " + set + "\n" +
 		// On an address with a bad reputation (a shared mobile or office
@@ -79,7 +83,7 @@ func editorSetup() string {
 		// posts and menus: one weak signal is let through, a real attack
 		// (several rules) is not.
 		fmt.Sprintf(`SecRule REQUEST_URI "@rx (?:/wp-admin/|/wp-json/|[?&]rest_route=)" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, IDEditorCookie+1000) + "\n" +
-		`  SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_[0-9a-f]{32}$" "t:none,chain"` + "\n" +
+		`  SecRule TX:xg_wp_editor "@eq 1" "t:none,chain"` + "\n" +
 		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
 		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n" +
 		// The same editor saving from their own wp-admin page (Elementor's
@@ -88,7 +92,7 @@ func editorSetup() string {
 		// Referer is this site's wp-admin. Attack tools on that address send
 		// neither, so they keep the stricter threshold above.
 		fmt.Sprintf(`SecRule REQUEST_URI "@rx (?:/wp-admin/|/wp-json/|[?&]rest_route=)" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, IDEditorAdmin) + "\n" +
-		`  SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_[0-9a-f]{32}$" "t:none,chain"` + "\n" +
+		`  SecRule TX:xg_wp_editor "@eq 1" "t:none,chain"` + "\n" +
 		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
 		`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,chain"` + "\n" +
 		`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?wp-admin/" "t:none,t:lowercase,capture,chain"` + "\n" +
@@ -154,4 +158,23 @@ func autodiscoverSetup() string {
 		`  SecRule REQUEST_FILENAME "@rx ^/+autodiscover/autodiscover\.xml$" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n" +
 		`  SecRule REQUEST_HEADERS:Content-Type "@rx ^(?:text|application)/xml" "t:none,t:lowercase,chain"` + "\n" +
 		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n"
+}
+
+// wpUserSetup marks requests of logged-in WordPress users. The login cookie
+// is read both by name and from the Cookie header, and the block editor's
+// REST calls are also known by their nonce, sent same-origin from the
+// site's own wp-admin: on LiteSpeed servers logged-in editors were not
+// recognised by the cookie name patterns alone, so their saves (pages,
+// menus, SEO fields) and the block editor's user list were refused like a
+// visitor's.
+func wpUserSetup() string {
+	return "# Logged-in WordPress users (read once; the rules below test tx.xg_wp_user / tx.xg_wp_editor).\n" +
+		fmt.Sprintf(`SecRule REQUEST_COOKIES_NAMES "@beginsWith wordpress_logged_in_" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_wp_user=1"`, IDWPUser) + "\n" +
+		fmt.Sprintf(`SecRule REQUEST_HEADERS:Cookie "@contains wordpress_logged_in_" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_wp_user=1"`, IDWPUser+1) + "\n" +
+		fmt.Sprintf(`SecRule REQUEST_COOKIES_NAMES "@rx ^wordpress_logged_in_[0-9a-f]{32}$" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_wp_editor=1"`, IDWPUser+2) + "\n" +
+		fmt.Sprintf(`SecRule REQUEST_HEADERS:Cookie "@rx (?:^|;)\s*wordpress_logged_in_[0-9a-f]{32}=" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_wp_editor=1"`, IDWPUser+3) + "\n" +
+		fmt.Sprintf(`SecRule REQUEST_HEADERS:X-WP-Nonce "@rx ^[0-9a-f]{10}$" "id:%d,phase:1,pass,t:none,t:lowercase,nolog,chain"`, IDWPUser+1000) + "\n" +
+		`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,chain"` + "\n" +
+		`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?wp-admin/" "t:none,t:lowercase,capture,chain"` + "\n" +
+		`  SecRule TX:1 "@streq %{REQUEST_HEADERS.Host}" "t:none,t:lowercase,setvar:tx.xg_wp_user=1,setvar:tx.xg_wp_editor=1"` + "\n"
 }

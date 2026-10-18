@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { toText } from '../src/routes/mcp.js';
 import { Client, startHarness, type Harness } from './helpers.js';
 
 let h: Harness;
@@ -250,5 +251,23 @@ describe('mcp discovery with the web app served', () => {
       expect(r.status).toBe(404);
     }
     expect(await (await fetch(h.url + '/servers')).text()).toContain('spa');
+  });
+});
+
+describe('tool result text', () => {
+  it('shortens a long event list to valid JSON with the next page', () => {
+    const events = Array.from({ length: 2000 }, (_, i) => ({ id: 5000 - i, uri: '/wp-admin/admin-ajax.php?x=' + 'a'.repeat(40), method: '', detail: null }));
+    const out = toText({ events, total: 9000 });
+    expect(out.length).toBeLessThanOrEqual(60_000);
+    const parsed = JSON.parse(out);
+    expect(parsed.total).toBe(9000);
+    expect(parsed.events.length).toBe(parsed.truncated.shown);
+    expect(parsed.truncated.of).toBe(2000);
+    expect(parsed.truncated.next_before_id).toBe(parsed.events[parsed.events.length - 1].id);
+    expect(parsed.events[0]).not.toHaveProperty('method'); // empty fields dropped
+    expect(parsed.events[0]).not.toHaveProperty('detail');
+  });
+  it('leaves short results whole', () => {
+    expect(JSON.parse(toText({ events: [{ id: 1, ip: '1.2.3.4' }], total: 1 }))).toEqual({ events: [{ id: 1, ip: '1.2.3.4' }], total: 1 });
   });
 });

@@ -43,6 +43,8 @@ type AutoExclusion struct {
 	Learned int64  `json:"learned"`
 	Expires int64  `json:"expires"`
 	State   string `json:"state"` // active | suggested | rejected
+	// Accepted: an administrator switched it on (not learned in "auto").
+	Accepted bool `json:"accepted,omitempty"`
 }
 
 const (
@@ -269,6 +271,19 @@ func (m *Manager) Learn(now int64) (bool, error) {
 		keep = append(keep, e)
 	}
 	list = keep
+	// Learned by itself under the old "auto" mode: an attack rule (SQL, XSS,
+	// code) waits for an administrator again. Address-rotating scanners
+	// taught some (an XSS payload in a shop's sort field, SQL on wp-login);
+	// the protocol rules stay, they only judge the shape of a request.
+	for i, e := range list {
+		if e.State == "active" && !e.Accepted && !protocolRule(e.Rule) {
+			list[i].State = "suggested"
+			changed = true
+			if m.Log != nil {
+				m.Log.Info("WAF learned exclusion waits for an administrator", "rule", e.Rule, "domain", e.Domain, "path", e.Path)
+			}
+		}
+	}
 	if mode == "off" {
 		if changed {
 			m.saveAuto(list)
@@ -400,7 +415,7 @@ func (m *Manager) SetAutoExclusion(key, action string) error {
 		}
 		switch action {
 		case "accept":
-			list[i].State = "active"
+			list[i].State, list[i].Accepted = "active", true
 		case "reject":
 			list[i].State = "rejected"
 			list[i].Expires = 0

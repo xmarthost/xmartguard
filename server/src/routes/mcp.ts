@@ -22,6 +22,34 @@ import { ACTIONS } from './agent-cmd.js';
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const MAX_TEXT = 60_000;
 
+// compact drops empty fields ("", null) so long event lists fit.
+const compact = (_k: string, v: unknown) => (v === '' || v === null ? undefined : v);
+
+/** toText is a tool result as compact JSON. A list too long for one answer
+ *  is shortened to what fits (still valid JSON) and says how to get the rest. */
+export function toText(data: unknown): string {
+  const text = JSON.stringify(data, compact);
+  if (text.length <= MAX_TEXT) return text;
+  const o = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
+  const key = o && Object.keys(o).find((k) => Array.isArray(o[k]));
+  if (o && key) {
+    const list = o[key] as unknown[];
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (JSON.stringify({ ...o, [key]: list.slice(0, mid) }, compact).length + 200 <= MAX_TEXT) lo = mid;
+      else hi = mid - 1;
+    }
+    const kept = list.slice(0, lo);
+    const last = kept[kept.length - 1] as { id?: unknown } | undefined;
+    const more: Record<string, unknown> = { shown: kept.length, of: list.length };
+    if (last && typeof last.id === 'number') more.next_before_id = last.id;
+    return JSON.stringify({ ...o, [key]: kept, truncated: more }, compact);
+  }
+  return text.slice(0, MAX_TEXT) + '\n… (truncated; use limit or filters)';
+}
+
 interface TokenCtx {
   id: string;
   accountId: string;
@@ -188,9 +216,36 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     },
     {
       name: 'waf_events',
-      description: 'Web application firewall (ModSecurity) blocked requests on a server, newest first.',
-      inputSchema: obj({ server, q: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 } }, ['server']),
-      run: (ctx, a) => agent(ctx, a.server, 'waf.events', { q: String(a.q ?? ''), limit: clamp(a.limit, 50, 200), offset: 0 }),
+      description:
+        'Web application firewall (ModSecurity) hits on a server, newest first: refused requests and logged or watched ones. ' +
+        'Filters: blocked (refused only), rule, ip, host, hours (last N hours), q (text in address, site, URL or message). ' +
+        'Page back with before_id = the smallest id of the previous page; total is the count for the filters.',
+      inputSchema: obj(
+        {
+          server,
+          q: { type: 'string' },
+          blocked: { type: 'boolean', description: 'Only requests that were refused (403).' },
+          rule: { type: 'integer', description: 'Only hits of this rule id.' },
+          ip: { type: 'string' },
+          host: { type: 'string', description: 'Website, with or without www.' },
+          hours: { type: 'integer', minimum: 1, maximum: 720, description: 'Only the last N hours.' },
+          before_id: { type: 'integer', minimum: 1 },
+          limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 },
+        },
+        ['server'],
+      ),
+      run: (ctx, a) =>
+        agent(ctx, a.server, 'waf.events', {
+          q: String(a.q ?? '').slice(0, 200),
+          blocked: a.blocked === true,
+          rule: Math.max(0, Math.trunc(Number(a.rule) || 0)),
+          ip: String(a.ip ?? '').slice(0, 64),
+          host: String(a.host ?? '').slice(0, 255),
+          since: a.hours ? Math.floor(Date.now() / 1000) - clamp(a.hours, 24, 720) * 3600 : 0,
+          before_id: Math.max(0, Math.trunc(Number(a.before_id) || 0)),
+          limit: clamp(a.limit, 100, 500),
+          offset: 0,
+        }),
     },
     {
       name: 'ipdb_status',
@@ -355,8 +410,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         const args = msg.params?.arguments && typeof msg.params.arguments === 'object' ? msg.params.arguments : {};
         try {
           const data = await tool.run(ctx, args);
-          let text = JSON.stringify(data, null, 1);
-          if (text.length > MAX_TEXT) text = text.slice(0, MAX_TEXT) + '\n… (truncated; use limit/offset or filters)';
+          const text = toText(data);
           return ok({ content: [{ type: 'text', text }], isError: false });
         } catch (err) {
           if (err instanceof ToolError) return ok({ content: [{ type: 'text', text: err.message }], isError: true });

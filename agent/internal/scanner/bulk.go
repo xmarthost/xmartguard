@@ -23,7 +23,7 @@ const BulkLimit = 100000
 
 // bulkStatuses are the statuses an action applies to.
 var bulkStatuses = map[string][]string{
-	"restore":    {"quarantined", "disabled"},
+	"restore": {"quarantined", "disabled"},
 	// Files the AI put back count too: a wrong "clean" is undone in bulk.
 	"quarantine": {"detected", StatusAIRestored},
 }

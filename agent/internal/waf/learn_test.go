@@ -171,6 +171,49 @@ func TestLearnDropsLooseExclusions(t *testing.T) {
 	}
 }
 
+// TestLearnDemotesSelfLearnedAttackRules: exclusions the old "auto" mode
+// switched on by itself for attack rules (an XSS payload in a shop's sort
+// field, SQL on wp-login) wait for an administrator again; protocol rules
+// and the ones an administrator accepted stay on.
+func TestLearnDemotesSelfLearnedAttackRules(t *testing.T) {
+	m := learnManager(t)
+	now := int64(1_800_000_000)
+	ex := func(rule int, domain, path string, accepted bool) AutoExclusion {
+		return AutoExclusion{RuleExclusion: settings.RuleExclusion{Rule: rule, Domain: domain, Path: path}, Key: fmt.Sprintf("%d|%s|%s", rule, domain, path), IPs: 9, Learned: now - 86400, Expires: now + 86400, State: "active", Accepted: accepted}
+	}
+	m.saveAuto([]AutoExclusion{
+		ex(941100, "abranzia.com", "/product-category/men/", false),
+		ex(942100, "uploadarticle.com", "/wp-login.php", false),
+		ex(920420, "lakevista.net", "", false),
+		ex(942290, "webco.pk", "/solar/wp-admin/admin-ajax.php", true),
+	})
+	changed, err := m.Learn(now)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	state := map[string]string{}
+	for _, e := range m.AutoExclusions() {
+		state[e.Domain] = e.State
+	}
+	want := map[string]string{"abranzia.com": "suggested", "uploadarticle.com": "suggested", "lakevista.net": "active", "webco.pk": "active"}
+	for d, w := range want {
+		if state[d] != w {
+			t.Errorf("%s: %q, want %q", d, state[d], w)
+		}
+	}
+	if err := m.SetAutoExclusion("941100|abranzia.com|/product-category/men/", "accept"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Learn(now); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range m.AutoExclusions() {
+		if e.Domain == "abranzia.com" && (e.State != "active" || !e.Accepted) {
+			t.Fatalf("accepted exclusion demoted again: %+v", e)
+		}
+	}
+}
+
 func TestLearnModes(t *testing.T) {
 	m := learnManager(t)
 	now := int64(1_800_000_000)

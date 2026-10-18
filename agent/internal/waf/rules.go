@@ -498,13 +498,13 @@ func Render(c settings.WAF, o Options) string {
 		// REST API lists users; attackers use both to find login names.
 		if !off[IDUserEnum] {
 			w(`SecRule ARGS_GET:author "@rx ^\s*\d" "id:%d,phase:1,t:none,t:urlDecodeUni,deny,status:403,log,msg:'xPGuard - WordPress user enumeration blocked',tag:'xpguard/wordpress',chain"`, IDUserEnum)
-			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
+			w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none"`)
 		}
 		if !off[IDRestUsers] {
 			// Not /users/me: the block editor asks who is logged in (WordPress
 			// answers 401 to visitors). RE2-safe: no lookahead (Coraza).
 			w(`SecRule REQUEST_URI "@rx (?:/wp-json/+wp/v2/+users|[?&]rest_route=/*wp/v2/+users)(?:$|[^/]|/+(?:$|[^m]|m(?:$|[^e])|me[^/?&#]))" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - WordPress REST user list blocked',tag:'xpguard/wordpress',chain"`, IDRestUsers)
-			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
+			w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none"`)
 		}
 		// WordPress never runs the PHP files of wp-includes and of
 		// wp-admin/includes, css, js and images directly (the hardening guide
@@ -549,7 +549,7 @@ func Render(c settings.WAF, o Options) string {
 	if c.VirtualPatches {
 		if !off[IDVPGravitySMTP] {
 			w(`SecRule REQUEST_URI "@rx (?:/wp-json/+gravitysmtp/|[?&]rest_route=/?gravitysmtp/)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Virtual patch: Gravity SMTP REST API without login',tag:'xpguard/vpatch',chain"`, IDVPGravitySMTP)
-			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
+			w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none"`)
 		}
 		rule(IDVPFileManager, `SecRule REQUEST_FILENAME "@rx /wp-content/+plugins/+wp-file-manager/+lib/+php/+connector\.minimal\.php$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Virtual patch: WP File Manager connector (CVE-2020-25213)',tag:'xpguard/vpatch'"`, IDVPFileManager)
 		if !off[IDVPRevSlider] {
@@ -755,7 +755,7 @@ func Render(c settings.WAF, o Options) string {
 			// Not for logged-in users and API clients (some site tools send it).
 			w(`SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*mozilla/5\.0\s*$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake browser User-Agent blocked',tag:'xpguard/bot',chain"`, IDBareMozilla)
 			w(`  SecRule &REQUEST_HEADERS:Authorization "@eq 0" "t:none,chain"`)
-			w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none"`)
+			w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none"`)
 		}
 	}
 	bot(c.SEOBots, FileSEOBots, IDSEOBots, "SEO crawler")
@@ -780,7 +780,7 @@ func Render(c settings.WAF, o Options) string {
 				// A logged-in WordPress user is the site's own editor on a
 				// shared or mobile address (WordPress checks the login;
 				// logins themselves are still refused from listed addresses).
-				w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none,chain"`)
+				w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none,chain"`)
 				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, first)
 			} else {
 				w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, o.Dir, first, id, msg, what)
