@@ -84,13 +84,72 @@ func init() {
 }
 
 // FleetNameOK reports whether a file name may be blocked fleet-wide.
+// Shells found on a server often carry ordinary names (edit.php,
+// services.php, content.php): blocking those everywhere breaks WordPress's
+// own admin pages and the pages of custom PHP sites. Only names no website
+// uses are blocked: with a digit (test123cp.php, 4o4.php), with a long
+// made-up part (classwithtostring.php), or a misspelt WordPress file
+// (xmrlpc.php, functlons.php). The scanner still quarantines the files.
 func FleetNameOK(name string) bool {
 	name = strings.ToLower(name)
 	if !reFleetName.MatchString(name) || GenericNames[name] {
 		return false
 	}
 	stem := name[:strings.LastIndexByte(name, '.')]
-	return len(stem) >= 3 && !GenericNames[stem+".php"]
+	if len(stem) < 3 || GenericNames[stem+".php"] || strings.HasPrefix(stem, "class-") || strings.HasPrefix(stem, "class.") {
+		return false
+	}
+	if strings.ContainsAny(stem, "0123456789") {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(stem, func(r rune) bool { return r == '-' || r == '_' || r == '.' }) {
+		if len(part) >= 12 {
+			return true
+		}
+	}
+	return misspeltCore(stem)
+}
+
+// coreStems are WordPress files attackers imitate with a typo.
+var coreStems = []string{"xmlrpc", "functions", "comments", "wp-login", "wp-config", "wp-load", "wp-settings", "wp-blog-header",
+	"wp-cron", "wp-signup", "wp-activate", "wp-trackback", "wp-comments-post", "admin-ajax", "admin-post", "wp-links-opml"}
+
+// misspeltCore reports a name one or two letters away from a WordPress
+// file (not the file itself, nor a shorter or longer form of it).
+func misspeltCore(stem string) bool {
+	for _, c := range coreStems {
+		// comment.php and function.php are words, not misspellings.
+		if len(stem) >= 6 && !strings.Contains(c, stem) && !strings.Contains(stem, c) && editDistance(stem, c) <= 2 {
+			return true
+		}
+	}
+	return false
+}
+
+// editDistance is the number of letters to change, add, drop or swap
+// with a neighbour to turn a into b.
+func editDistance(a, b string) int {
+	d := make([][]int, len(a)+1)
+	for i := range d {
+		d[i] = make([]int, len(b)+1)
+		d[i][0] = i
+	}
+	for j := range d[0] {
+		d[0][j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			d[i][j] = min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1]+cost)
+			if i > 1 && j > 1 && a[i-1] == b[j-2] && a[i-2] == b[j-1] {
+				d[i][j] = min(d[i][j], d[i-2][j-2]+1)
+			}
+		}
+	}
+	return d[len(a)][len(b)]
 }
 
 // validRegex checks a pattern for a SecRule: it compiles and cannot break

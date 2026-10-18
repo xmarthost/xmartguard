@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
-	"github.com/xmarthost/xmartguard/agent/internal/trusted"
 )
 
 // Rule id ranges by category.
@@ -44,10 +43,8 @@ const (
 	IDWPLookalike   = 7700311
 	IDWPUploadsList = 7700312
 	IDWPCachePHP    = 7700313
-	// IDFakeJetpack: XML-RPC requests that call themselves Jetpack from an
-	// address outside Jetpack's network (password guessing hides behind
-	// the name, because sites must keep XML-RPC open for Jetpack).
-	IDFakeJetpack  = 7700314
+	// 7700314 (XML-RPC "fake Jetpack") is retired: the Jetpack mobile app
+	// sends that name from its users' own connections.
 	IDStaticPHP    = 7700321
 	IDRepeatDirPHP = 7700322
 	IDHiddenDirPHP = 7700323
@@ -165,7 +162,6 @@ var Catalog = []RuleInfo{
 	{IDStaticPHP, "generic", "Block running PHP files inside images, img, fonts and css folders of any website", "block"},
 	{IDRepeatDirPHP, "generic", "Block PHP requests through repeated folders (/images/images/cache.php), a backdoor search pattern", "block"},
 	{IDHiddenDirPHP, "generic", "Block running PHP files inside hidden folders (/.tmb/, /.trash/), except .well-known", "block"},
-	{IDFakeJetpack, "wordpress", "Block XML-RPC requests that claim to be Jetpack from outside Jetpack's network (not behind a proxy)", "block"},
 	{IDNoUAPost, "bad_bots", "Block POSTs to PHP files with no User-Agent, Referer or cookie (web shell tools), except API, webhook and payment callback paths and trusted services", "block"},
 	{IDDoubleEncode, "generic", "Block double-encoded path traversal (%252e%252e) in the address", "block"},
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
@@ -490,14 +486,6 @@ func Render(c settings.WAF, o Options) string {
 			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Request without User-Agent to a WordPress file blocked',tag:'xpguard/wordpress',chain"`, IDEmptyUAWP+1000)
 			w(`  SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
 		}
-		if !off[IDFakeJetpack] {
-			// Behind Cloudflare or a proxy the address is the proxy's: not checked.
-			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake Jetpack request to XML-RPC blocked',tag:'xpguard/wordpress',chain"`, IDFakeJetpack)
-			w(`  SecRule REQUEST_HEADERS:User-Agent "@contains jetpack" "t:none,t:lowercase,chain"`)
-			w(`  SecRule &REQUEST_HEADERS:CF-Connecting-IP "@eq 0" "t:none,chain"`)
-			w(`  SecRule &REQUEST_HEADERS:X-Forwarded-For "@eq 0" "t:none,chain"`)
-			w(`  SecRule REMOTE_ADDR "!@ipMatch %s" "t:none"`, jetpackIPs())
-		}
 		if !off[IDXMLRPCMulti] {
 			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC multicall blocked',tag:'xpguard/wordpress',chain"`, IDXMLRPCMulti)
 			w(`  SecRule REQUEST_BODY "@contains system.multicall" "t:none,t:lowercase"`)
@@ -672,7 +660,18 @@ func Render(c settings.WAF, o Options) string {
 		// Paths only exploit scanners request: PHPUnit's eval-stdin.php
 		// (CVE-2017-9841), Laravel Ignition (CVE-2021-3129), leaked credentials.
 		if in := o.Intel; in != nil && len(in.Names) > 0 && !off[IDFleetNames] {
-			rule(IDFleetNames, `SecRule REQUEST_FILENAME "@rx /(?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell name learned by the fleet blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(in.Names), "|"), IDFleetNames)
+			// Not in wp-admin and wp-includes: WordPress's own files live
+			// there, and other rules refuse anything else in them.
+			var names []string
+			for _, n := range in.Names {
+				if FleetNameOK(n) {
+					names = append(names, n)
+				}
+			}
+			if len(names) > 0 {
+				w(`SecRule REQUEST_FILENAME "@rx /(?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell name learned by the fleet blocked',tag:'xpguard/webshell',chain"`, strings.Join(quoteAll(names), "|"), IDFleetNames)
+				w(`  SecRule REQUEST_FILENAME "!@rx /wp-(?:admin|includes)/" "t:none,t:urlDecodeUni,t:lowercase"`)
+			}
 		}
 		rule(IDMalwareExt, `SecRule REQUEST_FILENAME "@rx /wp-content/+(?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Malware plugin or theme folder blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(MalwareExtDirs), "|"), IDMalwareExt)
 		rule(IDExploitProbe, `SecRule REQUEST_FILENAME "@rx /(?:vendor/phpunit/phpunit/src/util/php/eval-stdin\.php|_ignition/execute-solution|\.aws/credentials|\.vscode/sftp\.json|sftp-config\.json|\.git-credentials)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Exploit probe blocked',tag:'xpguard/webshell'"`, IDExploitProbe)
@@ -774,6 +773,10 @@ func Render(c settings.WAF, o Options) string {
 		head := func(id int, what, first string) {
 			if post {
 				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, id, msg, what)
+				// A logged-in WordPress user is the site's own editor on a
+				// shared or mobile address (WordPress checks the login;
+				// logins themselves are still refused from listed addresses).
+				w(`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_logged_in_/ "@eq 0" "t:none,chain"`)
 				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, first)
 			} else {
 				w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, o.Dir, first, id, msg, what)
@@ -945,13 +948,4 @@ func quoteAll(l []string) []string {
 		out[i] = regexp.QuoteMeta(v)
 	}
 	return out
-}
-
-// jetpackIPs is Jetpack's network for @ipMatch (ModSecurity 2 refuses "/32").
-func jetpackIPs() string {
-	var out []string
-	for _, c := range trusted.Builtin("jetpack") {
-		out = append(out, strings.TrimSuffix(c, "/32"))
-	}
-	return strings.Join(out, ",")
 }

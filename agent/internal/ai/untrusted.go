@@ -19,6 +19,10 @@ var untrustedSignatures = map[string]bool{
 	"PHP.Backdoor.GlobalsDispatch":         true,
 	"PHP.Obfuscated.CompressedPayload":     true,
 	"Archive.PHP.Backdoor.GlobalsDispatch": true,
+	// Attack kits lock every folder with an .htaccess that refuses all PHP
+	// but their own file names; the AI reads it as hardening.
+	"Htaccess.Hacked.PHPLock":      true,
+	"Htaccess.Webshell.CGIHandler": true,
 }
 
 // wpDropIns are wp-content files WordPress loads on its own: malware

@@ -45,7 +45,12 @@ func TestUntrustedSignatureStaysFlagged(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, sha := range []string{"aa", "bb"} {
-		Save(db, Verdict{SHA256: sha, Verdict: Clean, Confidence: 100, Source: "fleet", At: store.Now()})
+		Save(db, Verdict{SHA256: sha, Verdict: Clean, Confidence: 100, Source: "fleet", Model: "admin", At: store.Now()})
+	}
+	// Another server's AI alone does not clear a file here.
+	Save(db, Verdict{SHA256: "cc", Verdict: Clean, Confidence: 100, Source: "fleet", Model: "groq", At: store.Now()})
+	if IsCleared(db, "cc") {
+		t.Fatal("a fleet AI verdict cleared a file")
 	}
 	if IsCleared(db, "aa") {
 		t.Fatal("a GlobalsDispatch file the fleet called clean is not flagged again")

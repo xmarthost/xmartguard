@@ -310,13 +310,35 @@ func analyzeJS(content []byte) *verdict {
 	if m(reJSMiner) {
 		return &verdict{CatVirus, "JS.Miner.Browser"}
 	}
-	if m(reJSHexArray) && (m(reJSHexBlob) || m(reLongB64)) {
+	// Packers (eval(function(p,a,c,k,e,d)…) build whole libraries and
+	// flipbooks; injected code is a packed line added to the start or end
+	// of an ordinary script.
+	if m(reJSHexArray) && (m(reJSHexBlob) || m(reLongB64)) && packedLineAdded(content) {
 		return &verdict{CatSuspicious, "JS.Obfuscated.EvalPacked"}
 	}
 	if m(reJSDocWrite) {
 		return &verdict{CatSuspicious, "JS.Injection.DocumentWriteUnescape"}
 	}
 	return nil
+}
+
+// packedLineAdded reports a packed eval on the first or last line of a
+// script that has plenty of ordinary code besides it.
+func packedLineAdded(content []byte) bool {
+	loc := reJSHexArray.FindIndex(content)
+	if loc == nil {
+		return false
+	}
+	start := bytes.LastIndexByte(content[:loc[0]], '\n') + 1
+	end := bytes.IndexByte(content[loc[1]:], '\n')
+	if end < 0 {
+		end = len(content)
+	} else {
+		end += loc[1]
+	}
+	before, after := bytes.TrimSpace(content[:start]), bytes.TrimSpace(content[end:])
+	rest := len(before) + len(after)
+	return rest >= 2000 && (len(before) == 0 || len(after) == 0)
 }
 
 // taintedCall reports a variable assigned from request data and then

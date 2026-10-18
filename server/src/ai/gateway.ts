@@ -56,11 +56,12 @@ export class AIGateway {
     private log: FastifyBaseLogger,
   ) {}
 
-  start(): void {
-    if (!this.cfg.aiTraining) return;
-    this.trainTimer = setInterval(() => void this.trainDirty(), 5 * 60_000);
-    this.trainTimer.unref();
-  }
+  /**
+   * The fleet model is no longer retrained on its own from the AI's
+   * verdicts: one wrong verdict taught to every server did too much harm.
+   * An administrator trains it (AI Learning » Train) after reviewing.
+   */
+  start(): void {}
 
   stop(): void {
     if (this.trainTimer) clearInterval(this.trainTimer);

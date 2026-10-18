@@ -178,10 +178,9 @@ export default function AILearning() {
       </div>
 
       <div className="card p-4 text-sm text-slate-600 sm:p-5">
-        <b className="text-navy-900">How the scanner learns.</b> The same file content is never flagged again on any server once the AI found it clean. When a
-        signature flags {d?.rules.auto_review_files ?? 5} different files the AI finds clean (at least {d?.rules.min_confidence ?? 90}% sure) and never a file the
-        AI finds malicious, it is put on <b>AI review</b> on every server automatically: its matches wait for the AI instead of being quarantined and restored
-        again and again. You can also put a signature on review, turn it off, or keep it as it is.
+        <b className="text-navy-900">How the scanner learns.</b> It does not change itself: the AI's verdicts only apply to the file the AI checked, on
+        its own server. What the AI finds clean or malicious is collected here as a report; you decide (put a signature on review, turn it off, keep it, or
+        mark a file in the knowledge base) and only your decisions reach every server.
       </div>
 
       <div className="card p-4 sm:p-6">

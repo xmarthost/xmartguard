@@ -548,10 +548,13 @@ func binaryCheck(path string, head []byte) (*Detection, error) {
 			hidden = true
 		}
 	}
-	// npm keeps its tools in node_modules/.bin and .cache folders.
-	if strings.Contains(path, "/node_modules/") {
-		hidden = false
+	// Build and package folders hold real programs and libraries: npm's
+	// node_modules (and copies of it), Python virtual environments,
+	// Composer's vendor, Android/CMake build output.
+	if reDevDir.MatchString(path) {
+		return nil, nil
 	}
+	lib := reSharedLib.MatchString(base)
 	web, wpContent := false, false
 	for i, part := range parts {
 		switch {
@@ -575,6 +578,10 @@ func binaryCheck(path string, head []byte) (*Detection, error) {
 		return &Detection{CatVirus, "Binary.ELF.HiddenInWebsite"}, nil
 	case web && SystemServiceName(base):
 		return &Detection{CatVirus, "Binary.ELF.FakeSystemService"}, nil
+	// Image optimizers ship their tools (EWWW: optipng, gifsicle,
+	// jpegtran, pngquant, cwebp), and applications their libraries (.so).
+	case wpContent && imageTools[strings.ToLower(base)], lib:
+		return nil, nil
 	case wpContent:
 		return &Detection{CatBinary, "Binary.ELF.InWordPressContent"}, nil
 	case web:
@@ -582,6 +589,15 @@ func binaryCheck(path string, head []byte) (*Detection, error) {
 	}
 	return nil, nil
 }
+
+var (
+	reDevDir = regexp.MustCompile(`/(?:node_modules[^/]*|venv|\.venv|site-packages|vendor|\.cxx|\.gradle|\.dart_tool|CMakeFiles)/`)
+	// Shared libraries and native modules (Node, Bare) load into an
+	// application; they are not run on their own.
+	reSharedLib = regexp.MustCompile(`\.(?:so(?:\.[0-9.]+)?|node|bare)$`)
+	imageTools  = map[string]bool{"optipng": true, "gifsicle": true, "jpegtran": true, "pngquant": true, "cwebp": true, "dwebp": true,
+		"gif2webp": true, "avifenc": true, "jpegoptim": true, "pngout": true, "advpng": true, "svgcleaner": true, "cjpeg": true}
+)
 
 // systemServices are names malware gives its programs to pass for the
 // operating system's own (seen running from wp-content: polkitd, gdm3,
@@ -1441,7 +1457,18 @@ func NewOffline() *Scanner {
 // capHeuristic reports heuristic detections in test suites and PHP archives
 // as suspicious: test code exercises eval, exec and uploads on purpose, and a
 // .phar bundles whole libraries. The AI scanner then confirms them.
+var reBuilderThumbs = regexp.MustCompile(`/wp-content/uploads/(?:master_addons|elementor|envato-elements|templately|starter-templates|astra-sites|ocdi)/`)
+
 func capHeuristic(path, ext string, d *Detection) *Detection {
+	// Composer packages (PHPStan) start from their own .phar.
+	if d.Signature == "PHP.Suspicious.PharInclude" && strings.Contains(path, "/vendor/") {
+		return nil
+	}
+	// Template-kit thumbnails page builders download into their own upload
+	// folder: when the remote answers with a page, it is saved as the image.
+	if d.Signature == "Disguised.MarkupInImage" && reBuilderThumbs.MatchString(path) {
+		return nil
+	}
 	if d.Category != CatVirus {
 		return d
 	}

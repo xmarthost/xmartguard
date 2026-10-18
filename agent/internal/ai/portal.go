@@ -296,7 +296,10 @@ const LearnedMinConfidence = 90
 
 // WriteLearned regenerates the fleet-learned hash list the scanner loads.
 func (a *Analyzer) WriteLearned() error {
-	rows, err := a.DB.Query(`SELECT sha256, size FROM ai_verdicts WHERE verdict = 'malicious' AND confidence >= ? AND size > 0 AND source IN ('ai','fleet')`, LearnedMinConfidence)
+	// Only files an administrator marked malicious on the portal: an AI
+	// verdict alone is never turned into a detection on every server (one
+	// wrong verdict quarantined thousands of files).
+	rows, err := a.DB.Query(`SELECT sha256, size FROM ai_verdicts WHERE verdict = 'malicious' AND confidence >= ? AND size > 0 AND source = 'fleet' AND model = 'admin'`, LearnedMinConfidence)
 	if err != nil {
 		return err
 	}

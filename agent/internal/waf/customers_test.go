@@ -74,9 +74,8 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		{"Same save without the WHMCS session", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{"Referer: https://my.example.com/MANZ00R/configgeneral.php"}, 403},
 		{"Same save sent from another site", "my.example.com", "POST", "/MANZ00R/configgeneral.php?action=save", form, whmcs, []string{whmcsSess, "Referer: https://evil.example.net/x"}, 403},
 		{"Client area post with the WHMCS session stays checked", "my.example.com", "POST", "/submitticket.php", form, whmcs, []string{whmcsSess, "Referer: https://my.example.com/submitticket.php"}, 403},
-		// XML-RPC under Jetpack's name from outside Jetpack's network.
-		{"Fake Jetpack on XML-RPC", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>wp.getUsersBlogs</methodName></methodCall>`, []string{"User-Agent: Jetpack by WordPress.com"}, 403},
-		{"Jetpack name behind Cloudflare is not judged", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>jetpack.jsonAPI</methodName></methodCall>`, []string{"User-Agent: Jetpack by WordPress.com", "CF-Connecting-IP: 192.0.84.10"}, 200},
+		// The Jetpack mobile app manages sites from its users' own connections.
+		{"Jetpack app on XML-RPC", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>wp.getUsersBlogs</methodName></methodCall>`, []string{"User-Agent: jetpack-android/24.1"}, 200},
 		{"Mobile app on XML-RPC", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>wp.getPosts</methodName></methodCall>`, []string{"User-Agent: wp-android/24.1"}, 200},
 		// POSTs from tools without any browser header.
 		{"POST without User-Agent to a script", "site.example.com", "POST", "/old/includes/up.php", form, "a=1", []string{"User-Agent: "}, 403},

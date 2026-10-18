@@ -392,14 +392,16 @@ var cleared struct {
 }
 
 func isClearedVerdict(v Verdict) bool {
-	return v.Verdict == Clean && v.Confidence >= ClearMinConfidence && (v.Source == "ai" || v.Source == "fleet" || v.Source == SourceAdmin)
+	// Another server's AI verdict does not clear files here: only this
+	// server's own check of the file, or an administrator's decision.
+	return v.Verdict == Clean && v.Confidence >= ClearMinConfidence && (v.Source == "ai" || (v.Source == "fleet" && v.Model == "admin") || v.Source == SourceAdmin)
 }
 
 func loadCleared(db *sql.DB) {
 	set, admin := map[string]bool{}, map[string]bool{}
 	// Content one of the untrusted signatures caught stays flagged unless an
 	// administrator cleared it (the AI and the fleet were wrong about it).
-	rows, err := db.Query(`SELECT sha256, source FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND source IN ('ai','fleet','admin')
+	rows, err := db.Query(`SELECT sha256, source FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND (source IN ('ai','admin') OR (source = 'fleet' AND model = 'admin'))
 		AND (source = 'admin' OR sha256 NOT IN (SELECT sha256 FROM findings WHERE sha256 != '' AND signature IN (`+untrustedSigList()+`)))`, ClearMinConfidence)
 	if err == nil {
 		for rows.Next() {

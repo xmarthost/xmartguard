@@ -79,3 +79,33 @@ func TestHtaccessStorm(t *testing.T) {
 		t.Errorf("new window alerts again, got %d", calls)
 	}
 }
+
+// A fully packed script (flipbook builds, libraries) is not flagged; a
+// packed line added to an ordinary script is.
+func TestPackedJS(t *testing.T) {
+	packed := `eval(function(p,a,c,k,e,d){return p}('` + strings.Repeat("QUJD", 80) + `',62,0,''.split('|'),0,{}))`
+	if d := analyze(".js", []byte(packed)); d != nil {
+		t.Errorf("packed library flagged: %+v", d)
+	}
+	script := strings.Repeat("function step(n) { return n + 1; }\n", 80)
+	if d := analyze(".js", []byte(script+packed+"\n")); d == nil || d.Signature != "JS.Obfuscated.EvalPacked" {
+		t.Errorf("appended packed line: %+v", d)
+	}
+	if d := analyze(".js", []byte(packed+"\n"+script)); d == nil {
+		t.Error("prepended packed line not flagged")
+	}
+}
+
+func TestCapHeuristicPlaces(t *testing.T) {
+	img := &Detection{CatSuspicious, "Disguised.MarkupInImage"}
+	if capHeuristic("/home/u/public_html/wp-content/uploads/master_addons/templates/kit-thumb.jpg", ".jpg", img) != nil {
+		t.Error("page builder thumbnail flagged")
+	}
+	if capHeuristic("/home/u/public_html/wp-content/uploads/2026/10/x.jpg", ".jpg", img) == nil {
+		t.Error("markup in an ordinary upload not flagged")
+	}
+	phar := &Detection{CatSuspicious, "PHP.Suspicious.PharInclude"}
+	if capHeuristic("/home/u/public_html/vendor/phpstan/phpstan/phpstan", "", phar) != nil {
+		t.Error("composer phar loader flagged")
+	}
+}

@@ -132,15 +132,10 @@ export default function WafIntel() {
         <SettingRow title="Share and apply fleet intelligence" desc="Learned web shell names and the portal's virtual patches on every server (WAF » Web shells and Virtual patches packages).">
           <Toggle on={enabled} disabled={!admin || busy} onChange={setEnabled} />
         </SettingRow>
-        <SettingRow title="Block a name automatically once found on" desc="Fewer servers blocks new backdoors sooner; more servers is safer against a wrong detection. You can always approve a name by hand.">
-          <select className="input w-40" value={minServers} disabled={!admin || busy} onChange={(e) => setMinServers(Number(e.target.value))}>
-            {[1, 2, 3, 5, 10].map((n) => (
-              <option key={n} value={n}>
-                {n} server{n === 1 ? '' : 's'}
-              </option>
-            ))}
-          </select>
-        </SettingRow>
+        <p className="text-sm text-slate-500">
+          Names are never blocked on their own: approve each name below after checking it. Names websites use (edit.php, services.php) and names inside
+          wp-admin and wp-includes are never blocked by name.
+        </p>
       </Card>
 
       <Card title="Learned web shell names" desc="Names the scanners reported, with where they were found (the part under the web root) and the detection.">

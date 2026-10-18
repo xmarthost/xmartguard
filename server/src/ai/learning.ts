@@ -105,9 +105,10 @@ export async function recordFalsePositives(pool: Pool, serverId: string, files: 
     );
     sigs.add(sig);
   }
-  const moved: string[] = [];
-  for (const sig of sigs) if (await autoReview(pool, sig)) moved.push(sig);
-  return moved;
+  // Recorded for the AI Learning report only: an administrator decides
+  // what changes (autoReview is no longer run on its own).
+  void sigs;
+  return [];
 }
 
 /**

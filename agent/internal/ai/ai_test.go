@@ -171,6 +171,7 @@ func TestFleetSyncLearnsHashesAndModel(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	base, _ := ml.Base()
 	sha := strings.Repeat("ab", 32)
+	aiOnly := strings.Repeat("cd", 32)
 	calls := 0
 	srv := fakePortal(t, pub, func(path string, p map[string]any) any {
 		calls++
@@ -178,7 +179,8 @@ func TestFleetSyncLearnsHashesAndModel(t *testing.T) {
 			return map[string]any{}
 		}
 		return map[string]any{
-			"kb":     []map[string]any{{"sha256": sha, "size": 1234, "verdict": "malicious", "confidence": 97, "reason": "web shell", "model": "groq"}},
+			"kb": []map[string]any{{"sha256": sha, "size": 1234, "verdict": "malicious", "confidence": 100, "reason": "web shell", "model": "admin"},
+				{"sha256": aiOnly, "size": 99, "verdict": "malicious", "confidence": 97, "reason": "looks like a shell", "model": "groq"}},
 			"cursor": 42,
 			"delta":  map[string]any{"base_version": base.Version, "version": 7, "bias": 0.1, "entries": [][2]float64{{5, 0.5}}, "samples": 3},
 		}
@@ -187,7 +189,7 @@ func TestFleetSyncLearnsHashesAndModel(t *testing.T) {
 	a, _ := setup(t, `{"ai":{"provider":"builtin"}}`)
 	a.Portal = portalFor(srv.URL, priv)
 	n, err := a.Sync(context.Background())
-	if err != nil || n != 1 {
+	if err != nil || n != 2 {
 		t.Fatalf("sync: %d %v", n, err)
 	}
 	defer ml.ApplyDelta(nil)
@@ -195,7 +197,8 @@ func TestFleetSyncLearnsHashesAndModel(t *testing.T) {
 		t.Fatal("cursor not stored")
 	}
 	raw, _ := os.ReadFile(scanner.LearnedHashPath())
-	if !strings.Contains(string(raw), "1234 "+sha+" "+scanner.LearnedLabel) {
+	// Only an administrator's verdict becomes a detection on every server.
+	if !strings.Contains(string(raw), "1234 "+sha+" "+scanner.LearnedLabel) || strings.Contains(string(raw), aiOnly) {
 		t.Fatalf("learned list: %s", raw)
 	}
 	m, _ := ml.Default()

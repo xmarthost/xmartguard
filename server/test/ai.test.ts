@@ -219,7 +219,7 @@ describe('AI answer parsing', () => {
 });
 
 describe('AI learning (false positives)', () => {
-  it('keeps what the scanner flagged and why the AI restored it, and moves a noisy signature to review', async () => {
+  it('keeps what the scanner flagged and why the AI restored it; only an administrator moves a signature to review', async () => {
     const sig = 'PHP.Suspicious.TemplateEcho';
     const flagged = (i: number) =>
       file(`fp${i}`, `1|<?php echo esc_html($title${i});`, {
@@ -239,7 +239,9 @@ describe('AI learning (false positives)', () => {
     await agentPost('/api/agent/ai/judge', envelope({ files: [flagged(5)] }));
     l = await admin.req('GET', '/api/ai/learning');
     const row = l.body.signatures.find((s: any) => s.signature === sig);
-    expect(row).toMatchObject({ files: 5, events: 6, action: 'review', auto: true });
+    // Nothing changes on its own: an administrator decides.
+    expect(row).toMatchObject({ files: 5, events: 6, action: null });
+    expect((await admin.req('PUT', '/api/ai/learning/signature', { signature: sig, action: 'review' })).status).toBe(200);
     expect(l.body.signatures.find((s: any) => s.signature === 'PHP.Mixed.Sig')).toMatchObject({ files: 1, malicious: 1, action: null });
 
     const files = await admin.req('GET', `/api/ai/learning/files?signature=${encodeURIComponent(sig)}`);
@@ -253,7 +255,7 @@ describe('AI learning (false positives)', () => {
     expect(text).not.toContain('web1');
     const rep = JSON.parse(text);
     const s = rep.signatures.find((x: any) => x.signature === sig);
-    expect(s).toMatchObject({ decision: 'review', decided_automatically: true, clean_files: 5, malicious_verdicts: 0 });
+    expect(s).toMatchObject({ decision: 'review', decided_automatically: false, clean_files: 5, malicious_verdicts: 0 });
     expect(s.examples[0]).toMatchObject({ server: 'server-1', matched_code: expect.stringContaining('esc_html'), ai_reason: 'ordinary template code' });
     const csv = await (await fetch(h.url + '/api/ai/learning/export?format=csv', { headers: { cookie: admin.cookie } })).text();
     expect(csv.split('\n')[0]).toContain('signature,decision,path');

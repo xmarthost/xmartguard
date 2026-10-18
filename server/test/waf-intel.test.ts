@@ -42,40 +42,38 @@ async function agent(i: number, payload: unknown) {
 
 describe('WAF fleet intelligence', () => {
   it('never blocks common file names', () => {
-    for (const n of ['wp-2019.php', 'alfa-rex.php7', 'gzdecodes.php']) expect(nameOK(n)).toBe(true);
-    for (const n of ['index.php', 'Config.php', 'about.php', 'ab.php', 'x.js', '../a.php']) expect(nameOK(n)).toBe(false);
+    for (const n of ['wp-2019.php', 'xmrlpc.php', 'functlons.php', 'classwithtostring.php', '4O4.php']) expect(nameOK(n)).toBe(true);
+    for (const n of ['index.php', 'Config.php', 'about.php', 'ab.php', 'x.js', '../a.php', 'edit.php', 'services.php', 'content.php',
+      'comment.php', 'about-us.php', 'radio.php', 'class-data.php', 'xmlrpc.php']) expect(nameOK(n)).toBe(false);
   });
 
-  it('sends the virtual patches, then names found on two servers', async () => {
-    const first = await agent(0, { etag: '', reports: [{ name: 'gzdecodes.php', tail: 'wp-content/plugins/x/gzdecodes.php', signature: 'php.webshell' }, { name: 'index.php' }] });
+  it('sends the virtual patches, and names only once an administrator approves them', async () => {
+    const first = await agent(0, { etag: '', reports: [{ name: 'gzdecode2x.php', tail: 'wp-content/plugins/x/gzdecode2x.php', signature: 'php.webshell' }, { name: 'index.php' }] });
     expect(first.status).toBe(200);
     expect(first.body.intel.names).toEqual([]);
     expect(first.body.intel.patches.length).toBeGreaterThanOrEqual(6);
     expect(first.body.intel.patches[0]).not.toHaveProperty('plugin');
     const etag = first.body.intel.etag;
     expect((await agent(0, { etag, reports: [] })).body).toEqual({ unchanged: true });
-    // A second server finds it: every server gets the name now.
-    pushed.length = 0;
-    const second = await agent(1, { etag, reports: [{ name: 'GZDECODES.php', tail: 'gzdecodes.php', signature: 'php.webshell' }] });
-    expect(second.body.intel.names).toEqual(['gzdecodes.php']);
-    await new Promise((r) => setTimeout(r, 200));
-    expect(pushed.map((p) => p.id).sort()).toEqual(servers.map((s) => s.id).sort());
+    // A second server finds it: still only reported, never blocked on its own.
+    const second = await agent(1, { etag, reports: [{ name: 'GZDECODE2X.php', tail: 'gzdecode2x.php', signature: 'php.webshell' }] });
+    expect(second.body.intel?.names ?? []).toEqual([]);
     const g = await admin.req('GET', '/api/waf/intel');
-    const n = g.body.names.find((x: { name: string }) => x.name === 'gzdecodes.php');
-    expect(n).toMatchObject({ servers: 2, status: 'active' });
+    const n = g.body.names.find((x: { name: string }) => x.name === 'gzdecode2x.php');
+    expect(n).toMatchObject({ servers: 2, status: 'pending' });
     expect(g.body.names.find((x: { name: string }) => x.name === 'index.php').status).toBe('not_allowed');
   });
 
   it('stops blocking a name restored as clean, unless approved', async () => {
-    await agent(2, { etag: '', reports: [{ name: 'gzdecodes.php', clean: true }] });
+    await agent(2, { etag: '', reports: [{ name: 'gzdecode2x.php', clean: true }] });
     let g = await admin.req('GET', '/api/waf/intel');
-    expect(g.body.names.find((x: { name: string }) => x.name === 'gzdecodes.php').status).toBe('false_positive');
+    expect(g.body.names.find((x: { name: string }) => x.name === 'gzdecode2x.php').status).toBe('false_positive');
     expect((await agent(0, { etag: '', reports: [] })).body.intel.names).toEqual([]);
-    expect((await admin.req('POST', '/api/waf/intel/names', { name: 'gzdecodes.php', status: 'approved' })).status).toBe(200);
-    expect((await agent(0, { etag: '', reports: [] })).body.intel.names).toEqual(['gzdecodes.php']);
-    await admin.req('POST', '/api/waf/intel/names', { name: 'gzdecodes.php', status: 'ignored' });
+    expect((await admin.req('POST', '/api/waf/intel/names', { name: 'gzdecode2x.php', status: 'approved' })).status).toBe(200);
+    expect((await agent(0, { etag: '', reports: [] })).body.intel.names).toEqual(['gzdecode2x.php']);
+    await admin.req('POST', '/api/waf/intel/names', { name: 'gzdecode2x.php', status: 'ignored' });
     g = await admin.req('GET', '/api/waf/intel');
-    expect(g.body.names.find((x: { name: string }) => x.name === 'gzdecodes.php').status).toBe('ignored');
+    expect(g.body.names.find((x: { name: string }) => x.name === 'gzdecode2x.php').status).toBe('ignored');
   });
 
   it('adds names by hand, refuses common ones, switches patches off', async () => {

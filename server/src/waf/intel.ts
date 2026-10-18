@@ -74,12 +74,37 @@ const GENERIC = new Set(
 
 const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,78}\.(?:php[0-9]?|phtml|phar|pht)$/;
 
-/** Whether a file name may be blocked on every server. */
+/** WordPress files attackers imitate with a typo. */
+const CORE_STEMS = ['xmlrpc', 'functions', 'comments', 'wp-login', 'wp-config', 'wp-load', 'wp-settings', 'wp-blog-header',
+  'wp-cron', 'wp-signup', 'wp-activate', 'wp-trackback', 'wp-comments-post', 'admin-ajax', 'admin-post', 'wp-links-opml'];
+
+/** Letters to change, add, drop or swap with a neighbour to turn a into b. */
+function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+
+/**
+ * Whether a file name may be blocked on every server (same rule as the
+ * agent). Shells often carry ordinary names (edit.php, services.php):
+ * blocking those everywhere breaks WordPress's admin and custom sites'
+ * pages. Only names no website uses: with a digit, with a made-up part of
+ * 12+ letters, or a misspelt WordPress file (xmrlpc.php).
+ */
 export function nameOK(name: string): boolean {
   const n = name.toLowerCase();
   if (!NAME_RE.test(n) || GENERIC.has(n)) return false;
   const stem = n.slice(0, n.lastIndexOf('.'));
-  return stem.length >= 3 && !GENERIC.has(`${stem}.php`);
+  if (stem.length < 3 || GENERIC.has(`${stem}.php`) || stem.startsWith('class-') || stem.startsWith('class.')) return false;
+  if (/[0-9]/.test(stem)) return true;
+  if (stem.split(/[-_.]/).some((p) => p.length >= 12)) return true;
+  return CORE_STEMS.some((c) => stem.length >= 6 && !c.includes(stem) && !stem.includes(c) && editDistance(stem, c) <= 2);
 }
 
 export interface IntelConfig {
@@ -149,8 +174,9 @@ export async function learnedNames(pool: Pool, accountId: string, cfg: IntelConf
     else if (n.override === 'ignored') [n.status, n.reason] = ['ignored', 'Ignored by an administrator.'];
     else if (n.override === 'approved' || n.override === 'added') [n.status, n.reason] = ['active', n.override === 'added' ? 'Added by an administrator.' : 'Approved by an administrator.'];
     else if (n.clean_servers > 0) [n.status, n.reason] = ['false_positive', 'A file with this name was restored as clean on a server: approve it to block the name anyway.'];
-    else if (n.servers >= cfg.min_servers) [n.status, n.reason] = ['active', `Found on ${n.servers} server(s).`];
-    else [n.status, n.reason] = ['pending', `Found on ${n.servers} of the ${cfg.min_servers} servers needed: approve it to block it now.`];
+    // Nothing is blocked by name on its own any more: an administrator
+    // approves each name (common names learned this way broke sites).
+    else [n.status, n.reason] = ['pending', `Found on ${n.servers} server(s): approve it to block it.`];
     return n;
   });
 }

@@ -280,6 +280,11 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.OSM.Run(ctx)
 	go a.domainRepLoop(ctx)
 	go a.Captcha.Run(ctx)
+	// Rebuild the fleet-learned hash list with the current rule (only
+	// administrators' verdicts): drops what older agents learned on their own.
+	if err := a.AI.WriteLearned(); err != nil {
+		a.Log.Warn("rebuilding the learned hash list failed", "err", err)
+	}
 	go a.AI.Run(ctx)
 	go a.AI.RunSync(ctx)
 	go a.wpCoreLoop(ctx)

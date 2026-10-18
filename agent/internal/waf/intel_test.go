@@ -9,7 +9,12 @@ import (
 
 func TestFleetNameOK(t *testing.T) {
 	for name, want := range map[string]bool{
-		"wp-2019.php": true, "alfa-rex.php7": true, "xmrlpc.php": true, "gzdecodes.php": true,
+		"wp-2019.php": true, "xmrlpc.php": true, "functlons.php": true, "connents.php": true, "test123cp.php": true,
+		"4o4.php": true, "classwithtostring.php": true, "ultradybbuks.php": true,
+		// Names websites use (WordPress admin pages, custom PHP sites' pages).
+		"edit.php": false, "services.php": false, "content.php": false, "comment.php": false, "archive.php": false,
+		"shop.php": false, "blog.php": false, "about-us.php": false, "privacy-policy.php": false, "radio.php": false,
+		"advanced-cache.php": false, "class-data.php": false, "goods.php": false, "xmlrpc.php": false, "comments.php": false,
 		"index.php": false, "config.php": false, "about.php": false, "Upload.php": false, "ab.php": false,
 		"x.js": false, "../evil.php": false, "a\"b.php": false, "sh ell.php": false, "cache.php": false,
 	} {
@@ -72,7 +77,7 @@ var portalPatches = []PortalPatch{
 
 func TestPortalPatchesOnApache(t *testing.T) {
 	m, send := apacheWith(t, `{"waf":{"upload_scan":false}}`)
-	in := &Intel{ETag: "t", Names: []string{"gzdecodes.php"}, Patches: portalPatches}
+	in := &Intel{ETag: "t", Names: []string{"gzdecode2x.php", "edit.php", "xmrlpc.php"}, Patches: portalPatches}
 	m.Intel = func() *Intel { return in }
 	if err := m.Apply(); err != nil {
 		t.Fatal(err)
@@ -96,7 +101,12 @@ func TestPortalPatchesOnApache(t *testing.T) {
 		{"GET", "/wp-admin/admin-post.php?swp_debug=load_options&swp_url=http://x", nil, true},
 		{"GET", "/wp-content/plugins/wpcargo/includes/barcode.php?text=x1234%3C%3Fphp", nil, true},
 		{"GET", "/wp-content/plugins/wpcargo/includes/barcode.php?text=SHIP123", nil, false},
-		{"GET", "/wp-content/plugins/x/gzdecodes.php", nil, true},
+		{"GET", "/wp-content/plugins/x/gzdecode2x.php", nil, true},
+		{"GET", "/xmrlpc.php", nil, true},
+		// A common name the fleet once saw as a shell, and fleet names inside
+		// WordPress's own folders, are never blocked by name.
+		{"GET", "/wp-admin/edit.php", nil, false},
+		{"GET", "/edit.php", nil, false},
 	} {
 		if code := send(c.method, c.uri, c.hdr...); (code == 403) != c.want {
 			t.Errorf("%s %s %v: %d", c.method, c.uri, c.hdr, code)
