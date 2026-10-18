@@ -37,7 +37,7 @@ const GROUPS: [string, string, string][] = [
   ['search', 'Search engines', 'Crawlers that index the sites (SEO): Google, Bing, Apple, DuckDuckGo, Yandex, Baidu.'],
   ['seo', 'SEO tools', 'Ahrefs, Semrush, Moz and SE Ranking crawlers that customers use for backlink and site audit reports. Only the real crawlers: Ahrefs from its official list, the others once their address passes a reverse DNS check. Fakes with the same name stay blocked, and the shop filter and cart rules still apply to them.'],
   ['social', 'Social networks', 'Link previews when a page is shared on Facebook, Instagram, WhatsApp or Telegram.'],
-  ['ai', 'AI assistants & MCP', 'ChatGPT, Claude and Perplexity opening pages for their users, and MCP tool calls to servers hosted on the sites. Never banned; the WAF "Block AI crawlers" switch still applies to them.'],
+  ['ai', 'AI assistants & crawlers', 'GPTBot, ClaudeBot, PerplexityBot, CCBot, Amazonbot and Bytespider from their official networks, ChatGPT, Claude and Perplexity opening pages for their users, and MCP tool calls. Never banned or blocked as bots; the same names from other networks are fakes and are blocked.'],
   ['cdn', 'CDN & website firewalls', 'Cloudflare, QUIC.cloud (LiteSpeed), Fastly, Bunny, CloudFront, Sucuri, Imperva: every visitor of a proxied site arrives from these addresses, so blocking one would take the site offline.'],
   ['monitor', 'Uptime monitors', 'Uptime checks, so a site is not reported down because the firewall blocked the monitor.'],
   ['payment', 'Payments', 'Order confirmations from Stripe and PayPal.'],

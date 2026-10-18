@@ -61,7 +61,7 @@ type Manager struct {
 	// returning nil = off).
 	Central func() *Central
 	// OnBotBlocked is told about requests the bot lists refused (address
-	// and what matched), so real SEO crawlers can be verified and trusted.
+	// and what matched), so real SEO and AI crawlers can be verified and trusted.
 	OnBotBlocked func(ip, matched string)
 
 	mu       sync.Mutex
@@ -974,7 +974,7 @@ func (m *Manager) tailLogs(ctx context.Context) {
 			return
 		}
 		m.record(ev)
-		if m.OnBotBlocked != nil && (ev.RuleID == IDBadBots || ev.RuleID == IDSEOBots || ev.RuleID == IDCustomBots) {
+		if m.OnBotBlocked != nil && (ev.RuleID == IDBadBots || ev.RuleID == IDSEOBots || ev.RuleID == IDAIBots || ev.RuleID == IDCustomBots) {
 			m.OnBotBlocked(ev.IP, ev.Detail)
 		}
 		if ev.Category == "login" {

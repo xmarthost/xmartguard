@@ -1066,7 +1066,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
       {!replaced && (
         <>
           <h3 className="mt-4 text-base font-semibold text-navy-900">Package options</h3>
-          {row('ai_bots', 'AI Crawler protection', 'Stops AI crawlers (GPTBot, CCBot, Bytespider, ClaudeBot…) from sending requests to your websites')}
+          {row('ai_bots', 'Fake AI crawler protection', 'Stops requests that call themselves GPTBot, ClaudeBot, PerplexityBot, CCBot, Bytespider… but do not come from that company\'s official network. The real crawlers are allowed; sites that do not want them can say so in robots.txt.')}
         </>
       )}
       <div className="mt-2 border-t border-slate-200" />

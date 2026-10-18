@@ -106,6 +106,8 @@ var Services = []Service{
 	// calls to MCP servers hosted on the sites.
 	{ID: "anthropic", Name: "Claude (Anthropic): MCP connectors, web fetch", Group: "ai",
 		Builtin: []string{"160.79.104.0/21"}},
+	{ID: "anthropic-crawlers", Name: "ClaudeBot, Claude-User, Claude-SearchBot (Anthropic)", Group: "ai", Format: "prefixes",
+		URL: "https://claude.com/crawling/bots.json", Builtin: []string{"216.73.216.0/22"}},
 	{ID: "openai-chatgpt-user", Name: "ChatGPT (OpenAI): user actions, GPT actions, connectors", Group: "ai", Format: "prefixes",
 		URL: "https://openai.com/chatgpt-user.json"},
 	{ID: "openai-searchbot", Name: "OAI-SearchBot (ChatGPT search)", Group: "ai", Format: "prefixes",
@@ -116,6 +118,14 @@ var Services = []Service{
 		URL: "https://www.perplexity.com/perplexity-user.json"},
 	{ID: "perplexitybot", Name: "PerplexityBot (Perplexity search)", Group: "ai", Format: "prefixes",
 		URL: "https://www.perplexity.com/perplexitybot.json"},
+	{ID: "commoncrawl", Name: "CCBot (Common Crawl)", Group: "ai", Format: "scan",
+		URL:     "https://index.commoncrawl.org/ccbot.json",
+		Builtin: []string{"3.41.188.32/29", "18.97.9.168/29", "18.97.14.80/29", "18.97.14.88/30", "2600:1f28:365:8000::/56"},
+		UA:      []string{"ccbot"}, RDNS: []string{"commoncrawl.org"}},
+	{ID: "amazonbot", Name: "Amazonbot (Alexa, Rufus), verified by reverse DNS", Group: "ai",
+		UA: []string{"amazonbot"}, RDNS: []string{"crawl.amazonbot.amazon"}},
+	{ID: "bytespider", Name: "Bytespider (ByteDance), verified by reverse DNS", Group: "ai",
+		UA: []string{"bytespider"}, RDNS: []string{"crawl.bytedance.com"}},
 
 	// Uptime monitors.
 	{ID: "uptimerobot", Name: "UptimeRobot", Group: "monitor", Format: "lines",
@@ -185,9 +195,10 @@ var Services = []Service{
 }
 
 // Groups whose addresses the WAF's bot rules also skip. CDN addresses carry
-// every visitor of a proxied site, and AI crawlers follow the "Block AI
-// crawlers" switch, so those two groups are only kept out of bans.
-var wafGroups = map[string]bool{"seo": true, "search": true, "social": true, "monitor": true, "payment": true, "wordpress": true, "vendor": true, "custom": true}
+// every visitor of a proxied site, so that group is only kept out of bans.
+// AI crawlers from their official networks are the real ones: the AI
+// crawler rule only stops the others.
+var wafGroups = map[string]bool{"seo": true, "search": true, "social": true, "ai": true, "monitor": true, "payment": true, "wordpress": true, "vendor": true, "custom": true}
 
 // State is one service's current list.
 type State struct {
@@ -609,7 +620,7 @@ func (s *Store) VerifyCrawler(ctx context.Context, ip, ua string) string {
 // and the administrator's own list. The firewall exempts all of them.
 func (s *Store) CIDRs(disabled []string) []string { return s.cidrs(disabled, nil) }
 
-// WAFCIDRs is CIDRs without the CDN and AI groups, for the WAF's bot rules.
+// WAFCIDRs is CIDRs without the CDN group, for the WAF's bot rules.
 func (s *Store) WAFCIDRs(disabled []string) []string { return s.cidrs(disabled, wafGroups) }
 
 func (s *Store) cidrs(disabled []string, groups map[string]bool) []string {

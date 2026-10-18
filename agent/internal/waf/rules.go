@@ -24,6 +24,8 @@ const (
 	IDWhiteDomains = 7700002
 	IDDisable      = 7700003
 	IDTrusted      = 7700004
+	// IDTrustedCF marks trusted services behind Cloudflare (CF-Connecting-IP).
+	IDTrustedCF = 7700056
 	// IDExempt: the server's own addresses, its fleet, the portal and the
 	// firewall whitelist are never inspected (ctl:ruleEngine=Off).
 	IDExempt        = 7700006
@@ -177,7 +179,7 @@ var Catalog = []RuleInfo{
 	{IDBareMozilla, "bad_bots", "Block the fake User-Agent \"Mozilla/5.0\" with nothing after it (scripts pretending to be a browser)", "block"},
 	{IDFakeSearchBot, "bot_blocker", "Block fake Googlebot and Bingbot: the User-Agent says so but the address is not on Google's or Microsoft's published list", "block"},
 	{IDSEOBots, "seo_bots", "Block aggressive SEO crawlers", "block"},
-	{IDAIBots, "ai_bots", "Block AI training crawlers", "block"},
+	{IDAIBots, "ai_bots", "Block fake AI crawlers (GPTBot, ClaudeBot, PerplexityBot… from outside their official networks; the real ones are allowed)", "block"},
 	{IDCustomBots, "bot_blocker", "Bad Bot blocker: block the User-Agents in the list", "block"},
 	{IDProxyBlocked, "proxy_ip_check", "Block blacklisted visitors behind Cloudflare or a local proxy (real IP from CF-Connecting-IP / X-Forwarded-For)", "block"},
 	{IDIPDBPost, "ipdb_post", "Block POST requests (logins, forms, uploads) from IPDB-listed addresses, also behind Cloudflare", "block"},
@@ -285,6 +287,17 @@ var ProxyRanges = []string{"127.0.0.1", "::1",
 	"190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
 	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
 	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32"}
+
+// cloudflareRanges are ProxyRanges without the local proxies.
+func cloudflareRanges() []string {
+	var out []string
+	for _, r := range ProxyRanges {
+		if r != "127.0.0.1" && r != "::1" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
 
 // placeholderIP keeps an empty list loadable (@ipMatchFromFile refuses an
 // empty file); it is a documentation address no visitor has.
@@ -437,13 +450,17 @@ func Render(c settings.WAF, o Options) string {
 		// They are never sent to a CAPTCHA either (a link-preview or search
 		// bot cannot solve one, and the preview or the crawl breaks): the
 		// login gate, the central CAPTCHA and soft blocking skip them. A
-		// strong OWASP CRS signal still blocks them.
-		// The AI crawler rule still applies: Meta's AI crawler
-		// (meta-externalagent) comes from the same network as its link
-		// previews, and the "Block AI crawlers" switch must stop it.
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+		// strong OWASP CRS signal still blocks them. Real AI crawlers come
+		// from their official networks too, so the AI crawler rule only
+		// stops fakes and crawlers that can not be verified.
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,setvar:tx.xg_trusted=1,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
 			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDSEOBots, IDCustomBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet,
 			IDGateNoCookie, IDCentralGate, IDSoftCaptcha, IDSoftDeny, IDNoUAPost)
+		// LiteSpeed ignores ctl:ruleRemoveById, so the bot rules also test
+		// tx.xg_trusted. Behind Cloudflare the visitor is CF-Connecting-IP,
+		// which Cloudflare sets itself (X-Forwarded-For can be forged).
+		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,t:none,pass,nolog,chain"`, strings.Join(cloudflareRanges(), ","), IDTrustedCF)
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP "@ipMatchFromFile %s/%s" "t:none,setvar:tx.xg_trusted=1"`, o.Dir, FileTrustedIPs)
 	}
 	// rule writes one of our rules unless it was switched off.
 	rule := func(id int, format string, a ...any) {
@@ -682,7 +699,11 @@ func Render(c settings.WAF, o Options) string {
 	}
 	bot := func(on bool, file string, id int, what string) {
 		if on && !off[id] {
-			w(`SecRule REQUEST_HEADERS:User-Agent "@pmFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s blocked',tag:'xpguard/bot'"`, o.Dir, file, id, what)
+			// Trusted services (official lists, verified crawlers) are the real
+			// crawlers; anyone may read robots.txt.
+			w(`SecRule REQUEST_HEADERS:User-Agent "@pmFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s blocked',tag:'xpguard/bot',chain"`, o.Dir, file, id, what)
+			w(`  SecRule &TX:xg_trusted "@eq 0" "t:none,chain"`)
+			w(`  SecRule REQUEST_FILENAME "!@streq /robots.txt" "t:none"`)
 		}
 	}
 	bot(c.BadBots, FileBadBots, IDBadBots, "Bad bot")
@@ -759,7 +780,7 @@ func Render(c settings.WAF, o Options) string {
 		}
 	}
 	bot(c.SEOBots, FileSEOBots, IDSEOBots, "SEO crawler")
-	bot(c.AIBots, FileAIBots, IDAIBots, "AI crawler")
+	bot(c.AIBots, FileAIBots, IDAIBots, "Fake AI crawler")
 	bot(c.BotBlocker && len(c.BotList) > 0, FileCustomBots, IDCustomBots, "Bad bot")
 	if len(o.VerifiedBots) > 0 && o.Trusted && c.BotBlocker && !off[IDFakeSearchBot] {
 		// Only direct visitors: behind a CDN or proxy the address is the

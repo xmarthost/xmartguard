@@ -98,9 +98,10 @@ func TestScanRADBAndGroups(t *testing.T) {
 		}
 		return false
 	}
-	// Cloudflare and Claude are never banned, but only crawlers, monitors,
-	// payments, vendors and your own list skip the WAF's bot rules.
-	if !has(all, "104.16.0.0/13") || has(waf, "104.16.0.0/13") || !has(all, "160.79.104.0/21") || has(waf, "160.79.104.0/21") {
+	// Cloudflare is never banned but carries every visitor of a proxied
+	// site, so it does not skip the WAF's bot rules; real AI crawlers and
+	// assistants (official networks) do.
+	if !has(all, "104.16.0.0/13") || has(waf, "104.16.0.0/13") || !has(waf, "160.79.104.0/21") || !has(waf, "216.73.216.0/22") {
 		t.Fatal("cdn/ai groups")
 	}
 	if !has(waf, "66.249.64.0/19") || !has(waf, "198.51.100.7") || !has(all, "203.0.113.0/24") {
@@ -169,6 +170,18 @@ func TestVerifyCrawler(t *testing.T) {
 	s2.LookupAddr, s2.Resolve = s.LookupAddr, s.Resolve
 	if id := s2.VerifyCrawler(context.Background(), "198.51.100.20", ""); id != "semrush" {
 		t.Errorf("no User-Agent: %q", id)
+	}
+	// AI crawlers known by reverse DNS are verified the same way.
+	s.LookupAddr = func(_ context.Context, a string) ([]string, error) {
+		return map[string][]string{"198.51.100.30": {"crawler-198-51-100-30.crawl.amazonbot.amazon."}, "198.51.100.31": {"amazonbot.example.net."}}[a], nil
+	}
+	s.Resolve = func(_ context.Context, h string) ([]string, error) { return []string{"198.51.100.30"}, nil }
+	amz := "Mozilla/5.0 (compatible; Amazonbot/0.1; +https://developer.amazon.com/support/amazonbot)"
+	if id := s.VerifyCrawler(context.Background(), "198.51.100.30", amz); id != "amazonbot" || !has(s.WAFCIDRs(nil), "198.51.100.30") {
+		t.Errorf("real Amazonbot: %q", id)
+	}
+	if id := s.VerifyCrawler(context.Background(), "198.51.100.31", amz); id != "" {
+		t.Errorf("fake Amazonbot verified as %q", id)
 	}
 	// The verified address survives a restart.
 	if s2 := New(s.Path); !has(s2.WAFCIDRs(nil), "198.51.100.20") {

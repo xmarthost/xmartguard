@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.7** (see `VERSION`).
+- Current release: **0.22.8** (see `VERSION`).
 
 ## Working rules
 
@@ -102,6 +102,18 @@ project. It holds the rules, the current state and what is still open.
   block, and CRS blocks only at twice the threshold. They are also exempt
   from IPDB POST blocks. Real attacks still score above the relaxed
   threshold.
+- **Real and fake crawlers** (0.22.8): the bot rules (bad bots, SEO, AI
+  crawlers, Bad Bot blocker list) block a crawler name only when the
+  visitor is not a trusted service and never on `/robots.txt`. Trusted
+  visitors are marked with `tx.xg_trusted` (rule 7700004, and 7700056
+  behind Cloudflare from `CF-Connecting-IP` only); the old
+  `ctl:ruleRemoveById` alone did nothing on LiteSpeed, so verified Semrush
+  and official Ahrefs/GPTBot addresses were still blocked. AI crawlers from
+  their official networks (OpenAI, Anthropic `claude.com/crawling/bots.json`,
+  Perplexity, Common Crawl, and Amazonbot/Bytespider by reverse DNS) are
+  allowed; the same names from elsewhere are fakes ("Fake AI crawler",
+  7700503). A customer testing with a browser User-Agent plus "GPTBot" from
+  their own connection is a fake and still gets 403.
 - **Shared egress networks** (`waf.SharedEgressRanges`: Apple Private Relay
   17.0.0.0/8 and 104.28.0.0/16) never get IPDB POST blocks: many real
   people share each address.
