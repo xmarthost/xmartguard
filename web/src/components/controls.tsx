@@ -84,23 +84,43 @@ export function useAgent<T>(serverId: string | undefined, action: string, params
 
 // ------------------------------------------------------------------ toasts
 
-type Toast = { id: number; kind: 'ok' | 'err'; text: string };
-const ToastCtx = createContext<(kind: 'ok' | 'err', text: string) => void>(() => {});
+type Toast = { id: number; kind: 'ok' | 'err'; text: string; undo?: () => unknown };
+type PushToast = (kind: 'ok' | 'err', text: string, undo?: () => unknown) => void;
+const ToastCtx = createContext<PushToast>(() => {});
 
+/** Toasts; one with an undo shows an "Undo" button for 10 seconds. */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const push = useCallback((kind: 'ok' | 'err', text: string) => {
-    const id = Date.now() + Math.random();
-    setToasts((t) => [...t, { id, kind, text }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'err' ? 7000 : 3500);
-  }, []);
+  const drop = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+  const push = useCallback<PushToast>(
+    (kind, text, undo) => {
+      const id = Date.now() + Math.random();
+      setToasts((t) => [...t, { id, kind, text, undo }]);
+      setTimeout(() => drop(id), undo ? 10_000 : kind === 'err' ? 7000 : 3500);
+    },
+    [drop],
+  );
   return (
     <ToastCtx.Provider value={push}>
       {children}
       <div className="fixed right-4 bottom-4 z-50 flex max-w-sm flex-col gap-2">
         {toasts.map((t) => (
-          <div key={t.id} className={`rounded-lg px-4 py-3 text-sm text-white shadow-lg ${t.kind === 'ok' ? 'bg-green-600' : 'bg-red-600'}`}>
-            {t.text}
+          <div key={t.id} className={`flex items-center gap-3 rounded-lg px-4 py-3 text-sm text-white shadow-lg ${t.kind === 'ok' ? 'bg-green-600' : 'bg-red-600'}`}>
+            <span className="min-w-0 flex-1">{t.text}</span>
+            {t.undo && (
+              <button
+                className="shrink-0 rounded bg-white/20 px-2 py-0.5 font-medium hover:bg-white/30"
+                onClick={() => {
+                  drop(t.id);
+                  Promise.resolve(t.undo!()).then(
+                    () => push('ok', 'Undone'),
+                    (e: Error) => push('err', e?.message || 'Could not undo'),
+                  );
+                }}
+              >
+                Undo
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -115,11 +135,11 @@ export function useAction() {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const run = useCallback(
-    async <T,>(fn: () => Promise<T>, okText?: string | ((r: T) => string)): Promise<T | undefined> => {
+    async <T,>(fn: () => Promise<T>, okText?: string | ((r: T) => string), undo?: (r: T) => unknown): Promise<T | undefined> => {
       setBusy(true);
       try {
         const r = await fn();
-        if (okText) toast('ok', typeof okText === 'function' ? okText(r) : okText);
+        if (okText) toast('ok', typeof okText === 'function' ? okText(r) : okText, undo ? () => undo(r) : undefined);
         return r;
       } catch (e: any) {
         toast('err', e.message || 'Something went wrong');

@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { TodayQueue } from '../components/TodayQueue';
 import { Ban, Bug, CircleCheck, CircleX, Lock, Server as ServerIcon, ShieldAlert, ShieldX } from 'lucide-react';
 import { useApi } from '../hooks';
 import { panelName } from '../format';
@@ -19,6 +20,7 @@ export default function Overview() {
   const d = data!;
   return (
     <div className="space-y-6">
+      {d.servers_total > 0 && <TodayQueue />}
       <section>
         <h2 className="h-title mb-4">Quick Access</h2>
         {d.quick_access.length === 0 ? (

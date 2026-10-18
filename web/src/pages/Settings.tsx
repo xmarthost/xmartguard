@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Bell, Bug, CheckCircle2, ChevronDown, History, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserX, Wrench } from 'lucide-react';
+import { Bell, Bug, CheckCircle2, ChevronDown, History, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserCheck, UserX, Wrench } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -8,6 +8,7 @@ import { ErrorBox, PageLoader } from '../components/ui';
 import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
 import { LearnedExclusions, RuleExclusionsEditor, type LearnedExclusion, type RuleExclusion } from '../components/RuleExclusions';
 import { SettingsHistory } from '../components/SettingsHistory';
+import { AccountExceptions } from '../components/AccountExceptions';
 
 interface ScannerS {
   enabled: boolean;
@@ -200,7 +201,7 @@ const SCHEDULE_TZS: [string, string][] = [
 ];
 const tzLabel = (tz?: string) => (SCHEDULE_TZS.find(([v]) => v === (tz || 'Asia/Karachi'))?.[1] ?? tz ?? 'PKT');
 
-type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'additional' | 'notifications' | 'history' | 'about';
+type Section = 'scanner' | 'waf' | 'cms' | 'suspension' | 'osm' | 'rbl' | 'additional' | 'notifications' | 'exceptions' | 'history' | 'about';
 const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[] = [
   { v: 'scanner', l: 'Virus Scanner', icon: <Bug className="h-4 w-4" /> },
   { v: 'rbl', l: 'RBL & IP Reputation', icon: <Lock className="h-4 w-4" /> },
@@ -210,9 +211,62 @@ const NAV: { v: Section | string; l: string; icon: ReactNode; soon?: boolean }[]
   { v: 'additional', l: 'Additional Settings', icon: <Wrench className="h-4 w-4" /> },
   { v: 'osm', l: 'Outgoing Spam Monitor', icon: <Mail className="h-4 w-4" /> },
   { v: 'notifications', l: 'Notifications', icon: <Bell className="h-4 w-4" /> },
+  { v: 'exceptions', l: 'Account exceptions', icon: <UserCheck className="h-4 w-4" /> },
   { v: 'history', l: 'History & Undo', icon: <History className="h-4 w-4" /> },
   { v: 'about', l: 'About', icon: <Info className="h-4 w-4" /> },
 ];
+
+/** Settings search: words people look for, and the section with them. */
+const SEARCH: [string, Section][] = [
+  ['realtime scanning', 'scanner'], ['scan schedule daily weekly nightly', 'scanner'], ['virus action quarantine disable', 'scanner'],
+  ['suspicious files binary files', 'scanner'], ['signature feeds clamav yara', 'scanner'], ['trim injected code', 'scanner'],
+  ['scan speed cpu', 'scanner'], ['time zone', 'scanner'], ['whitelist files paths', 'scanner'], ['blacklist files', 'scanner'],
+  ['maximum file size', 'scanner'], ['ai scanner verdicts restore', 'scanner'], ['database whitelist', 'scanner'],
+  ['ip reputation rbl blocklist', 'rbl'], ['exim rbl spamhaus phishing', 'rbl'], ['domain reputation safe browsing', 'rbl'],
+  ['waf modsecurity level strict', 'waf'], ['bruteforce login', 'waf'], ['tor exit', 'waf'], ['bad bot blocker list', 'waf'],
+  ['ai crawlers seo', 'waf'], ['ipdb post', 'waf'], ['rule exclusions false positive', 'waf'], ['captcha login gate', 'waf'],
+  ['upload scan php upload', 'waf'], ['proxy cloudflare', 'waf'], ['whitelist ips domains waf', 'waf'],
+  ['wordpress core check repair', 'cms'], ['database scan', 'cms'], ['vulnerability cve', 'cms'], ['auto update patches', 'cms'], ['wp-cron', 'cms'],
+  ['automatic suspension suspend', 'suspension'], ['process monitor kill miner', 'additional'], ['cron monitor', 'additional'],
+  ['keep logs days', 'additional'], ['manual scan cpanel users', 'additional'], ['outgoing spam mail limit', 'osm'],
+  ['email notifications smtp', 'notifications'], ['telegram slack', 'notifications'], ['daily report', 'notifications'],
+  ['account exceptions excluded users never suspend', 'exceptions'], ['history undo rollback', 'history'], ['agent version update cpu', 'about'],
+];
+
+function SettingsSearch({ onPick }: { onPick: (s: Section) => void }) {
+  const [q, setQ] = useState('');
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = words.length ? SEARCH.filter(([k]) => words.every((w) => k.includes(w))).slice(0, 8) : [];
+  return (
+    <div className="relative mb-3 px-1">
+      <input className="input w-full !py-1.5 text-sm" placeholder="Search settings (tor, cron…)" value={q} onChange={(e) => setQ(e.target.value)} />
+      {hits.length > 0 && (
+        <div className="absolute inset-x-1 top-full z-20 mt-1 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+          {hits.map(([k, sec]) => (
+            <button key={k} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-50" onClick={() => (onPick(sec), setQ(''))}>
+              {k} <span className="text-xs text-slate-400">· {NAV.find((n) => n.v === sec)?.l}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {words.length > 0 && hits.length === 0 && <p className="px-1 pt-1 text-xs text-slate-400">Nothing found</p>}
+    </div>
+  );
+}
+
+/** Where the account lists of a section went. */
+function ExceptionsNote() {
+  const [, setSp] = useSearchParams();
+  return (
+    <p className="my-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500">
+      Accounts left out of this (and of the other checks) are set in one place:{' '}
+      <button type="button" className="text-navy-700 underline" onClick={() => setSp({ s: 'exceptions' })}>
+        Account exceptions
+      </button>
+      .
+    </p>
+  );
+}
 
 const ACTIONS = [
   { v: 'notify', l: 'Email Only', d: 'Only report the file (and email if notifications are on). Handle it manually.' },
@@ -249,6 +303,7 @@ export default function SettingsPage() {
     <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
       <div className="card h-fit p-3">
         <div className="mb-3 flex items-center gap-2 px-2 text-lg font-semibold text-navy-900"><SettingsIcon className="h-5 w-5" /> Settings</div>
+        <SettingsSearch onPick={(v) => setSp({ s: v })} />
         {NAV.map((n) => (
           <button
             key={n.v}
@@ -267,7 +322,9 @@ export default function SettingsPage() {
         {section === 'scanner' && (
           <>
             <ScannerSection s={st.scanner} meta={meta} admin={admin} busy={busy} onSave={setScanner} />
-            <ClamAVSection serverId={id!} s={st.scanner} admin={admin} busy={busy} onSave={setScanner} />
+            <Advanced id="clamav" desc="ClamAV-format signature databases: status and your own subscriptions">
+              <ClamAVSection serverId={id!} s={st.scanner} admin={admin} busy={busy} onSave={setScanner} />
+            </Advanced>
           </>
         )}
         {section === 'scanner' && st.ai && <AISection s={st.ai} admin={admin} busy={busy} onSave={(p) => save({ ai: p })} />}
@@ -282,10 +339,23 @@ export default function SettingsPage() {
         )}
         {section === 'rbl' && st.domain_reputation && <DomainRepSection s={st.domain_reputation} admin={admin} busy={busy} onSave={(p) => save({ domain_reputation: p })} />}
         {section === 'waf' && st.waf && <WAFSection serverId={id!} s={st.waf} all={st} admin={admin} busy={busy} onSave={(p) => save({ waf: p })} saveAll={save} onReload={res.reload} />}
-        {section === 'cms' && st.cms && <CMSSection s={st.cms} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ cms: p })} />}
+        {section === 'cms' && st.cms && (
+          <CMSSection
+            s={st.cms}
+            meta={meta}
+            admin={admin}
+            busy={busy}
+            onSave={(p) => save({ cms: p })}
+            repair={st.scanner.wp_core_repair || st.scanner.auto_clean}
+            onCore={(v) => save({ cms: { core_check: v }, scanner: { wp_core_repair: v, auto_clean: false } })}
+          />
+        )}
         {section === 'osm' && st.osm && <OSMSection s={st.osm} admin={admin} busy={busy} onSave={(p) => save({ osm: p })} />}
         {section === 'suspension' && st.auto_suspend && <SuspendSection serverId={id!} s={st.auto_suspend} admin={admin} busy={busy} onSave={(p) => save({ auto_suspend: p })} />}
         {section === 'notifications' && <NotificationsSection serverId={id!} s={st.notifications} meta={meta} admin={admin} busy={busy} onSave={(p) => save({ notifications: p })} />}
+        {section === 'exceptions' && (
+          <AccountExceptions st={st as unknown as Record<string, Record<string, unknown>>} users={meta.users.map((u) => u.name)} disabled={!admin || busy} save={save as never} />
+        )}
         {section === 'history' && <SettingsHistory serverId={id!} admin={admin} onRolledBack={res.reload} />}
         {section === 'about' && <About serverId={id!} />}
       </div>
@@ -337,85 +407,81 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         <SettingRow title="Realtime scanning" desc="Scan files in website directories as soon as they are written" recommended>
           <Toggle on={s.realtime} disabled={dis} onChange={(v) => onSave({ realtime: v })} />
         </SettingRow>
-        <SettingRow title="Daily scan" desc={`Scan all files modified in the last 24 hours (every night between 2:00 and 5:00 AM, ${tzLabel(s.schedule_tz)})`} recommended>
-          <Toggle on={s.daily_scan} disabled={dis} onChange={(v) => onSave({ daily_scan: v })} />
-        </SettingRow>
-        <SettingRow title="Weekly scan" desc={`Scan all files modified in the last 7 days (Saturday to Sunday night, between 2:00 and 5:00 AM, ${tzLabel(s.schedule_tz)}); replaces that night's daily scan`} recommended>
-          <Toggle on={s.weekly_scan} disabled={dis} onChange={(v) => onSave({ weekly_scan: v })} />
-        </SettingRow>
-        <SettingRow title="Scan schedule time zone" desc="The nightly scans start between 12:00 AM and 3:00 AM in this time zone, whatever the server's own clock is set to.">
-          <select className="input w-56" value={s.schedule_tz || 'Asia/Karachi'} disabled={dis} onChange={(e) => onSave({ schedule_tz: e.target.value })}>
-            {SCHEDULE_TZS.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
+        <SettingRow
+          title="Scan schedule"
+          desc={`Nightly scans of the files changed since the last one, between 2:00 and 5:00 AM (${tzLabel(s.schedule_tz)}). Daily + weekly: every night the last day's files, on Saturday night the whole week's.`}
+          recommended
+        >
+          <select
+            className="input w-56"
+            disabled={dis}
+            value={s.daily_scan && s.weekly_scan ? 'both' : s.daily_scan ? 'daily' : s.weekly_scan ? 'weekly' : 'off'}
+            onChange={(e) => onSave({ daily_scan: e.target.value === 'daily' || e.target.value === 'both', weekly_scan: e.target.value === 'weekly' || e.target.value === 'both' })}
+          >
+            <option value="both">Daily + weekly (recommended)</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="off">Off (realtime and manual scans only)</option>
           </select>
         </SettingRow>
         <SettingRow
-          title="Scan speed"
-          desc="Scans run in their own process (xpguard-scan in the process list) at the lowest CPU and disk priority, so the websites always come first. Low: one CPU core, like other server scanners. Auto (recommended): up to a quarter of the cores while the server is quiet, one as soon as it gets busy or short of memory. Fast: up to half of the cores."
-        >
-          <select className="input w-56" value={s.scan_speed === 'low' || s.scan_speed === 'fast' ? s.scan_speed : 'auto'} disabled={dis} onChange={(e) => onSave({ scan_speed: e.target.value as ScannerS['scan_speed'] })}>
-            <option value="auto">Auto (recommended)</option>
-            <option value="low">Low</option>
-            <option value="fast">Fast</option>
-          </select>
-        </SettingRow>
-        <SettingRow title="Delete insecure symbolic links" desc="Remove links that point into another account's files, or to files the user could not read otherwise" recommended>
-          <Toggle on={s.delete_symlinks} disabled={dis} onChange={(v) => onSave({ delete_symlinks: v })} />
-        </SettingRow>
-        <SettingRow
-          title="Repair infected WordPress core files"
-          desc="Replace an infected WordPress core file with the official file of the site's WordPress version (downloaded through the portal, checked against the official checksum). Official core files of every release since 5.8, betas included, are never flagged."
+          title="Extra signature feeds"
+          desc="Public malware signatures the portal collects every day (Linux Malware Detect, web shell YARA rules) and ClamAV-format databases. Their pattern hits are reported as suspicious and confirmed by the AI scanner."
           recommended
         >
-          <Toggle on={s.wp_core_repair || s.auto_clean} disabled={dis} onChange={(v) => onSave({ wp_core_repair: v, auto_clean: false })} />
-        </SettingRow>
-        <SettingRow
-          title="Public malware signatures"
-          desc="Also use the signatures the portal collects every day: Linux Malware Detect (MD5 and hex patterns) and web shell YARA rules (signature-base). Pattern and YARA hits are reported as suspicious and confirmed by the AI scanner."
-          recommended
-        >
-          <Toggle on={s.feeds} disabled={dis} onChange={(v) => onSave({ feeds: v })} />
+          <Toggle on={s.feeds || s.clamav} disabled={dis} onChange={(v) => onSave({ feeds: v, clamav: v })} />
         </SettingRow>
         <SettingRow
           title="Trim injected code"
-          desc="When the AI finds hacker code added to a legitimate file (e.g. a backdoor at the top of a plugin file), remove only that code and keep the site running instead of quarantining the whole file. The change is kept only if the file still passes a PHP syntax check and a rescan; the original stays in quarantine and can be restored. Needs the xPGuard AI (portal) provider."
+          desc="When the AI finds hacker code added to a legitimate file, remove only that code and keep the site running instead of quarantining the whole file. Kept only if the file still passes a PHP syntax check and a rescan; the original stays in quarantine."
           recommended
         >
-          <div className="flex items-center gap-3">
-            <label className="flex items-center gap-1 text-xs text-slate-500">
-              max
-              <input
-                className="input w-16 !py-1"
-                type="number"
-                min={1}
-                max={50}
-                defaultValue={s.trim_max_percent}
-                disabled={dis}
-                onBlur={(e) => Number(e.target.value) !== s.trim_max_percent && onSave({ trim_max_percent: Number(e.target.value) })}
-              />
-              % of file
-            </label>
-            <Toggle on={s.trim} disabled={dis} onChange={(v) => onSave({ trim: v })} />
-          </div>
+          <Toggle on={s.trim} disabled={dis} onChange={(v) => onSave({ trim: v })} />
         </SettingRow>
-        <SettingRow title="YARA rules" desc="Also run YARA rules placed in /etc/xpguard/yara/*.yar (requires the yara package)">
-          <Toggle on={s.yara} disabled={dis} onChange={(v) => onSave({ yara: v })} />
-        </SettingRow>
-        <SettingRow title="Maximum file size" desc="Larger files are skipped (MB)">
-          <input className="input w-24" type="number" min={1} max={100} defaultValue={s.max_file_size_mb} disabled={dis} onBlur={(e) => Number(e.target.value) !== s.max_file_size_mb && onSave({ max_file_size_mb: Number(e.target.value) })} />
-        </SettingRow>
-        <ListEditor
-          title="Accounts not scanned"
-          desc="Files owned by these users are not scanned"
-          items={s.whitelist_users}
-          options={meta.users.map((u) => u.name)}
-          disabled={dis}
-          empty="No whitelisted users"
-          onChange={(v) => onSave({ whitelist_users: v })}
-        />
+        <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500">
+          WordPress core files are checked and repaired from WordPress and CMS. Insecure symbolic links are only reported: delete one from Scanner Logs.
+        </p>
+        <Advanced id="scanner" desc="Scan speed and time zone, the signature feeds one by one, YARA, file size, trim limit, file lists">
+          <SettingRow
+            title="Scan speed"
+            desc="Scans run in their own process (xpguard-scan) at the lowest CPU and disk priority. Low: one core. Auto (recommended): up to a quarter of the cores while the server is quiet, one as soon as it gets busy. Fast: up to half."
+          >
+            <select className="input w-56" value={s.scan_speed === 'low' || s.scan_speed === 'fast' ? s.scan_speed : 'auto'} disabled={dis} onChange={(e) => onSave({ scan_speed: e.target.value as ScannerS['scan_speed'] })}>
+              <option value="auto">Auto (recommended)</option>
+              <option value="low">Low</option>
+              <option value="fast">Fast</option>
+            </select>
+          </SettingRow>
+          <SettingRow title="Scan schedule time zone" desc="The nightly scans run at night in this time zone, whatever the server's own clock is set to.">
+            <select className="input w-56" value={s.schedule_tz || 'Asia/Karachi'} disabled={dis} onChange={(e) => onSave({ schedule_tz: e.target.value })}>
+              {SCHEDULE_TZS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </SettingRow>
+          <SettingRow title="Public malware signatures" desc="Linux Malware Detect (MD5 and hex patterns) and web shell YARA rules (signature-base), collected by the portal.">
+            <Toggle on={s.feeds} disabled={dis} onChange={(v) => onSave({ feeds: v })} />
+          </SettingRow>
+          <SettingRow title="YARA rules" desc="Also run YARA rules placed in /etc/xpguard/yara/*.yar (requires the yara package)">
+            <Toggle on={s.yara} disabled={dis} onChange={(v) => onSave({ yara: v })} />
+          </SettingRow>
+          <SettingRow title="Trim at most" desc="Larger injections quarantine the whole file (% of the file).">
+            <input
+              className="input w-20"
+              type="number"
+              min={1}
+              max={50}
+              defaultValue={s.trim_max_percent}
+              disabled={dis}
+              onBlur={(e) => Number(e.target.value) !== s.trim_max_percent && onSave({ trim_max_percent: Number(e.target.value) })}
+            />
+          </SettingRow>
+          <SettingRow title="Maximum file size" desc="Larger files are skipped (MB)">
+            <input className="input w-24" type="number" min={1} max={100} defaultValue={s.max_file_size_mb} disabled={dis} onBlur={(e) => Number(e.target.value) !== s.max_file_size_mb && onSave({ max_file_size_mb: Number(e.target.value) })} />
+          </SettingRow>
+        <ExceptionsNote />
         <ListEditor
           title="Whitelist Files"
           desc="File name, or absolute file/directory path, to exclude from the scanner"
@@ -433,6 +499,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
           empty="No blacklisted files"
           onChange={(v) => onSave({ blacklist_names: v })}
         />
+        </Advanced>
       </div>
     </div>
   );
@@ -484,7 +551,7 @@ const AI_PROVIDERS = [
   {
     v: 'builtin',
     l: 'Built-in AI model (free, offline)',
-    d: 'xPGuard’s own model runs on this server. Free, private, nothing is sent anywhere. It still learns from the fleet when "Learn from all servers" is on.',
+    d: 'xPGuard’s own model runs on this server. Free, private, nothing is sent anywhere. It uses only decisions an administrator approved for the fleet.',
   },
   {
     v: 'portal',
@@ -539,6 +606,7 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
               </>
             )}
           </div>
+          <Advanced id="ai" desc="Which files go to the AI, files per hour, excerpt size">
           <div className="mb-2 text-sm font-medium text-navy-900">Which files go to the AI</div>
           <div className="grid gap-2 pb-3 md:grid-cols-2">
             {[
@@ -562,21 +630,31 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
           <SettingRow title="Excerpt size" desc="How much of a big file is sent (KB). The start, end and risky parts are kept; smaller = fewer tokens.">
             <input className="input w-28" type="number" min={2} max={64} value={f.max_kb} disabled={dis} onChange={(e) => setF({ ...f, max_kb: Number(e.target.value) })} />
           </SettingRow>
+          </Advanced>
         </>
       )}
-      <SettingRow
-        title="Restore false positives"
-        desc="When the AI is at least 90% sure a detected file is clean, put it back from quarantine (or re-enable it). The scanner then never flags that content again, on any server."
-        recommended
-      >
-        <Toggle on={f.restore_clean} disabled={dis} onChange={(v) => setF({ ...f, restore_clean: v })} />
-      </SettingRow>
-      <SettingRow title="Learn from all servers" desc="Files any linked server’s AI found malicious are detected here immediately, and this server’s built-in model gets the fleet’s training updates." recommended>
-        <Toggle on={f.learn} disabled={dis} onChange={(v) => setF({ ...f, learn: v })} />
-      </SettingRow>
-      <SettingRow title="Act on AI verdicts" desc="Quarantine or disable (per the virus action) files the AI is at least 80% sure are malicious">
-        <Toggle on={f.act} disabled={dis} onChange={(v) => setF({ ...f, act: v })} />
-      </SettingRow>
+      <div className="py-3">
+        <div className="mb-2 text-sm font-medium text-navy-900">What the AI may do</div>
+        <div className="grid gap-2 md:grid-cols-2">
+          {[
+            { v: false, l: 'Only advise', d: 'Its opinion and reason are shown next to each detection; you decide. Nothing is moved or restored by the AI.' },
+            {
+              v: true,
+              l: 'Act on confident verdicts (recommended)',
+              d: 'At least 80% sure it is malware: the virus action is applied. At least 90% sure it is clean: the file is put back from quarantine and not flagged again.',
+            },
+          ].map((o) => (
+            <label key={String(o.v)} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${f.act === o.v && f.restore_clean === o.v ? 'border-navy-600 bg-navy-100/40' : 'border-slate-200'}`}>
+              <input type="radio" className="mt-1" disabled={dis} checked={f.act === o.v && f.restore_clean === o.v} onChange={() => setF({ ...f, act: o.v, restore_clean: o.v })} />
+              <div>
+                <div className="text-sm font-medium text-navy-900">{o.l}</div>
+                <div className="text-xs text-slate-500">{o.d}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+        {f.act !== f.restore_clean && <p className="mt-2 text-xs text-amber-700">Set by hand earlier: {f.act ? 'acts on malware but does not restore' : 'restores clean files but does not act on malware'}. Pick one above.</p>}
+      </div>
       <div className="flex justify-end">
         <button className="btn-primary" disabled={dis || JSON.stringify(f) === JSON.stringify(s)} onClick={() => onSave(f)}>
           Save AI scanner
@@ -611,7 +689,6 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         <SettingRow title="Kill malicious processes" desc="Miners and reverse shells are killed at once. Programs that only run from an unusual place (temporary or hidden folder, deleted program) are killed only when they have run for 30 minutes and keep at least half a CPU core busy (like a miner); a short load spike never gets a process killed. Everything else is only alerted.">
           <Toggle on={st.processes.kill} disabled={dis || !st.processes.enabled} onChange={(v) => save({ processes: { kill: v } })} />
         </SettingRow>
-        <ListEditor title="Accounts the process monitor skips" desc="Processes running under these users will not be monitored or terminated" items={st.processes.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ processes: { whitelist_users: v } })} />
         <ListEditor title="Whitelist Strings" desc="Skip processes whose path or command line contains these strings" items={st.processes.whitelist_strings} disabled={dis} onChange={(v) => void save({ processes: { whitelist_strings: v } })} />
       </div>
       <div className="my-3 rounded-xl border border-slate-200 p-4">
@@ -621,7 +698,6 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
         <SettingRow title="Disable malicious cron jobs" desc="Comment out malicious lines in the user's crontab (the rest is kept): downloaded and run scripts, miners, backdoors, programs in temporary folders, files the scanner found. Lines that only start a program from a hidden folder are alerted, not switched off, and developer tools (PM2 or Node.js from nvm at boot) are not flagged. Re-enable a line from Process & Cron Monitor. Off: alert only">
           <Toggle on={st.cron.disable ?? true} disabled={dis || !st.cron.enabled} onChange={(v) => save({ cron: { disable: v } })} />
         </SettingRow>
-        <ListEditor title="Accounts whose cron jobs are not checked" desc="Cron jobs from these users will not be monitored" items={st.cron.whitelist_users} options={users} disabled={dis} onChange={(v) => void save({ cron: { whitelist_users: v } })} />
       </div>
       <SettingRow title="Keep logs for" desc="How long to keep xPGuard logs and quarantined files on the server">
         <select className="input w-40" value={st.scanner.keep_days} disabled={dis} onChange={(e) => save({ scanner: { keep_days: Number(e.target.value) } })}>
@@ -1080,7 +1156,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
           </SettingRow>
         )}
         <LearnedExclusions
-          mode={s.auto_exclusions ?? 'auto'}
+          mode={s.auto_exclusions === 'off' ? 'off' : 'suggest'}
           items={info.data?.auto_exclusions ?? []}
           cpanelOff={info.data?.cpanel_off ?? []}
           disabled={dis}
@@ -1130,7 +1206,11 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
                         on={r.enabled}
                         disabled={dis || !s.enabled}
                         onChange={async (v) => {
-                          const res = await run(() => agentCall<{ warning?: string }>(serverId, 'waf.rule', { id: r.id, enabled: v }), `Rule ${r.id} ${v ? 'on' : 'off'}`);
+                          const res = await run(
+                            () => agentCall<{ warning?: string }>(serverId, 'waf.rule', { id: r.id, enabled: v }),
+                            `Rule ${r.id} ${v ? 'on' : 'off'}`,
+                            () => agentCall(serverId, 'waf.rule', { id: r.id, enabled: !v }).then(() => onReload()),
+                          );
                           if (res?.warning) alert(res.warning);
                           info.reload();
                           onReload();
@@ -1183,11 +1263,12 @@ function WafLevel({ level, disabled, onChange }: { level: 'low' | 'normal' | 'st
   );
 }
 
-/** Less used WAF options, closed until opened (remembered per browser). */
-function Advanced({ children }: { children: ReactNode }) {
+/** Less used options, closed until opened (remembered per browser). */
+function Advanced({ children, id = 'waf', desc = 'Tor, false-positive protection, per-site rule exclusions, PHP uploads and single xPGuard rules' }: { children: ReactNode; id?: string; desc?: string }) {
+  const key = `xg-${id}-advanced`;
   const [open, setOpen] = useState(() => {
     try {
-      return localStorage.getItem('xg-waf-advanced') === '1';
+      return localStorage.getItem(key) === '1';
     } catch {
       return false;
     }
@@ -1195,7 +1276,7 @@ function Advanced({ children }: { children: ReactNode }) {
   const toggle = () => {
     setOpen(!open);
     try {
-      localStorage.setItem('xg-waf-advanced', open ? '0' : '1');
+      localStorage.setItem(key, open ? '0' : '1');
     } catch {
       /* private window */
     }
@@ -1205,7 +1286,7 @@ function Advanced({ children }: { children: ReactNode }) {
       <button type="button" className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left" onClick={toggle} aria-expanded={open}>
         <span>
           <span className="font-medium text-navy-900">Advanced options</span>
-          <span className="block text-sm text-slate-500">Tor, false-positive protection, per-site rule exclusions, PHP uploads and single xPGuard rules</span>
+          <span className="block text-sm text-slate-500">{desc}</span>
         </span>
         <ChevronDown className={`h-5 w-5 shrink-0 text-slate-400 transition ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -1316,7 +1397,7 @@ function VendorRulesCard({ serverId, name, admin, onChanged }: { serverId: strin
   );
 }
 
-function CMSSection({ s, meta, admin, busy, onSave }: { s: CMSS; meta: Meta; admin: boolean; busy: boolean; onSave: (p: Partial<CMSS>) => void }) {
+function CMSSection({ s, meta, admin, busy, onSave, repair, onCore }: { s: CMSS; meta: Meta; admin: boolean; busy: boolean; onSave: (p: Partial<CMSS>) => void; repair: boolean; onCore: (v: boolean) => void }) {
   const dis = !admin || busy;
   const [cvss, setCvss] = useState(s.auto_update_cvss);
   const [days, setDays] = useState(s.auto_update_days);
@@ -1330,8 +1411,12 @@ function CMSSection({ s, meta, admin, busy, onSave }: { s: CMSS; meta: Meta; adm
         </div>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </div>
-      <SettingRow title="Verify WordPress core files" desc="Compare every core file with the official checksums from wordpress.org" recommended>
-        <Toggle on={s.core_check} disabled={dis || !s.enabled} onChange={(v) => onSave({ core_check: v })} />
+      <SettingRow
+        title="WordPress core: check and repair"
+        desc="Compare every core file with the official checksums from wordpress.org, and replace an infected core file with the official one of the site's version (checked against the checksum). Official core files are never flagged."
+        recommended
+      >
+        <Toggle on={s.core_check || repair} disabled={dis || !s.enabled} onChange={onCore} />
       </SettingRow>
       <SettingRow title="Scan WordPress databases" desc="Look for injected scripts, hidden iframes and PHP code in posts and options (read-only)" recommended>
         <Toggle on={s.db_scan} disabled={dis || !s.enabled} onChange={(v) => onSave({ db_scan: v })} />
@@ -1387,7 +1472,6 @@ function CMSSection({ s, meta, admin, busy, onSave }: { s: CMSS; meta: Meta; adm
         </div>
       </div>
       <ListEditor title="Blacklisted WordPress plugins" desc="Automatically deactivate these plugins (slug) during CMS checks" items={s.blacklist_plugins ?? []} disabled={dis} placeholder="plugin-slug" onChange={(v) => onSave({ blacklist_plugins: v.map((x) => x.toLowerCase()) })} />
-      <ListEditor title="Exclude users from auto patches" desc="CMSs of these users won't be updated, patched or have plugins auto-disabled" items={s.exclude_users ?? []} options={meta.users.map((u) => u.name)} disabled={dis} onChange={(v) => onSave({ exclude_users: v })} />
       <SettingRow title="Scan interval" desc="How often all websites are re-checked. Scheduled checks run at night (3:00–6:00, scan schedule time zone) at the lowest priority, and a database that did not change since the last check is not searched again. Scan now runs at once.">
         <select className="input w-40" value={s.interval_hours} disabled={dis || !s.enabled} onChange={(e) => onSave({ interval_hours: Number(e.target.value) })}>
           {[24, 48, 72, 168].map((h) => (
@@ -1479,14 +1563,7 @@ function SuspendSection({ serverId, s, admin, busy, onSave }: { serverId: string
       <SettingRow title="Within (hours)" desc="Time window for counting detections">
         <NumberSave label="hours" value={s.window_hours} min={1} disabled={dis || !s.enabled} onSave={(v) => onSave({ window_hours: v })} />
       </SettingRow>
-      <ListEditor
-        title="Never suspend"
-        desc="Accounts excluded from automatic suspension"
-        items={s.exclude_users}
-        options={(meta.data?.meta.users ?? []).map((u) => u.name)}
-        disabled={dis}
-        onChange={(v) => onSave({ exclude_users: v })}
-      />
+      <ExceptionsNote />
       <SettingRow title="Suspend on domain blacklist" desc="Automatically suspend an account when one of its domains becomes blacklisted">
         <Toggle on={s.on_domain_blacklist} disabled={dis} onChange={(v) => onSave({ on_domain_blacklist: v })} />
       </SettingRow>
@@ -1713,7 +1790,6 @@ function NotificationsSection({ serverId, s, meta, admin, busy, onSave }: { serv
           <option value="monthly">Monthly</option>
         </select>
       </SettingRow>
-      <ListEditor title="Excluded users" desc="Selected users will not receive notifications" items={s.exclude_users ?? []} options={meta.users.map((u) => u.name)} disabled={dis} onChange={(v) => onSave({ exclude_users: v })} />
     </div>
   );
 }

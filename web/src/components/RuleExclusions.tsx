@@ -162,8 +162,7 @@ export interface LearnedExclusion extends RuleExclusion {
 }
 
 const MODES = [
-  { v: 'auto', l: 'Switch off automatically (recommended)' },
-  { v: 'suggest', l: 'Only suggest, I decide' },
+  { v: 'suggest', l: 'Suggest, I approve each one (recommended)' },
   { v: 'off', l: 'Off' },
 ];
 

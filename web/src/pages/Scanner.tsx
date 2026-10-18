@@ -422,9 +422,12 @@ export function ScannerLogs() {
   const act = async (action: string) => {
     const a = ACTIONS.find((x) => x.v === action)!;
     if (a.confirm && !confirm(a.confirm)) return;
+    const ids = sel;
+    const back: Record<string, string> = { quarantine: 'restore', disable: 'restore', restore: 'quarantine' };
     const r = await run(
-      () => agentCall<{ done: number; failed: Record<string, string> }>(id!, 'finding.action', { ids: sel, action }),
+      () => agentCall<{ done: number; failed: Record<string, string> }>(id!, 'finding.action', { ids, action }),
       (r) => `${a.l}: ${r.done} done${Object.keys(r.failed).length ? `, ${Object.keys(r.failed).length} failed` : ''}`,
+      back[action] ? () => agentCall(id!, 'finding.action', { ids, action: back[action] }).then(() => list.reload()) : undefined,
     );
     if (r && Object.keys(r.failed).length) alert(Object.entries(r.failed).map(([k, v]) => `#${k}: ${v}`).join('\n'));
     list.reload();

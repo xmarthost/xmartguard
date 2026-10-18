@@ -279,9 +279,9 @@ type WAF struct {
 	// off for one website or path only, for false positives that should not
 	// turn the rule off everywhere.
 	RuleExclusions []RuleExclusion `json:"rule_exclusions"`
-	// AutoExclusions: false positives learned from the WAF log are switched
-	// off for their website and path ("auto"), only listed ("suggest") or
-	// not looked for ("off").
+	// AutoExclusions: false positives found in the WAF log are listed for an
+	// administrator to approve ("suggest") or not looked for ("off"). The
+	// old "auto" (switched off without asking) reads as "suggest".
 	AutoExclusions string `json:"auto_exclusions"`
 	// Level is how strict the WAF is: "low" (only clear attacks: OWASP CRS
 	// threshold 20, no IPDB/Tor POST blocks), "normal" (threshold 10;
@@ -800,11 +800,14 @@ func normalize(s *Settings) {
 		s.Scanner.ScheduleTZ = "Asia/Karachi"
 	}
 	s.WAF.RuleExclusions = CleanExclusions(s.WAF.RuleExclusions)
-	switch s.WAF.AutoExclusions {
-	case "auto", "suggest", "off":
-	default:
-		s.WAF.AutoExclusions = "auto"
+	// Nothing is learned automatically any more: "auto" became "suggest"
+	// (exclusions already learned stay; new ones wait for an approval).
+	if s.WAF.AutoExclusions != "off" {
+		s.WAF.AutoExclusions = "suggest"
 	}
+	// Insecure symbolic links are only reported (deleting them broke
+	// customers' own setups); an administrator deletes one by hand.
+	s.Scanner.DeleteSymlinks = false
 	switch s.WAF.TorAction {
 	case "off", "captcha", "post", "block":
 	default:

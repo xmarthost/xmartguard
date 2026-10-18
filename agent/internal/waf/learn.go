@@ -203,7 +203,9 @@ func (m *Manager) saveAuto(list []AutoExclusion) {
 
 // activeAuto are the learned exclusions the rules use.
 func (m *Manager) activeAuto() []settings.RuleExclusion {
-	if m.Settings.Get().WAF.AutoExclusions != "auto" {
+	// Learned exclusions apply once approved (or learned back when they
+	// were switched on by themselves); "off" uses none.
+	if m.Settings.Get().WAF.AutoExclusions == "off" {
 		return nil
 	}
 	var out []settings.RuleExclusion

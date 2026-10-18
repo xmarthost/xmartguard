@@ -536,7 +536,12 @@ function AddRemove({ serverId, kind, label, placeholder = 'Enter IP or CIDR rang
     const err = isIPorCIDR(addr.trim());
     if (err) return alert(err);
     const minutes = withDuration ? Number(dur) * Number(unit) : 0;
-    const r = await run(() => agentCall(serverId, 'fw.add', { kind, addr: addr.trim(), comment, minutes }), `${addr.trim()} added`);
+    const a = addr.trim();
+    const r = await run(
+      () => agentCall(serverId, 'fw.add', { kind, addr: a, comment, minutes }),
+      `${a} added`,
+      () => agentCall(serverId, 'fw.remove', { kind, addr: a }).then(() => onChanged?.()),
+    );
     if (r) {
       setAddr('');
       setComment('');

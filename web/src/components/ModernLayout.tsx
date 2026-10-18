@@ -300,6 +300,35 @@ function UserMenu() {
   );
 }
 
+const SERVER_COLORS = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#db2777', '#4f46e5'];
+
+/** A server's own colour (the same every time), to tell open servers apart. */
+export function serverColor(id: string): string {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return SERVER_COLORS[h % SERVER_COLORS.length];
+}
+
+/** Inside a server: its name and colour in the header, so an action is
+ *  never taken on the wrong server by mistake. */
+function ServerBadge() {
+  const m = useMatch('/servers/:id/*');
+  const id = m?.params.id && m.params.id !== 'add' ? m.params.id : '';
+  const { data } = useApi<{ server: { hostname: string } }>(id ? `/api/servers/${id}` : null);
+  if (!id || !data) return null;
+  const color = serverColor(id);
+  return (
+    <span
+      className="hidden max-w-xs items-center gap-2 truncate rounded-full border px-3 py-1 text-sm font-medium md:inline-flex"
+      style={{ borderColor: color, color }}
+      title="The server you are working on"
+    >
+      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
+      <span className="truncate">{data.server.hostname}</span>
+    </span>
+  );
+}
+
 /** The Modern style's frame: a light sidebar with labels and a white header. */
 export default function ModernLayout({ entries, bottom, children }: { entries: ModernEntry[]; bottom: ModernEntry[]; children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -328,6 +357,7 @@ export default function ModernLayout({ entries, bottom, children }: { entries: M
             <img src="/xpguard-mark.png" alt="xPGuard" className="h-8 w-auto sm:hidden" />
           </Link>
           <ServerSearch />
+          <ServerBadge />
           <div className="ml-auto flex items-center gap-1 sm:gap-3">
             <Alerts />
             <ModeButton />

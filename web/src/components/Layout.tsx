@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useMatch } from 'react-router-dom';
 import {
-  BookOpen, BadgeCheck, ShieldOff, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
+  BookOpen, BadgeCheck, ShieldOff, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -49,10 +49,8 @@ export default function Layout({ children }: { children: ReactNode }) {
           icon: <ShieldAlert />,
           children: [
             { to: `${base}/firewall`, label: 'Firewall', icon: <Flame /> },
-            { to: `${base}/firewall-logs`, label: 'Firewall Logs', icon: <ListX /> },
-            { to: `${base}/waf-logs`, label: 'WAF Logs', icon: <ShieldCheck /> },
-            { to: `${base}/ipdb`, label: 'IPDB', icon: <Globe2 /> },
-            { to: `${base}/bot-attacks`, label: 'Bot Attacks', icon: <Bot /> },
+            { to: `${base}/events`, label: 'Security Events', icon: <ListX /> },
+            { to: `${base}/allow`, label: 'Allow list', icon: <BadgeCheck /> },
             { to: `${base}/osm`, label: 'Outgoing Spam Monitor', icon: <MailWarning /> },
           ],
         },
@@ -61,8 +59,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           icon: <HeartPulse />,
           children: [
             { to: `${base}/monitoring`, label: 'System Monitoring', icon: <Activity /> },
-            { to: `${base}/domain-reputation`, label: 'Domain Reputation', icon: <Globe /> },
-            { to: `${base}/ip-reputation`, label: 'IP Reputation', icon: <Radar /> },
+            { to: `${base}/reputation`, label: 'Reputation', icon: <Radar /> },
             { to: `${base}/security-monitor`, label: 'Process & Cron Monitor', icon: <Cpu /> },
             { to: `${base}/server-audit`, label: 'Server Audit', icon: <ClipboardCheck /> },
           ],

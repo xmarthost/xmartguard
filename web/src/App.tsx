@@ -20,9 +20,7 @@ const SupportPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m
 const UsersPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.UsersPage })));
 const ManualScans = lazy(() => import('./pages/Scanner').then((m) => ({ default: m.ManualScans })));
 const ScannerLogs = lazy(() => import('./pages/Scanner').then((m) => ({ default: m.ScannerLogs })));
-const FirewallLogs = lazy(() => import('./pages/Firewall').then((m) => ({ default: m.FirewallLogs })));
 const FirewallPage = lazy(() => import('./pages/Firewall').then((m) => ({ default: m.FirewallPage })));
-const IPReputation = lazy(() => import('./pages/Firewall').then((m) => ({ default: m.IPReputation })));
 const TrustedServices = lazy(() => import('./pages/TrustedServices'));
 const MailProtection = lazy(() => import('./pages/MailProtection'));
 const FleetDomainReputation = lazy(() => import('./pages/DomainReputation'));
@@ -32,13 +30,13 @@ const ServerAudit = lazy(() => import('./pages/ServerAudit'));
 const LearningCenter = lazy(() => import('./pages/LearningCenter'));
 const BlockLookup = lazy(() => import('./pages/BlockLookup'));
 const FleetHealth = lazy(() => import('./pages/FleetHealth'));
+const SecurityEvents = lazy(() => import('./pages/SecurityEvents'));
+const Reputation = lazy(() => import('./pages/Reputation'));
+const AllowList = lazy(() => import('./pages/AllowList'));
 const Unblock = lazy(() => import('./pages/Unblock'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
-const BotAttacks = lazy(() => import('./pages/WAF').then((m) => ({ default: m.BotAttacks })));
-const WafLogs = lazy(() => import('./pages/WAF').then((m) => ({ default: m.WafLogs })));
 const CMSThreats = lazy(() => import('./pages/CMS').then((m) => ({ default: m.CMSThreats })));
 const DBScanner = lazy(() => import('./pages/CMS').then((m) => ({ default: m.DBScanner })));
-const DomainReputation = lazy(() => import('./pages/Mail').then((m) => ({ default: m.DomainReputation })));
 const OutgoingSpam = lazy(() => import('./pages/Mail').then((m) => ({ default: m.OutgoingSpam })));
 const MassOperations = lazy(() => import('./pages/MassOperations'));
 const CustomerServers = lazy(() => import('./pages/CustomerServers'));
@@ -47,7 +45,6 @@ const AIConnector = lazy(() => import('./pages/AIConnector'));
 const WafRuleSets = lazy(() => import('./pages/WafRuleSets'));
 const AppearancePage = lazy(() => import('./pages/AppearancePage'));
 const IPDBPage = lazy(() => import('./pages/IPDB'));
-const ServerIPDB = lazy(() => import('./pages/ServerIPDB'));
 
 function Protected({ children, role }: { children: ReactNode; role?: 'owner' | 'admin' }) {
   const { user, loading } = useAuth();
@@ -81,15 +78,18 @@ export default function App() {
         <Route path="/servers/:id/scanner" element={<Protected><ManualScans /></Protected>} />
         <Route path="/servers/:id/scanner-logs" element={<Protected><ScannerLogs /></Protected>} />
         <Route path="/servers/:id/firewall" element={<Protected><FirewallPage /></Protected>} />
-        <Route path="/servers/:id/firewall-logs" element={<Protected><FirewallLogs /></Protected>} />
-        <Route path="/servers/:id/ip-reputation" element={<Protected><IPReputation /></Protected>} />
+        <Route path="/servers/:id/firewall-logs" element={<Protected><SecurityEvents initial="firewall" /></Protected>} />
+        <Route path="/servers/:id/ip-reputation" element={<Protected><Reputation initial="ip" /></Protected>} />
+        <Route path="/servers/:id/reputation" element={<Protected><Reputation /></Protected>} />
         <Route path="/servers/:id/osm" element={<Protected><OutgoingSpam /></Protected>} />
-        <Route path="/servers/:id/domain-reputation" element={<Protected><DomainReputation /></Protected>} />
+        <Route path="/servers/:id/domain-reputation" element={<Protected><Reputation initial="domains" /></Protected>} />
         <Route path="/servers/:id/cms" element={<Protected><CMSThreats /></Protected>} />
         <Route path="/servers/:id/db-scanner" element={<Protected><DBScanner /></Protected>} />
-        <Route path="/servers/:id/waf-logs" element={<Protected><WafLogs /></Protected>} />
-        <Route path="/servers/:id/bot-attacks" element={<Protected><BotAttacks /></Protected>} />
-        <Route path="/servers/:id/ipdb" element={<Protected><ServerIPDB /></Protected>} />
+        <Route path="/servers/:id/waf-logs" element={<Protected><SecurityEvents initial="waf" /></Protected>} />
+        <Route path="/servers/:id/events" element={<Protected><SecurityEvents /></Protected>} />
+        <Route path="/servers/:id/allow" element={<Protected><AllowList /></Protected>} />
+        <Route path="/servers/:id/bot-attacks" element={<Protected><SecurityEvents initial="bots" /></Protected>} />
+        <Route path="/servers/:id/ipdb" element={<Protected><SecurityEvents initial="ipdb" /></Protected>} />
         <Route path="/servers/:id/settings" element={<Protected><SettingsPage /></Protected>} />
         <Route path="/servers/:id/security-monitor" element={<Protected><SecurityMonitor /></Protected>} />
         <Route path="/servers/:id/server-audit" element={<Protected><ServerAudit /></Protected>} />

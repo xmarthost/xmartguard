@@ -100,14 +100,21 @@ func TestLearnFalsePositives(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := m.AutoExclusions()
-	if !changed || len(got) != 1 {
+	if changed || len(got) != 1 {
 		t.Fatalf("changed=%v, learned %+v", changed, got)
 	}
 	e := got[0]
-	if e.Rule != 942100 || e.Domain != "hapetsupplies.com" || e.Path != "/wp-content/uploads/" || e.State != "active" || e.IPs != 4 || e.Where != "REQUEST_COOKIES:cart" {
+	if e.Rule != 942100 || e.Domain != "hapetsupplies.com" || e.Path != "/wp-content/uploads/" || e.State != "suggested" || e.IPs != 4 || e.Where != "REQUEST_COOKIES:cart" {
 		t.Fatalf("learned %+v", e)
 	}
-	// It is in the rules, for that website and path only.
+	// Only a suggestion: nothing changes until an administrator accepts it.
+	if strings.Contains(Render(settings.WAF{}, Options{Dynamic: m.dynamic()}), "7704500") {
+		t.Fatal("suggestion applied without approval")
+	}
+	if err := m.SetAutoExclusion(e.Key, "accept"); err != nil {
+		t.Fatal(err)
+	}
+	// Accepted, it is in the rules, for that website and path only.
 	rules := Render(settings.WAF{}, Options{Dynamic: m.dynamic()})
 	if !strings.Contains(rules, `"id:7704500,`) || !strings.Contains(rules, `@beginsWith /wp-content/uploads/" "t:none,t:urlDecodeUni,ctl:ruleRemoveById=942100"`) {
 		t.Fatalf("learned exclusion not rendered:\n%s", rules)
@@ -125,11 +132,11 @@ func TestLearnFalsePositives(t *testing.T) {
 	}
 	// Forgotten: learned again while the false positive goes on.
 	m.SetAutoExclusion(e.Key, "forget")
-	if changed, _ := m.Learn(now + 180); !changed || len(m.AutoExclusions()) != 1 {
-		t.Fatal("not learned again after forget")
+	if m.Learn(now + 180); len(m.AutoExclusions()) != 1 || m.AutoExclusions()[0].State != "suggested" {
+		t.Fatal("not suggested again after forget")
 	}
 	// Learned exclusions expire after 30 days.
-	if changed, _ := m.Learn(now + 31*86400); !changed || len(m.AutoExclusions()) != 0 {
+	if m.Learn(now + 31*86400); len(m.AutoExclusions()) != 0 {
 		t.Fatalf("not expired: %+v", m.AutoExclusions())
 	}
 }
