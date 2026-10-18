@@ -23,6 +23,13 @@ beforeAll(async () => {
   h.hub.isOnline = () => true;
   h.hub.command = async (id: string, action: string, params: unknown) => {
     if (action === 'waf.intel') pushed.push({ id, params: params as (typeof pushed)[0]['params'] });
+    if (action === 'waf.watch_report') {
+      const n = servers.findIndex((s) => s.id === id);
+      return {
+        rules: [{ id: 7700510, title: 'Shop scraping', since: '0.21.31', watching: true, hits: n + 1, ips: 1, hosts: 1,
+          examples: [{ at: 1, ip: '198.51.100.7', method: 'GET', host: 'shop.example', uri: '/?filter_color=a,b,c', action: 'Logged', detail: '' }] }],
+      };
+    }
     return { ok: true };
   };
 });
@@ -92,6 +99,22 @@ describe('WAF fleet intelligence', () => {
     expect(off.names).toEqual([]);
     expect(off.patches).toEqual([]);
     expect((await admin.req('PUT', '/api/waf/intel/config', { enabled: true, min_servers: 0, disabled_patches: [] })).status).toBe(400);
+  });
+
+  it('lists new rules with their fleet-wide matches; approving one makes it block', async () => {
+    const g = await admin.req('GET', '/api/waf/approvals?hours=48');
+    expect(g.status).toBe(200);
+    const r = g.body.rules.find((x: { id: number }) => x.id === 7700510);
+    expect(r).toMatchObject({ servers: 3, watching: 3, hits: 6, hit_servers: 3, decision: null });
+    expect(r.examples[0].server).toMatch(/^web-/);
+    pushed.length = 0;
+    expect((await admin.req('POST', '/api/waf/approvals', { rule_id: 7700510, status: 'enforce' })).status).toBe(200);
+    expect(pushed.length).toBe(3);
+    expect((pushed[0].params as unknown as { enforce: number[] }).enforce).toEqual([7700510]);
+    expect((await agent(0, { etag: '', reports: [] })).body.intel.enforce).toEqual([7700510]);
+    await admin.req('POST', '/api/waf/approvals', { rule_id: 7700510, status: 'watch' });
+    expect((await agent(0, { etag: '', reports: [] })).body.intel.enforce).toEqual([]);
+    expect((await admin.req('POST', '/api/waf/approvals', { rule_id: 12, status: 'enforce' })).status).toBe(400);
   });
 
   it('refuses unsigned reports', async () => {

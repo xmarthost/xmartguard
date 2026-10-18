@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useMatch } from 'react-router-dom';
 import {
-  BookOpen, BadgeCheck, ShieldQuestion, Brain, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck, Download,
+  BookOpen, BadgeCheck, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, Bot, Globe, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '../auth';
 import { useApi } from '../hooks';
@@ -79,7 +79,6 @@ export default function Layout({ children }: { children: ReactNode }) {
           icon: <ShieldHalf />,
           children: [
             { to: '/waf-rulesets', label: 'WAF Rule Sets', icon: <ShieldHalf /> },
-            { to: '/waf-intel', label: 'WAF Intelligence', icon: <Brain /> },
             { to: '/captcha-page', label: 'CAPTCHA Page', icon: <ShieldQuestion /> },
             { to: '/ipdb', label: 'IPDB', icon: <ShieldBan /> },
             { to: '/trusted-services', label: 'Trusted Services', icon: <BadgeCheck /> },
@@ -92,11 +91,10 @@ export default function Layout({ children }: { children: ReactNode }) {
           icon: <BrainCircuit />,
           children: [
             { to: '/ai', label: 'AI Scanner', icon: <BrainCircuit /> },
-            { to: '/ai-learning', label: 'AI Learning', icon: <Brain /> },
-            { to: '/xpguard-learning', label: 'xPGuard Learning', icon: <Download /> },
             { to: '/ai-connector', label: 'AI Connector', icon: <Cable /> },
           ],
         },
+        { label: 'Learning Center', icon: <GraduationCap />, to: '/learning' },
         { label: 'Mass Operations', icon: <Layers />, to: '/mass-operations' },
         { label: 'Appearance', icon: <Palette />, to: '/appearance' },
       ]

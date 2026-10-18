@@ -9,7 +9,7 @@ const HOURS = [1, 6, 12, 24, 48, 72, 168];
  * server. Nothing here changes a server: the files are read, reviewed, and
  * improvements are released as updates.
  */
-export default function LearningExport() {
+export default function LearningExport({ embedded = false }: { embedded?: boolean }) {
   const [hours, setHours] = useState(24);
   const card = (kind: 'waf' | 'detections', icon: ReactNode, title: string, desc: string, cols: string) => (
     <div className="card flex flex-col gap-3 p-5">
@@ -27,7 +27,7 @@ export default function LearningExport() {
   );
   return (
     <div className="space-y-5">
-      <Breadcrumb items={['AI', 'xPGuard Learning']} />
+      {!embedded && <Breadcrumb items={['AI', 'xPGuard Learning']} />}
       <div className="max-w-3xl">
         <h1 className="h-title">xPGuard Learning</h1>
         <p className="text-sm text-slate-500">

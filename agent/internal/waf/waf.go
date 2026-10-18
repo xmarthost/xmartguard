@@ -580,14 +580,28 @@ func (m *Manager) RuleCatalog() []CatalogRule {
 	now := store.Now()
 	day, week := m.ruleHits(now-86400), m.ruleHits(now-7*86400)
 	rules := append([]RuleInfo(nil), Catalog...)
+	var in *Intel
 	if m.Intel != nil {
-		if in := m.Intel().Clean(); in != nil {
+		in = m.Intel().Clean()
+	}
+	watching := Monitored(in)
+	for i := range rules {
+		if watching[rules[i].ID] {
+			rules[i].Action = "watch"
+		}
+	}
+	{
+		if in != nil {
 			for _, p := range in.Patches {
 				t := "Portal patch: " + p.Title
 				if p.CVE != "" {
 					t += " (" + p.CVE + ")"
 				}
-				rules = append(rules, RuleInfo{p.ID, "virtual_patches", t, "block"})
+				act := "block"
+				if p.Monitor {
+					act = "watch"
+				}
+				rules = append(rules, RuleInfo{p.ID, "virtual_patches", t, act})
 			}
 		}
 	}

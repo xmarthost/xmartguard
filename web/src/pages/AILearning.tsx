@@ -116,7 +116,7 @@ function Files({ sig, onClose }: { sig: string; onClose: () => void }) {
 }
 
 /** Master: the scanner's false positives the AI restored, by signature, with decisions and an export. */
-export default function AILearning() {
+export default function AILearning({ embedded = false }: { embedded?: boolean }) {
   const { user } = useAuth();
   const admin = !!user && can(user, 'admin');
   const [q, setQ] = useState('');
@@ -149,7 +149,7 @@ export default function AILearning() {
   const t = d?.totals;
   return (
     <div className="space-y-5">
-      <Breadcrumb items={['AI', 'AI Learning']} />
+      {!embedded && <Breadcrumb items={['AI', 'AI Learning']} />}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="h-title flex items-center gap-2">

@@ -813,7 +813,7 @@ func Render(c settings.WAF, o Options) string {
 		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
 		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
 	}
-	return b.String()
+	return applyMonitor(b.String(), Monitored(o.Intel))
 }
 
 // RenderLoginWatch is what stays of xPGuard's rules where another rule set

@@ -56,7 +56,7 @@ function savedPageSize(): number {
 
 /** Overview » WAF Intelligence: web shell names learned from the scanners of
  *  all servers, and the portal's virtual patches. */
-export default function WafIntel() {
+export default function WafIntel({ embedded = false }: { embedded?: boolean }) {
   const { user } = useAuth();
   const admin = can(user, 'admin');
   const res = useApi<Resp>('/api/waf/intel');
@@ -92,7 +92,7 @@ export default function WafIntel() {
 
   return (
     <div className="space-y-5">
-      <Breadcrumb items={['Overview', 'WAF Intelligence']} />
+      {!embedded && <Breadcrumb items={['Overview', 'WAF Intelligence']} />}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="h-title flex items-center gap-2">

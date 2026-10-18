@@ -27,10 +27,9 @@ const TrustedServices = lazy(() => import('./pages/TrustedServices'));
 const MailProtection = lazy(() => import('./pages/MailProtection'));
 const FleetDomainReputation = lazy(() => import('./pages/DomainReputation'));
 const CaptchaPage = lazy(() => import('./pages/CaptchaPage'));
-const WafIntel = lazy(() => import('./pages/WafIntel'));
 const SecurityMonitor = lazy(() => import('./pages/SecurityMonitor'));
 const ServerAudit = lazy(() => import('./pages/ServerAudit'));
-const LearningExport = lazy(() => import('./pages/LearningExport'));
+const LearningCenter = lazy(() => import('./pages/LearningCenter'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
 const BotAttacks = lazy(() => import('./pages/WAF').then((m) => ({ default: m.BotAttacks })));
 const WafLogs = lazy(() => import('./pages/WAF').then((m) => ({ default: m.WafLogs })));
@@ -40,7 +39,6 @@ const DomainReputation = lazy(() => import('./pages/Mail').then((m) => ({ defaul
 const OutgoingSpam = lazy(() => import('./pages/Mail').then((m) => ({ default: m.OutgoingSpam })));
 const MassOperations = lazy(() => import('./pages/MassOperations'));
 const CustomerServers = lazy(() => import('./pages/CustomerServers'));
-const AILearning = lazy(() => import('./pages/AILearning'));
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'));
 const AIConnector = lazy(() => import('./pages/AIConnector'));
 const WafRuleSets = lazy(() => import('./pages/WafRuleSets'));
@@ -97,13 +95,14 @@ export default function App() {
         <Route path="/mail-protection" element={<Protected><MailProtection /></Protected>} />
         <Route path="/domain-reputation" element={<Protected><FleetDomainReputation /></Protected>} />
         <Route path="/captcha-page" element={<Protected><CaptchaPage /></Protected>} />
-        <Route path="/waf-intel" element={<Protected><WafIntel /></Protected>} />
+        <Route path="/waf-intel" element={<Navigate to="/learning?tab=names" replace />} />
         <Route path="/appearance" element={<Protected><AppearancePage /></Protected>} />
         <Route path="/ai-connector" element={<Protected role="admin"><AIConnector /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
         <Route path="/all-servers" element={<Protected><CustomerServers /></Protected>} />
-        <Route path="/ai-learning" element={<Protected><AILearning /></Protected>} />
-        <Route path="/xpguard-learning" element={<Protected role="admin"><LearningExport /></Protected>} />
+        <Route path="/ai-learning" element={<Navigate to="/learning?tab=ai" replace />} />
+        <Route path="/learning" element={<Protected><LearningCenter /></Protected>} />
+        <Route path="/xpguard-learning" element={<Navigate to="/learning?tab=exports" replace />} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />
         <Route path="/security" element={<Protected role="admin"><SecurityLogPage /></Protected>} />

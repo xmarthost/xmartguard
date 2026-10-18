@@ -184,7 +184,21 @@ export async function learnedNames(pool: Pool, accountId: string, cfg: IntelConf
 export interface Intel {
   etag: string;
   names: string[];
-  patches: Omit<PortalPatch, 'plugin'>[];
+  patches: (Omit<PortalPatch, 'plugin'> & { monitor?: boolean })[];
+  /** New rules (and patches) the administrator approved to block. */
+  enforce: number[];
+}
+
+/** Portal patches from this id on are new: they only log until approved. */
+export const FIRST_REVIEWED_PATCH = 7703007;
+
+/** Rules approved to block (the others among the new rules only log). */
+export async function enforcedRules(pool: Pool, accountId: string): Promise<number[]> {
+  const { rows } = await pool.query<{ rule_id: number }>(
+    "SELECT rule_id FROM waf_rule_decisions WHERE account_id = $1 AND status = 'enforce' ORDER BY rule_id",
+    [await masterAccount(pool, accountId)],
+  );
+  return rows.map((r) => r.rule_id);
 }
 
 /** What the agents of an account apply. */
@@ -192,7 +206,12 @@ export async function intelFor(pool: Pool, accountId: string): Promise<Intel> {
   accountId = await masterAccount(pool, accountId);
   const cfg = await loadIntelConfig(pool, accountId);
   const names = cfg.enabled ? (await learnedNames(pool, accountId, cfg)).filter((n) => n.status === 'active').map((n) => n.name).sort().slice(0, 3000) : [];
-  const patches = cfg.enabled ? PATCHES.filter((p) => !cfg.disabled_patches.includes(p.id)).map(({ plugin: _p, ...p }) => p) : [];
-  const etag = createHash('sha256').update(JSON.stringify({ names, patches })).digest('hex').slice(0, 32);
-  return { etag, names, patches };
+  const enforce = await enforcedRules(pool, accountId);
+  const patches = cfg.enabled
+    ? PATCHES.filter((p) => !cfg.disabled_patches.includes(p.id)).map(({ plugin: _p, ...p }) =>
+        p.id >= FIRST_REVIEWED_PATCH && !enforce.includes(p.id) ? { ...p, monitor: true } : p,
+      )
+    : [];
+  const etag = createHash('sha256').update(JSON.stringify({ names, patches, enforce })).digest('hex').slice(0, 32);
+  return { etag, names, patches, enforce };
 }

@@ -198,6 +198,16 @@ func (a *Agent) intelHandlers(h map[string]client.Handler) {
 		c := a.wafIntel()
 		return map[string]any{"ok": true, "names": len(c.Names), "patches": len(c.Patches)}, nil
 	}
+	// New rules under review and what they matched (Rule approvals).
+	h["waf.watch_report"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			Hours int `json:"hours"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"rules": a.WAF.WatchReport(a.wafIntel(), in.Hours)}, nil
+	}
 	h["waf.intel_sync"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
 		return map[string]any{"ok": true}, a.syncIntel(ctx)
 	}

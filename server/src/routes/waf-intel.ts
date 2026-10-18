@@ -5,7 +5,7 @@ import type { AgentHub } from '../agents/hub.js';
 import { audit, requirePlatform } from '../auth.js';
 import { masterAccount, scopeAccounts } from '../tenancy.js';
 import { signedPayload } from '../agent-sign.js';
-import { PATCHES, intelFor, learnedNames, loadIntelConfig, nameOK, type IntelConfig } from '../waf/intel.js';
+import { FIRST_REVIEWED_PATCH, PATCHES, intelFor, learnedNames, loadIntelConfig, nameOK, type IntelConfig } from '../waf/intel.js';
 
 /** WAF fleet intelligence (Overview » WAF Intelligence) and its agent API. */
 export function wafIntelRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub): void {
@@ -78,6 +78,74 @@ export function wafIntelRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub):
       );
     }
     await audit(pool, { accountId: acc, userId: req.user!.id, action: 'waf.intel.name', detail: { name, status: status || 'reset' }, ip: req.ip });
+    return push(acc);
+  });
+
+  // ---- Rule approvals: new rules only log ("watch") until approved here.
+  interface WatchEvent { at: number; ip: string; method: string; host: string; uri: string; action: string; detail: string }
+  interface WatchRule { id: number; title: string; since: string; watching: boolean; hits: number; ips: number; hosts: number; examples: WatchEvent[] | null }
+  app.get('/api/waf/approvals', viewer, async (req) => {
+    const hours = Math.min(336, Math.max(1, Number((req.query as { hours?: string }).hours) || 48));
+    const acc = await masterAccount(pool, req.user!.accountId);
+    const { rows: servers } = await pool.query<{ id: string; hostname: string }>(
+      "SELECT id, hostname FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active' ORDER BY hostname",
+      [await scopeAccounts(pool, acc)],
+    );
+    const { rows: dec } = await pool.query<{ rule_id: number; status: string; updated_at: Date }>('SELECT rule_id, status, updated_at FROM waf_rule_decisions WHERE account_id = $1', [acc]);
+    const decided = new Map(dec.map((d) => [d.rule_id, d]));
+    const rules = new Map<number, { id: number; title: string; since: string; servers: number; watching: number; hits: number; ips: number; sites: number; hit_servers: number; examples: (WatchEvent & { server: string })[] }>();
+    const add = (r: Omit<WatchRule, 'examples' | 'watching' | 'hits' | 'ips' | 'hosts'>) => {
+      let x = rules.get(r.id);
+      if (!x) rules.set(r.id, (x = { id: r.id, title: r.title, since: r.since, servers: 0, watching: 0, hits: 0, ips: 0, sites: 0, hit_servers: 0, examples: [] }));
+      return x;
+    };
+    // Patches under review are listed even before a server reports them.
+    for (const p of PATCHES) if (p.id >= FIRST_REVIEWED_PATCH) add({ id: p.id, title: `Portal patch: ${p.title}`, since: 'portal' });
+    let asked = 0;
+    let answered = 0;
+    const online = servers.filter((s) => hub.isOnline(String(s.id)));
+    let next = 0;
+    const worker = async () => {
+      for (;;) {
+        const srv = online[next++];
+        if (!srv) return;
+        asked++;
+        try {
+          const res = (await hub.command(String(srv.id), 'waf.watch_report', { hours }, 30_000)) as { rules: WatchRule[] | null };
+          answered++;
+          for (const r of res.rules ?? []) {
+            const x = add(r);
+            x.servers++;
+            if (r.watching) x.watching++;
+            x.hits += r.hits;
+            x.ips += r.ips;
+            x.sites += r.hosts;
+            if (r.hits) x.hit_servers++;
+            for (const e of r.examples ?? []) if (x.examples.length < 40) x.examples.push({ ...e, server: srv.hostname });
+          }
+        } catch {
+          /* older agent or offline: not counted */
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(10, online.length) }, worker));
+    const out = [...rules.values()]
+      .map((r) => ({ ...r, decision: decided.get(r.id)?.status ?? null, decided_at: decided.get(r.id)?.updated_at ?? null }))
+      .sort((a, b) => a.id - b.id);
+    return { hours, servers: servers.length, asked, answered, rules: out };
+  });
+
+  const Decision = z.object({ rule_id: z.number().int().min(7700000).max(7709999), status: z.enum(['enforce', 'watch']) });
+  app.post('/api/waf/approvals', admin, async (req, reply) => {
+    const b = Decision.safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'invalid decision' });
+    const acc = await masterAccount(pool, req.user!.accountId);
+    await pool.query(
+      `INSERT INTO waf_rule_decisions (account_id, rule_id, status, decided_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (account_id, rule_id) DO UPDATE SET status = EXCLUDED.status, decided_by = EXCLUDED.decided_by, updated_at = now()`,
+      [acc, b.data.rule_id, b.data.status, req.user!.id],
+    );
+    await audit(pool, { accountId: req.user!.accountId, userId: req.user!.id, action: 'waf.rule_decision', detail: b.data, ip: req.ip });
     return push(acc);
   });
 

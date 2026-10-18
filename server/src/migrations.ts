@@ -621,4 +621,18 @@ WITH fam AS (
 DELETE FROM ai_fp WHERE sha256 IN (SELECT sha256 FROM upd);
 `,
   },
+  {
+    version: '022_next_level',
+    sql: `
+-- New WAF rules only watch until an administrator approves them.
+CREATE TABLE waf_rule_decisions (
+  account_id  uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  rule_id     int NOT NULL,
+  status      text NOT NULL CHECK (status IN ('enforce', 'watch')),
+  decided_by  uuid,
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, rule_id)
+);
+`,
+  },
 ];

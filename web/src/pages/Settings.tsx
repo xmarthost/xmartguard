@@ -1116,7 +1116,7 @@ function WAFSection({ serverId, s, all, admin, busy, onSave, saveAll, onReload }
                   <tr key={r.id}>
                     <td className="w-20 py-2 pr-3 font-mono text-xs text-slate-500">{r.id}</td>
                     <td className="py-2 pr-3">{r.title}</td>
-                    <td className="py-2 pr-3 text-xs text-slate-500">{r.action}</td>
+                    <td className="py-2 pr-3 text-xs text-slate-500">{r.action === 'watch' ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700" title="New rule: logs only until approved in the Learning Center">watching</span> : r.action}</td>
                     <td className="whitespace-nowrap py-2 pr-3 text-right text-xs" title="Blocked in the last 24 hours / 7 days">
                       <span className={r.hits_24h ? 'font-medium text-red-600' : 'text-slate-400'}>{r.hits_24h ?? 0}</span>
                       <span className="text-slate-400"> / {r.hits_7d ?? 0}</span>

@@ -3,6 +3,7 @@ package waf
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -27,6 +28,8 @@ type Intel struct {
 	ETag    string        `json:"etag"`
 	Names   []string      `json:"names"`
 	Patches []PortalPatch `json:"patches"`
+	// Enforce: new rules (NewRules) the administrator approved to block.
+	Enforce []int `json:"enforce,omitempty"`
 }
 
 // PortalPatch describes one virtual patch; every condition set must match.
@@ -44,6 +47,8 @@ type PortalPatch struct {
 	Header *PatchMatch  `json:"header,omitempty"`
 	// LoggedOut applies the patch only to visitors not logged in to WordPress.
 	LoggedOut bool `json:"logged_out,omitempty"`
+	// Monitor: a new patch that only logs until it is approved.
+	Monitor bool `json:"monitor,omitempty"`
 }
 
 // PatchMatch is a request argument or header condition.
@@ -213,6 +218,12 @@ func (in *Intel) Clean() *Intel {
 		return nil
 	}
 	out := &Intel{ETag: in.ETag}
+	for _, id := range in.Enforce {
+		if _, ok := NewRules[id]; ok && !slices.Contains(out.Enforce, id) {
+			out.Enforce = append(out.Enforce, id)
+		}
+	}
+	sort.Ints(out.Enforce)
 	seen := map[string]bool{}
 	for _, n := range in.Names {
 		n = strings.ToLower(strings.TrimSpace(n))
