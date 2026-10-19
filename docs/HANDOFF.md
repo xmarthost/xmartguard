@@ -21,6 +21,17 @@ project. It holds the rules, the current state and what is still open.
 
 ## Working rules
 
+- **Every fix is for the whole fleet and for future servers (owner's
+  standing rule, pinned).** A false positive or a wrong block found on one
+  server is fixed in the engine (scanner, WAF or firewall logic), never
+  only by restoring, allow-listing a hash or excluding one site. Restoring
+  a file only repairs that copy; the release must make every server,
+  including new ones and fresh scans, judge that *kind* of file correctly,
+  while the malware next to it is still caught. Each fix gets a regression
+  test with an inert fixture of the case (scanner: `fleetfp_test.go`,
+  `families_test.go`, `binary_test.go`; WAF: the Apache tests), and the
+  report to the owner says what changed in the engine, not only what was
+  restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on `claude/dreamy-davinci-10tcgi`, then push to `main`:
   ```
