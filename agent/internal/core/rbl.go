@@ -11,9 +11,12 @@ import (
 
 // rblExempt are addresses the IPDB POST block and the Tor rules never
 // block: allowed, ignored and temporarily allowed addresses (a solved
-// firewall CAPTCHA) and those that solved the portal's CAPTCHA page.
+// firewall CAPTCHA), those that solved the portal's CAPTCHA page and the
+// trusted services (search and AI crawlers, monitors, payment gateways):
+// their networks share IPDB-listed cloud ranges, and the kernel firewall
+// already lets them in.
 func (a *Agent) rblExempt() []string {
-	var out []string
+	out := a.wafTrustedCIDRs()
 	if a.Firewall != nil {
 		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow} {
 			if rs, err := a.Firewall.List(kind); err == nil {

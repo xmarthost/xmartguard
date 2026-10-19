@@ -859,6 +859,11 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 	if res.Protected && best <= 0 {
 		res.Status = "allowed"
 	}
+	// So are the trusted services: the IPDB and country lists never block
+	// them (the WAF's IPDB POST rule exempts them too).
+	if res.Trusted != "" && best <= 0 {
+		res.Status = "allowed"
+	}
 	evs, _, _ := m.Events(EventFilter{Query: res.IP, Limit: 20})
 	res.Events = evs
 	return res, nil

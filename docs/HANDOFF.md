@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.12** (see `VERSION`).
+- Current release: **0.22.13** (see `VERSION`).
 
 ## Working rules
 
@@ -119,6 +119,19 @@ project. It holds the rules, the current state and what is still open.
   API whose cloud address was on the IPDB (seen on business200:
   54.215.31.113, AWS, answering from port 443) never got the answer, and
   the site hung. `TestAnswersFromListedAddressesOnKernel` covers it.
+- **Trusted services and the IPDB; exemptions without ctl** (0.22.13):
+  the WAF's IPDB POST rule (7700711/7701711) exempts the trusted services
+  (search, SEO, AI, monitors, payment, vendors: the WAF groups, not CDNs)
+  like the kernel firewall already did; real Bingbot 40.77.167.72 was
+  refused `POST /hit` on kuwaitgoldrates.com (business200). LiteSpeed
+  ignores `ctl:ruleRemoveById`, so every exemption that removes rules is
+  also a marker or a condition in the rule: `tx.xg_api` (API/webhook
+  headers, 7700714), `tx.xg_same_origin` (shop filter rules, 7702510) and
+  `tx.xg_trusted` in the rules the trusted rule removes (`guardChains`).
+  A negated header test (`!@streq`) does not match a request without the
+  header: use a marker. Check IP shows a trusted service as allowed.
+  `TestExemptionsOnApacheWithoutCtl` strips every ctl from the rules and
+  checks on a real Apache; `TestTrustedServicesNotIPDBBlocked` in core.
 - **Admin areas of any application** (0.22.12): a save from
   `/admin/`, `/administrator/`, `/adminpanel/`, `/admin-panel/` or
   `/backend/` sent by that admin area's own page (Sec-Fetch-Site

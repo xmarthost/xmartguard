@@ -13,6 +13,7 @@ import (
 	"net"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
@@ -753,7 +754,7 @@ func Render(c settings.WAF, o Options) string {
 		if !off[IDShopScrape] {
 			// A browser moving within the site says so even when the site
 			// sends no Referer (Referrer-Policy: no-referrer).
-			w(`SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDShopScrape+2000, IDShopScrape, IDShopScrape+1000)
+			w(`SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_same_origin=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDShopScrape+2000, IDShopScrape, IDShopScrape+1000)
 			w(`SecRule ARGS_GET:/^filter_/|ARGS_GET:/^pa_/ "@rx ^[^,]*,[^,]*," "id:%d,phase:1,t:none,t:urlDecodeUni,deny,status:403,log,msg:'xPGuard - Shop filter scraping blocked (no cookies, many filter values)',tag:'xpguard/bot',chain"`, IDShopScrape)
 			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
 			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
@@ -802,6 +803,11 @@ func Render(c settings.WAF, o Options) string {
 				// shared or mobile address (WordPress checks the login;
 				// logins themselves are still refused from listed addresses).
 				w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none,chain"`)
+				if list == FileIPDBIPs {
+					// API calls and webhooks (marked by IDIPDBPostAPI: LiteSpeed
+					// ignores its ctl:ruleRemoveById, so the marker decides).
+					w(`  SecRule &TX:xg_api "@eq 0" "t:none,chain"`)
+				}
 				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, first)
 			} else {
 				w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, o.Dir, first, id, msg, what)
@@ -819,7 +825,7 @@ func Render(c settings.WAF, o Options) string {
 		}
 	}
 	if c.IPDBPost && !off[IDIPDBPost] {
-		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_api=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
 			reAPIHeader.String(), IDIPDBPostAPI, IDIPDBPost, IDIPDBPost+1000)
 		rblRule(IDIPDBPost, true, FileIPDBIPs, "POST from an IPDB-listed address blocked", "")
 	}
@@ -840,7 +846,44 @@ func Render(c settings.WAF, o Options) string {
 		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
 		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
 	}
-	return applyMonitor(b.String(), Monitored(o.Intel))
+	out := b.String()
+	if o.Trusted {
+		// LiteSpeed ignores the trusted rule's ctl:ruleRemoveById: the
+		// rules it removes also test tx.xg_trusted.
+		out = guardChains(out, `SecRule &TX:xg_trusted "@eq 0" "t:none,chain"`, IDRootProbe, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000,
+			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot)
+	}
+	// Same for the shop filter rules' same-origin exemption (IDShopScrape+2000;
+	// a negated header test would not match a request without the header).
+	out = guardChains(out, `SecRule &TX:xg_same_origin "@eq 0" "t:none,chain"`, IDShopScrape, IDShopScrape+1000)
+	return applyMonitor(out, Monitored(o.Intel))
+}
+
+// guardChains adds cond (a chained rule) as the second rule of the chained
+// rules with the given ids, so they skip what cond excludes without relying
+// on ctl:ruleRemoveById, which LiteSpeed's ModSecurity ignores.
+func guardChains(text, cond string, ids ...int) string {
+	want := map[int]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines)+len(ids))
+	for i, l := range lines {
+		out = append(out, l)
+		if !strings.HasPrefix(l, "SecRule ") || !strings.HasSuffix(l, `,chain"`) {
+			continue
+		}
+		m := reRuleID.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		if id, _ := strconv.Atoi(m[1]); !want[id] || (i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == cond) {
+			continue
+		}
+		out = append(out, "  "+cond)
+	}
+	return strings.Join(out, "\n")
 }
 
 // RenderLoginWatch is what stays of xPGuard's rules where another rule set

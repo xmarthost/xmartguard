@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
@@ -49,5 +50,39 @@ func TestTorCaptchaAndExempt(t *testing.T) {
 	}
 	if !ex["192.0.2.10"] && !ex["192.0.2.10/32"] || !ex["203.0.113.8"] {
 		t.Fatalf("exempt %v", a.rblExempt())
+	}
+}
+
+// A real search crawler on an IPDB-listed network (Bingbot from Microsoft's
+// cloud) is never blocked: the WAF's IPDB POST rule exempts the trusted
+// services as the kernel firewall does, and the lookup says so.
+func TestTrustedServicesNotIPDBBlocked(t *testing.T) {
+	a := newTestAgent(t, `{"firewall":{"trusted_services":true},"ipdb":{"enabled":true}}`)
+	has := func(l []string, v string) bool {
+		for _, x := range l {
+			if x == v {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(a.rblExempt(), "40.77.167.0/24") {
+		t.Fatal("Bingbot's network is not exempt from the IPDB POST rule")
+	}
+	if has(a.rblExempt(), "104.16.0.0/13") {
+		t.Fatal("a CDN carries every visitor and must not be exempt")
+	}
+	if _, err := a.Firewall.ApplyIPDB("v1", []string{"40.77.167.72 US", "203.0.113.9 ZZ"}); err != nil {
+		t.Logf("kernel: %v", err)
+	}
+	if r, _ := a.Firewall.Check("40.77.167.72"); r.Trusted == "" || r.Status != "allowed" {
+		t.Fatalf("trusted crawler on the IPDB: %s %q", r.Status, r.Trusted)
+	}
+	if r, _ := a.Firewall.Check("203.0.113.9"); !strings.HasPrefix(r.Status, "ipdb-blocked") {
+		t.Fatalf("listed address: %s", r.Status)
+	}
+	a.Settings.Patch([]byte(`{"firewall":{"trusted_disabled":["bingbot"]}}`))
+	if has(a.rblExempt(), "40.77.167.0/24") {
+		t.Fatal("a switched-off service is still exempt")
 	}
 }
