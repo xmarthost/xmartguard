@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.11** (see `VERSION`).
+- Current release: **0.22.12** (see `VERSION`).
 
 ## Working rules
 
@@ -119,6 +119,16 @@ project. It holds the rules, the current state and what is still open.
   API whose cloud address was on the IPDB (seen on business200:
   54.215.31.113, AWS, answering from port 443) never got the answer, and
   the site hung. `TestAnswersFromListedAddressesOnKernel` covers it.
+- **Admin areas of any application** (0.22.12): a save from
+  `/admin/`, `/administrator/`, `/adminpanel/`, `/admin-panel/` or
+  `/backend/` sent by that admin area's own page (Sec-Fetch-Site
+  same-origin, same-host admin Referer, a cookie) gets the editor threshold
+  (rule 7700058; only the session threshold on a bad-reputation address,
+  7701058). `/dashboard/` and `/panel/` are customer areas and are not
+  lifted. Session cookies named by a 32-hex hash (Joomla) count as
+  sessions. The older 7700018 exclusion uses `ctl:ruleRemoveByTag`, which
+  LiteSpeed ignores; a Joomla administrator on business600 got 403 saving
+  RSMembership templates and in File Explorer.
 - **Real and fake crawlers** (0.22.8): the bot rules (bad bots, SEO, AI
   crawlers, Bad Bot blocker list) block a crawler name only when the
   visitor is not a trusted service and never on `/robots.txt`. Trusted

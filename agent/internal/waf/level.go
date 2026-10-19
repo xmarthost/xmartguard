@@ -32,6 +32,11 @@ const (
 	// macros. On a LiteSpeed server CRS refused WooCommerce checkouts,
 	// Contact Form 7, Joomla sign-ups and admin-ajax with plain form posts.
 	IDContentType = 7700052
+	// IDAdminArea: a save from the admin area of any web application
+	// (Joomla's /administrator/, OpenCart, Laravel and custom panels' /admin/)
+	// sent by that admin area's own page with a session; +1000 on an address
+	// with a bad reputation.
+	IDAdminArea = 7700058
 	// IDEditorAdmin: a logged-in editor on an address with a bad reputation
 	// saving from their own site's wp-admin.
 	IDEditorAdmin = 7702040
@@ -105,8 +110,38 @@ func editorSetup() string {
 		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
 		`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,chain"` + "\n" +
 		`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?wp-admin/" "t:none,t:lowercase,capture,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,setvar:tx.xg_soft=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n"
+		fmt.Sprintf(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,setvar:tx.xg_soft=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n" +
+		adminAreaSetup()
 }
+
+// adminAreaSetup lifts the threshold for saves from the admin area of any
+// web application, the way editorSetup does for WordPress: Joomla's
+// administrator saving email templates or editing files (File Explorer),
+// OpenCart, Laravel and custom panels saving HTML. The browser says the
+// request came from the same site (Sec-Fetch-Site, which a page of another
+// site cannot fake), the Referer is the same host's admin area and a
+// session cookie is sent; the application checks the login. On an address
+// with a bad reputation only the session threshold applies.
+func adminAreaSetup() string {
+	head := func(id int) string {
+		return fmt.Sprintf(`SecRule REQUEST_FILENAME "@rx (?:^|/)%s/" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, adminAreaSegments, id) + "\n" +
+			`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,chain"` + "\n" +
+			`  SecRule &REQUEST_COOKIES "@gt 0" "t:none,chain"` + "\n" +
+			fmt.Sprintf(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?%s/" "t:none,t:lowercase,capture,chain"`, adminAreaSegments) + "\n" +
+			`  SecRule TX:1 "@streq %{REQUEST_HEADERS.Host}" "t:none,t:lowercase,chain"` + "\n"
+	}
+	return "# Saves from a web application's own admin area (xPGuard WAF level).\n" +
+		head(IDAdminArea) +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.xg_session=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n" +
+		head(IDAdminArea+1000) +
+		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
+		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+}
+
+// adminAreaSegments name an application's admin area: not "dashboard" or
+// "panel", which are customer areas too (their users are not the site's
+// administrators).
+const adminAreaSegments = `(?:admin|administrator|adminpanel|admin-panel|backend)`
 
 // sessionSetup lifts the threshold for requests a website's own pages send
 // with a session cookie: admin panels of any application (Laravel,
@@ -121,7 +156,9 @@ func sessionSetup() string {
 		fmt.Sprintf(`SecRule REQUEST_HEADERS:Host "@rx ^([^:]+)" "id:%d,phase:1,pass,t:none,t:lowercase,nolog,capture,setvar:tx.xg_host=%%{TX.1}"`, IDSessionHost) + "\n" +
 		fmt.Sprintf(`SecRule REQUEST_HEADERS:Origin|REQUEST_HEADERS:Referer "@rx ^https?://([^/:?#]+)" "id:%d,phase:1,pass,t:none,t:lowercase,nolog,capture,chain"`, IDSessionSite) + "\n" +
 		`  SecRule TX:1 "@streq %{tx.xg_host}" "t:none,chain"` + "\n" +
-		`  SecRule REQUEST_COOKIES_NAMES "@rx (?i)(?:sess|sid$|xsrf|csrf|token|logged_in|auth|remember)" "t:none,chain"` + "\n" +
+		// Joomla and many PHP applications name the session cookie with a
+		// 32-character hash (md5 of the site's secret).
+		`  SecRule REQUEST_COOKIES_NAMES "@rx (?i)(?:sess|sid$|xsrf|csrf|token|logged_in|auth|remember|^[0-9a-f]{32}$)" "t:none,chain"` + "\n" +
 		// WordPress has its own rule for logged-in users; its shop and
 		// comment visitors have session cookies too and are not relaxed.
 		// (no "|" in a collection's name regex: ModSecurity splits on it)
