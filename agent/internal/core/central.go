@@ -191,6 +191,13 @@ func (a *Agent) centralPassFor(minutes int, ips ...string) error {
 	if a.central.applied >= mine {
 		return nil // a reload that started after this pass already ran
 	}
+	// Wait out the reload gap before taking the passes to write: the ones
+	// that arrive meanwhile go out with this reload. Waiting inside the
+	// reload instead left each of them a full gap behind the one before,
+	// past the portal's 90 seconds ("could not confirm the check").
+	if w := a.WAF.PassReloadWait(); w > 0 {
+		time.Sleep(w)
+	}
 	a.central.mu.Lock()
 	upTo := a.central.gen
 	a.central.mu.Unlock()

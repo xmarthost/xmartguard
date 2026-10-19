@@ -530,6 +530,22 @@ func (m *Manager) RefreshPasses() error {
 	return nil
 }
 
+// PassReloadWait is how long a solved CAPTCHA still waits for its reload
+// (the rest of the gap since the last one). The agent waits it out before it
+// writes the pass list, so passes that arrive meanwhile go out with the same
+// reload instead of each waiting a full gap after the one before.
+func (m *Manager) PassReloadWait() time.Duration {
+	m.mu.Lock()
+	liteSpeed := m.target.LiteSpeed
+	m.mu.Unlock()
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	if m.lastReload.IsZero() {
+		return 0
+	}
+	return ListReloadGap(liteSpeed, true) - time.Since(m.lastReload)
+}
+
 // liteSpeedRestart restarts LiteSpeed gracefully (tests replace it).
 var liteSpeedRestart = []string{"/usr/local/lsws/bin/lswsctrl", "restart"}
 
@@ -543,12 +559,13 @@ var addressLists = map[string]bool{FileBlockedIPs: true, FileIPDBIPs: true, File
 // ListReloadGap is the least time between two reloads for address list
 // changes: LiteSpeed restarts its server processes on every reload, Apache
 // only re-reads its configuration. A visitor who solved the CAPTCHA waits
-// the least (the portal waits 90 seconds for the server). Tests set it to
+// the least (the portal waits 90 seconds for the server; passes that arrive
+// while one waits share its reload, see PassReloadWait). Tests set it to
 // zero.
 var ListReloadGap = func(liteSpeed, captchaPass bool) time.Duration {
 	switch {
 	case captchaPass && liteSpeed:
-		return time.Minute
+		return 30 * time.Second
 	case captchaPass:
 		return 10 * time.Second
 	case liteSpeed:

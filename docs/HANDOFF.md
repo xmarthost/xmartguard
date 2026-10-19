@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.22** (see `VERSION`).
+- Current release: **0.22.23** (see `VERSION`).
 
 ## Working rules
 
@@ -189,6 +189,14 @@ project. It holds the rules, the current state and what is still open.
   (a visitor or crawler on site.com//…). `parseParams` now keeps one
   leading slash: the way back is always `https://<h><u>`, so this never
   leaves the site. `/v/verify` still refuses a `//` path sent by hand.
+- **Slow CAPTCHA pass / "could not confirm the check"** (0.22.23): on
+  LiteSpeed every pass needs a graceful restart, at most one per gap. The
+  wait happened inside the reload, after the pass list was rendered, so a
+  pass arriving during another's wait went out a full gap later (minute +
+  minute + restarts > the portal's 90 s: seen on business100 for
+  3dcrafthub.com). `centralPassFor` now waits `WAF.PassReloadWait()` first
+  and then renders, so passes arriving meanwhile share the reload; the
+  LiteSpeed pass gap is 30 s instead of 60. `TestPassReloadWait`.
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

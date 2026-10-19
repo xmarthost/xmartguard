@@ -157,3 +157,45 @@ func TestRepeatedPassReloadsAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A pass that waits out the gap first (PassReloadWait) is reloaded at once
+// afterwards, so passes that arrived during the wait share that reload.
+func TestPassReloadWait(t *testing.T) {
+	old := ListReloadGap
+	t.Cleanup(func() { ListReloadGap = old })
+	ListReloadGap = func(liteSpeed, pass bool) time.Duration {
+		if pass && liteSpeed {
+			return 300 * time.Millisecond
+		}
+		return time.Hour
+	}
+	tg, calls := countReloads(t, true)
+	m := &Manager{RulesDir: t.TempDir(), target: tg}
+	if w := m.PassReloadWait(); w != 0 {
+		t.Fatalf("wait before any reload: %v", w)
+	}
+	pass := func(list string) map[string]string { return map[string]string{FileCaptchaPass: list} }
+	if err := m.install(tg, "SecRule A", pass("203.0.113.1\n")); err != nil {
+		t.Fatal(err)
+	}
+	w := m.PassReloadWait()
+	if w <= 0 || w > 300*time.Millisecond {
+		t.Fatalf("wait right after a reload: %v", w)
+	}
+	time.Sleep(w)
+	// Two visitors solved it during the wait: one reload for both, no
+	// further wait.
+	start := time.Now()
+	if err := m.install(tg, "SecRule A", pass("203.0.113.1\n203.0.113.2\n203.0.113.3\n")); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Fatalf("the pass waited again after the gap: %v", d)
+	}
+	if n := strings.Count(strings.Join(calls(), ","), "lswsctrl"); n != 2 {
+		t.Fatalf("%d restarts, want 2", n)
+	}
+	if ListReloadGap = old; old(true, true) > 30*time.Second {
+		t.Fatalf("a CAPTCHA pass on LiteSpeed may wait %v", old(true, true))
+	}
+}
