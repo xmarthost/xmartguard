@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.21** (see `VERSION`).
+- Current release: **0.22.22** (see `VERSION`).
 
 ## Working rules
 
@@ -184,6 +184,11 @@ project. It holds the rules, the current state and what is still open.
   the same address and shared its 60/10 min limit (429s in the proxy log):
   the page is now limited per visitor (`visitorIP`), like the ALTCHA and
   verify routes. Rollback: point the DNS back to 162.55.6.159.
+- **CAPTCHA links with a double slash** (0.22.22): the proxy log showed
+  400s for real agent links like `u=//blog/wp-includes/wlwmanifest.xml`
+  (a visitor or crawler on site.com//…). `parseParams` now keeps one
+  leading slash: the way back is always `https://<h><u>`, so this never
+  leaves the site. `/v/verify` still refuses a `//` path sent by hand.
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

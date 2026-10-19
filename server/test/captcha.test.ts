@@ -100,11 +100,18 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(page.headers['content-security-policy']).toContain('challenges.cloudflare.com');
     expect(page.headers['x-robots-tag']).toContain('noindex');
     // Bad links: no check.
-    for (const bad of [`/v?s=${serverId}&ip=x&h=shop.example.com&u=/`, `/v?s=${serverId}&ip=1.2.3.4&h=<script>&u=/`, `/v?s=${serverId}&ip=1.2.3.4&h=a.org&u=//evil.com`, '/v?s=nope&ip=1.2.3.4&h=a.org&u=/']) {
+    for (const bad of [`/v?s=${serverId}&ip=x&h=shop.example.com&u=/`, `/v?s=${serverId}&ip=1.2.3.4&h=<script>&u=/`, `/v?s=${serverId}&ip=1.2.3.4&h=a.org&u=evil.com`, '/v?s=nope&ip=1.2.3.4&h=a.org&u=/']) {
       const r = await h.app.inject({ method: 'GET', url: bad });
       expect(r.statusCode, bad).toBe(400);
       expect(r.body).not.toContain('<script>&');
     }
+  });
+
+  it('keeps one slash for pages opened with a double slash (site.com//wp-admin/)', async () => {
+    const r = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=shop.example.com&u=//blog/wp-includes/wlwmanifest.xml`, headers: { 'cf-connecting-ip': '203.0.113.5' } });
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toContain('/blog/wp-includes/wlwmanifest.xml');
+    expect(r.body).not.toContain('//blog/');
   });
 
   it('limits the page per visitor, not per proxy in front of it', async () => {

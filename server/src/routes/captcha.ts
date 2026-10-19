@@ -242,6 +242,10 @@ export function parseParams(rawUrl: string) {
   const head = new URLSearchParams(at >= 0 ? query.slice(0, at) : query);
   let u = at >= 0 ? query.slice(at + 3) : (head.get('u') ?? '/');
   if (!u.startsWith('/') && /^%2f/i.test(u)) u = decodeURIComponent(u);
+  // A visitor (or crawler) on site.com//wp-admin/ gets a link with
+  // u=//wp-admin/. The way back is always https://<h><u>, so the extra
+  // slashes can not lead to another site: keep one instead of refusing.
+  u = u.replace(/^\/{2,}/, '/');
   const d = head.get('d') ?? '';
   return {
     s: head.get('s') ?? '',
