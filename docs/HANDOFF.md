@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.20** (see `VERSION`).
+- Current release: **0.22.21** (see `VERSION`).
 
 ## Working rules
 
@@ -174,6 +174,16 @@ project. It holds the rules, the current state and what is still open.
   language or keyword lists (Urdu/Arabic comments are real), CAPTCHA on
   comment POSTs (the comment would be lost). `commentspam_test.go` (also
   through Apache + CRS with XG_CRS_DIR).
+- **CAPTCHA domain behind a front proxy** (0.22.21): recaptcha.world now
+  points (Cloudflare, proxied) to business600, whose LiteSpeed proxies it
+  (External App `xpguard_portal` = https://162.55.6.159:443, `.htaccess`
+  `[P]` rule) to the portal on business900, so abuse mail for the domain no
+  longer goes to Hetzner. The portal still matches the Host header and
+  takes the visitor from CF-Connecting-IP; nothing changed in xPGuard's
+  configuration. With the extra hop every visitor reached `GET /v` from
+  the same address and shared its 60/10 min limit (429s in the proxy log):
+  the page is now limited per visitor (`visitorIP`), like the ALTCHA and
+  verify routes. Rollback: point the DNS back to 162.55.6.159.
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

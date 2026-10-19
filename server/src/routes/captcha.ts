@@ -363,7 +363,10 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     return html(reply, renderInfo());
   });
 
-  app.get('/v', { config: { rateLimit: { max: 60, timeWindow: '10 minutes' } } }, async (req, reply) => {
+  // Counted per visitor, not per connecting address: behind Cloudflare and
+  // a front proxy for the CAPTCHA domain, every visitor reaches the portal
+  // from the same few addresses and would share one limit (429s).
+  app.get('/v', { config: { rateLimit: { max: 60, timeWindow: '10 minutes', keyGenerator: (req: FastifyRequest) => visitorIP(req, cfg.trustProxy) } } }, async (req, reply) => {
     const p = parseParams(req.raw.url ?? '');
     const ip = visitorIP(req, cfg.trustProxy);
     // Preview from Overview » CAPTCHA Page: only the check itself is tried.

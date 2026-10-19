@@ -107,6 +107,19 @@ describe('CAPTCHA page for suspicious visitors', () => {
     }
   });
 
+  it('limits the page per visitor, not per proxy in front of it', async () => {
+    // Behind Cloudflare and a front proxy every visitor arrives from the same
+    // address; 70 visitors in a row must all get the page.
+    for (let i = 1; i <= 70; i++) {
+      const r = await h.app.inject({ method: 'GET', url: link(), headers: { 'cf-connecting-ip': `198.18.0.${i}` } });
+      expect(r.statusCode, `visitor ${i}`).toBe(200);
+    }
+    // One visitor reloading it over and over is still limited.
+    let last = 0;
+    for (let i = 0; i < 61; i++) last = (await h.app.inject({ method: 'GET', url: link(), headers: { 'cf-connecting-ip': '198.18.1.1' } })).statusCode;
+    expect(last).toBe(429);
+  });
+
   it('passes a solved check to the server and sends the visitor back', async () => {
     const p = { s: serverId, ip: '203.0.113.5', h: 'shop.example.com', u: '/wp-login.php?redirect_to=/wp-admin/&reauth=1' };
     // Strict: only the address the website saw may solve the check.
