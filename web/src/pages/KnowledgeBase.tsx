@@ -60,18 +60,16 @@ xpguard-agent check /home/user/public_html/folder --misses --no-hash   # rules o
   },
   {
     id: 'waf-rulesets',
-    title: 'WAF Rule Sets: OWASP CRS, Malware.Expert and other vendors for all servers',
+    title: 'WAF Rule Sets: OWASP CRS and other vendors for all servers',
     body: (
       <>
         <p>
           <b>WAF Rule Sets</b> (sidebar) holds one ModSecurity configuration for every server: xPGuard's own rules, the free OWASP Core Rule Set
-          (the portal downloads the latest official release from GitHub), cPanel ModSecurity vendors such as <b>Malware.Expert</b> (paid; paste the
-          vendor URL from your subscription page) or Comodo, and your own custom rules. Saving rolls it out to all online servers at once.
+          (the portal downloads the latest official release from GitHub), cPanel ModSecurity vendors such as Comodo, and your own custom rules. Saving rolls it out to all online servers at once.
         </p>
         <Steps
           items={[
             <>Turn on <b>OWASP Core Rule Set</b> at paranoia level 1 for shared hosting.</>,
-            <>For Malware.Expert: <b>Add a vendor… » Malware.Expert</b>, paste the vendor configuration URL, save. WHM installs it and keeps it updated; it then shows in WHM » ModSecurity Vendors.</>,
             <>Check <b>Rollout</b>: every server shows each rule set as active, skipped or error, and which logs it reads hits from.</>,
           ]}
         />

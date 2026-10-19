@@ -65,6 +65,7 @@ type Manager struct {
 	OnBotBlocked func(ip, matched string)
 
 	mu       sync.Mutex
+	counts   countCache
 	target   Target
 	err      string
 	sources  []string // logs being read
@@ -94,9 +95,6 @@ type Status struct {
 	// ModSecCheck says why ModSecurity was not found.
 	ModSecCheck string `json:"modsec_check,omitempty"`
 	Rules       int    `json:"rules"`
-	// ReplacedBy: xPGuard's own blocking rules are off here because this
-	// rule set is used instead (e.g. Malware.Expert).
-	ReplacedBy string `json:"replaced_by,omitempty"`
 	// EnabledSince is when the rules were first hooked into the web server.
 	EnabledSince int64 `json:"enabled_since"`
 	// Logs the agent reads ModSecurity hits from.
@@ -132,7 +130,7 @@ func (m *Manager) Status() Status {
 	since, _ := strconv.ParseInt(store.GetKV(m.DB, "waf_enabled_since"), 10, 64)
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
 		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest, EnabledSince: since,
-		ReplacedBy: m.OwnRulesReplacedBy(), ModSecCheck: t.ModSecCheck}
+		ModSecCheck: t.ModSecCheck}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {
@@ -315,7 +313,7 @@ func (m *Manager) rblFiles(cfg settings.WAF) map[string]string {
 // CentralChanged reports whether the central CAPTCHA's address lists on
 // disk differ from the current ones (so a reload is due).
 func (m *Manager) CentralChanged() bool {
-	if m.Central == nil || !m.Settings.Get().WAF.Enabled || m.OwnRulesReplacedBy() != "" {
+	if m.Central == nil || !m.Settings.Get().WAF.Enabled {
 		return false
 	}
 	c := m.Central()
@@ -346,7 +344,7 @@ func (m *Manager) BlockedListChanged() bool {
 	m.mu.Lock()
 	crs, tg := m.ruleSets.CRS, m.target
 	m.mu.Unlock()
-	if crs.Enabled && crs.ReplacedBy == "" && systemCRS(tg) == "" && m.CRSInstalled(crs.Version) {
+	if crs.Enabled && systemCRS(tg) == "" && m.CRSInstalled(crs.Version) {
 		if sb, ok := m.softBlock(crs, m.crsThreshold(crs)); ok {
 			for k, v := range sb.files {
 				want[strings.TrimPrefix(k, m.RulesDir+"/")] = v
@@ -457,17 +455,12 @@ func (m *Manager) apply(mode applyMode) error {
 		_ = store.SetKV(m.DB, "waf_enabled_since", "")
 	default:
 		rules := ""
-		if by := m.OwnRulesReplacedBy(); cfg.Enabled && by != "" {
-			// Only the vendor's rules block here. The failed-login detectors
-			// stay: they block nothing and feed the brute-force bans.
-			rules = RenderLoginWatch(cfg, by, m.dynamic())
-		} else if cfg.Enabled {
+		if cfg.Enabled {
 			opts := Options{Dir: m.RulesDir, UploadScan: true, Trusted: len(m.trustedList()) > 0}
-			// A vendor's own login CAPTCHA (Malware.Expert recaptcha) wins.
-			if m.Gate != nil && m.VendorLoginCaptcha() == "" {
+			if m.Gate != nil {
 				opts.Gate = m.Gate()
 			}
-			if opts.Gate == nil && m.Central != nil && m.VendorLoginCaptcha() == "" {
+			if opts.Gate == nil && m.Central != nil {
 				opts.Central = m.Central()
 			}
 			central = opts.Central
@@ -587,8 +580,8 @@ func (m *Manager) RuleCatalog() []CatalogRule {
 	for _, id := range cfg.DisabledRules {
 		disabled[id] = true
 	}
-	now := store.Now()
-	day, week := m.ruleHits(now-86400), m.ruleHits(now-7*86400)
+	c := m.cachedCounts()
+	day, week := c.day, c.week
 	rules := append([]RuleInfo(nil), Catalog...)
 	var in *Intel
 	if m.Intel != nil {
@@ -646,6 +639,53 @@ var pairRules = map[int]int{IDEmptyUAWP + 1000: IDEmptyUAWP, IDRootProbe + 1000:
 	IDIPDBPost + 1000: IDIPDBPost, IDTorPost + 1000: IDTorPost, IDTorBlock + 1000: IDTorBlock,
 	IDTorPost + 2000: IDTorPost, IDTorBlock + 2000: IDTorBlock}
 
+// countCache keeps the WAF log counts (rule hits and totals): counting a
+// week of a busy server's log takes seconds, and the WAF settings page and
+// the heartbeat ask often. Counts older than countFresh are served while a
+// fresh count runs in the background.
+type countCache struct {
+	at       time.Time
+	running  bool
+	day      map[int]int
+	week     map[int]int
+	stats    Stats
+	computed bool
+}
+
+const countFresh = time.Minute
+
+func (m *Manager) countNow() countCache {
+	now := store.Now()
+	return countCache{at: time.Now(), day: m.ruleHits(now - 86400), week: m.ruleHits(now - 7*86400), stats: m.countStats(), computed: true}
+}
+
+func (m *Manager) cachedCounts() countCache {
+	m.mu.Lock()
+	c := m.counts
+	if !c.computed {
+		m.mu.Unlock()
+		fresh := m.countNow()
+		m.mu.Lock()
+		m.counts = fresh
+		m.mu.Unlock()
+		return fresh
+	}
+	if time.Since(c.at) > countFresh && !c.running {
+		m.counts.running = true
+		go func() {
+			fresh := m.countNow()
+			m.mu.Lock()
+			m.counts = fresh
+			m.mu.Unlock()
+		}()
+	}
+	m.mu.Unlock()
+	return c
+}
+
+// WarmCounts fills the count cache so the first page view is quick.
+func (m *Manager) WarmCounts() { m.cachedCounts() }
+
 // ruleHits counts each catalog rule's logged events since a time.
 func (m *Manager) ruleHits(since int64) map[int]int {
 	out := map[int]int{}
@@ -668,8 +708,10 @@ func (m *Manager) ruleHits(since int64) map[int]int {
 }
 
 // PackageStates lists the rule packages for the portal's cards.
-func (m *Manager) PackageStates() []PackageState {
-	cat := m.RuleCatalog()
+func (m *Manager) PackageStates() []PackageState { return PackagesOf(m.RuleCatalog()) }
+
+// PackagesOf builds the package cards from an already built rule catalog.
+func PackagesOf(cat []CatalogRule) []PackageState {
 	var out []PackageState
 	for _, p := range Packages {
 		ps := PackageState{Package: p}
@@ -1198,7 +1240,9 @@ type Stats struct {
 	Total      int `json:"total"`
 }
 
-func (m *Manager) Stats() Stats {
+func (m *Manager) Stats() Stats { return m.cachedCounts().stats }
+
+func (m *Manager) countStats() Stats {
 	var s Stats
 	day := store.Now() - 86400
 	_ = m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category='waf' AND at>=?`, day).Scan(&s.Blocked24h)
@@ -1243,15 +1287,4 @@ func (c *counter) reset(ip string) {
 	c.mu.Lock()
 	delete(c.hits, ip)
 	c.mu.Unlock()
-}
-
-// OwnRulesReplacedBy names the rule set used instead of xPGuard's own
-// blocking rules on this server ("" = ours are used).
-func (m *Manager) OwnRulesReplacedBy() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.ruleSets.OwnRules != nil {
-		return m.ruleSets.OwnRules.ReplacedBy
-	}
-	return ""
 }

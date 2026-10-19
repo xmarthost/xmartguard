@@ -59,8 +59,8 @@ func TestExclusionsRender(t *testing.T) {
 	if strings.Contains(Render(c, Options{Dir: "/r"}), `"id:7700010,`) {
 		t.Fatal("disabled exclusion rendered")
 	}
-	// Kept where a vendor replaces our rules and when our rules are off.
-	if !strings.Contains(RenderLoginWatch(c, "Malware.Expert", Dynamic{}), "ctl:ruleRemoveById=941100") || !strings.Contains(RenderExclusionsOnly(c, Dynamic{}), "id:7700012") {
+	// Kept when our rules are off.
+	if !strings.Contains(RenderExclusionsOnly(c, Dynamic{}), "id:7700012") {
 		t.Fatal("exclusions missing without our rules")
 	}
 }

@@ -13,15 +13,6 @@ import { readTar } from '../signatures/service.js';
 
 export const PRESET_VENDORS = [
   {
-    id: 'malware_expert',
-    name: 'Malware.Expert ModSecurity rules',
-    price: 'Paid (per server or unlimited)',
-    url_hint: 'Vendor configuration URL from your Malware.Expert subscription page',
-    default_url: '',
-    site: 'https://malware.expert/modsecurity-rules/',
-    note: 'Commercial rules for WordPress/Joomla/PHP exploits and web shells, updated often. The URL contains your license. The license is per server IP: link it only to the licensed server(s). Do not also add the same rules as a remote feed on that server.',
-  },
-  {
     id: 'comodo',
     name: 'Comodo WAF (CWAF) free rules',
     price: 'Free (registration)',
@@ -44,27 +35,8 @@ export const PRESET_VENDORS = [
 /** Servers a rule feed is linked to: empty = every server of the account. */
 const Servers = z.array(z.string().uuid()).max(500).default([]);
 
-/** Ready-made remote feeds (SecRemoteRules). */
-export const PRESET_REMOTE = [
-  {
-    id: 'malware_expert',
-    name: 'Malware.Expert',
-    url: 'https://rules.malware.expert/download.php?rules=generic&extra=webshell,scanner,crawler,rbl,proxy,recaptcha',
-    rbl: 'rbl.malware.expert',
-    // Optional modules, added to the URL as &extra=… (malware.expert/modsecurity-rules/extra-rules/).
-    extras: [
-      { id: 'webshell', name: 'Web shells', desc: 'Command execution blocked in Phoenix, FilesMan, c99shell, b374k, WSO, Ani-Shell' },
-      { id: 'scanner', name: 'Scanners', desc: 'Bad user agents and unwanted crawlers that cause high load' },
-      { id: 'crawler', name: 'Crawlers', desc: 'Heavy search engine and AI crawlers: MJ12bot, BLEXBot, ClaudeBot, Bytespider, GPTBot, ImagesiftBot, ChatGPT, Meta-ExternalAgent' },
-      { id: 'rbl', name: 'RBL', desc: 'Bots on the Malware.Expert blocklist (DDoS and high load)' },
-      { id: 'proxy', name: 'Proxy', desc: 'Bot traffic through proxies/CDNs, using X-Forwarded-For, X-Real-IP and CF-Connecting-IP to find the real client' },
-      { id: 'recaptcha', name: 'Captcha by Malware.Expert', desc: 'reCaptcha challenge for bots on WordPress and Joomla logins, served by Malware.Expert on the linked servers' },
-    ],
-    key_hint: 'Serial key from your Malware.Expert account',
-    site: 'https://malware.expert/modsecurity-rules/',
-    note: 'Licensed per server IP: link the feed only to the server(s) whose IP is on your license. Other servers would be refused by Malware.Expert.',
-  },
-] as const;
+/** Ready-made remote feeds (SecRemoteRules): none since Malware.Expert was dropped. */
+export const PRESET_REMOTE: readonly { id: string; name: string; url: string; rbl?: string; extras?: readonly { id: string; name: string; desc: string }[]; key_hint: string; site: string; note: string }[] = [];
 
 const Vendor = z.object({
   id: z.string().regex(/^[a-z0-9_-]{2,40}$/),
@@ -94,18 +66,18 @@ const Remote = z.object({
     .default(''),
 });
 
-/** Malware.Expert rules (remote feed or WHM vendor). */
-export function isMalwareExpert(x: { id?: string; url: string }): boolean {
-  return x.id === 'malware_expert' || /^https:\/\/(?:rules|vendor)\.malware\.expert\//i.test(x.url);
+/**
+ * Malware.Expert rules (remote feed, WHM vendor or its RBL). xPGuard no
+ * longer uses Malware.Expert: stored entries are dropped when the
+ * configuration is read and new ones are refused.
+ */
+export function isMalwareExpert(x: { id?: string; url: string; rbl?: string }): boolean {
+  return x.id === 'malware_expert' || /(?:^|[/.])malware\.expert(?:[/:?]|$)/i.test(x.url) || /(?:^|\.)malware\.expert$/i.test(x.rbl ?? '');
 }
 
-/**
- * Servers that load Malware.Expert rules get no OWASP CRS: both are
- * generic attack rule sets, and running the two together doubles false
- * positives and load.
- */
-export function usesMalwareExpert(c: { vendors: { id: string; url: string; enabled: boolean; servers?: string[] }[]; remote: { id: string; url: string; enabled: boolean; servers?: string[] }[] }, serverId: string): boolean {
-  return [...c.vendors, ...c.remote].some((x) => x.enabled && isMalwareExpert(x) && linkedTo(x, serverId));
+/** The configuration without Malware.Expert. */
+export function withoutMalwareExpert<T extends { vendors: { id: string; url: string }[]; remote: { id: string; url: string; rbl?: string }[] }>(c: T): T {
+  return { ...c, vendors: c.vendors.filter((v) => !isMalwareExpert(v)), remote: c.remote.filter((r) => !isMalwareExpert(r)) };
 }
 
 /** Whether a feed or vendor applies to a server. */
@@ -124,8 +96,15 @@ export const RuleSetsConfig = z.object({
     /** Weak signals (one rule) in page views of clean visitors: CAPTCHA page instead of 403. */
     soft_block: z.enum(['captcha', 'off']).default('captcha'),
   }),
-  vendors: z.array(Vendor).max(10),
-  remote: z.array(Remote).max(10).default([]),
+  vendors: z
+    .array(Vendor)
+    .max(10)
+    .refine((l) => !l.some((v) => isMalwareExpert(v)), 'Malware.Expert is no longer supported'),
+  remote: z
+    .array(Remote)
+    .max(10)
+    .default([])
+    .refine((l) => !l.some((r) => isMalwareExpert(r)), 'Malware.Expert is no longer supported'),
   custom: z.object({ enabled: z.boolean(), rules: z.string().max(200_000) }),
 });
 export type RuleSetsConfig = z.infer<typeof RuleSetsConfig>;
@@ -175,7 +154,7 @@ export async function loadConfig(pool: Pool, accountId: string): Promise<{ confi
   const { rows } = await pool.query('SELECT config, version, updated_at FROM waf_rulesets WHERE account_id = $1', [accountId]);
   if (!rows[0]) return { config: DEFAULT_CONFIG, version: 0, updated_at: null };
   const parsed = RuleSetsConfig.safeParse({ ...DEFAULT_CONFIG, ...rows[0].config });
-  return { config: parsed.success ? parsed.data : DEFAULT_CONFIG, version: Number(rows[0].version), updated_at: rows[0].updated_at };
+  return { config: parsed.success ? withoutMalwareExpert(parsed.data) : DEFAULT_CONFIG, version: Number(rows[0].version), updated_at: rows[0].updated_at };
 }
 
 const CRS_FILE = /^(crs-setup\.conf\.example|rules\/[A-Za-z0-9._-]+\.(?:conf|data))$/;

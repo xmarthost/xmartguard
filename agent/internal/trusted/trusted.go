@@ -190,8 +190,6 @@ var Services = []Service{
 		Hosts: []string{"license.litespeedtech.com", "license2.litespeedtech.com", "update.litespeedtech.com", "www.litespeedtech.com"}},
 	{ID: "cloudlinux", Name: "CloudLinux / Imunify license and repositories", Group: "vendor",
 		Hosts: []string{"cln.cloudlinux.com", "repo.cloudlinux.com", "repo.imunify360.cloudlinux.com"}},
-	{ID: "malware-expert", Name: "Malware.Expert (rule and RBL servers)", Group: "vendor",
-		Hosts: []string{"rules.malware.expert", "www.malware.expert"}},
 }
 
 // Groups whose addresses the WAF's bot rules also skip. CDN addresses carry

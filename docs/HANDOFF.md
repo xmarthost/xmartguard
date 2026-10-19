@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.18** (see `VERSION`).
+- Current release: **0.22.19** (see `VERSION`).
 
 ## Working rules
 
@@ -148,6 +148,20 @@ project. It holds the rules, the current state and what is still open.
   forces a reload (`WAF.RefreshPasses`, at most once per 20 s) and on
   LiteSpeed the pass answer waits `PassSettle` (3 s) so the visitor's
   retry lands on the new processes.
+- **WAF settings page speed** (0.22.19): the Rule packages and rule list
+  waited for `waf.status`, which counted a week of the WAF log twice (rule
+  hits for the catalog and again for the packages) plus four totals: seconds
+  on busy servers (business200: ~1M events a week). Counts are now cached a
+  minute and refreshed in the background (stale counts served meanwhile),
+  warmed at agent start, and the catalog is built once per request.
+  `TestPackageCountsCached`.
+- **Malware.Expert removed** (0.22.19, owner's decision): no presets, no
+  CRS/own-rules replacement, no vendor rules page, no recaptcha/RBL logic,
+  no trusted-service entry. Portal refuses ME feeds/vendors and drops stored
+  ones on read; agent drops them from any configuration it gets and removes
+  (`modsec_remove_vendor`) a WHM vendor it added for ME. Agents that still
+  report `own_replaced_by` are resynced and get our rules and CRS back.
+  The generic remote-feed and WHM-vendor mechanisms stay.
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

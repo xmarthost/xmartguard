@@ -16,21 +16,19 @@ import (
 
 // RuleSets is the fleet-wide ModSecurity configuration made in the portal
 // (WAF Rule Sets): xPGuard's own rules, the OWASP Core Rule Set, cPanel
-// ModSecurity vendors (Malware.Expert, Comodo, …) and custom rules.
+// ModSecurity vendors and custom rules.
 type RuleSets struct {
 	Version  int64 `json:"version"`
 	OwnRules *struct {
 		Enabled bool `json:"enabled"`
-		// ReplacedBy names the rule set used instead of xPGuard's own
-		// blocking rules on this server (the portal sets it where
-		// Malware.Expert is linked, so the same attacks are not handled by
-		// two rule sets).
+		// ReplacedBy is no longer used (it named Malware.Expert); it is
+		// read so old portals' configurations still parse, then cleared.
 		ReplacedBy string `json:"replaced_by,omitempty"`
 	} `json:"xmartguard,omitempty"`
 	CRS     CRSConfig `json:"crs"`
 	Vendors []Vendor  `json:"vendors"`
-	// Remote rule feeds loaded with SecRemoteRules (e.g. Malware.Expert
-	// with your own license key), for servers without WHM vendors.
+	// Remote rule feeds loaded with SecRemoteRules (with your own license
+	// key), for servers without WHM vendors.
 	Remote []RemoteRules `json:"remote"`
 	Custom struct {
 		Enabled bool   `json:"enabled"`
@@ -50,8 +48,7 @@ type CRSConfig struct {
 	// CAPTCHA page instead of a 403 ("" or "captcha", the default); "off"
 	// blocks it like any other.
 	SoftBlock string `json:"soft_block,omitempty"`
-	// ReplacedBy names the rule set used instead on this server
-	// (the portal turns CRS off where Malware.Expert is linked).
+	// ReplacedBy is no longer used (see OwnRules.ReplacedBy).
 	ReplacedBy string `json:"replaced_by,omitempty"`
 }
 
@@ -71,48 +68,42 @@ type RemoteRules struct {
 	Key     string `json:"key"`
 	URL     string `json:"url"`
 	Enabled bool   `json:"enabled"`
-	// RBL is an optional DNS blocklist from the same vendor (for example
-	// rbl.malware.expert): POST requests from listed addresses are dropped.
+	// RBL is an optional DNS blocklist from the same vendor: POST
+	// requests from listed addresses are dropped.
 	RBL string `json:"rbl,omitempty"`
 }
 
-// vendorHasRBL reports a Malware.Expert feed with its "rbl" extra module,
-// whose rule 400010 already drops POSTs from rbl.malware.expert.
-func vendorHasRBL(url, rbl string) bool {
-	return rbl == "rbl.malware.expert" && strings.Contains(url, "malware.expert/") && urlExtra(url, "rbl")
+// IsMalwareExpert reports a Malware.Expert feed or vendor. xPGuard no
+// longer uses Malware.Expert: such entries are dropped from the portal's
+// configuration (old portals may still send them) and a WHM vendor the
+// agent added for it is removed.
+func IsMalwareExpert(url string) bool {
+	u := strings.ToLower(url)
+	return strings.Contains(u, "malware.expert/") || strings.Contains(u, "malware.expert\"") || strings.HasSuffix(u, "malware.expert")
 }
 
-// VendorLoginCaptcha names the rule feed that brings its own login-page
-// CAPTCHA to this server ("" = none): Malware.Expert's "recaptcha" extra
-// sends bots on WordPress/Joomla logins to recaptcha.cloud, and xPGuard's
-// login-page CAPTCHA would stop every visitor before it.
-func (m *Manager) VendorLoginCaptcha() string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, r := range m.ruleSets.Remote {
-		if r.Enabled && strings.Contains(r.URL, "malware.expert/") && urlExtra(r.URL, "recaptcha") {
-			return r.Name
+// withoutMalwareExpert drops Malware.Expert from a rule set configuration.
+func withoutMalwareExpert(rs RuleSets) RuleSets {
+	var vendors []Vendor
+	for _, v := range rs.Vendors {
+		if !IsMalwareExpert(v.URL) && v.ID != "malware_expert" {
+			vendors = append(vendors, v)
 		}
 	}
-	return ""
-}
-
-// urlExtra reports a module in a Malware.Expert feed's extra= list.
-func urlExtra(url, module string) bool {
-	i := strings.Index(url, "extra=")
-	if i < 0 {
-		return false
-	}
-	extra := url[i+6:]
-	if j := strings.IndexByte(extra, '&'); j >= 0 {
-		extra = extra[:j]
-	}
-	for _, e := range strings.Split(extra, ",") {
-		if e == module {
-			return true
+	var remote []RemoteRules
+	for _, r := range rs.Remote {
+		if !IsMalwareExpert(r.URL) && r.ID != "malware_expert" && !IsMalwareExpert(r.RBL) {
+			remote = append(remote, r)
 		}
 	}
-	return false
+	rs.Vendors, rs.Remote = vendors, remote
+	if rs.OwnRules != nil {
+		o := *rs.OwnRules
+		o.ReplacedBy = ""
+		rs.OwnRules = &o
+	}
+	rs.CRS.ReplacedBy = ""
+	return rs
 }
 
 // IDRemoteRBL is the first rule id for remote feed blocklists.
@@ -135,6 +126,7 @@ type RuleSetState struct {
 
 // SetRuleSets stores the portal's configuration for the next Apply.
 func (m *Manager) SetRuleSets(rs RuleSets) {
+	rs = withoutMalwareExpert(rs)
 	m.mu.Lock()
 	m.ruleSets = rs
 	m.mu.Unlock()
@@ -247,9 +239,6 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 	switch {
 	case !rs.CRS.Enabled:
 		crs.State = "off"
-		if rs.CRS.ReplacedBy != "" {
-			crs.Detail = "replaced by " + rs.CRS.ReplacedBy + " on this server"
-		}
 	case systemCRS(t) != "":
 		crs.State, crs.Detail = "skipped", "already loaded by "+systemCRS(t)+" on this server"
 	case !m.CRSInstalled(rs.CRS.Version):
@@ -334,15 +323,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			}
 			fmt.Fprintf(&inc, "SecRemoteRules \"%s\" \"%s\"\n", r.Key, r.URL)
 			st.State, st.Detail = "active", "loaded by ModSecurity from "+r.URL
-			if strings.Contains(r.URL, "malware.expert/") && urlExtra(r.URL, "recaptcha") {
-				st.Detail += "; login CAPTCHA by Malware.Expert (recaptcha.cloud) replaces xPGuard's"
-			}
 			rbl := strings.ToLower(strings.TrimSpace(r.RBL))
-			if rbl != "" && vendorHasRBL(r.URL, rbl) {
-				// The feed's own "rbl" module already drops these POSTs.
-				st.Detail += "; POST blocklist " + rbl + " by the feed's own rbl rule"
-				rbl = ""
-			}
 			if rbl != "" && reRemoteRBL.MatchString(rbl) && rblID < IDRemoteRBL+10 {
 				fmt.Fprintf(&inc, "SecRule REQUEST_METHOD \"@streq POST\" \"id:%d,phase:2,drop,log,msg:'POST from an address listed on %s',tag:'xpguard/rbl',chain\"\n  SecRule REMOTE_ADDR \"@rbl %s\"\n", rblID, rbl, rbl)
 				rblID++
@@ -629,7 +610,12 @@ func ApplyVendors(ctx context.Context, t Target, vendors []Vendor, managed map[s
 			}
 		}
 		if !listed {
-			if iv, ok := byID[id]; ok && iv.Enabled {
+			iv, ok := byID[id]
+			switch {
+			case ok && IsMalwareExpert(url):
+				// Malware.Expert is no longer used: take it out of WHM.
+				_, _ = whmapi(ctx, "modsec_remove_vendor", "vendor_id="+id)
+			case ok && iv.Enabled:
 				_, _ = whmapi(ctx, "modsec_disable_vendor", "vendor_id="+id)
 			}
 			delete(managed, url)

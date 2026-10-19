@@ -11,7 +11,7 @@ import (
 )
 
 // Remote feeds (SecRemoteRules) are downloaded by ModSecurity itself when
-// the web server loads its configuration. Vendors such as Malware.Expert only
+// the web server loads its configuration. Many vendors only
 // answer genuine ModSecurity requests, so instead of downloading the feed
 // again the agent reads what ModSecurity wrote to the web server's error log:
 //
@@ -77,15 +77,7 @@ func (m *Manager) checkRemoteStates(states []RuleSetState, logs []string) {
 				continue
 			}
 			r := remoteFromLogs(logs, f.URL)
-			hits := 0
-			if !r.found {
-				hits = feedHits(logs, f.URL)
-			}
 			switch {
-			case hits > 0:
-				// LiteSpeed does not log loading remote rules; the feed's own
-				// blocks show it is running.
-				states[i].Detail = fmt.Sprintf("working: %d requests blocked by its rules in the recent web server log%s", hits, rblSuffix(states[i].Detail))
 			case !r.found:
 				states[i].Detail = "configured; the web server has not logged loading it yet" + rblSuffix(states[i].Detail)
 			case r.err != "":
@@ -99,32 +91,6 @@ func (m *Manager) checkRemoteStates(states []RuleSetState, logs []string) {
 			}
 		}
 	}
-}
-
-// feedHits counts recent blocks by a vendor's own rules (Malware.Expert tags
-// them "MEWAF" and names itself in the message).
-func feedHits(logs []string, url string) int {
-	if !strings.Contains(url, "malware.expert/") {
-		return 0
-	}
-	n := 0
-	for _, p := range uniqueFiles(logs) {
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		if st, err := f.Stat(); err == nil && st.Size() > remoteLogTail {
-			_, _ = f.Seek(-remoteLogTail, io.SeekEnd)
-		}
-		b, _ := io.ReadAll(io.LimitReader(f, remoteLogTail))
-		f.Close()
-		for _, line := range strings.Split(string(b), "\n") {
-			if strings.Contains(line, "ModSecurity") && (strings.Contains(line, `[tag "MEWAF"]`) || strings.Contains(line, "Malware.Expert")) {
-				n++
-			}
-		}
-	}
-	return n
 }
 
 // uniqueFiles drops paths that are the same file (cPanel links
@@ -146,7 +112,7 @@ func uniqueFiles(paths []string) []string {
 }
 
 // rblSuffix keeps the notes added after the first part of a feed's detail
-// (POST blocklist, vendor login CAPTCHA).
+// (POST blocklist).
 func rblSuffix(detail string) string {
 	if i := strings.Index(detail, "; "); i >= 0 {
 		return detail[i:]

@@ -147,7 +147,7 @@ func TestApplyVendorsWithWHM(t *testing.T) {
 	os.WriteFile(fake, []byte(`#!/bin/sh
 echo "$@" >> `+log+`
 case "$2" in
-modsec_get_vendors) echo '{"metadata":{"result":1},"data":{"vendors":[{"vendor_id":"MalwareExpert","name":"Malware.Expert","enabled":1,"update":1,"installed_from":"https://example.net/meta_me.yaml"},{"vendor_id":"comodo_litespeed","name":"Comodo","enabled":0,"update":0,"installed_from":"https://waf.comodo.com/doc/meta_comodo_litespeed.yaml"}]}}' ;;
+modsec_get_vendors) echo '{"metadata":{"result":1},"data":{"vendors":[{"vendor_id":"ExampleVendor","name":"Example","enabled":1,"update":1,"installed_from":"https://example.net/meta_ex.yaml"},{"vendor_id":"comodo_litespeed","name":"Comodo","enabled":0,"update":0,"installed_from":"https://waf.comodo.com/doc/meta_comodo_litespeed.yaml"}]}}' ;;
 modsec_add_vendor) echo '{"metadata":{"result":1},"data":{"vendor_id":"NewVendor"}}' ;;
 *) echo '{"metadata":{"result":1},"data":{}}' ;;
 esac
@@ -157,7 +157,7 @@ esac
 	defer func() { WHMAPI = old }()
 	managed := map[string]string{}
 	vendors := []Vendor{
-		{ID: "malware_expert", Name: "Malware.Expert", URL: "https://example.net/meta_me.yaml", Enabled: true},
+		{ID: "example", Name: "Example", URL: "https://example.net/meta_ex.yaml", Enabled: true},
 		{ID: "comodo", Name: "Comodo", URL: "https://waf.comodo.com/doc/meta_comodo_apache.yaml", Enabled: true},
 		{ID: "custom1", Name: "New", URL: "https://example.org/meta_new.yaml", Enabled: true},
 	}
@@ -179,7 +179,7 @@ esac
 			t.Errorf("missing call %q in:\n%s", want, c)
 		}
 	}
-	if strings.Contains(c, "vendor_id=MalwareExpert") {
+	if strings.Contains(c, "vendor_id=ExampleVendor") {
 		t.Error("already enabled vendor was changed")
 	}
 	if managed["https://example.org/meta_new.yaml"] != "NewVendor" {
@@ -189,7 +189,7 @@ esac
 	os.Remove(log)
 	ApplyVendors(context.Background(), Target{Name: "cpanel", LiteSpeed: true}, vendors[:1], managed)
 	calls, _ = os.ReadFile(log)
-	if strings.Contains(string(calls), "modsec_disable_vendor vendor_id=MalwareExpert") {
+	if strings.Contains(string(calls), "modsec_disable_vendor vendor_id=ExampleVendor") {
 		t.Error("kept vendor disabled")
 	}
 	// Without WHM: reported as unsupported.
@@ -321,7 +321,7 @@ func TestRemoteRules(t *testing.T) {
 	m := &Manager{RulesDir: t.TempDir()}
 	var rs RuleSets
 	rs.Remote = []RemoteRules{
-		{ID: "me", Name: "Malware.Expert", Key: "ABC-123", URL: "https://rules.example/modsec/rules.conf", Enabled: true, RBL: "rbl.example.net"},
+		{ID: "feed", Name: "Example feed", Key: "ABC-123", URL: "https://rules.example/modsec/rules.conf", Enabled: true, RBL: "rbl.example.net"},
 		{ID: "rblbad", Name: "RBL bad", Key: "ABCD", URL: "https://rules.example/b", Enabled: true, RBL: "x\" exec:/bin/sh"},
 		{ID: "bad", Name: "Bad", Key: "k\" exec", URL: "https://x/y", Enabled: true},
 	}
@@ -337,7 +337,50 @@ func TestRemoteRules(t *testing.T) {
 	for _, s := range states {
 		got[s.ID] = s.State
 	}
-	if got["remote:me"] != "active" || got["remote:bad"] != "error" {
+	if got["remote:feed"] != "active" || got["remote:bad"] != "error" {
 		t.Fatalf("%+v", states)
+	}
+}
+
+// xPGuard no longer uses Malware.Expert: an old portal's configuration
+// that still lists it loads nothing of it, our own rules and the CRS stay
+// on, and a WHM vendor the agent added for it is removed from WHM.
+func TestMalwareExpertIsDropped(t *testing.T) {
+	m := &Manager{}
+	var rs RuleSets
+	rs.OwnRules = &struct {
+		Enabled    bool   `json:"enabled"`
+		ReplacedBy string `json:"replaced_by,omitempty"`
+	}{true, "Malware.Expert"}
+	rs.CRS = CRSConfig{Enabled: true, ReplacedBy: "Malware.Expert"}
+	rs.Vendors = []Vendor{{ID: "malware_expert", Name: "Malware.Expert", URL: "https://vendor.malware.expert/meta.yaml", Enabled: true}, {ID: "comodo", URL: "https://waf.comodo.com/doc/meta_comodo_apache.yaml", Enabled: true}}
+	rs.Remote = []RemoteRules{{ID: "malware_expert", Name: "Malware.Expert", Key: "INERT-KEY", URL: "https://rules.malware.expert/download.php?rules=generic", Enabled: true, RBL: "rbl.malware.expert"}, {ID: "feed", Name: "Other", Key: "INERT-KEY", URL: "https://rules.example/r.conf", Enabled: true}}
+	m.SetRuleSets(rs)
+	got := m.ruleSets
+	if len(got.Vendors) != 1 || got.Vendors[0].ID != "comodo" || len(got.Remote) != 1 || got.Remote[0].ID != "feed" {
+		t.Fatalf("Malware.Expert kept: %+v %+v", got.Vendors, got.Remote)
+	}
+	if got.OwnRules.ReplacedBy != "" || got.CRS.ReplacedBy != "" {
+		t.Fatal("own rules or CRS still replaced")
+	}
+
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	fake := filepath.Join(dir, "whmapi1")
+	os.WriteFile(fake, []byte(`#!/bin/sh
+echo "$@" >> `+log+`
+case "$2" in
+modsec_get_vendors) echo '{"metadata":{"result":1},"data":{"vendors":[{"vendor_id":"MalwareExpert","name":"Malware.Expert","enabled":1,"update":1,"installed_from":"https://vendor.malware.expert/meta.yaml"}]}}' ;;
+*) echo '{"metadata":{"result":1},"data":{}}' ;;
+esac
+`), 0o755)
+	old := WHMAPI
+	WHMAPI = fake
+	defer func() { WHMAPI = old }()
+	managed := map[string]string{"https://vendor.malware.expert/meta.yaml": "MalwareExpert"}
+	ApplyVendors(context.Background(), Target{Name: "cpanel"}, got.Vendors[:0], managed)
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "modsec_remove_vendor vendor_id=MalwareExpert") || len(managed) != 0 {
+		t.Fatalf("vendor not removed: %s %v", calls, managed)
 	}
 }

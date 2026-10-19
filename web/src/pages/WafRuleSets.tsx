@@ -210,10 +210,6 @@ export default function WafRuleSets() {
     ...cfg.vendors.filter((v) => v.enabled && (!v.servers?.length || v.servers.includes(s.id))).map((v) => v.name),
     ...(cfg.remote ?? []).filter((r) => r.enabled && (!r.servers?.length || r.servers.includes(s.id))).map((r) => r.name),
   ];
-  const isME = (x: { id?: string; url: string }) => x.id === 'malware_expert' || /^https:\/\/(?:rules|vendor)\.malware\.expert\//i.test(x.url);
-  const meServers = data.servers.filter((s) =>
-    [...cfg.vendors, ...(cfg.remote ?? [])].some((x) => x.enabled && isME(x) && (!x.servers?.length || x.servers.includes(s.id))),
-  );
   const current = (s: ServerRow) => s.version != null && s.version === data.version;
   const latest = data.crs.releases[0];
 
@@ -320,18 +316,13 @@ export default function WafRuleSets() {
             </button>
           )}
         </div>
-        {cfg.crs.enabled && meServers.length > 0 && (
-          <p className="mt-2 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-800">
-            Turned off automatically on the server(s) that use Malware.Expert, so two generic rule sets never run together: {meServers.map((s) => s.hostname).join(', ')}.
-          </p>
-        )}
         <p className="mt-2 text-xs text-slate-500">
           Where the server already loads its own CRS (cPanel's OWASP vendor, Debian's modsecurity-crs or RHEL's mod_security_crs package), the portal's copy is skipped: loading CRS twice would fail.
         </p>
       </Card>
 
       <Card
-        title="Third-party rule sets (Malware.Expert)"
+        title="Third-party rule sets"
         desc="ModSecurity downloads the vendor's rules itself with your license key (SecRemoteRules), on cPanel, LiteSpeed and plain Apache servers alike. Link each feed to the servers its license covers."
       >
         <div className="mt-3 space-y-3">
@@ -457,7 +448,7 @@ export default function WafRuleSets() {
       {(cfg.vendors.length > 0 || showVendors) && (
       <Card
         title="WHM ModSecurity vendors (older method)"
-        desc="The same rule sets installed through WHM » Security Center » ModSecurity Vendors instead of a remote feed; cPanel servers only. Use a remote feed above for Malware.Expert; keep a vendor here only if you already use one. Never use both for the same rules on a server."
+        desc="The same rule sets installed through WHM » Security Center » ModSecurity Vendors instead of a remote feed; cPanel servers only. Keep a vendor here only if you already use one. Never use both for the same rules on a server."
       >
         <div className="mt-3 space-y-3">
           {cfg.vendors.length === 0 && <div className="text-sm text-slate-400">No vendors yet.</div>}

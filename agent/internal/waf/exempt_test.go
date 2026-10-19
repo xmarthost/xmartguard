@@ -29,9 +29,6 @@ func TestExemptAddresses(t *testing.T) {
 	if !strings.Contains(rules, `SecRule REMOTE_ADDR "@ipMatch 203.0.113.9" "id:7700001,phase:1,pass,nolog,ctl:ruleEngine=Off"`) {
 		t.Fatal("WAF whitelist does not skip every rule")
 	}
-	if !strings.Contains(RenderLoginWatch(settings.WAF{Enabled: true}, "Malware.Expert", d), "id:7700006,") {
-		t.Fatal("exempt rule missing where a vendor's rules are used")
-	}
 	if strings.Contains(Render(settings.WAF{Enabled: true}, Options{Dir: m.RulesDir}), "id:7700006,") {
 		t.Fatal("exempt rule without a list")
 	}

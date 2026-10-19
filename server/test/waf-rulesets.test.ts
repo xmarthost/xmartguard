@@ -100,7 +100,8 @@ describe('WAF rule sets', () => {
     const r = await admin.req('GET', '/api/waf/rulesets');
     expect(r.body.version).toBe(0);
     expect(r.body.config.crs.enabled).toBe(true); // OWASP CRS is on by default
-    expect(r.body.presets.map((p: any) => p.id)).toContain('malware_expert');
+    expect(r.body.presets.map((p: any) => p.id)).not.toContain('malware_expert');
+    expect(r.body.remote_presets).toEqual([]);
     const a = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
     expect(a.body.unchanged).toBe(true);
   });
@@ -159,7 +160,7 @@ describe('WAF rule sets', () => {
 
 describe('remote rule feeds', () => {
   it('stores the license key, masks it in the portal and keeps it on save', async () => {
-    const remote = [{ id: 'malware_expert', name: 'Malware.Expert', key: 'LICENSE-KEY-9876', url: 'https://rules.example/modsec.conf', enabled: true }];
+    const remote = [{ id: 'feed', name: 'Licensed feed', key: 'LICENSE-KEY-9876', url: 'https://rules.example/modsec.conf', enabled: true }];
     expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote }))).status).toBe(200);
     const g = await admin.req('GET', '/api/waf/rulesets');
     expect(g.body.config.remote[0].key).toBe('********9876');
@@ -176,7 +177,7 @@ describe('linking feeds to servers', () => {
   it('sends a licensed feed only to the servers it is linked to', async () => {
     const other = '00000000-0000-4000-8000-000000000001';
     const remote = [
-      { id: 'me', name: 'Malware.Expert', key: 'SERIAL.12345', url: 'https://rules.example/generic', enabled: true, servers: [serverId], rbl: 'RBL.Example.net' },
+      { id: 'me', name: 'Licensed feed', key: 'SERIAL.12345', url: 'https://rules.example/generic', enabled: true, servers: [serverId], rbl: 'RBL.Example.net' },
       { id: 'all', name: 'Everyone', key: 'KEY-ALL', url: 'https://rules.example/all', enabled: true },
     ];
     expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote }))).status).toBe(200);
@@ -189,7 +190,6 @@ describe('linking feeds to servers', () => {
     const bad = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...remote[0], servers: [other] }] }));
     expect(bad.status).toBe(400);
     const g = await admin.req('GET', '/api/waf/rulesets');
-    expect(g.body.remote_presets[0].url).toContain('malware.expert');
     const cfg = g.body.config;
     cfg.remote[0].servers = [];
     cfg.remote = [cfg.remote[1], { ...cfg.remote[0], id: 'me2', key: 'KEY-TWO', servers: [serverId] }];
@@ -201,45 +201,38 @@ describe('linking feeds to servers', () => {
   });
 });
 
-describe('Malware.Expert replaces the OWASP CRS', () => {
-  it('turns CRS off only on the servers linked to Malware.Expert', async () => {
-    const me = { id: 'malware_expert', name: 'Malware.Expert', key: 'SERIAL.1', url: 'https://rules.malware.expert/download.php?rules=generic', enabled: true };
-    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...me, servers: [serverId] }] }))).status).toBe(200);
-    const a = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
-    expect(a.body.config.crs.enabled).toBe(false);
-    expect(a.body.config.crs.replaced_by).toBe('Malware.Expert');
-    expect(a.body.crs).toBeUndefined();
-    // xPGuard's own blocking rules are replaced there too.
-    expect(a.body.config.xmartguard).toEqual({ enabled: true, replaced_by: 'Malware.Expert' });
-    // Switched off: CRS comes back.
-    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...me, enabled: false }] }))).status).toBe(200);
-    const b = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
-    expect(b.body.config.crs.enabled).toBe(true);
-    expect(b.body.crs.version).toBe('4.29.0');
-  });
-});
+describe('Malware.Expert is no longer used', () => {
+  const me = { id: 'malware_expert', name: 'Malware.Expert', key: 'INERT.1', url: 'https://rules.malware.expert/download.php?rules=generic', enabled: true };
 
-describe('CRS replacement reaches servers that are up to date', () => {
-  it('resyncs a server still running CRS once Malware.Expert is linked', async () => {
-    const me = { id: 'malware_expert', name: 'Malware.Expert', key: 'SERIAL.1', url: 'https://rules.malware.expert/download.php?rules=generic', enabled: true, servers: [serverId] };
-    const put = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [me] }));
+  it('refuses new Malware.Expert feeds and vendors', async () => {
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote: [me] }))).status).toBe(400);
+    const renamed = { ...me, id: 'feed2', name: 'Other name' };
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote: [renamed] }))).status).toBe(400);
+    const vendor = { id: 'x1', name: 'X', url: 'https://vendor.malware.expert/meta_me.yaml', enabled: true };
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ vendors: [vendor], remote: [] }))).status).toBe(400);
+  });
+
+  it('drops a stored Malware.Expert feed and turns CRS and our rules back on', async () => {
+    const put = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [] }));
+    expect(put.status).toBe(200);
+    // A configuration saved before Malware.Expert was removed.
+    await h.pool.query(
+      `UPDATE waf_rulesets SET config = jsonb_set(config::jsonb, '{remote}', $1::jsonb) WHERE version = $2`,
+      [JSON.stringify([{ ...me, servers: [serverId], rbl: 'rbl.malware.expert' }]), put.body.version],
+    );
+    const g = await admin.req('GET', '/api/waf/rulesets');
+    expect(g.body.config.remote).toEqual([]);
+    const a = await agent('/api/agent/waf/config', { version: 0, crs_version: '' });
+    expect(a.body.config.remote).toEqual([]);
+    expect(a.body.config.crs.enabled).toBe(true);
+    expect(a.body.config.crs.replaced_by).toBeUndefined();
+    expect(a.body.config.xmartguard).toEqual({ enabled: true });
+    // An older agent that still runs Malware.Expert instead of our rules is resynced.
     const v = put.body.version;
-    // Same version, but the server still reports CRS 4.29.0: not "unchanged".
-    const a = await agent('/api/agent/waf/config', { version: v, crs_version: '4.29.0' });
-    expect(a.body.unchanged).toBeUndefined();
-    expect(a.body.config.crs.enabled).toBe(false);
-    const b = await agent('/api/agent/waf/config', { version: v, crs_version: '' });
-    expect(b.body.unchanged).toBe(true);
-    // CRS never downloaded, but still switched on in the server's config.
-    const c = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: true });
-    expect(c.body.config.crs.enabled).toBe(false);
-    const d = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: false });
-    expect(d.body.unchanged).toBe(true);
-    // A server still running xPGuard's own rules next to Malware.Expert is resynced.
-    const e = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: false, own_replaced_by: '' });
-    expect(e.body.config.xmartguard.replaced_by).toBe('Malware.Expert');
-    const f = await agent('/api/agent/waf/config', { version: v, crs_version: '', crs_enabled: false, own_replaced_by: 'Malware.Expert' });
-    expect(f.body.unchanged).toBe(true);
+    const b = await agent('/api/agent/waf/config', { version: v, crs_version: '4.29.0', crs_enabled: true, own_replaced_by: 'Malware.Expert' });
+    expect(b.body.unchanged).toBeUndefined();
+    const c = await agent('/api/agent/waf/config', { version: v, crs_version: '4.29.0', crs_enabled: true, own_replaced_by: '' });
+    expect(c.body.unchanged).toBe(true);
   });
 });
 

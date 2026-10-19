@@ -284,6 +284,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.reputationLoop(ctx)
 	a.loadRuleSets()
 	go a.WAF.Run(ctx)
+	go a.WAF.WarmCounts()
 	go a.wafSyncLoop(ctx)
 	go a.CMS.Run(ctx)
 	// Move wp-cron lines of earlier versions (all at 0:00) to their own times.
@@ -1468,7 +1469,8 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 
 	// ---- WAF
 	h["waf.status"] = func(context.Context, json.RawMessage) (any, error) {
-		return map[string]any{"status": a.WAF.Status(), "rules": a.WAF.RuleCatalog(), "packages": a.WAF.PackageStates(), "stats": a.WAF.Stats(),
+		rules := a.WAF.RuleCatalog()
+		return map[string]any{"status": a.WAF.Status(), "rules": rules, "packages": waf.PackagesOf(rules), "stats": a.WAF.Stats(),
 			"tor": a.Tor.Status(), "ipdb_addresses": len(a.Firewall.IPDBEntries()),
 			"auto_exclusions": a.WAF.AutoExclusions(), "cpanel_off": waf.CPanelModsecOff()}, nil
 	}
@@ -1491,43 +1493,6 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		return res, nil
 	}
 	// waf.sync pulls the portal's WAF Rule Sets now and applies them.
-	// waf.vendor_rules: where Malware.Expert replaces xPGuard's rules, its
-	// packages and the rules of it that triggered here.
-	h["waf.vendor_rules"] = func(context.Context, json.RawMessage) (any, error) {
-		return a.WAF.VendorRules(), nil
-	}
-	// waf.vendor_rule switches one vendor rule off (false positive) or on.
-	h["waf.vendor_rule"] = func(_ context.Context, p json.RawMessage) (any, error) {
-		in, err := decode[struct {
-			ID      int  `json:"id"`
-			Enabled bool `json:"enabled"`
-		}](p)
-		if err != nil {
-			return nil, err
-		}
-		if in.ID <= 0 || in.ID > 99999999 {
-			return nil, errors.New("invalid rule id")
-		}
-		cur := a.Settings.Get().WAF.DisabledRules
-		next := []int{}
-		for _, id := range cur {
-			if id != in.ID {
-				next = append(next, id)
-			}
-		}
-		if !in.Enabled {
-			next = append(next, in.ID)
-		}
-		raw, _ := json.Marshal(map[string]any{"waf": map[string]any{"disabled_rules": next}})
-		if _, err := a.Settings.Patch(raw); err != nil {
-			return nil, err
-		}
-		res := map[string]any{"vendor": a.WAF.VendorRules()}
-		if err := a.WAF.Apply(); err != nil {
-			res["warning"] = err.Error()
-		}
-		return res, nil
-	}
 	h["waf.sync"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
 		res, err := a.syncWAF(ctx, true)
 		if err != nil {

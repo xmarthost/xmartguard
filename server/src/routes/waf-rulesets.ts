@@ -5,7 +5,7 @@ import type { AgentHub } from '../agents/hub.js';
 import { audit, requirePlatform } from '../auth.js';
 import { scopeAccounts } from '../tenancy.js';
 import { signedPayload } from '../agent-sign.js';
-import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, linkedTo, loadConfig, usesMalwareExpert, validateCustomRules } from '../waf/rulesets.js';
+import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, linkedTo, loadConfig, validateCustomRules } from '../waf/rulesets.js';
 
 /**
  * WAF Rule Sets: one ModSecurity configuration for all servers. Saving it
@@ -135,28 +135,24 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
     if (!r) return;
     const cur = await loadConfig(pool, r.accountId);
     const c = cur.version ? cur.config : DEFAULT_CONFIG;
-    // Malware.Expert replaces the OWASP CRS on the servers that use it.
-    const meHere = usesMalwareExpert(c, r.serverId);
-    const replaced = c.crs.enabled && meHere;
-    const crsOn = c.crs.enabled && !replaced;
+    const crsOn = c.crs.enabled;
     const crsVersion = crsOn ? await crs.resolve(c.crs.version) : null;
     // The agent reports the CRS release it runs ('' = none), so a server
     // that must drop CRS (or pick it up again) is resynced.
     // Older agents only report the release.
     const crsState = r.data.crs_enabled === undefined ? crsOn || r.data.crs_version === '' : r.data.crs_enabled === crsOn;
     const crsCurrent = crsState && (!crsOn || !crsVersion || crsVersion === r.data.crs_version);
-    // Malware.Expert also replaces xPGuard's own blocking rules there (two
-    // rule sets would handle the same attacks). Agents from 0.11.4 report
-    // what they run, so a server whose linking changed is resynced.
-    const ownReplacedBy = cur.version && meHere ? 'Malware.Expert' : '';
-    const ownCurrent = r.data.own_replaced_by === undefined || r.data.own_replaced_by === ownReplacedBy;
+    // Agents up to 0.22.18 report whether another rule set (Malware.Expert,
+    // no longer used) replaced xPGuard's own rules: those are resynced so
+    // they turn our rules and the CRS back on.
+    const ownCurrent = !r.data.own_replaced_by;
     if (cur.version === r.data.version && crsCurrent && ownCurrent) return { unchanged: true };
     const config = {
       version: cur.version,
       // Unset until the account saves its rule sets, so existing per-server
       // WAF switches are left alone.
-      xmartguard: cur.version ? { ...c.xmartguard, replaced_by: ownReplacedBy || undefined } : undefined,
-      crs: { ...c.crs, enabled: crsOn, version: crsVersion ?? '', replaced_by: replaced ? 'Malware.Expert' : undefined },
+      xmartguard: cur.version ? c.xmartguard : undefined,
+      crs: { ...c.crs, enabled: crsOn, version: crsVersion ?? '' },
       // Licensed feeds go only to the servers they are linked to.
       vendors: c.vendors.filter((v) => linkedTo(v, r.serverId)).map(({ servers: _s, ...v }) => v),
       remote: c.remote.filter((x) => linkedTo(x, r.serverId)).map(({ servers: _s, ...x }) => x),

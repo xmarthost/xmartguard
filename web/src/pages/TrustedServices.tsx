@@ -43,7 +43,7 @@ const GROUPS: [string, string, string][] = [
   ['payment', 'Payments', 'Order confirmations from Stripe and PayPal.'],
   ['mail', 'Mail relays', 'MailBaby and other outbound mail relays: never blocked, and trusted by cPanel greylisting so their mail is not delayed.'],
   ['wordpress', 'WordPress', 'Jetpack / WordPress.com, WordPress.org updates and WooCommerce.com.'],
-  ['vendor', 'Hosting vendors', 'cPanel, LiteSpeed, CloudLinux / Imunify, Softaculous and Malware.Expert license and update servers.'],
+  ['vendor', 'Hosting vendors', 'cPanel, LiteSpeed, CloudLinux / Imunify and Softaculous license and update servers.'],
   ['custom', 'Your list', 'Addresses you added below.'],
 ];
 

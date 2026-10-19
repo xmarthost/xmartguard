@@ -143,7 +143,7 @@ export default function CaptchaPage() {
       <Card title="Setup" desc="The page runs on this portal. Its address is used by the WAF of every server.">
         <SettingRow
           title="Use this CAPTCHA page on all servers"
-          desc="Banned and IPDB-listed visitors, suspicious visitors of login pages and weak WAF signals get this page instead of each server's own built-in one. Where it is used is chosen per server in Firewall » CAPTCHA (Malware.Expert's own login CAPTCHA wins where it is linked)."
+          desc="Banned and IPDB-listed visitors, suspicious visitors of login pages and weak WAF signals get this page instead of each server's own built-in one. Where it is used is chosen per server in Firewall » CAPTCHA."
         >
           <Toggle on={enabled} disabled={!admin || busy} onChange={setEnabled} />
         </SettingRow>

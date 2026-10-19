@@ -886,65 +886,6 @@ func guardChains(text, cond string, ids ...int) string {
 	return strings.Join(out, "\n")
 }
 
-// RenderLoginWatch is what stays of xPGuard's rules where another rule set
-// (Malware.Expert) replaces them: only the failed-login detectors, which
-// pass every request and let the agent ban brute-force attackers.
-func RenderLoginWatch(c settings.WAF, replacedBy string, dyn Dynamic) string {
-	var b strings.Builder
-	b.WriteString("# xPGuard's own blocking rules are off on this server: " + replacedBy + "'s rules are used instead.\n")
-	b.WriteString("# Kept: the portal's whitelists and switched-off rules (applied to " + replacedBy + "'s rules),\n")
-	b.WriteString("# and failed-login detection (pass, log only) for the brute-force bans.\n\n")
-	off := map[int]bool{}
-	for _, id := range c.DisabledRules {
-		off[id] = true
-	}
-	lw := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
-	renderExempt(lw, dyn)
-	renderCPanelOff(lw, dyn)
-	renderExclusions(lw, c, off, dyn)
-	// Whitelisted addresses and domains skip the vendor's rules too.
-	if len(c.WhitelistIPs) > 0 {
-		ips := make([]string, len(c.WhitelistIPs))
-		for i, a := range c.WhitelistIPs {
-			ips[i] = modsecAddr(a)
-		}
-		fmt.Fprintf(&b, "SecRule REMOTE_ADDR \"@ipMatch %s\" \"id:%d,phase:1,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(ips, ","), IDWhitelist)
-	}
-	if len(c.WhitelistDomains) > 0 {
-		var alt []string
-		for _, d := range c.WhitelistDomains {
-			alt = append(alt, strings.ReplaceAll(regexp.QuoteMeta(d), `\*`, `[^.]+`))
-		}
-		fmt.Fprintf(&b, "SecRule SERVER_NAME \"@rx ^(?:%s)$\" \"id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleEngine=Off\"\n", strings.Join(alt, "|"), IDWhiteDomains)
-	}
-	// Rules switched off in the portal (a vendor rule causing false positives).
-	if ids := append([]int(nil), c.DisabledRules...); len(ids) > 0 {
-		sort.Ints(ids)
-		var ctl []string
-		for _, id := range ids {
-			ctl = append(ctl, fmt.Sprintf("ctl:ruleRemoveById=%d", id))
-		}
-		fmt.Fprintf(&b, "SecAction \"id:%d,phase:1,pass,nolog,%s\"\n", IDDisable, strings.Join(ctl, ","))
-	}
-	b.WriteString("\n")
-	if !c.BruteForce {
-		return b.String()
-	}
-	full := Render(settings.WAF{BruteForce: true, LoginURLs: c.LoginURLs, DisabledRules: c.DisabledRules}, Options{})
-	keep := false
-	for _, l := range strings.Split(full, "\n") {
-		if strings.HasPrefix(l, "SecRule ") {
-			keep = strings.Contains(l, "tag:'xpguard/login'")
-		} else if !strings.HasPrefix(l, "  ") {
-			keep = false
-		}
-		if keep {
-			b.WriteString(l + "\n")
-		}
-	}
-	return b.String()
-}
-
 // BotFiles returns the bot list files to write next to the rules.
 func BotFiles(c settings.WAF) map[string]string {
 	join := func(l []string) string { return strings.Join(l, "\n") + "\n" }

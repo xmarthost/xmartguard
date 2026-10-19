@@ -229,3 +229,51 @@ func TestPackageStates(t *testing.T) {
 		t.Errorf("virtual patches %+v", v)
 	}
 }
+
+// The WAF settings page must not wait for a week of log counting each
+// time: counts are kept a minute and then refreshed in the background
+// while the last ones are served.
+func TestPackageCountsCached(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
+	db, _ := store.Open()
+	defer db.Close()
+	st, _ := settings.Load()
+	m := &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	add := func() {
+		db.Exec(`INSERT INTO waf_events (at, ip, rule_id, action, category) VALUES (?, '203.0.113.5', ?, 'Access denied with code 403', 'waf')`, store.Now()-60, IDRootProbe)
+	}
+	hits := func() int {
+		for _, p := range m.PackageStates() {
+			if p.ID == "scanner" {
+				return p.Hits24h
+			}
+		}
+		return -1
+	}
+	add()
+	if h := hits(); h != 1 {
+		t.Fatalf("first count %d", h)
+	}
+	add()
+	if h := hits(); h != 1 {
+		t.Fatalf("fresh counts should be served from the cache, got %d", h)
+	}
+	m.mu.Lock()
+	m.counts.at = m.counts.at.Add(-2 * countFresh)
+	m.mu.Unlock()
+	if h := hits(); h != 1 {
+		t.Fatalf("stale counts should be served while refreshing, got %d", h)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for hits() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh never landed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if s := m.Stats(); s.Blocked24h != 2 {
+		t.Errorf("stats %+v", s)
+	}
+}

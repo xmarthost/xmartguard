@@ -9,7 +9,6 @@ reports back what it applied, shown under **Rollout**.
 |---|---|---|---|---|
 | xPGuard rules | built in | free | agent renders them (`/etc/xpguard/waf/rules.conf`) | with agent releases |
 | OWASP Core Rule Set | [github.com/coreruleset/coreruleset](https://github.com/coreruleset/coreruleset) (Apache 2.0) | free | portal downloads the official release, agents install it next to our rules | portal checks GitHub every 12 h; "latest" follows new releases, or pin a version |
-| Malware.Expert | [malware.expert](https://malware.expert/modsecurity-rules/) | paid (single server / 50 / unlimited) | cPanel vendor: agent runs `whmapi1 modsec_add_vendor url=…` with the vendor URL from your subscription, then enables it with automatic updates | by WHM from the vendor |
 | Comodo WAF (CWAF) | [waf.comodo.com](https://waf.comodo.com/) | free (registration) | cPanel vendor (`meta_comodo_apache.yaml`; LiteSpeed servers get `meta_comodo_litespeed.yaml`) | by WHM; the service has been unreliable, servers report download errors |
 | Any other cPanel vendor | vendor YAML URL | depends | cPanel vendor | by WHM |
 | Custom rules | typed in the portal | free | `/etc/xpguard/waf/custom.conf`, loaded last | when you save |
@@ -40,7 +39,7 @@ malware engine, bad bots and login brute force.
   when its score reaches the threshold (5 = one critical match). Paranoia
   level 1 is the right choice for shared hosting; levels 2–4 add rules and
   false positives.
-- Vendors use their own actions (Malware.Expert answers 406).
+- Vendors use their own actions.
 
 Where the web server already loads its own CRS (cPanel's OWASP vendor
 `OWASP3`, Debian's `modsecurity-crs` or RHEL's `mod_security_crs` package),
@@ -81,7 +80,17 @@ Only blocked requests are counted as web attacks; OWASP CRS's per-rule
 warnings are not recorded. The logs being read are listed per server under
 Rollout ("Reads hits from").
 
-## Licensed feeds and linked servers (Malware.Expert)
+## Malware.Expert removed (0.22.19)
+
+xPGuard no longer uses Malware.Expert. The portal refuses Malware.Expert
+feeds and vendors and drops any it still has stored when the configuration
+is read; agents drop them too (older portals may still send them). On a
+server where the agent added Malware.Expert as a WHM vendor, the vendor is
+removed from WHM (`modsec_remove_vendor`). Servers that ran Malware.Expert
+instead of xPGuard's own rules and the OWASP CRS get both back at their
+next sync (the portal resyncs agents that still report `own_replaced_by`).
+
+## Licensed feeds and linked servers
 
 Every WHM vendor and remote feed (SecRemoteRules) has **Linked servers**:
 "All servers" (default) or "Only selected servers". The portal sends a feed
@@ -90,53 +99,17 @@ calling server), so a feed licensed for one IP is never loaded elsewhere.
 Unlinked servers drop it on the next sync (WHM vendors that xPGuard
 added are disabled).
 
-"Add a remote feed… » Malware.Expert" fills in:
-
-- URL `https://rules.malware.expert/download.php?rules=generic` with all
-  **extra rules** (`&extra=webshell,scanner,crawler,rbl,proxy,recaptcha`);
-  each module can be switched off with its checkbox.
-- **Captcha by Malware.Expert** (`recaptcha`): Malware.Expert's reCaptcha for
-  bots on WordPress/Joomla logins, on the linked servers only. xPGuard's
-  own CAPTCHA keeps working for firewall bans; Settings » WAF shows which
-  one a server uses.
-- An optional POST blocklist: `POST` requests from addresses listed on
-  `rbl.malware.expert` are dropped (rule 7700801, chained on
-  `REMOTE_ADDR @rbl`).
-- The first server as the only linked server.
-
 The license/serial key is entered in the portal only (never in this
 repository), is shown masked and is sent only to the linked servers.
 After applying, the agent reads what ModSecurity logged while loading the
 feed (`Loaded N rules from: '…'` or `Problems loading external resources`)
 in the web server's error log and reports "N rules loaded" or the error
 under Rollout, because ModSecurity itself only logs a warning
-(`SecRemoteRulesFailAction Warn`) and keeps serving. The agent does not
-download the feed itself: Malware.Expert answers other clients with
-"Are you going to steal our rules ?" (HTTP 505).
-
-Malware.Expert replaces the OWASP CRS: on every server linked to an
-enabled Malware.Expert feed (or WHM vendor) the portal sends CRS switched
-off ("replaced by Malware.Expert on this server" under Rollout), so two
-generic rule sets never run together. Other servers keep CRS. The agent
-reports whether it runs CRS (`crs_enabled`), so servers that are already up
-to date switch at their next sync.
+(`SecRemoteRulesFailAction Warn`) and keeps serving.
 
 The WHM ModSecurity vendors card is the older way to install the same rule
 sets; it is hidden unless a vendor is configured. Use either the WHM vendor
 or the remote feed for the same rules on a server, not both.
-
-## Malware.Expert replaces xPGuard's own rules (0.11.4)
-
-On a server linked to Malware.Expert the portal sends `xmartguard.replaced_by:
-"Malware.Expert"`. The agent then renders none of its own blocking rules there
-(upload scan, sensitive files, WordPress hardening, bots, web shells, CAPTCHA
-gate): two rule sets handling the same attacks cause double blocks and false
-positives. What stays is the self-test rule (7700000, proves the WAF is
-enforced) and the failed-login detectors (7700401-7700405, `pass,log`: they
-block nothing and feed the brute-force bans). The per-server WAF settings page
-says so, and the switches apply again when Malware.Expert is unlinked. Agents
-report what they run (`own_replaced_by`), so a server whose linking changed is
-resynced without waiting for a new rule-set version.
 
 ## Trusted services (0.11.4)
 
@@ -161,8 +134,6 @@ and AI crawlers still follow "Block AI crawlers").
 - "Block PHP file uploads" appears once (Settings » WAF).
 - "Block SEO crawlers" merged into the Bad Bot blocker list (its crawlers
   are added to the list while the blocker is on).
-- Malware.Expert rows show only on servers linked to Malware.Expert; rows
-  it also covers carry a "+ Malware.Expert" badge.
 
 ## Custom rules
 
@@ -173,7 +144,7 @@ are rejected (by the portal and again by the agent), so the portal cannot be
 used to run commands on servers. Ids 7700000–7709999 are reserved for
 xPGuard; use 1000000–1999999.
 
-Example (the Gravity SMTP data exposure seen in the Malware.Expert log):
+Example (the Gravity SMTP data exposure):
 
 ```
 SecRule REQUEST_URI "@beginsWith /wp-json/gravitysmtp/v1/tests/mock-data" \
@@ -223,15 +194,3 @@ before the page opens; the rest of the website never shows it.
 - The CAPTCHA ports (default 7780/7743) are opened in xPGuard's port
   filter and, under CSF, with an `iptables -I INPUT … xpguard-captcha`
   rule that csfpost.sh restores after `csf -r`.
-
-Malware.Expert on LiteSpeed: LiteSpeed does not log "Loaded N rules", so a
-feed is shown as working once its own blocks (`[tag "MEWAF"]`) appear in the
-error log. With the `rbl` extra, Malware.Expert's rule 400010 already drops
-POSTs from rbl.malware.expert and xPGuard's 7700801 is left out.
-
-When the Malware.Expert feed linked to a server has the `recaptcha` extra,
-its CAPTCHA protects the login pages there (rule 1000050: addresses on
-blacklist.recaptcha.cloud are sent to recaptcha.cloud) and xPGuard's
-login-page CAPTCHA is not rendered on that server, since it would stop every
-visitor before Malware.Expert's rule. Settings » WAF shows "Captcha by
-Malware.Expert" instead of the switch.
