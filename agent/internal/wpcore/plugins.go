@@ -224,6 +224,26 @@ func (p *Plugins) Known(path string, sum [16]byte) bool {
 	return files[rel][hex.EncodeToString(sum[:])]
 }
 
+// KnownFile reports an unmodified file (rel inside the plugin's folder) of
+// a published plugin version: used for the files of a plugin's zip.
+func (p *Plugins) KnownFile(slug, version, rel string, sum [16]byte) bool {
+	if p == nil || p.Source == nil || !reSlug.MatchString(slug) || version == "" || rel == "" {
+		return false
+	}
+	return p.checksums(slug, version)[rel][hex.EncodeToString(sum[:])]
+}
+
+// PluginVersionOf reads the Version header of a plugin's main file.
+func PluginVersionOf(main []byte) string {
+	if !rePluginName.Match(main) {
+		return ""
+	}
+	if m := rePluginVersion.FindSubmatch(main); m != nil {
+		return string(m[1])
+	}
+	return ""
+}
+
 // DirectPlugins fetches from downloads.wordpress.org.
 type DirectPlugins struct{ D *Direct }
 

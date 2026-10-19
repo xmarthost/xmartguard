@@ -108,6 +108,10 @@ type Scanner struct {
 	// KnownGoodPath reports an unmodified file of a published plugin
 	// (checked against the official checksums of its version).
 	KnownGoodPath func(path string, md5 [16]byte) bool
+	// KnownPluginFile reports an unmodified file of a published plugin
+	// version (slug, version, path inside the plugin's folder): the files
+	// of a plugin's zip (WP-CLI's download cache, an uploaded package).
+	KnownPluginFile func(slug, version, rel string, md5 [16]byte) bool
 	// Cleared reports content (by SHA-256) the AI scanner or an
 	// administrator found clean; it is not flagged again.
 	Cleared func(sha256 string) bool
@@ -492,7 +496,7 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		if backupArchive(path) {
 			return nil, nil
 		}
-		d := scanZip(path, info.Size())
+		d := scanZipKnown(path, info.Size(), s.KnownPluginFile)
 		if d != nil && s.clearedFile(path) {
 			return nil, ErrTrusted
 		}

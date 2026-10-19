@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.15** (see `VERSION`).
+- Current release: **0.22.16** (see `VERSION`).
 
 ## Working rules
 
@@ -119,6 +119,19 @@ project. It holds the rules, the current state and what is still open.
   API whose cloud address was on the IPDB (seen on business200:
   54.215.31.113, AWS, answering from port 443) never got the answer, and
   the site hung. `TestAnswersFromListedAddressesOnKernel` covers it.
+- **Plugin zips judged like the installed plugin** (0.22.16): on s5,
+  `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
+  quarantines of one file, WP-CLI's download cache
+  `~/.wp-cli/cache/plugin/woocommerce-paypal-payments-4.1.3.zip` (same
+  sha256 in ten accounts, re-downloaded every minute, AI-restored each
+  time). Installed plugin files pass through the official WordPress.org
+  checksums (`KnownGoodPath`); zip members never did. `scanZipKnown`
+  finds the plugin a zip holds (one `<slug>/` folder, version from the
+  main file's header or the zip name) and skips members matching that
+  version's checksums (`Scanner.KnownPluginFile`); changed members, mixed
+  zips and plugins without public checksums are still checked. The
+  signature itself is sound (21 real backdoors on s5). Test:
+  `TestFleetPluginZipOfficialMembers`.
 - **CAPTCHA page bypass audit** (0.22.15): two ways to pass bots were
   closed. (1) A visitor of the other address family was always allowed
   to solve the page for any address: one IPv6 solver could pass any number

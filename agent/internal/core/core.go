@@ -132,6 +132,10 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		pluginsOnce.Do(func() { plugins.Source = a.pluginSource() })
 		return plugins.Known(path, sum)
 	}
+	a.Scanner.KnownPluginFile = func(slug, version, rel string, sum [16]byte) bool {
+		pluginsOnce.Do(func() { plugins.Source = a.pluginSource() })
+		return plugins.KnownFile(slug, version, rel, sum)
+	}
 	a.Realtime = &scanner.Realtime{S: a.Scanner}
 	// Scans run in their own low-priority process (the agent's program
 	// with "scan-engine"), named xpguard-scan in the process list.

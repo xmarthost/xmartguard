@@ -7,7 +7,10 @@ import (
 	"encoding/hex"
 	"io"
 	"path"
+	"regexp"
 	"strings"
+
+	"github.com/xmarthost/xmartguard/agent/internal/wpcore"
 )
 
 // Zip archives in web folders often carry web shells (uploaded "plugin"
@@ -44,7 +47,52 @@ func backupArchive(file string) bool {
 }
 
 // scanZip returns the first confident detection inside a zip archive.
-func scanZip(file string, size int64) *Detection {
+func scanZip(file string, size int64) *Detection { return scanZipKnown(file, size, nil) }
+
+// reZipVersion is the version in a plugin zip's name (WP-CLI's cache and
+// WordPress.org: <slug>-<version>.zip or <slug>.<version>.zip).
+var reZipVersion = regexp.MustCompile(`^(.+?)[-.]v?([0-9]+(?:\.[0-9A-Za-z+-]+)*)\.zip$`)
+
+// zipPlugin finds the plugin a zip holds: every member in one folder
+// <slug>/, and the version from the main file's header (or the zip's
+// name). It returns "" for other archives.
+func zipPlugin(file string, files []*zip.File) (slug, version string) {
+	for _, f := range files {
+		top, _, ok := strings.Cut(f.Name, "/")
+		if !ok || top == "" || (slug != "" && top != slug) {
+			return "", ""
+		}
+		slug = top
+	}
+	if slug == "" {
+		return "", ""
+	}
+	for _, f := range files {
+		rest := strings.TrimPrefix(f.Name, slug+"/")
+		if strings.Contains(rest, "/") || extOf(rest) != ".php" || f.UncompressedSize64 > 1<<20 {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		head, _ := io.ReadAll(io.LimitReader(rc, 8192))
+		rc.Close()
+		if v := wpcore.PluginVersionOf(head); v != "" {
+			return slug, v
+		}
+	}
+	if m := reZipVersion.FindStringSubmatch(path.Base(file)); m != nil && m[1] == slug {
+		return slug, m[2]
+	}
+	return "", ""
+}
+
+// scanZipKnown is scanZip that skips the members of a published plugin's
+// zip that match its version's official checksums (known may be nil): a
+// genuine plugin package is judged like the installed plugin, a changed
+// member is still checked.
+func scanZipKnown(file string, size int64, known func(slug, version, rel string, md5 [16]byte) bool) *Detection {
 	if size > maxZipSize {
 		return nil
 	}
@@ -53,6 +101,10 @@ func scanZip(file string, size int64) *Detection {
 		return nil
 	}
 	defer r.Close()
+	slug, version := "", ""
+	if known != nil {
+		slug, version = zipPlugin(file, r.File)
+	}
 	var total int64
 	for i, f := range r.File {
 		if i >= maxZipEntries || total >= maxZipTotal {
@@ -75,6 +127,9 @@ func scanZip(file string, size int64) *Detection {
 			continue
 		}
 		total += int64(len(content))
+		if slug != "" && known(slug, version, strings.TrimPrefix(f.Name, slug+"/"), md5.Sum(content)) {
+			continue
+		}
 		if hdb := activeHashDB(); hdb.SizeKnown(int64(len(content))) {
 			label := hdb.LookupSums(int64(len(content)), func() (string, string) {
 				h, m := sha256.Sum256(content), md5.Sum(content)
