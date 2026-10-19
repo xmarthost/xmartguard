@@ -35,7 +35,7 @@ func TestCSFCompat(t *testing.T) {
 	// Hook: added once next to an existing csfpost.sh, removed cleanly.
 	os.MkdirAll(filepath.Join(root, "usr/local/csf/bin"), 0o755)
 	os.WriteFile(filepath.Join(root, csfPost), []byte("#!/bin/sh\n/usr/local/bin/other-script\n"), 0o700)
-	if EnsureCSFHook() != nil || EnsureCSFHook() != nil {
+	if err1, err2 := EnsureCSFHook(), EnsureCSFHook(); err1 != nil || err2 != nil {
 		t.Fatal("hook")
 	}
 	b, _ := os.ReadFile(filepath.Join(root, csfPost))

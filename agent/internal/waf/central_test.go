@@ -218,7 +218,9 @@ func TestCentralSiteMode(t *testing.T) {
 		res.Body.Close()
 		return res.StatusCode, res.Header.Get("Location")
 	}
-	get := func(cookie string) (int, string) { return getPath("/wp-login.php?redirect_to=/wp-admin/&reauth=1", cookie) }
+	get := func(cookie string) (int, string) {
+		return getPath("/wp-login.php?redirect_to=/wp-admin/&reauth=1", cookie)
+	}
 	want := "https://shop.example.com:7743/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1"
 	// The login page reached through PATH_INFO or an encoded name is the
 	// same login page (PHP runs wp-login.php for /wp-login.php/x).

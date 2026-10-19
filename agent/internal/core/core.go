@@ -188,7 +188,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Mailer.Channels = a.channels
 	a.Mailer.Admin = func() string { return a.Settings.Get().Notifications.Email }
 	a.AI = &ai.Analyzer{DB: db, Settings: st, Log: log, OnVerdict: a.onAIVerdict}
-	if cfg != nil && cfg.ServerURL != "" {
+	if cfg.ServerURL != "" {
 		a.AI.Portal = &ai.PortalAI{URL: cfg.ServerURL, ServerID: cfg.ServerID, Sign: func(msg []byte) string {
 			id, err := identity.Load(config.KeyPath())
 			if err != nil {

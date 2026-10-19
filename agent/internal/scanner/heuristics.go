@@ -27,9 +27,6 @@ var (
 	reSink          = regexp.MustCompile(`(?i)(?:^|[^\w$>:\\])(?:system|shell_exec|passthru|proc_open|popen|pcntl_exec)\s*\(`)
 	reExecBare      = regexp.MustCompile(`(?i)(?:^|[^\w$>:\\])exec\s*\(`)
 	reVarFunc       = regexp.MustCompile(`\$(?:[a-zA-Z_]\w*|_(?:POST|GET|REQUEST|COOKIE|SERVER)\s*\[[^\]]+\])\s*\(`)
-	reCallUserFunc  = regexp.MustCompile(`(?i)\bcall_user_func(?:_array)?\s*\(`)
-	reUploader      = regexp.MustCompile(`(?i)move_uploaded_file\s*\(`)
-	reFilesName     = regexp.MustCompile(`\$_FILES\b`)
 	reWriteSink     = regexp.MustCompile(`(?i)\b(?:file_put_contents|fwrite|fputs)\s*\(`)
 	reWriteSinkFile = regexp.MustCompile(`(?i)\b(?:file_put_contents|fwrite|fputs)\s*\(\s*[^'"\s]|\b(?:file_put_contents|fwrite|fputs)\s*\(\s*['"](?:[^p'"]|p[^h]|ph[^p]|php[^:])`)
 	reUserInput     = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|FILES)\b`)
@@ -50,7 +47,6 @@ var (
 	reGlobalsCall  = regexp.MustCompile(`\$GLOBALS\s*\[[^\]]+\]\s*(?:\[[^\]]+\]\s*)*\(`)
 	reAssertVar    = regexp.MustCompile(`(?i)\bassert\s*\(\s*(?:@\s*)?\$`)
 	reOrdChr       = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
-	reStrReplace   = regexp.MustCompile(`(?i)\bstr_replace\s*\(`)
 	reDefineArr    = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
 	reEvalGz       = regexp.MustCompile(`(?i)\b(?:eval|assert|create_function)\s*\(`)
 	// A function name taken straight from request data: $_POST['f'](...) or

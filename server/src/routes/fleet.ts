@@ -51,6 +51,8 @@ export function fleetRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
           /* counted as no answer */
         }
       }
+      // The most serious first.
+      problems.sort((x, y) => (x.level === y.level ? 0 : x.level === 'danger' ? -1 : 1));
       return {
         id,
         hostname: r.hostname,
