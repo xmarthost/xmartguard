@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { isIP } from 'node:net';
 import { z } from 'zod';
@@ -267,6 +268,9 @@ function validParams(p: { s: string; ip: string; h: string; u: string }): string
 }
 
 export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: AgentHub): void {
+  // Checks being verified, by solution (see /v/verify).
+  const verifying = new Map<string, Promise<{ code: number; body: unknown }>>();
+  const res = (code: number, body: unknown) => ({ code, body });
   const viewer = { preHandler: requirePlatform('viewer') };
   const admin = { preHandler: requirePlatform('admin') };
   const pageUrl = `${cfg.captchaUrl}/v`;
@@ -427,72 +431,94 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       const { config } = await load(pool, accountId);
       const provider = effectiveProvider(config);
       if (!config.enabled || !provider) return reply.code(503).send({ error: 'The check is not available right now.' });
-      const ip = visitorIP(req, cfg.trustProxy);
-      const method = b.data.altcha ? 'altcha' : 'turnstile';
-      // Turnstile's token, or ALTCHA's solution where ALTCHA is allowed.
-      const solved = async () => {
-        if (b.data.altcha) return provider !== 'turnstile' && (await altchaVerify(b.data.altcha));
-        if (b.data.token) return provider !== 'altcha' && (await turnstile.verify(config.secret_key, b.data.token, ip, tokenHosts));
-        return false;
+      // The same solution sent again while the first request still waits for
+      // the website's server (a proxy in front of the CAPTCHA domain retrying
+      // it, or a double submit) gets the first request's answer: a check is
+      // accepted once, so the repeat used to answer "The check failed" while
+      // the first was still letting the visitor in.
+      const answer = b.data.altcha ?? b.data.token;
+      const ip0 = visitorIP(req, cfg.trustProxy);
+      const key = answer ? createHash('sha256').update(`${p.s}|${p.ip}|${p.h}|${p.u}|${ip0}|${answer}`).digest('hex') : '';
+      const earlier = key ? verifying.get(key) : undefined;
+      if (earlier) {
+        const r = await earlier;
+        return reply.code(r.code).send(r.body);
+      }
+      const run = async (): Promise<{ code: number; body: unknown }> => {
+        const ip = visitorIP(req, cfg.trustProxy);
+        const method = b.data.altcha ? 'altcha' : 'turnstile';
+        // Turnstile's token, or ALTCHA's solution where ALTCHA is allowed.
+        const solved = async () => {
+          if (b.data.altcha) return provider !== 'turnstile' && (await altchaVerify(b.data.altcha));
+          if (b.data.token) return provider !== 'altcha' && (await turnstile.verify(config.secret_key, b.data.token, ip, tokenHosts));
+          return false;
+        };
+        // A preview only tests the check: no server is asked, nothing is recorded.
+        if (b.data.preview) {
+          if (!(await solved())) return res(403, { error: 'The check failed. Please try again.' });
+          return res(200, { ok: true, preview: true });
+        }
+        // The link is for the address the website saw. Mobile networks and
+        // ISPs often reach different sites from different addresses, so
+        // another address may solve it (a few per hour), unless the strict
+        // setting is on. A dual-stack visitor can reach this page over the
+        // other family (also with the strict setting), but that counts as
+        // another address too: one IPv6 visitor must not pass any number of
+        // IPv4 addresses.
+        const other = !sameIP(ip, p.ip);
+        const sameFamily = isIP(ip) === isIP(p.ip);
+        if (other && ((config.strict_ip && sameFamily) || !allowOtherAddress(ip, p.ip))) {
+          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+          return res(403, {
+            error:
+              config.strict_ip && sameFamily
+                ? 'This check was opened for another address. Please go back to the website and try again.'
+                : 'Too many checks from this address. Please try again in an hour.',
+          });
+        }
+        // ALTCHA where Turnstile is the check: only the visitor's own network
+        // (or its other family), not from a hosting network, a few times a
+        // day, for a shorter time.
+        const altchaKeys = [`s:${ip}`, `t:${p.ip}`];
+        if (method === 'altcha' && provider !== 'turnstile') {
+          if ((provider === 'auto' && other && sameFamily && !sameNetwork(ip, p.ip)) || !altchaAllowed(altchaKeys, provider === 'auto' ? 'auto' : 'altcha')) {
+            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+            return res(403, { error: 'Too many checks from this address. Please try again later.' });
+          }
+          if (provider === 'auto' && (await hostingAddress(pool, ip))) {
+            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+            return res(403, { error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
+          }
+        }
+        if (!(await solved())) {
+          await record(accountId, p.s, p.ip, p.h, 'failed', method, ip);
+          return res(403, { error: 'The check failed. Please try again.' });
+        }
+        if (!hub.isOnline(p.s)) {
+          await record(accountId, p.s, p.ip, p.h, 'offline', method, ip);
+          return res(503, { error: "The website's server cannot be reached right now. Please try again in a minute." });
+        }
+        try {
+          // Also the address the visitor solved it from: on mobile networks
+          // (CGNAT) the next request to the site may come from that one.
+          const short = method === 'altcha' && provider === 'auto' ? { minutes: Math.min(config.minutes, ALTCHA_FALLBACK_MINUTES) } : {};
+          await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip, ...short }, 90_000);
+        } catch (e) {
+          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+          req.log.warn({ err: (e as Error).message, server: p.s, host: p.h }, 'captcha pass refused');
+          return res(403, { error: 'This website could not confirm the check. Please try again later.' });
+        }
+        if (method === 'altcha') noteAltchaPass(altchaKeys);
+        await record(accountId, p.s, p.ip, p.h, 'passed', method, ip);
+        return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}` });
       };
-      // A preview only tests the check: no server is asked, nothing is recorded.
-      if (b.data.preview) {
-        if (!(await solved())) return reply.code(403).send({ error: 'The check failed. Please try again.' });
-        return { ok: true, preview: true };
-      }
-      // The link is for the address the website saw. Mobile networks and
-      // ISPs often reach different sites from different addresses, so
-      // another address may solve it (a few per hour), unless the strict
-      // setting is on. A dual-stack visitor can reach this page over the
-      // other family (also with the strict setting), but that counts as
-      // another address too: one IPv6 visitor must not pass any number of
-      // IPv4 addresses.
-      const other = !sameIP(ip, p.ip);
-      const sameFamily = isIP(ip) === isIP(p.ip);
-      if (other && ((config.strict_ip && sameFamily) || !allowOtherAddress(ip, p.ip))) {
-        await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
-        return reply.code(403).send({
-          error:
-            config.strict_ip && sameFamily
-              ? 'This check was opened for another address. Please go back to the website and try again.'
-              : 'Too many checks from this address. Please try again in an hour.',
-        });
-      }
-      // ALTCHA where Turnstile is the check: only the visitor's own network
-      // (or its other family), not from a hosting network, a few times a
-      // day, for a shorter time.
-      const altchaKeys = [`s:${ip}`, `t:${p.ip}`];
-      if (method === 'altcha' && provider !== 'turnstile') {
-        if ((provider === 'auto' && other && sameFamily && !sameNetwork(ip, p.ip)) || !altchaAllowed(altchaKeys, provider === 'auto' ? 'auto' : 'altcha')) {
-          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
-          return reply.code(403).send({ error: 'Too many checks from this address. Please try again later.' });
-        }
-        if (provider === 'auto' && (await hostingAddress(pool, ip))) {
-          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
-          return reply.code(403).send({ error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
-        }
-      }
-      if (!(await solved())) {
-        await record(accountId, p.s, p.ip, p.h, 'failed', method, ip);
-        return reply.code(403).send({ error: 'The check failed. Please try again.' });
-      }
-      if (!hub.isOnline(p.s)) {
-        await record(accountId, p.s, p.ip, p.h, 'offline', method, ip);
-        return reply.code(503).send({ error: "The website's server cannot be reached right now. Please try again in a minute." });
-      }
-      try {
-        // Also the address the visitor solved it from: on mobile networks
-        // (CGNAT) the next request to the site may come from that one.
-        const short = method === 'altcha' && provider === 'auto' ? { minutes: Math.min(config.minutes, ALTCHA_FALLBACK_MINUTES) } : {};
-        await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip, ...short }, 90_000);
-      } catch (e) {
-        await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
-        req.log.warn({ err: (e as Error).message, server: p.s, host: p.h }, 'captcha pass refused');
-        return reply.code(403).send({ error: 'This website could not confirm the check. Please try again later.' });
-      }
-      if (method === 'altcha') noteAltchaPass(altchaKeys);
-      await record(accountId, p.s, p.ip, p.h, 'passed', method, ip);
-      return { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}` };
+      const pending = run();
+      if (key) verifying.set(key, pending);
+      const r = await pending;
+      // Only while it runs: a proxy retries a request that has not been
+      // answered yet; afterwards the check is used up as before.
+      if (key) verifying.delete(key);
+      return reply.code(r.code).send(r.body);
     },
   );
 

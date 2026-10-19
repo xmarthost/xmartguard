@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.23** (see `VERSION`).
+- Current release: **0.22.24** (see `VERSION`).
 
 ## Working rules
 
@@ -197,6 +197,15 @@ project. It holds the rules, the current state and what is still open.
   3dcrafthub.com). `centralPassFor` now waits `WAF.PassReloadWait()` first
   and then renders, so passes arriving meanwhile share the reload; the
   LiteSpeed pass gap is 30 s instead of 60. `TestPassReloadWait`.
+- **"The check failed" after ~50 s behind the front proxy** (0.22.24):
+  business600's LiteSpeed proxy sent `/v/verify` again while the first
+  request still waited for the site's server (LiteSpeed reload). A check is
+  accepted once, so the repeat answered "The check failed" and the browser
+  showed that, while the first request let the visitor in (passes logged
+  at the same millisecond). `/v/verify` now gives a repeat of a request
+  still in progress (same link, visitor and solution) the first request's
+  answer. Proxy setting: External App `xpguard_portal` Initial Request
+  Timeout 120 (more than the portal's 90 s).
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

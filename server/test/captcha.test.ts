@@ -268,6 +268,36 @@ describe('CAPTCHA page: other addresses and ALTCHA', () => {
     expect(fourth.body.error).toContain('Too many checks');
   });
 
+  it('answers a retried check with the first answer while the website is still letting the visitor in', async () => {
+    // The website's server takes a while (LiteSpeed reload); a front proxy
+    // sends the same request again meanwhile.
+    let release = () => {};
+    const slow = new Promise<void>((r) => (release = r));
+    const before = h.hub.command;
+    let calls = 0;
+    h.hub.command = async (id: string, action: string, params: unknown) => {
+      if (action === 'captcha.pass') {
+        calls++;
+        await slow;
+      }
+      return before(id, action, params);
+    };
+    try {
+      const first = verify({ ...p('198.51.100.61'), token: 'good-token' }, '198.51.100.61');
+      await new Promise((r) => setTimeout(r, 50));
+      const retry = verify({ ...p('198.51.100.61'), token: 'good-token' }, '198.51.100.61');
+      await new Promise((r) => setTimeout(r, 50));
+      release();
+      const [a, b] = await Promise.all([first, retry]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(b.body.redirect).toBe(a.body.redirect);
+      expect(calls).toBe(1);
+    } finally {
+      h.hub.command = before;
+    }
+  });
+
   it('checks ALTCHA solutions itself: once, and only where ALTCHA is allowed', async () => {
     const { solveChallenge } = await import('altcha-lib');
     const { deriveKey } = await import('altcha-lib/algorithms/pbkdf2');
