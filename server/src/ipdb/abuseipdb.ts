@@ -140,6 +140,8 @@ export interface CheckResult {
   score?: number;
   whitelisted?: boolean;
   country?: string;
+  /** AbuseIPDB's network type ("Data Center/Web Hosting/Transit", "Fixed Line ISP", …). */
+  usageType?: string;
   /** The plan's daily checks and how many are left (rate-limit headers). */
   limit?: number;
   remaining?: number;
@@ -155,10 +157,10 @@ export async function checkAbuseIPDB(key: string, ip: string): Promise<CheckResu
     const limit = header(res, 'x-ratelimit-limit');
     const remaining = header(res, 'x-ratelimit-remaining');
     if (!res.ok) return { error: await apiError(res), limit, remaining, exhausted: res.status === 429 || res.status === 401 };
-    const body = (await res.json().catch(() => null)) as { data?: { abuseConfidenceScore?: number; isWhitelisted?: boolean; countryCode?: string } } | null;
+    const body = (await res.json().catch(() => null)) as { data?: { abuseConfidenceScore?: number; isWhitelisted?: boolean; countryCode?: string; usageType?: string } } | null;
     const d = body?.data;
     if (!d || typeof d.abuseConfidenceScore !== 'number') return { error: 'unexpected answer from AbuseIPDB', limit, remaining };
-    return { score: d.abuseConfidenceScore, whitelisted: !!d.isWhitelisted, country: d.countryCode ?? '', limit, remaining };
+    return { score: d.abuseConfidenceScore, whitelisted: !!d.isWhitelisted, country: d.countryCode ?? '', usageType: d.usageType ?? '', limit, remaining };
   } catch (err) {
     return { error: `AbuseIPDB cannot be reached: ${(err as Error).message}` };
   }

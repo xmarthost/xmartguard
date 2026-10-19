@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.16** (see `VERSION`).
+- Current release: **0.22.17** (see `VERSION`).
 
 ## Working rules
 
@@ -119,6 +119,20 @@ project. It holds the rules, the current state and what is still open.
   API whose cloud address was on the IPDB (seen on business200:
   54.215.31.113, AWS, answering from port 443) never got the answer, and
   the site hung. `TestAnswersFromListedAddressesOnKernel` covers it.
+- **CAPTCHA log review** (0.22.17): after 0.22.15 the log showed cloud
+  solvers (43.119.x Tencent, 47.82.x Alibaba) refused while passing bot
+  addresses for globalincidenttracker.com, but also real people refused
+  (CGNAT neighbours 103.70.171.228/229, Cloudflare WARP / iCloud Private
+  Relay 104.29.194.57 for 104.29.197.209) and data-centre addresses
+  passing ALTCHA on their own address (Hetzner, Scaleway). The ALTCHA
+  fallback now accepts the visitor's own network (`sameNetwork`: same
+  /24, /48, or both in 104.28.0.0/15) and refuses hosting/cloud
+  addresses (AbuseIPDB usage type or score >= 50, cached 7 days, 200
+  checks a day; open when no key). 0.22.15 had also reformatted
+  captcha.ts, mcp.ts, captcha.test.ts and CaptchaPage.tsx with default
+  prettier (double quotes); they are back in the repository's style.
+  Never run prettier without the repository's style: there is no
+  prettier config, so it rewrites whole files.
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache
