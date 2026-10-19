@@ -688,4 +688,15 @@ CREATE TABLE oauth_grants (
 ALTER TABLE mcp_tokens ADD COLUMN grant_id uuid REFERENCES oauth_grants(id) ON DELETE CASCADE;
 `,
   },
+  {
+    version: '024_captcha_method',
+    sql: `
+-- CAPTCHA page log: which check was solved (turnstile / altcha) and, when
+-- the page was solved from another address than the website saw, that one
+-- (one address passing many others is someone passing bots through).
+ALTER TABLE captcha_events ADD COLUMN method text NOT NULL DEFAULT '';
+ALTER TABLE captcha_events ADD COLUMN solver_ip text NOT NULL DEFAULT '';
+CREATE INDEX captcha_events_account_solver ON captcha_events (account_id, solver_ip) WHERE solver_ip <> '';
+`,
+  },
 ];

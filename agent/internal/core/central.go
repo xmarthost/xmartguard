@@ -159,13 +159,20 @@ func (a *Agent) centralPassList() []string {
 
 // centralPass lets ip through the CAPTCHA for the configured time and
 // reloads the WAF (one reload covers every pass added before it starts).
-func (a *Agent) centralPass(ips ...string) error {
+func (a *Agent) centralPass(ips ...string) error { return a.centralPassFor(0, ips...) }
+
+// centralPassFor lets the addresses in for the given minutes, at most the
+// configured time (0: the configured time). The portal asks for less when
+// the check was the proof-of-work fallback, which a script can solve.
+func (a *Agent) centralPassFor(minutes int, ips ...string) error {
 	for _, ip := range ips {
 		if net.ParseIP(ip) == nil {
 			return fmt.Errorf("invalid address %q", ip)
 		}
 	}
-	minutes := a.Settings.Get().Captcha.CentralMinutes
+	if conf := a.Settings.Get().Captcha.CentralMinutes; minutes <= 0 || minutes > conf {
+		minutes = conf
+	}
 	a.central.mu.Lock()
 	m := a.centralPassMap()
 	for _, ip := range ips {
@@ -390,6 +397,8 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 			// from an address that is still sent to the check, again and
 			// again.
 			Also string `json:"also"`
+			// Minutes: a shorter pass than configured (0: as configured).
+			Minutes int `json:"minutes"`
 		}](p)
 		if err != nil {
 			return nil, err
@@ -401,12 +410,16 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if in.Also != "" && in.Also != in.IP && net.ParseIP(in.Also) != nil {
 			ips = append(ips, in.Also)
 		}
-		if err := a.centralPass(ips...); err != nil {
+		if err := a.centralPassFor(in.Minutes, ips...); err != nil {
 			return nil, err
 		}
 		for _, ip := range ips {
 			a.centralLiftBan(ip)
 		}
-		return map[string]any{"ok": true, "minutes": a.Settings.Get().Captcha.CentralMinutes}, nil
+		minutes := a.Settings.Get().Captcha.CentralMinutes
+		if in.Minutes > 0 && in.Minutes < minutes {
+			minutes = in.Minutes
+		}
+		return map[string]any{"ok": true, "minutes": minutes}, nil
 	}
 }

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.14** (see `VERSION`).
+- Current release: **0.22.15** (see `VERSION`).
 
 ## Working rules
 
@@ -119,6 +119,21 @@ project. It holds the rules, the current state and what is still open.
   API whose cloud address was on the IPDB (seen on business200:
   54.215.31.113, AWS, answering from port 443) never got the answer, and
   the site hung. `TestAnswersFromListedAddressesOnKernel` covers it.
+- **CAPTCHA page bypass audit** (0.22.15): two ways to pass bots were
+  closed. (1) A visitor of the other address family was always allowed
+  to solve the page for any address: one IPv6 solver could pass any number
+  of IPv4 bots; it now counts toward the 3 other addresses per hour.
+  (2) In "auto" mode ALTCHA (proof of work, a script solves it) was
+  accepted whenever sent, and the page falls back to it when Turnstile
+  errors (headless bots): ALTCHA where Turnstile is the check now passes
+  only the visitor's own address, 3 per address per day, for at most 60
+  minutes (`captcha.pass` takes `minutes`; the agent never goes above
+  its own setting). Turnstile tokens must come from the CAPTCHA host
+  (siteverify hostname). The log records the check used (`method`) and
+  the solving address (`solver_ip`); the connector has `captcha_events`
+  with a summary (solvers passing many addresses, most failed). Agent
+  redirects to the page are not stored in WAF events (`isGateRule`), so
+  the portal's `captcha_events` is the log to read.
 - **DB scanner: fleet review and bulk clean** (0.22.14): the fleet's DB
   Scanner Logs (15 servers, ~500 rows) were mostly false positives:
   WordPress post embeds stored HTML-escaped (`&amp;embed=true`) or without

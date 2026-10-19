@@ -138,6 +138,20 @@ func TestCentralCaptchaAgent(t *testing.T) {
 	if l := a.centralPassList(); len(l) != 2 || l[0] != "198.51.100.7" || l[1] != "203.0.113.77" {
 		t.Fatalf("pass list with the solving address %v", l)
 	}
+	// A shorter pass when the portal asks for one (the proof-of-work
+	// fallback); never longer than configured.
+	p, _ = json.Marshal(map[string]any{"ip": "198.51.100.9", "host": "shop.example.com", "minutes": 10})
+	r, err := h["captcha.pass"](ctx, p)
+	if err != nil || r.(map[string]any)["minutes"] != 10 {
+		t.Fatalf("short pass: %v %v", r, err)
+	}
+	if exp := a.centralPassMap()["198.51.100.9"]; exp > time.Now().Add(11*time.Minute).Unix() || exp < time.Now().Add(9*time.Minute).Unix() {
+		t.Fatalf("short pass expires at %d", exp)
+	}
+	p, _ = json.Marshal(map[string]any{"ip": "198.51.100.10", "host": "shop.example.com", "minutes": 100000})
+	if r, _ := h["captcha.pass"](ctx, p); r.(map[string]any)["minutes"] == 100000 {
+		t.Fatal("pass longer than configured")
+	}
 	// Expired passes drop out.
 	store.SetKV(a.DB, kvCentralPass, `{"198.51.100.7":1}`)
 	if l := a.centralPassList(); len(l) != 0 {
