@@ -65,7 +65,7 @@ func (a *Agent) centralWAF() *waf.Central {
 	all := captcha.GateWanted(cur)
 	w := &waf.Central{URL: c.CentralURL, ServerID: a.Cfg.ServerID, All: all, Pass: a.centralPassList()}
 	if captcha.SiteWanted(cur) {
-		w.Site, w.Tokens, w.HTTPSPort = true, captcha.GateTokens(a.gateSecret, time.Now()), c.HTTPSPort
+		w.Site, w.Slots, w.HTTPSPort = true, a.sitePasses.Slots(time.Now()), c.HTTPSPort
 	}
 	if !all {
 		w.Suspects = a.centralSuspects()
@@ -92,7 +92,7 @@ func (a *Agent) centralSuspects() []string {
 		rows.Close()
 	}
 	if rows, err := a.DB.Query(`SELECT ip FROM waf_events WHERE at >= ? AND action LIKE 'Access denied%'
-		AND NOT (rule_id BETWEEN 7700900 AND 7700909) GROUP BY ip HAVING count(*) >= 3`, now-86400); err == nil {
+		AND NOT (rule_id BETWEEN 7700900 AND 7700919) GROUP BY ip HAVING count(*) >= 3`, now-86400); err == nil {
 		for rows.Next() {
 			var ip string
 			if rows.Scan(&ip) == nil {
@@ -212,6 +212,21 @@ func (a *Agent) centralPassFor(minutes int, ips ...string) error {
 	}
 	a.central.applied = upTo
 	return nil
+}
+
+// onPassCookie withdraws a pass-cookie value of the check on the website's
+// address that a suspect sent without having been given it (one solved
+// check shared with other addresses): the WAF is applied without it.
+func (a *Agent) onPassCookie(ip string, slot int) {
+	if !a.sitePasses.Used(ip, slot, time.Now()) {
+		return
+	}
+	a.Log.Warn("CAPTCHA pass cookie sent from an address it was not given to: value withdrawn", "ip", ip, "slot", slot)
+	go func() {
+		if err := a.WAF.Apply(); err != nil {
+			a.Log.Warn("WAF re-apply after withdrawing a CAPTCHA pass failed", "err", err)
+		}
+	}()
 }
 
 // centralLiftBan lets a visitor that solved the portal's page through the

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.25** (see `VERSION`).
+- Current release: **0.22.26** (see `VERSION`).
 
 ## Working rules
 
@@ -206,6 +206,22 @@ project. It holds the rules, the current state and what is still open.
   still in progress (same link, visitor and solution) the first request's
   answer. Proxy setting: External App `xpguard_portal` Initial Request
   Timeout 120 (more than the portal's 90 s).
+- **CAPTCHA bypass review** (0.22.26):
+  - Login paths through PATH_INFO: PHP runs `/wp-login.php` for
+    `/wp-login.php/x`, and every login-page rule (CAPTCHA gate, central
+    CAPTCHA, brute-force counters, XML-RPC, comment spam) matched only the
+    path's end, so a suspect skipped the CAPTCHA that way. They now match
+    `name(?:/|$)`, decoded (`/wp%2dlogin.php`). `TestLoginRulesPathInfo`,
+    Apache cases in `TestCentralSiteMode`.
+  - Shared pass cookie: one daily value let one solve open the login pages
+    to a botnet. Site mode now uses `captcha.SitePasses`: 8 values a day
+    (slots), each pass recorded with the address (IPv6: its /64), state in
+    KV `captcha_site_passes`. Rules 7700910+slot log the value a suspect
+    sends; `onPassCookie` withdraws a value sent by an address it was not
+    given to (new generation, WAF re-applied); holders of that slot solve
+    again. `TestSitePassShared`, `TestCentralCaptchaOnSite`.
+  - The portal's verify waits up to 20 s for a reconnecting agent before
+    "cannot be reached" (seen on business600 at 22:28 on 2026-10-19).
 - **CAPTCHA on the website's own address** (0.22.25): CAPTCHA Page »
   "Where the check opens" picks per server (`site_servers`): portal address
   (recaptcha.world, pass list + web server reload) or the website's own

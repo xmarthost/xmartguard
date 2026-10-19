@@ -56,6 +56,9 @@ type Agent struct {
 	// gateSecret signs the CAPTCHA pass cookie (login-page CAPTCHA and the
 	// portal's check on the website's own address).
 	gateSecret []byte
+	// sitePasses records the pass cookies of the check on the websites'
+	// own addresses.
+	sitePasses *captcha.SitePasses
 	// settingsApply applies saved settings in the background; syncSettings
 	// (tests) applies them before settings.set answers.
 	settingsApply settingsApply
@@ -223,6 +226,9 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		}}
 	gateSecret := loadGateSecret(db)
 	a.gateSecret = gateSecret
+	a.sitePasses = &captcha.SitePasses{Secret: gateSecret,
+		Load: func() []byte { return []byte(store.GetKV(db, "captcha_site_passes")) },
+		Save: func(b []byte) { _ = store.SetKV(db, "captcha_site_passes", string(b)) }}
 	a.Captcha = &captcha.Server{Settings: st, Log: log, GateSecret: gateSecret, ServerID: cfg.ServerID, Solved: func(ip string) error {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
@@ -240,6 +246,8 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		}}
 	a.WAF.Central = a.centralWAF
 	a.Captcha.Passed = a.centralLiftBan
+	a.Captcha.Passes = a.sitePasses
+	a.WAF.OnPassCookie = a.onPassCookie
 	a.WAF.OnBotBlocked = a.onBotBlocked
 	a.CMS = &cms.Manager{Zone: func() *time.Location { return scanner.ScheduleZone(st.Get().Scanner.ScheduleTZ) }, DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
 		Accounts: func() []cms.Account {

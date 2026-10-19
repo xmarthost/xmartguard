@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -146,12 +147,15 @@ func TestCentralSiteMode(t *testing.T) {
 	c := settings.Defaults().WAF
 	c.LoginURLs = []string{"/wp-login.php"}
 	tok := "0123456789abcdef0123456789abcdef"
-	ct := &Central{URL: "https://captcha.xpguard.org/v", ServerID: "15d69a72-653a-47b6-90f6-fde737bce061", Site: true, Tokens: []string{tok}, HTTPSPort: 7743}
+	ct := &Central{URL: "https://captcha.xpguard.org/v", ServerID: "15d69a72-653a-47b6-90f6-fde737bce061", Site: true, Slots: [][]string{{tok}, {"fedcba9876543210fedcba9876543210"}}, HTTPSPort: 7743}
 	out := Render(c, Options{Dir: "/etc/xpguard/waf", Central: ct})
 	for _, want := range []string{
 		"id:7700904", "id:7700907", "id:7700906", "id:7700908",
 		"redirect:https://%{REQUEST_HEADERS.Host}:7743/.xpguard/gate?back=%{REQUEST_URI}",
-		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none,chain"`, `SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:` + tok + `)\s*(?:;|$)" "t:none,chain"`,
+		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none,chain"`, `SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:` + tok + `|fedcba9876543210fedcba9876543210)\s*(?:;|$)" "t:none,chain"`,
+		// Which value a suspect sends, one rule per slot (shared passes).
+		"id:7700910,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,log,msg:'xPGuard - CAPTCHA pass cookie used'", "id:7700911,",
+		`SecRule REQUEST_HEADERS:Cookie "@rx (?:^|;)\s*xg_gate=(?:fedcba9876543210fedcba9876543210)\s*(?:;|$)" "t:none"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
@@ -161,7 +165,7 @@ func TestCentralSiteMode(t *testing.T) {
 		t.Error("site mode still sends to the portal's domain or reads the pass list")
 	}
 	// No valid token or port: back to the portal's domain.
-	if out := Render(c, Options{Dir: "/x", Central: &Central{URL: ct.URL, ServerID: ct.ServerID, Site: true, Tokens: []string{"bad token"}, HTTPSPort: 7743}}); !strings.Contains(out, "captcha.xpguard.org/v?s=") {
+	if out := Render(c, Options{Dir: "/x", Central: &Central{URL: ct.URL, ServerID: ct.ServerID, Site: true, Slots: [][]string{{"bad token"}}, HTTPSPort: 7743}}); !strings.Contains(out, "captcha.xpguard.org/v?s=") {
 		t.Error("site mode without a token")
 	}
 
@@ -199,8 +203,8 @@ func TestCentralSiteMode(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	get := func(cookie string) (int, string) {
-		req, _ := http.NewRequest("GET", "http://127.0.0.1/wp-login.php?redirect_to=/wp-admin/&reauth=1", nil)
+	getPath := func(path, cookie string) (int, string) {
+		req, _ := http.NewRequest("GET", "http://127.0.0.1"+path, nil)
 		req.Host = "shop.example.com"
 		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) Firefox/130.0")
 		req.Header.Set("Accept", "text/html,*/*")
@@ -214,7 +218,22 @@ func TestCentralSiteMode(t *testing.T) {
 		res.Body.Close()
 		return res.StatusCode, res.Header.Get("Location")
 	}
+	get := func(cookie string) (int, string) { return getPath("/wp-login.php?redirect_to=/wp-admin/&reauth=1", cookie) }
 	want := "https://shop.example.com:7743/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1"
+	// The login page reached through PATH_INFO or an encoded name is the
+	// same login page (PHP runs wp-login.php for /wp-login.php/x).
+	for _, p := range []string{"/wp-login.php/x", "/wp-login.php/", "/wp%2dlogin.php", "//WP-LOGIN.php"} {
+		if code, loc := getPath(p, ""); code != 302 || !strings.HasPrefix(loc, "https://shop.example.com:7743/.xpguard/gate?back=") {
+			t.Fatalf("suspect on %s: %d %q", p, code, loc)
+		}
+	}
+	// A cookie value that is not one of the accepted ones, or one glued to
+	// more text, does not pass.
+	for _, cookie := range []string{"xg_gate=" + tok + "0", "xg_gate=0" + tok, "axg_gate=" + tok, "xg_gate=" + strings.ToUpper(tok)} {
+		if code, _ := get(cookie); code != 302 {
+			t.Fatalf("forged cookie %q: %d", cookie, code)
+		}
+	}
 	for _, cookie := range []string{"", "wordpress_test_cookie=WP+Cookie+check", "xg_gate=ffffffffffffffffffffffffffffffff"} {
 		if code, loc := get(cookie); code != 302 || loc != want {
 			t.Fatalf("suspect with cookie %q: %d %q", cookie, code, loc)
@@ -224,6 +243,41 @@ func TestCentralSiteMode(t *testing.T) {
 	for _, cookie := range []string{"xg_gate=" + tok, "wordpress_test_cookie=WP+Cookie+check; xg_gate=" + tok} {
 		if code, _ := get(cookie); code != 200 {
 			t.Fatalf("passed visitor (%q) still sent to the CAPTCHA: %d", cookie, code)
+		}
+	}
+	// The web server's log says which value the suspect sent, as an event
+	// the agent reads (it withdraws values sent from other addresses).
+	time.Sleep(300 * time.Millisecond)
+	logb, _ := os.ReadFile("/var/log/apache2/error.log")
+	seen := false
+	for _, l := range strings.Split(string(logb), "\n") {
+		if ev, ok := ParseLine(l); ok && CentralPassSlot(ev.RuleID) == 0 && ev.IP == "127.0.0.1" {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatal("no pass-cookie event in the web server's log")
+	}
+}
+
+// PHP runs /wp-login.php for /wp-login.php/anything (PATH_INFO), so the
+// login, XML-RPC and comment rules match the script name with any path
+// after it, and decoded (/wp%2dlogin.php).
+func TestLoginRulesPathInfo(t *testing.T) {
+	c := settings.Defaults().WAF
+	out := Render(c, Options{Dir: "/etc/xpguard/waf"})
+	for _, want := range []string{`"@rx /wp-login\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase`, `"@rx /xmlrpc\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(out, `"@endsWith /wp-login.php"`) || strings.Contains(out, `"@endsWith /xmlrpc.php"`) {
+		t.Error("a login rule still matches only the end of the path")
+	}
+	re := regexp.MustCompile(`/wp-login\.php(?:/|$)`)
+	for p, want := range map[string]bool{"/wp-login.php": true, "/wp-login.php/x": true, "/blog/wp-login.php/": true, "/wp-login.phpx": false, "/wp-login.php.bak": false} {
+		if re.MatchString(p) != want {
+			t.Errorf("%s: %v", p, !want)
 		}
 	}
 }

@@ -127,6 +127,10 @@ const (
 	// these two a wrong or expired one.
 	IDCentralGateBadCookie      = 7700907
 	IDCentralNoBrowserBadCookie = 7700908
+	// IDCentralPassUsed+N logs a suspect sending pass-cookie value N (slot N
+	// of Central.Slots), so the agent sees a value used by an address it was
+	// not given to. Up to 10 slots.
+	IDCentralPassUsed = 7700910
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -377,9 +381,10 @@ type Central struct {
 	Pass     []string
 	// Site shows the check on the website's own address: suspects go to
 	// this server's CAPTCHA port (HTTPSPort) and pass with a cookie that
-	// holds one of Tokens (no web server reload for a pass).
+	// holds one of the values of Slots (no web server reload for a pass).
+	// Each slot lists its values (today's, yesterday's).
 	Site      bool
-	Tokens    []string
+	Slots     [][]string
 	HTTPSPort int
 }
 
@@ -423,7 +428,15 @@ const GateCookie = "xg_gate"
 var reGateToken = regexp.MustCompile(`^[a-f0-9]{16,64}$`)
 
 // isGateRule reports the login-page CAPTCHA redirects, which are not attacks.
-func isGateRule(id int) bool { return id >= 7700900 && id <= 7700909 }
+func isGateRule(id int) bool { return id >= 7700900 && id <= 7700919 }
+
+// CentralPassSlot is the pass-cookie slot an IDCentralPassUsed event names (-1: none).
+func CentralPassSlot(id int) int {
+	if id >= IDCentralPassUsed && id < IDCentralPassUsed+10 {
+		return id - IDCentralPassUsed
+	}
+	return -1
+}
 
 // renderExempt turns the WAF off for the addresses that are never
 // inspected: this server itself (its cron jobs and scripts calling its own
@@ -528,7 +541,7 @@ func Render(c settings.WAF, o Options) string {
 		}
 		rule(IDHiddenPHP, `SecRule REQUEST_FILENAME "@rx /\.[^/]+\.(?:php[0-9]?|phtml|phar)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Hidden PHP file request blocked',tag:'xpguard/wordpress'"`, IDHiddenPHP)
 		if !off[IDXMLRPCGet] {
-			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC accepts only POST',tag:'xpguard/wordpress',chain"`, IDXMLRPCGet)
+			w(`SecRule REQUEST_FILENAME "@rx /xmlrpc\.php(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC accepts only POST',tag:'xpguard/wordpress',chain"`, IDXMLRPCGet)
 			w(`  SecRule REQUEST_METHOD "!@streq POST" "t:none"`)
 		}
 		if !off[IDEmptyUAWP] {
@@ -539,7 +552,7 @@ func Render(c settings.WAF, o Options) string {
 		}
 		// Comment spam. The comment text goes to the log (logdata) so the
 		// watch report shows what would have been refused.
-		comment := `SecRule REQUEST_FILENAME "@endsWith /wp-comments-post.php" "id:%d,phase:2,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - %s',tag:'xpguard/comment-spam',logdata:'%%{MATCHED_VAR}',chain"`
+		comment := `SecRule REQUEST_FILENAME "@rx /wp-comments-post\.php(?:/|$)" "id:%d,phase:2,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - %s',tag:'xpguard/comment-spam',logdata:'%%{MATCHED_VAR}',chain"`
 		if !off[IDCommentScript] {
 			w(comment, IDCommentScript, "Comment posted by a script (no Origin or Referer) blocked")
 			w(`  SecRule REQUEST_METHOD "@streq POST" "t:none,chain"`)
@@ -561,7 +574,7 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule ARGS_POST:comment "@rx ^(?:(?:[^:]|:[^/]|:/[^/])*://){4}" "t:none,t:htmlEntityDecode"`)
 		}
 		if !off[IDXMLRPCMulti] {
-			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC multicall blocked',tag:'xpguard/wordpress',chain"`, IDXMLRPCMulti)
+			w(`SecRule REQUEST_FILENAME "@rx /xmlrpc\.php(?:/|$)" "id:%d,phase:2,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC multicall blocked',tag:'xpguard/wordpress',chain"`, IDXMLRPCMulti)
 			w(`  SecRule REQUEST_BODY "@contains system.multicall" "t:none,t:lowercase"`)
 		}
 		// User enumeration: /?author=1 redirects to /author/<login>/ and the
@@ -643,21 +656,21 @@ func Render(c settings.WAF, o Options) string {
 		// Successful WordPress logins redirect (302); a failed one shows the form again (200).
 		if !off[IDLoginWP] {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:3,pass,log,msg:'xPGuard - Failed login: WordPress',tag:'xpguard/login',chain"`, IDLoginWP)
-			w(`  SecRule REQUEST_FILENAME "@endsWith /wp-login.php" "t:none,t:lowercase,chain"`)
+			w(`  SecRule REQUEST_FILENAME "@rx /wp-login\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
 			w(`  SecRule RESPONSE_STATUS "@streq 200" "t:none"`)
 		}
 		if !off[IDLoginXMLRPC] {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: XML-RPC',tag:'xpguard/login',chain"`, IDLoginXMLRPC)
-			w(`  SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "t:none,t:lowercase"`)
+			w(`  SecRule REQUEST_FILENAME "@rx /xmlrpc\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase"`)
 		}
 		if !off[IDLoginJoomla] {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: Joomla',tag:'xpguard/login',chain"`, IDLoginJoomla)
-			w(`  SecRule REQUEST_FILENAME "@endsWith /administrator/index.php" "t:none,t:lowercase,chain"`)
+			w(`  SecRule REQUEST_FILENAME "@rx /administrator/index\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
 			w(`  SecRule ARGS:task "@streq login" "t:none,t:lowercase"`)
 		}
 		if !off[IDLoginOpenCart] {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: OpenCart',tag:'xpguard/login',chain"`, IDLoginOpenCart)
-			w(`  SecRule REQUEST_FILENAME "@endsWith /admin/index.php" "t:none,t:lowercase,chain"`)
+			w(`  SecRule REQUEST_FILENAME "@rx /admin/index\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
 			w(`  SecRule ARGS:route "@rx ^common/login" "t:none,t:lowercase"`)
 		}
 		var custom []string
@@ -668,7 +681,7 @@ func Render(c settings.WAF, o Options) string {
 		}
 		if len(custom) > 0 && !off[IDLoginCustom] {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: protected URL',tag:'xpguard/login',chain"`, IDLoginCustom)
-			w(`  SecRule REQUEST_FILENAME "@rx (?:%s)$" "t:none,t:urlDecodeUni,t:lowercase"`, strings.Join(custom, "|"))
+			w(`  SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase"`, strings.Join(custom, "|"))
 		}
 	}
 	if g := o.Gate; g != nil && len(g.Tokens) > 0 && len(c.LoginURLs) > 0 {
@@ -690,7 +703,7 @@ func Render(c settings.WAF, o Options) string {
 			// as attacks (see isGateRule).
 			pass := fmt.Sprintf(`(?:^|;)\s*%s=(?:%s)\s*(?:;|$)`, GateCookie, strings.Join(toks, "|"))
 			gate := func(id int, cond string) {
-				w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:https://%%{REQUEST_HEADERS.Host}:%d/.xpguard/gate?back=%%{REQUEST_URI},log,msg:'xPGuard - CAPTCHA required for a login page',tag:'xpguard/captcha',chain"`,
+				w(`SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,redirect:https://%%{REQUEST_HEADERS.Host}:%d/.xpguard/gate?back=%%{REQUEST_URI},log,msg:'xPGuard - CAPTCHA required for a login page',tag:'xpguard/captcha',chain"`,
 					strings.Join(urls, "|"), id, g.HTTPSPort)
 				w(`  %s`, cond)
 			}
@@ -718,10 +731,19 @@ func Render(c settings.WAF, o Options) string {
 		}
 		var pending []notPassed
 		var toks []string
-		for _, t := range ct.Tokens {
-			if reGateToken.MatchString(t) {
-				toks = append(toks, t)
+		var slots [][]string
+		for i, sl := range ct.Slots {
+			if i >= 10 {
+				break
 			}
+			var ok []string
+			for _, t := range sl {
+				if reGateToken.MatchString(t) {
+					ok = append(ok, t)
+				}
+			}
+			slots = append(slots, ok)
+			toks = append(toks, ok...)
 		}
 		site := ct.Site && len(toks) > 0 && ct.HTTPSPort > 0 && ct.HTTPSPort < 65536
 		if site {
@@ -734,7 +756,7 @@ func Render(c settings.WAF, o Options) string {
 			pending = []notPassed{{IDCentralGate, IDCentralNoBrowser, fmt.Sprintf(`SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none`, o.Dir, FileCaptchaPass)}}
 		}
 		gateRule := func(id int, cond, action, msg, browser string) {
-			w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,%s,log,msg:'%s',tag:'xpguard/captcha',chain"`,
+			w(`SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,%s,log,msg:'%s',tag:'xpguard/captcha',chain"`,
 				strings.Join(urls, "|"), id, action, msg)
 			if !ct.All {
 				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
@@ -759,6 +781,22 @@ func Render(c settings.WAF, o Options) string {
 		// without an Accept header) is not a browser.
 		for _, p := range pending {
 			gateRule(p.deny, p.cond, "deny,status:403", "xPGuard - suspicious visitor blocked (not a browser)", "")
+		}
+		// Which pass-cookie value a suspect sends: a value sent from an address
+		// it was not given to is withdrawn by the agent (one solve shared
+		// with a botnet).
+		if site {
+			for i, sl := range slots {
+				if len(sl) == 0 {
+					continue
+				}
+				w(`SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,log,msg:'xPGuard - CAPTCHA pass cookie used',tag:'xpguard/captcha',chain"`,
+					strings.Join(urls, "|"), IDCentralPassUsed+i)
+				if !ct.All {
+					w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+				}
+				w(`  SecRule REQUEST_HEADERS:Cookie "@rx (?:^|;)\s*%s=(?:%s)\s*(?:;|$)" "t:none"`, GateCookie, strings.Join(sl, "|"))
+			}
 		}
 	}
 	if c.Webshell {

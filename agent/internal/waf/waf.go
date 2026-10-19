@@ -63,6 +63,10 @@ type Manager struct {
 	// OnBotBlocked is told about requests the bot lists refused (address
 	// and what matched), so real SEO and AI crawlers can be verified and trusted.
 	OnBotBlocked func(ip, matched string)
+	// OnPassCookie is told which pass-cookie slot a suspect sent
+	// (IDCentralPassUsed): the agent withdraws a value used by an address
+	// it was not given to.
+	OnPassCookie func(ip string, slot int)
 
 	mu       sync.Mutex
 	counts   countCache
@@ -1002,6 +1006,13 @@ func (m *Manager) tailLogs(ctx context.Context) {
 		// matched rule; only the request they block is an attack to record.
 		// (The warnings share the request's unique id, so this comes first.)
 		if !strings.HasPrefix(ev.Action, "Access denied") && (ev.RuleID < 7700000 || ev.RuleID > 7709999) {
+			return
+		}
+		// A suspect sent a pass cookie of the check on the website's address.
+		if slot := CentralPassSlot(ev.RuleID); slot >= 0 {
+			if m.OnPassCookie != nil && !isSelfTest(ev) {
+				m.OnPassCookie(ev.IP, slot)
+			}
 			return
 		}
 		// Visitors sent to the login-page CAPTCHA are not attacks.

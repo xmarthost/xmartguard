@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 import { envelopeMessage } from '../src/agent-sign.js';
-import { hostingCheck, parseParams, sameNetwork, shownIP, turnstile } from '../src/routes/captcha.js';
+import { hostingCheck, offlineWait, parseParams, sameNetwork, shownIP, turnstile } from '../src/routes/captcha.js';
 
 let h: Harness;
 let admin: Client;
@@ -148,6 +148,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect((await verify({ ...p, h: 'evil.example', token: 'good-token' })).status).toBe(403);
     agentError = '';
     online = false;
+    offlineWait.ms = 1500;
     expect((await verify({ ...p, token: 'good-token' })).status).toBe(503);
     online = true;
     const g = await admin.req('GET', '/api/captcha');
@@ -484,6 +485,18 @@ describe('CAPTCHA on the website’s own address', () => {
       expect(ev.body.events[0]).toMatchObject({ ip: '203.0.113.88', result: 'passed', method: 'turnstile' });
     } finally {
       h.hub.command = before;
+    }
+  });
+
+  it('waits for a server that is reconnecting instead of failing the solved check', async () => {
+    online = false;
+    offlineWait.ms = 3000;
+    setTimeout(() => (online = true), 600);
+    try {
+      const r = await verify({ s: serverId, ip: '203.0.113.89', h: 'shop.example.com', u: '/wp-login.php', n: nonce, token: 'good-token' }, '203.0.113.89');
+      expect(r.status).toBe(200);
+    } finally {
+      online = true;
     }
   });
 

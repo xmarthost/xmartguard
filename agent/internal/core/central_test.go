@@ -216,7 +216,7 @@ func TestCentralCaptchaOnSite(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := a.centralWAF()
-	if w == nil || !w.Site || w.HTTPSPort != 7743 || len(w.Tokens) != 2 || w.Tokens[0] != captcha.GateTokens(a.gateSecret, time.Now())[0] {
+	if w == nil || !w.Site || w.HTTPSPort != 7743 || len(w.Slots) != captcha.SiteSlots || w.Slots[0][0] != a.sitePasses.Slots(time.Now())[0][0] {
 		t.Fatalf("site mode %+v", w)
 	}
 	if err := ticket("shop.example.com"); err != nil {
@@ -224,6 +224,23 @@ func TestCentralCaptchaOnSite(t *testing.T) {
 	}
 	if ticket("evil.example") == nil {
 		t.Fatal("ticket for a website that is not here")
+	}
+	// A pass cookie the WAF reports from an address it was not given to is
+	// withdrawn: the WAF no longer gets that value.
+	tok := a.sitePasses.Give("203.0.113.5", time.Now())
+	slot := -1
+	for i, sl := range a.centralWAF().Slots {
+		if sl[0] == tok {
+			slot = i
+		}
+	}
+	a.onPassCookie("203.0.113.5", slot)
+	if a.centralWAF().Slots[slot][0] != tok {
+		t.Fatal("the visitor's own pass withdrawn")
+	}
+	a.onPassCookie("198.51.100.66", slot)
+	if a.centralWAF().Slots[slot][0] == tok {
+		t.Fatal("a pass shared with another address still accepted")
 	}
 	// Any other mode word is the portal's domain.
 	cfg, _ = json.Marshal(centralConfig{Version: 5, Enabled: true, URL: "https://captcha.xpguard.org/v", Minutes: 30, Mode: "x"})

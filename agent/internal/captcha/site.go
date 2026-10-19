@@ -105,8 +105,11 @@ func (s *Server) sitePass(w http.ResponseWriter, r *http.Request, ip string) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "The check could not be confirmed. Please reload the page."})
 		return
 	}
-	toks := GateTokens(s.GateSecret, time.Now())
-	if len(toks) == 0 {
+	tok := ""
+	if s.Passes != nil {
+		tok = s.Passes.Give(ip, time.Now())
+	}
+	if tok == "" {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "The check is not available right now. Please try again later."})
 		return
@@ -115,9 +118,9 @@ func (s *Server) sitePass(w http.ResponseWriter, r *http.Request, ip string) {
 	if minutes <= 0 {
 		minutes = 720
 	}
-	// Not Secure: a website without HTTPS reads it too (it only says the
-	// check was solved today, as the login-page CAPTCHA's cookie does).
-	http.SetCookie(w, &http.Cookie{Name: GateCookie, Value: toks[0], Path: "/", MaxAge: minutes * 60, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	// Not Secure: a website without HTTPS reads it too (the value is
+	// recorded with this address; see SitePasses).
+	http.SetCookie(w, &http.Cookie{Name: GateCookie, Value: tok, Path: "/", MaxAge: minutes * 60, HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	if s.Passed != nil {
 		s.Passed(ip)
 	}

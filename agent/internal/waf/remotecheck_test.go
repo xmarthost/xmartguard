@@ -58,7 +58,7 @@ func TestGateRules(t *testing.T) {
 		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none"`,
 		`SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:0123456789abcdef0123456789abcdef)\s*(?:;|$)" "t:none"`,
 		`redirect:https://%{REQUEST_HEADERS.Host}:7743/.xpguard/gate?back=%{REQUEST_URI}`,
-		`(?:/wp-login\.php|/admin/index\.php)$`,
+		`(?:/wp-login\.php|/admin/index\.php)(?:/|$)`,
 	} {
 		if !strings.Contains(on, want) {
 			t.Fatalf("missing %q in\n%s", want, on)

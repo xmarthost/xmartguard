@@ -16,7 +16,7 @@ import (
 func TestSiteMode(t *testing.T) {
 	s, _ := newServer(t)
 	s.ServerID = "15d69a72-653a-47b6-90f6-fde737bce061"
-	s.GateSecret = []byte("0123456789abcdef0123456789abcdef")
+	s.Passes = &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef")}
 	var lifted []string
 	s.Passed = func(ip string) { lifted = append(lifted, ip) }
 	s.Settings.Patch([]byte(`{"waf":{"enabled":true},"captcha":{"central":true,"central_url":"https://captcha.xpguard.org/v","central_mode":"site","central_minutes":60}}`))
@@ -79,7 +79,11 @@ func TestSiteMode(t *testing.T) {
 			c = k
 		}
 	}
-	if c == nil || c.Value != GateTokens(s.GateSecret, time.Now())[0] || c.MaxAge != 3600 || !c.HttpOnly {
+	given := false
+	for _, sl := range s.Passes.Slots(time.Now()) {
+		given = given || (c != nil && c.Value == sl[0])
+	}
+	if c == nil || !given || c.MaxAge != 3600 || !c.HttpOnly {
 		t.Fatalf("cookie %+v", c)
 	}
 	if len(lifted) != 1 || lifted[0] != "203.0.113.5" {
@@ -98,5 +102,57 @@ func TestSiteMode(t *testing.T) {
 	s.Settings.Patch([]byte(`{"captcha":{"central_mode":""}}`))
 	if w := req("GET", "/.xpguard/gate?back=/wp-login.php", "", "203.0.113.5"); w.Code != 302 {
 		t.Fatalf("portal's domain: %d", w.Code)
+	}
+}
+
+// A pass cookie handed to other addresses (one solve for a botnet) is
+// withdrawn as soon as the WAF reports it from an address it was not given
+// to; the visitor it was given to keeps passing until then.
+func TestSitePassShared(t *testing.T) {
+	saved := []byte(nil)
+	p := &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef"), Save: func(b []byte) { saved = b }}
+	now := time.Date(2026, 10, 19, 23, 0, 0, 0, time.UTC)
+	tok := p.Give("203.0.113.5", now)
+	slot := -1
+	for i, sl := range p.Slots(now) {
+		if sl[0] == tok {
+			slot = i
+		}
+	}
+	if tok == "" || slot < 0 || len(p.Slots(now)) != SiteSlots {
+		t.Fatalf("value %q not among the accepted ones", tok)
+	}
+	// The owner, also after midnight (yesterday's value is still accepted).
+	if p.Used("203.0.113.5", slot, now) || p.Used("203.0.113.5", slot, now.Add(2*time.Hour)) {
+		t.Fatal("the visitor's own pass was withdrawn")
+	}
+	// IPv6 privacy addresses change within the /64.
+	tok6 := p.Give("2001:db8:1:2::10", now)
+	for i, sl := range p.Slots(now) {
+		if sl[0] == tok6 && p.Used("2001:db8:1:2:aaaa::1", i, now) {
+			t.Fatal("pass withdrawn for another address of the same /64")
+		}
+	}
+	// Restarted agent: the state comes back.
+	q := &SitePasses{Secret: p.Secret, Load: func() []byte { return saved }}
+	if q.Slots(now)[slot][0] != tok || q.Used("203.0.113.5", slot, now) {
+		t.Fatal("state lost across a restart")
+	}
+	// Another address: the value is withdrawn (once; the reports that follow
+	// before the WAF runs without it are the same misuse).
+	if !p.Used("198.51.100.7", slot, now) || p.Used("198.51.100.8", slot, now.Add(time.Second)) {
+		t.Fatal("shared pass not withdrawn exactly once")
+	}
+	if sl := p.Slots(now)[slot]; sl[0] == tok || sl[1] == tok {
+		t.Fatal("the WAF still accepts the shared value")
+	}
+	for i, sl := range p.Slots(now) {
+		if i != slot && sl[0] == tok {
+			t.Fatal("value moved to another slot")
+		}
+	}
+	// The other values stay; bad input is ignored.
+	if p.Used("nope", 0, now) || p.Used("198.51.100.7", SiteSlots, now) || (&SitePasses{}).Give("203.0.113.5", now) != "" {
+		t.Fatal("bad input")
 	}
 }

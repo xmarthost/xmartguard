@@ -53,6 +53,8 @@ type Server struct {
 	// Passed is called when a visitor solved the portal's check on the
 	// website's own address (lifts a temporary ban).
 	Passed func(ip string)
+	// Passes gives out and records the pass cookies of that check.
+	Passes *SitePasses
 
 	key      []byte
 	tickets  map[string]ticket

@@ -96,6 +96,9 @@ export function allowOtherAddress(visitor: string, target: string, now = Date.no
  * visitor whose browser cannot run Turnstile, so it lets in only the
  * visitor's own address, a few times a day, for at most an hour.
  */
+/** How long a solved check waits for the website's server to reconnect. */
+export const offlineWait = { ms: 20_000 };
+
 export const ALTCHA_FALLBACK_MINUTES = 60;
 const ALTCHA_PER_DAY = { auto: 3, altcha: 10 };
 const altchaPasses = new Map<string, number[]>();
@@ -520,6 +523,11 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         if (!(await solved())) {
           await record(accountId, p.s, p.ip, p.h, 'failed', method, ip);
           return res(403, { error: 'The check failed. Please try again.' });
+        }
+        // An agent reconnecting (update, WAF reload, network blip) is back
+        // within seconds: wait for it rather than throw the solved check away.
+        for (const end = Date.now() + offlineWait.ms; !hub.isOnline(p.s) && Date.now() < end; ) {
+          await new Promise((r) => setTimeout(r, 500));
         }
         if (!hub.isOnline(p.s)) {
           await record(accountId, p.s, p.ip, p.h, 'offline', method, ip);
