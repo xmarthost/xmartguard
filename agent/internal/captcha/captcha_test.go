@@ -435,8 +435,10 @@ func TestServeFromSite(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), origDstKey{}, netip.AddrPortFrom(ap.Addr(), 80)))
 	rec := httptest.NewRecorder()
 	if serveFromSite(rec, req) {
-		// Port 80 is not the test site's port: it is proxied there and fails cleanly.
-		if rec.Code != http.StatusBadGateway && !strings.Contains(rec.Body.String(), "robots for shop.example") {
+		// Port 80 is not the test site's port: it is proxied there and fails
+		// cleanly (or whatever web server runs on port 80 answers), never
+		// with the CAPTCHA page.
+		if rec.Code != http.StatusBadGateway && !strings.Contains(rec.Body.String(), "robots for shop.example") && strings.Contains(strings.ToLower(rec.Body.String()), "captcha") {
 			t.Fatalf("%d %s", rec.Code, rec.Body.String())
 		}
 	}
