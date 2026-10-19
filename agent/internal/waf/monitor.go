@@ -20,6 +20,11 @@ var NewRules = map[int]string{
 	IDShopScrape: "0.21.31",
 	IDCartSpam:   "0.21.31",
 	IDNoUAPost:   "0.21.31",
+	// Comment spam: watched until approved, so real comments are never
+	// refused before the report has been reviewed.
+	IDCommentScript:    "0.22.20",
+	IDCommentLinks:     "0.22.20",
+	IDCommentManyLinks: "0.22.20",
 }
 
 // FirstReviewedPatch: portal virtual patches from this id on are new and

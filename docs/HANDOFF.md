@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.19** (see `VERSION`).
+- Current release: **0.22.20** (see `VERSION`).
 
 ## Working rules
 
@@ -162,6 +162,18 @@ project. It holds the rules, the current state and what is still open.
   (`modsec_remove_vendor`) a WHM vendor it added for ME. Agents that still
   report `own_replaced_by` are resynced and get our rules and CRS back.
   The generic remote-feed and WHM-vendor mechanisms stay.
+- **Comment spam** (0.22.20): xmarthost.com/blog had 1,554 comments held
+  for moderation (SEO spam: keyword name, HTML link in the text, the same
+  shop as website). Three WordPress rules on wp-comments-post.php (also
+  WooCommerce reviews), new rules so they only watch until approved:
+  7700331 posted without Origin and Referer (every browser sends Origin on
+  a form POST), 7700332 an HTML link plus a filled website field (+1000:
+  BBCode [url=]), 7700333 four or more "://" in one comment (regex without
+  lookahead or deep backtracking). The comment text is logged (logdata) so
+  the watch report shows what would be refused. Not done on purpose:
+  language or keyword lists (Urdu/Arabic comments are real), CAPTCHA on
+  comment POSTs (the comment would be lost). `commentspam_test.go` (also
+  through Apache + CRS with XG_CRS_DIR).
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

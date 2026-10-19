@@ -55,19 +55,31 @@ const (
 	// IDNoUAPost: POSTs to a PHP file with no User-Agent, Referer or cookie
 	// (web shell and exploit tools). Not shared with the IPDB: a
 	// server-to-server call may look the same.
-	IDNoUAPost      = 7700330
-	IDLoginWP       = 7700401
-	IDLoginXMLRPC   = 7700402
-	IDLoginJoomla   = 7700403
-	IDLoginOpenCart = 7700404
-	IDLoginCustom   = 7700405
-	IDBadBots       = 7700501
-	IDSEOBots       = 7700502
-	IDAIBots        = 7700503
-	IDCustomBots    = 7700504
-	IDRootProbe     = 7700505
-	IDBareMozilla   = 7700506
-	IDFakeSearchBot = 7700507
+	IDNoUAPost = 7700330
+	// Comment spam on WordPress (wp-comments-post.php, also WooCommerce
+	// reviews). Real visitors' browsers always send Origin (or at least a
+	// Referer) when they post the comment form, type plain text into a
+	// plain textarea and rarely paste many links. IDCommentScript: posted
+	// without Origin and Referer (a script, not a browser).
+	// IDCommentLinks: a link written as HTML (<a href=…>) while the
+	// website field is filled too (an SEO backlink), or BBCode [url=…]
+	// that WordPress never shows (+1000). IDCommentManyLinks: 4 or more
+	// links in one comment.
+	IDCommentScript    = 7700331
+	IDCommentLinks     = 7700332
+	IDCommentManyLinks = 7700333
+	IDLoginWP          = 7700401
+	IDLoginXMLRPC      = 7700402
+	IDLoginJoomla      = 7700403
+	IDLoginOpenCart    = 7700404
+	IDLoginCustom      = 7700405
+	IDBadBots          = 7700501
+	IDSEOBots          = 7700502
+	IDAIBots           = 7700503
+	IDCustomBots       = 7700504
+	IDRootProbe        = 7700505
+	IDBareMozilla      = 7700506
+	IDFakeSearchBot    = 7700507
 	// IDCrawlerCart: crawlers adding to cart or wishlist (every such URL
 	// writes a session and runs the shop uncached).
 	IDCrawlerCart = 7700508
@@ -169,6 +181,9 @@ var Catalog = []RuleInfo{
 	{IDStaticPHP, "generic", "Block running PHP files inside images, img, fonts and css folders of any website", "block"},
 	{IDRepeatDirPHP, "generic", "Block PHP requests through repeated folders (/images/images/cache.php), a backdoor search pattern", "block"},
 	{IDHiddenDirPHP, "generic", "Block running PHP files inside hidden folders (/.tmb/, /.trash/), except .well-known", "block"},
+	{IDCommentScript, "wordpress", "Block comments and reviews posted by scripts: no Origin and no Referer header (every browser sends one when the comment form is posted)", "block"},
+	{IDCommentLinks, "wordpress", "Block SEO spam comments: a link written as HTML (<a href=…>) together with a filled website field, or forum BBCode [url=…] that WordPress never shows", "block"},
+	{IDCommentManyLinks, "wordpress", "Block comments and reviews with 4 or more links", "block"},
 	{IDNoUAPost, "bad_bots", "Block POSTs to PHP files with no User-Agent, Referer or cookie (web shell tools), except API, webhook and payment callback paths and trusted services", "block"},
 	{IDDoubleEncode, "generic", "Block double-encoded path traversal (%252e%252e) in the address", "block"},
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
@@ -507,6 +522,29 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule &REQUEST_HEADERS:User-Agent "@eq 0" "t:none"`)
 			w(`SecRule REQUEST_FILENAME "@rx /(?:wp-[a-z0-9_-]+\.php|wp-(?:admin|content|includes)/.*\.php)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Request without User-Agent to a WordPress file blocked',tag:'xpguard/wordpress',chain"`, IDEmptyUAWP+1000)
 			w(`  SecRule REQUEST_HEADERS:User-Agent "@rx ^\s*$" "t:none"`)
+		}
+		// Comment spam. The comment text goes to the log (logdata) so the
+		// watch report shows what would have been refused.
+		comment := `SecRule REQUEST_FILENAME "@endsWith /wp-comments-post.php" "id:%d,phase:2,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - %s',tag:'xpguard/comment-spam',logdata:'%%{MATCHED_VAR}',chain"`
+		if !off[IDCommentScript] {
+			w(comment, IDCommentScript, "Comment posted by a script (no Origin or Referer) blocked")
+			w(`  SecRule REQUEST_METHOD "@streq POST" "t:none,chain"`)
+			w(`  SecRule &REQUEST_HEADERS:Origin "@eq 0" "t:none,chain"`)
+			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none"`)
+		}
+		if !off[IDCommentLinks] {
+			w(comment, IDCommentLinks, "SEO spam comment (HTML link and website) blocked")
+			w(`  SecRule ARGS_POST:url "@rx [a-z0-9]\.[a-z]" "t:none,t:lowercase,chain"`)
+			w(`  SecRule ARGS_POST:comment "@rx <a\s[^>]*href\s*=" "t:none,t:htmlEntityDecode,t:lowercase"`)
+			w(comment, IDCommentLinks+1000, "Spam comment with BBCode links blocked")
+			w(`  SecRule ARGS_POST:comment "@rx \[(?:url|link)\s*=" "t:none,t:lowercase"`)
+		}
+		if !off[IDCommentManyLinks] {
+			w(comment, IDCommentManyLinks, "Comment with 4 or more links blocked")
+			// Four "://" (http, https, ftp …): each step stops right before the
+			// next "://", so the match never backtracks far (no lookahead, which
+			// not every ModSecurity engine supports).
+			w(`  SecRule ARGS_POST:comment "@rx ^(?:(?:[^:]|:[^/]|:/[^/])*://){4}" "t:none,t:htmlEntityDecode"`)
 		}
 		if !off[IDXMLRPCMulti] {
 			w(`SecRule REQUEST_FILENAME "@endsWith /xmlrpc.php" "id:%d,phase:2,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - XML-RPC multicall blocked',tag:'xpguard/wordpress',chain"`, IDXMLRPCMulti)
