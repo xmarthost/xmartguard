@@ -193,8 +193,10 @@ func analyzePHP(content []byte) *verdict {
 	// the site's config or layout and does not hide its errors. Mail
 	// testers and relays dropped by attackers stand alone, silence errors,
 	// run without a time limit or delete themselves.
+	// An application's form that also takes the subject from the request
+	// is an open relay (anyone can send any mail through it): still flagged.
 	if m(reMailInput) && hasInput && argOnInput(reMailTo, s) && !library && n < 60000 &&
-		(!m(reAppInclude) || m(reMailerTool)) {
+		(!m(reAppInclude) || m(reMailerTool) || argOnInput(reMailSubject, s)) {
 		return &verdict{CatSuspicious, "PHP.Spam.Mailer"}
 	}
 
@@ -529,9 +531,10 @@ var (
 	reCreateFuncArg = regexp.MustCompile(`(?i)\bcreate_function\s*\(([^;]{0,300})`)
 	// Signs of an application around a mail() call: it loads the site's
 	// files or templates, queries its database or redirects back to a page.
-	reAppInclude = regexp.MustCompile(`(?i)\b(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__\s*\.\s*)?['"][^'"]+\.(?:php|inc|twig|tpl)['"]|->\s*prepare\s*\(|\bheader\s*\(\s*["']location\s*:`)
-	reMailerTool = regexp.MustCompile(`(?i)error_reporting\s*\(\s*0\s*\)|set_time_limit\s*\(\s*0\s*\)|unlink\s*\(\s*(?:basename\s*\(\s*)?__FILE__|\bgoto\s+\w+\s*;|##(?:NOT)?SENT##`)
-	reMailTo     = regexp.MustCompile(`(?i)\bmail\s*\(([^,;]{0,200})`)
+	reAppInclude  = regexp.MustCompile(`(?i)\b(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__\s*\.\s*)?['"][^'"]+\.(?:php|inc|twig|tpl)['"]|->\s*prepare\s*\(|\bheader\s*\(\s*["']location\s*:`)
+	reMailerTool  = regexp.MustCompile(`(?i)error_reporting\s*\(\s*0\s*\)|set_time_limit\s*\(\s*0\s*\)|unlink\s*\(\s*(?:basename\s*\(\s*)?__FILE__|\bgoto\s+\w+\s*;|##(?:NOT)?SENT##`)
+	reMailTo      = regexp.MustCompile(`(?i)\bmail\s*\(([^,;]{0,200})`)
+	reMailSubject = regexp.MustCompile(`(?i)\bmail\s*\([^,;]{0,200},\s*([^,;]{0,200})`)
 )
 
 // evalOnInput reports eval/assert whose argument contains request data or a

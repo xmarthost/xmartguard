@@ -160,6 +160,8 @@ func TestConfigAndMailerFalsePositives(t *testing.T) {
 		{"ini prepend", ".ini", "auto_prepend_file = '/home/u/.cache/.p'\n", "PHP.Config.AutoPrependLoader"},
 		{"self-deleting tester", ".php", `<?php goto a; a: if (!empty($_GET["to"])) { $to = $_GET["to"]; @mail($to, "Sending emails 1", "Test", "From: x@example.com"); echo "##SENT##"; } unlink(basename(__FILE__));`, "PHP.Spam.Mailer"},
 		{"upload tester", ".php", `<?php error_reporting(0); ?><form method="post"><input name="email"></form><?php if (!empty($_POST['email'])) { $x = rand(); @mail($_POST['email'], "Result Report Test - ".$x, "WORKING !"); }`, "PHP.Spam.Mailer"},
+		{"open relay in a site", ".php", `<?php require 'common/conn.php'; if ($_POST["youremail"] != "") { $from = $_POST['youremail']; $to = trim($_POST['frndemail']); $subject = $_POST["emailSubject"]; $ok = mail($to, $subject, $Body, "From: $from"); header("Location: Newsletter.php?msg=1"); }`, "PHP.Spam.Mailer"},
+		{"template contact relay", ".php", `<?php include("../../../../../wp-load.php"); if (isset($_POST['email'])) $emailTo = $_POST['email']; if (isset($_POST['subject_email'])) $subject = $_POST['subject_email']; $result = mail($emailTo, $subject, $body, $headers);`, "PHP.Spam.Mailer"},
 		{"standalone tester", ".php", `<?php if (isset($_POST['email'])) { $rnd = rand(); mail($_POST['email'], "Email Sending Test Report ID: " . $rnd, "WORKING!"); }`, "PHP.Spam.Mailer"},
 	}
 	for _, c := range flagged {

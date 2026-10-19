@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.10** (see `VERSION`).
+- Current release: **0.22.11** (see `VERSION`).
 
 ## Working rules
 
@@ -151,7 +151,9 @@ project. It holds the rules, the current state and what is still open.
 - **Scanner false positives fixed in 0.22.10**: empty `auto_prepend_file`
   settings (cPanel's MultiPHP INI editor writes `= ""`); a site's own forms
   that mail the visitor (`PHP.Spam.Mailer` now needs a standalone script or
-  tester signs such as `error_reporting(0)`, self-delete or `goto`);
+  tester signs such as `error_reporting(0)`, self-delete or `goto`; since
+  0.22.11 also any form whose recipient and subject both come from the
+  request, an open relay);
   base64 certificates and keys (composer/ca-bundle, payment callbacks).
   ELF programs in a `vendor/` folder under wp-content are flagged again
   unless they are image tools (`cwebp-…`) or libraries.
