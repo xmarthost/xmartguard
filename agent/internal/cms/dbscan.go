@@ -112,14 +112,17 @@ type DBFinding struct {
 }
 
 // Hidden iframes these services use legitimately (Google Tag Manager's
-// <noscript> iframe, reCAPTCHA, video embeds kept hidden until opened).
+// <noscript> iframe, reCAPTCHA, video embeds kept hidden until opened,
+// Google Analytics' noscript beacon, AdSense and Ad Manager frames, the
+// Jetpack Likes frame, BeyondWords' audio player).
 var benignIframeHosts = []string{"googletagmanager.com", "google.com", "gstatic.com", "youtube.com", "youtube-nocookie.com",
-	"player.vimeo.com", "facebook.com", "doubleclick.net", "hotjar.com", "calendly.com", "hubspot.com", "tiktok.com"}
+	"player.vimeo.com", "facebook.com", "doubleclick.net", "hotjar.com", "calendly.com", "hubspot.com", "tiktok.com",
+	"google-analytics.com", "googlesyndication.com", "syndicatedsearch.goog", "wp.com", "beyondwords.io"}
 
 // DBRulesVersion changes when the database rules change in a way that
 // drops earlier detections: the next scan runs at once and marks what is no
 // longer found as a false positive ("cleared"), not as cleaned.
-const DBRulesVersion = "2"
+const DBRulesVersion = "3"
 
 // Options that hold plugin data or documentation, never page output
 // (Freemius keeps the plugins' descriptions, with example HTML, in fs_accounts).
@@ -128,15 +131,23 @@ var skipOptions = map[string]bool{"fs_accounts": true, "fs_api_cache": true, "fs
 var (
 	// WordPress core embeds another post (oEmbed): a sandboxed iframe kept
 	// hidden until wp-embed.js has sized it.
-	reWPEmbed = regexp.MustCompile(`(?is)\bclass\s*=\s*["'][^"']*\bwp-embedded-content\b`)
-	reSandbox = regexp.MustCompile(`(?i)\ssandbox\s*=`)
-	reEmbedTo = regexp.MustCompile(`(?i)\bsrc\s*=\s*["']?(?:https?:)?//[^"'\s>]+(?:/embed/?(?:[#?"'\s>]|$)|[?&]embed=true)`)
+	// Older embeds have no class but WordPress's sandbox, security and
+	// data-secret attributes; a plain permalink is stored HTML-escaped
+	// (?p=12&amp;embed=true, &#038;embed=true).
+	reWPEmbed     = regexp.MustCompile(`(?is)\bclass\s*=\s*["'][^"']*\bwp-embedded-content\b`)
+	reWPEmbedAttr = regexp.MustCompile(`(?is)\ssecurity\s*=\s*["']restricted["'].*\sdata-secret\s*=`)
+	reSandbox     = regexp.MustCompile(`(?i)\ssandbox\s*=`)
+	reEmbedTo     = regexp.MustCompile(`(?i)\bsrc\s*=\s*["']?(?:https?:)?//[^"'\s>]+(?:/embed/?(?:[#?"'\s>]|$)|(?:[?&]|&amp;|&#0?38;)embed=true)`)
 	// GiveWP donation forms load hidden and are shown by Give's resizer.
 	reGiveForm = regexp.MustCompile(`(?i)\bname\s*=\s*["']give-embed-form["']`)
 )
 
 var reIframeTag = regexp.MustCompile(`(?is)<iframe\b[^>]*>`)
-var reIframeSrc = regexp.MustCompile(`(?i)\bsrc\s*=\s*["']?(?:https?:)?//([^/"'\s>?#]+)`)
+
+// reIframeSrc finds the sources an iframe loads: src, and data-src for
+// lazy loading (src is then a placeholder).
+var reIframeSrc = regexp.MustCompile(`(?i)(?:^|\s)(?:data-(?:lazy-)?)?src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
+var reRemoteHost = regexp.MustCompile(`(?i)^\s*(?:https?:)?//([^/"'\s>?#]+)`)
 
 // Detail is what ScanValueDetail found.
 type Detail struct {
@@ -160,18 +171,37 @@ func snippetAround(v string, loc []int) string {
 	return strings.TrimSpace(strings.ToValidUTF8(v[start:end], ""))
 }
 
+// jsonHTML undoes the escaping of HTML kept in JSON by page builders
+// (\" and \/).
+var jsonHTML = strings.NewReplacer(`\"`, `"`, `\/`, `/`)
+
 func benignIframe(tag string) bool {
-	if reWPEmbed.MatchString(tag) && reSandbox.MatchString(tag) && reEmbedTo.MatchString(tag) {
+	if (reWPEmbed.MatchString(tag) || reWPEmbedAttr.MatchString(tag)) && reSandbox.MatchString(tag) && reEmbedTo.MatchString(tag) {
 		return true
 	}
 	if reGiveForm.MatchString(tag) {
 		return true
 	}
-	m := reIframeSrc.FindStringSubmatch(tag)
-	if m == nil {
-		return true // no remote source: nothing is loaded
+	// Every remote source must be a known service. A lazy-load placeholder
+	// (about:blank, also resolved against the page as ".../about:blank")
+	// loads nothing; Gravity Forms' AJAX frame is one too.
+	for _, m := range reIframeSrc.FindAllStringSubmatch(tag, 5) {
+		v := m[1] + m[2] + m[3]
+		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(v)), "about:blank") {
+			continue
+		}
+		h := reRemoteHost.FindStringSubmatch(v)
+		if h == nil {
+			continue // a page of the site itself
+		}
+		if !benignHost(strings.ToLower(h[1])) {
+			return false
+		}
 	}
-	host := strings.ToLower(m[1])
+	return true
+}
+
+func benignHost(host string) bool {
 	for _, b := range benignIframeHosts {
 		if host == b || strings.HasSuffix(host, "."+b) {
 			return true
@@ -203,17 +233,32 @@ func ScanValueDetail(v string) Detail {
 		}
 	}
 	for _, loc := range reIframeTag.FindAllStringIndex(v, 20) {
-		tag := v[loc[0]:loc[1]]
+		tag := jsonHTML.Replace(v[loc[0]:loc[1]])
 		if reHiddenIframe.MatchString(tag) && !benignIframe(tag) {
 			return Detail{"DB.Injected.HiddenIframe", "iframe", snippetAround(v, loc)}
 		}
 	}
 	if loc := rePHPOpen.FindStringIndex(v); loc != nil {
-		if d := scanner.AnalyzeScript("php", []byte(v)); d != nil {
+		// Only what is inside PHP tags is PHP: the HTML and JavaScript of a
+		// snippet around it (template literals use backticks) are not.
+		if d := scanner.AnalyzeScript("php", []byte(phpParts(v))); d != nil {
 			return Detail{"DB." + d.Signature, "php", snippetAround(v, loc)}
 		}
 	}
 	return Detail{}
+}
+
+var rePHPTag = regexp.MustCompile(`(?is)<\?(?:php\b|=)(.*?)(?:\?>|$)`)
+
+// phpParts keeps the code inside the PHP tags of a value.
+func phpParts(v string) string {
+	var b strings.Builder
+	b.WriteString("<?php\n")
+	for _, m := range rePHPTag.FindAllStringSubmatch(v, -1) {
+		b.WriteString(m[1])
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // ScanDatabase scans a WordPress database for injected code in options,

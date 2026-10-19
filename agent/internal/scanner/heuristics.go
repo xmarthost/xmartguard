@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -342,10 +343,60 @@ func analyzeJS(content []byte) *verdict {
 	if m(reJSHexArray) && (m(reJSHexBlob) || m(reLongB64)) && packedLineAdded(content) {
 		return &verdict{CatSuspicious, "JS.Obfuscated.EvalPacked"}
 	}
-	if m(reJSDocWrite) {
+	if m(reJSDocWrite) && !plainDocWrite(content) {
 		return &verdict{CatSuspicious, "JS.Injection.DocumentWriteUnescape"}
 	}
 	return nil
+}
+
+var (
+	reUnescapeCall = regexp.MustCompile(`(?is)document\.write\s*\(\s*unescape\s*\((.*?)\)\s*\)`)
+	reJSLiteral    = regexp.MustCompile(`(?s)'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"`)
+	rePctEscape    = regexp.MustCompile(`%([0-9A-Fa-f]{2})`)
+	// What written markup must not do: run script, redirect, or load a
+	// hidden frame.
+	reDocWriteBad = regexp.MustCompile(`(?is)<script|\beval\s*\(|atob\s*\(|fromcharcode|document\.cookie|location\s*[.=]|http-equiv|<iframe\b[^>]*(?:\s(?:width|height)\s*=\s*["']?0(?:px)?["'\s>]|display\s*:\s*none|visibility\s*:\s*hidden)`)
+)
+
+// plainDocWrite: document.write(unescape(...)) as old embed codes use it
+// (Google Analytics' ga.js loader, lead and chat widgets): only the angle
+// brackets and quotes are escaped and the address stays readable, or the
+// fully escaped markup is a visible frame (a video player). Encoded
+// letters hiding a script, a redirect or a hidden frame are not.
+func plainDocWrite(content []byte) bool {
+	calls := reUnescapeCall.FindAllSubmatch(content, 20)
+	if len(calls) == 0 {
+		return false
+	}
+	for _, c := range calls {
+		var lit strings.Builder
+		for _, l := range reJSLiteral.FindAllSubmatch(c[1], -1) {
+			lit.Write(l[1])
+			lit.Write(l[2])
+		}
+		text := lit.String()
+		if !rePctEscape.MatchString(text) {
+			return false // a variable or other encoding: can not be read here
+		}
+		letters := false
+		for _, e := range rePctEscape.FindAllStringSubmatch(text, -1) {
+			if b, _ := strconv.ParseUint(e[1], 16, 8); (b >= '0' && b <= '9') || (b|0x20 >= 'a' && b|0x20 <= 'z') {
+				letters = true
+				break
+			}
+		}
+		if !letters {
+			continue // <script src='https://readable.example/…'>
+		}
+		decoded := rePctEscape.ReplaceAllStringFunc(text, func(e string) string {
+			b, _ := strconv.ParseUint(e[1:], 16, 8)
+			return string(rune(b))
+		})
+		if reDocWriteBad.MatchString(decoded) || rePctEscape.MatchString(decoded) {
+			return false
+		}
+	}
+	return true
 }
 
 // packedLineAdded reports a packed eval on the first or last line of a

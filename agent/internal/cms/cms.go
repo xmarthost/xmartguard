@@ -343,6 +343,7 @@ func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 			ON CONFLICT(site_path, tbl, row_ref, signature) DO UPDATE SET at = excluded.at,
 				column_name = excluded.column_name, category = excluded.category, snippet = excluded.snippet,
 				first_seen = CASE WHEN db_findings.first_seen = 0 THEN excluded.first_seen ELSE db_findings.first_seen END,
+				note = CASE WHEN db_findings.status IN ('detected','archived') THEN db_findings.note ELSE 'found again after it was cleaned' END,
 				status = CASE WHEN db_findings.status = 'archived' THEN 'archived' ELSE 'detected' END`,
 			now, s.Path, s.User, c.Name, f.Table, f.Row, f.Signature, f.Column, f.Category, f.Snippet, now)
 		if err == nil && m.OnFinding != nil && !known[key] {
@@ -464,6 +465,9 @@ type DBRow struct {
 	Category  string `json:"category"`
 	Snippet   string `json:"snippet"`
 	FirstSeen int64  `json:"first_seen"`
+	Note      string `json:"note,omitempty"`
+	// Restorable: the value from before an xPGuard clean is saved.
+	Restorable bool `json:"restorable,omitempty"`
 }
 
 // DBFindings lists database infections.
@@ -483,7 +487,8 @@ func (m *Manager) DBFindings(status, q string, limit, offset int) ([]DBRow, int,
 	if err := m.DB.QueryRow(`SELECT count(*) FROM db_findings WHERE `+cond, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := m.DB.Query(`SELECT id, at, site_path, user, db_name, tbl, row_ref, signature, status, column_name, category, snippet, first_seen FROM db_findings WHERE `+cond+
+	rows, err := m.DB.Query(`SELECT id, at, site_path, user, db_name, tbl, row_ref, signature, status, column_name, category, snippet, first_seen, note,
+		EXISTS(SELECT 1 FROM db_clean_backup b WHERE b.finding_id = db_findings.id) FROM db_findings WHERE `+cond+
 		` ORDER BY id DESC LIMIT ? OFFSET ?`, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
@@ -492,7 +497,7 @@ func (m *Manager) DBFindings(status, q string, limit, offset int) ([]DBRow, int,
 	out := []DBRow{}
 	for rows.Next() {
 		var r DBRow
-		if err := rows.Scan(&r.ID, &r.At, &r.SitePath, &r.User, &r.Database, &r.Table, &r.Row, &r.Signature, &r.Status, &r.Column, &r.Category, &r.Snippet, &r.FirstSeen); err != nil {
+		if err := rows.Scan(&r.ID, &r.At, &r.SitePath, &r.User, &r.Database, &r.Table, &r.Row, &r.Signature, &r.Status, &r.Column, &r.Category, &r.Snippet, &r.FirstSeen, &r.Note, &r.Restorable); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, r)

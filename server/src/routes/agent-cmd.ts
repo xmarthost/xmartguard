@@ -71,6 +71,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'reputation.check': { role: 'operator', mutates: true, timeoutMs: 120_000 },
   'cms.scan': { role: 'operator', mutates: true },
   'db.archive': { role: 'operator', mutates: true },
+  'db.clean': { role: 'operator', mutates: true, timeoutMs: 600_000 },
+  'db.restore': { role: 'operator', mutates: true, timeoutMs: 300_000 },
   'osm.delete': { role: 'operator', mutates: true },
   'domainrep.check': { role: 'operator', mutates: true, timeoutMs: 600_000 },
 

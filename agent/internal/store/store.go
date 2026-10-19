@@ -214,6 +214,20 @@ CREATE TABLE IF NOT EXISTS db_findings (
   status      TEXT NOT NULL DEFAULT 'detected',
   UNIQUE(site_path, tbl, row_ref, signature)
 );
+-- Values the DB cleaner replaced, so a cleaned row can be put back.
+CREATE TABLE IF NOT EXISTS db_clean_backup (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  finding_id  INTEGER NOT NULL,
+  at          INTEGER NOT NULL,
+  site_path   TEXT NOT NULL,
+  db_name     TEXT NOT NULL,
+  tbl         TEXT NOT NULL,
+  key_col     TEXT NOT NULL,
+  key_val     TEXT NOT NULL,
+  col         TEXT NOT NULL,
+  old_value   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS db_clean_backup_finding ON db_clean_backup(finding_id);
 CREATE TABLE IF NOT EXISTS osm_events (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   at        INTEGER NOT NULL,
@@ -347,6 +361,8 @@ var columnMigrations = []string{
 	`ALTER TABLE db_findings ADD COLUMN category TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE db_findings ADD COLUMN snippet TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE db_findings ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0`,
+	// How a database finding was handled ("cleaned by xPGuard …").
+	`ALTER TABLE db_findings ADD COLUMN note TEXT NOT NULL DEFAULT ''`,
 	// Whitelist advanced options: protocol, ports and direction.
 	`ALTER TABLE fw_rules ADD COLUMN proto TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE fw_rules ADD COLUMN ports TEXT NOT NULL DEFAULT ''`,

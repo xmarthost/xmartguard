@@ -1501,6 +1501,43 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		return map[string]any{"done": n}, err
 	}
 
+	h["db.clean"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IDs []int64 `json:"ids"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if len(in.IDs) > 1000 {
+			return nil, fmt.Errorf("at most 1000 findings at once")
+		}
+		res := a.CMS.CleanDBFindings(ctx, in.IDs)
+		done := 0
+		for _, r := range res {
+			if r.OK {
+				done++
+			}
+		}
+		a.Log.Info("database findings cleaned", "done", done, "asked", len(in.IDs))
+		return map[string]any{"results": res, "done": done}, nil
+	}
+	h["db.restore"] = func(ctx context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IDs []int64 `json:"ids"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		res := a.CMS.RestoreDBFindings(ctx, in.IDs)
+		done := 0
+		for _, r := range res {
+			if r.OK {
+				done++
+			}
+		}
+		return map[string]any{"results": res, "done": done}, nil
+	}
+
 	// ---- outgoing spam monitor
 	h["osm.events"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		f, err := decode[mail.EventFilter](p)

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.13** (see `VERSION`).
+- Current release: **0.22.14** (see `VERSION`).
 
 ## Working rules
 
@@ -119,6 +119,25 @@ project. It holds the rules, the current state and what is still open.
   API whose cloud address was on the IPDB (seen on business200:
   54.215.31.113, AWS, answering from port 443) never got the answer, and
   the site hung. `TestAnswersFromListedAddressesOnKernel` covers it.
+- **DB scanner: fleet review and bulk clean** (0.22.14): the fleet's DB
+  Scanner Logs (15 servers, ~500 rows) were mostly false positives:
+  WordPress post embeds stored HTML-escaped (`&amp;embed=true`) or without
+  the class, Gravity Forms AJAX frames and lazy-load placeholders
+  (`src=".../about:blank"`, real source in `data-src`), Jetpack Likes,
+  Google Analytics/AdSense/Ad Manager frames, the GA-era
+  `document.write(unescape("%3Cscript src='...'"))` idiom, and JavaScript
+  around PHP in a WPCode snippet (only code inside PHP tags is judged
+  now). Rules version 3 marks them "False positive" at the next scan.
+  Hidden iframes in page-builder JSON (`\"`) are now seen. Real ones stay:
+  `wp_system_integrity_state` / `*_locale_cache_bootstrap` stored payloads,
+  transient-name backdoors, `//div.show/public` 1px frames, hidden ad
+  frames. `db.clean` cuts only the reported element out of each row
+  (serialized PHP lengths and JSON stay valid), never deletes rows, saves
+  the old value in `db_clean_backup`; `db.restore` puts it back. Portal:
+  DB Scanner » Clean selected / Clean all / Restore. Tests:
+  `TestFleetDBFalsePositives`, `TestCleanStoredValue`,
+  `TestCleanDBFindingsMySQL` (real MariaDB, `XG_MYSQL_TEST=1`),
+  `TestFleetDocumentWriteUnescape`.
 - **Trusted services and the IPDB; exemptions without ctl** (0.22.13):
   the WAF's IPDB POST rule (7700711/7701711) exempts the trusted services
   (search, SEO, AI, monitors, payment, vendors: the WAF groups, not CDNs)
