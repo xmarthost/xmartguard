@@ -53,6 +53,12 @@ import (
 
 // Agent holds every module.
 type Agent struct {
+	// settingsApply applies saved settings in the background; syncSettings
+	// (tests) applies them before settings.set answers.
+	settingsApply settingsApply
+	syncSettings  bool
+	// applyFn replaces applySettings in tests.
+	applyFn     func(context.Context, settingsJob) (string, error)
 	mailGuard   atomic.Pointer[mail.EximGuardStatus]
 	mailGuardMu sync.Mutex
 	Cfg         *config.Config
@@ -762,6 +768,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	h["settings.get"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{
 			"settings": masked(a.Settings.Get()),
+			"apply":    a.settingsApply.status(),
 			"meta": map[string]any{
 				"firewall":     a.Firewall.Status(),
 				"users":        scanner.Users(),
@@ -771,7 +778,10 @@ func (a *Agent) Handlers() map[string]client.Handler {
 		}, nil
 	}
 	h["settings.set"] = func(ctx context.Context, p json.RawMessage) (any, error) {
-		return a.setSettings(ctx, p, "")
+		return a.saveSettings(ctx, p, "", true)
+	}
+	h["settings.apply_status"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.settingsApply.status(), nil
 	}
 	a.historyHandlers(h)
 	a.scoreHandlers(h)
@@ -781,40 +791,153 @@ func (a *Agent) Handlers() map[string]client.Handler {
 	return h
 }
 
-// setSettings applies a settings change (the portal's Settings pages, a
-// rollback) and remembers the settings before it.
+// setSettings applies a settings change made by the agent itself (the
+// portal's trusted services and CAPTCHA page settings) and returns when
+// the firewall and WAF follow.
 func (a *Agent) setSettings(ctx context.Context, p json.RawMessage, summary string) (any, error) {
-	{
-		a.recordSettings(p, summary)
-		before, beforeIPDB := a.Settings.Get().Firewall, a.Settings.Get().IPDB
-		beforeWAF, beforeCaptcha := a.Settings.Get().WAF, a.Settings.Get().Captcha
-		beforeScan := a.Settings.Get().Scanner
-		p = keepSecrets(p, a.Settings.Get())
-		next, err := a.Settings.Patch(p)
-		if err != nil {
-			return nil, err
+	return a.saveSettings(ctx, p, summary, false)
+}
+
+// saveSettings saves a settings change and remembers the settings before
+// it. In the background (the portal's Settings pages, a rollback) the
+// answer comes as soon as the settings are saved, and the firewall and
+// WAF follow on their own: reloading them can take minutes (country
+// lists, a LiteSpeed restart), and the page stays usable meanwhile. The
+// outcome is in settings.apply_status and, when it failed, among the
+// server's problems.
+func (a *Agent) saveSettings(ctx context.Context, p json.RawMessage, summary string, background bool) (any, error) {
+	a.recordSettings(p, summary)
+	cur := a.Settings.Get()
+	job := settingsJob{fw: cur.Firewall, ipdb: cur.IPDB, waf: cur.WAF, captcha: cur.Captcha, scan: cur.Scanner}
+	p = keepSecrets(p, cur)
+	next, err := a.Settings.Patch(p)
+	if err != nil {
+		return nil, err
+	}
+	a.Trusted.SetCustom(next.Firewall.TrustedCustom)
+	if background && !a.syncSettings {
+		return map[string]any{"settings": masked(next), "apply": a.settingsApply.queue(a, job)}, nil
+	}
+	warning, err := a.applySettings(ctx, job)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"settings": masked(a.Settings.Get())}
+	if warning != "" {
+		out["warning"] = warning
+	}
+	return out, nil
+}
+
+// settingsJob holds the settings before a change: what changed decides
+// what is reloaded.
+type settingsJob struct {
+	fw      settings.Firewall
+	ipdb    settings.IPDB
+	waf     settings.WAF
+	captcha settings.Captcha
+	scan    settings.Scanner
+}
+
+// applySettings makes the firewall and the WAF follow the saved settings.
+// An error is the firewall's; the WAF's comes back as a warning (the
+// settings stay saved either way).
+func (a *Agent) applySettings(ctx context.Context, job settingsJob) (warning string, err error) {
+	next := a.Settings.Get()
+	if strings.Join(job.fw.DDNS, ",") != strings.Join(next.Firewall.DDNS, ",") {
+		a.Firewall.RefreshDDNS(ctx)
+	}
+	gateChanged := job.captcha != next.Captcha || job.waf.Enabled != next.WAF.Enabled ||
+		strings.Join(job.waf.LoginURLs, ",") != strings.Join(next.WAF.LoginURLs, ",")
+	if fwChanged(job.fw, next.Firewall) || job.ipdb != next.IPDB || gateChanged {
+		if err := a.Firewall.Apply(); err != nil {
+			return "", fmt.Errorf("settings saved, but the firewall could not be applied: %w", err)
 		}
-		a.Trusted.SetCustom(next.Firewall.TrustedCustom)
-		if strings.Join(before.DDNS, ",") != strings.Join(next.Firewall.DDNS, ",") {
-			a.Firewall.RefreshDDNS(ctx)
+	}
+	// Trusted services changed: the WAF's trusted list follows.
+	if wafChanged(job.waf, next.WAF) || a.WAF.TrustedListChanged() || gateChanged {
+		if err := a.WAF.ApplyNow(); err != nil {
+			warning = err.Error()
 		}
-		gateChanged := beforeCaptcha != next.Captcha || beforeWAF.Enabled != next.WAF.Enabled ||
-			strings.Join(beforeWAF.LoginURLs, ",") != strings.Join(next.WAF.LoginURLs, ",")
-		if fwChanged(before, next.Firewall) || beforeIPDB != next.IPDB || gateChanged {
-			if err := a.Firewall.Apply(); err != nil {
-				return nil, fmt.Errorf("settings saved, but the firewall could not be applied: %w", err)
+	}
+	if job.scan.ClamAV != next.Scanner.ClamAV || job.scan.ClamAVURLs != next.Scanner.ClamAVURLs {
+		go a.reloadClam(context.Background(), true)
+	}
+	return warning, nil
+}
+
+// ApplyState is the outcome of applying saved settings in the background.
+type ApplyState struct {
+	// State: "" (nothing applied since the agent started), applying,
+	// applied or failed.
+	State    string `json:"state"`
+	Started  int64  `json:"started,omitempty"`
+	Finished int64  `json:"finished,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Warning  string `json:"warning,omitempty"`
+}
+
+// settingsApply runs background applies one at a time. Saves made while
+// one runs are applied together afterwards (from the oldest settings
+// before them, so every change is seen).
+type settingsApply struct {
+	mu      sync.Mutex
+	running bool
+	pending *settingsJob
+	state   ApplyState
+}
+
+func (s *settingsApply) status() ApplyState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state
+}
+
+func (s *settingsApply) queue(a *Agent, job settingsJob) ApplyState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending == nil {
+		s.pending = &job
+	}
+	if s.state.State != "applying" {
+		s.state = ApplyState{State: "applying", Started: time.Now().Unix()}
+	}
+	if !s.running {
+		s.running = true
+		go s.run(a)
+	}
+	return s.state
+}
+
+func (s *settingsApply) run(a *Agent) {
+	for {
+		s.mu.Lock()
+		job := s.pending
+		s.pending = nil
+		if job == nil {
+			s.running = false
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		apply := a.applySettings
+		if a.applyFn != nil {
+			apply = a.applyFn
+		}
+		warning, err := apply(ctx, *job)
+		cancel()
+		s.mu.Lock()
+		if s.pending == nil {
+			s.state.Finished = time.Now().Unix()
+			s.state.Warning = warning
+			s.state.State = "applied"
+			if err != nil {
+				s.state.State, s.state.Error = "failed", err.Error()
+				a.Log.Warn("saved settings could not be applied", "err", err)
 			}
 		}
-		// Trusted services changed: the WAF's trusted list follows.
-		if wafChanged(beforeWAF, next.WAF) || a.WAF.TrustedListChanged() || gateChanged {
-			if err := a.WAF.ApplyNow(); err != nil {
-				return map[string]any{"settings": masked(next), "warning": err.Error()}, nil
-			}
-		}
-		if beforeScan.ClamAV != next.Scanner.ClamAV || beforeScan.ClamAVURLs != next.Scanner.ClamAVURLs {
-			go a.reloadClam(context.Background(), true)
-		}
-		return map[string]any{"settings": masked(next)}, nil
+		s.mu.Unlock()
 	}
 }
 

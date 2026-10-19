@@ -4,7 +4,7 @@ import { Ban, CheckCircle2, EyeOff, Search, ShieldAlert, Trash2, X } from 'lucid
 import { exclusionError, uriPath, type RuleExclusion } from '../components/RuleExclusions';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
-import { Pager, agentCall, fmtTime, useAction, useAgent } from '../components/controls';
+import { Pager, agentCall, fmtTime, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { useServerName } from './Scanner';
 import { DownloadRange, fetchAll, saveFile } from '../components/DownloadRange';
 
@@ -53,6 +53,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
   const status = useAgent<WafStatus>(id, 'waf.status');
   const ev = useAgent<{ events: WafEvent[]; total: number }>(id, 'waf.events', { category: cat, q: query, limit, offset }, 10_000);
   const { run, busy } = useAction();
+  const watch = useApplyWatch();
   const [sel, setSel] = useState<number[]>([]);
   const [exporting, setExporting] = useState('');
   const [allow, setAllow] = useState<WafEvent | null>(null);
@@ -92,7 +93,8 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
     if (!confirm(`Disable ModSecurity rule ${ruleId} on this server?`)) return;
     const cur = await agentCall<{ settings: { waf: { disabled_rules: number[] } } }>(id!, 'settings.get');
     const ids = Array.from(new Set([...(cur.settings.waf?.disabled_rules ?? []), ruleId]));
-    await run(() => agentCall(id!, 'settings.set', { waf: { disabled_rules: ids } }), `Rule ${ruleId} disabled`);
+    const r = await run(() => agentCall(id!, 'settings.set', { waf: { disabled_rules: ids } }), `Rule ${ruleId} disabled`);
+    if (r) watch(id!, r);
   };
 
   if (status.loading && !status.data) return <PageLoader />;
@@ -293,6 +295,7 @@ export function AllowDialog({ serverId, ev, onClose }: { serverId: string; ev: W
   const [scope, setScope] = useState<'path' | 'site'>(uriPath(ev.uri) && uriPath(ev.uri) !== '/' ? 'path' : 'site');
   const [err, setErr] = useState('');
   const { run, busy } = useAction();
+  const watch = useApplyWatch();
   const path = uriPath(ev.uri);
   const domain = (ev.host || '').toLowerCase().replace(/^www\./, '');
   const save = async () => {
@@ -302,7 +305,7 @@ export function AllowDialog({ serverId, ev, onClose }: { serverId: string; ev: W
     const ok = await run(async () => {
       const cur = await agentCall<{ settings: { waf: { rule_exclusions?: RuleExclusion[] } } }>(serverId, 'settings.get');
       const list = [...(cur.settings.waf?.rule_exclusions ?? []), ...add];
-      await agentCall(serverId, 'settings.set', { waf: { rule_exclusions: list } });
+      watch(serverId, await agentCall(serverId, 'settings.set', { waf: { rule_exclusions: list } }));
       return true;
     }, `Allowed on ${domain}`);
     if (ok) onClose();

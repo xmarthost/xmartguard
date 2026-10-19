@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.17** (see `VERSION`).
+- Current release: **0.22.18** (see `VERSION`).
 
 ## Working rules
 
@@ -133,6 +133,21 @@ project. It holds the rules, the current state and what is still open.
   prettier (double quotes); they are back in the repository's style.
   Never run prettier without the repository's style: there is no
   prettier config, so it rewrites whole files.
+- **Background settings apply** (0.22.18): `settings.set` saves and
+  returns at once (`apply.state: applying`); the firewall, WAF, DDNS and
+  ClamAV apply runs in the background, one at a time, saves made meanwhile
+  coalesced into one more run. `settings.apply_status` gives the state;
+  the web pages poll it and toast the result, and a failed apply (or one
+  running over 15 minutes, or a WAF warning) shows as a "Settings" item
+  in the dashboard problems bell. Central config, host trust and the
+  tests (`syncSettings`) still apply synchronously.
+- **Repeated CAPTCHA passes** (0.22.18): pakshaheens.com showed the same
+  visitor passing Turnstile 4 times in 2 minutes. The pass reached the
+  agent but LiteSpeed's graceful restart left old processes (keep-alive)
+  serving the challenge. A second pass for an address already passed now
+  forces a reload (`WAF.RefreshPasses`, at most once per 20 s) and on
+  LiteSpeed the pass answer waits `PassSettle` (3 s) so the visitor's
+  retry lands on the new processes.
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

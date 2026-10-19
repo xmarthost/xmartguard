@@ -312,7 +312,7 @@ func (a *Agent) applyCentralConfig(ctx context.Context, c centralConfig) error {
 	}
 	patch, _ := json.Marshal(map[string]any{"captcha": map[string]any{
 		"central": c.Enabled, "central_url": c.URL, "central_minutes": c.Minutes}})
-	if _, err := a.Handlers()["settings.set"](ctx, patch); err != nil {
+	if _, err := a.setSettings(ctx, patch, ""); err != nil {
 		return err
 	}
 	_ = store.SetKV(a.DB, kvCentralVersion, strconv.FormatInt(c.Version, 10))
@@ -410,8 +410,21 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if in.Also != "" && in.Also != in.IP && net.ParseIP(in.Also) != nil {
 			ips = append(ips, in.Also)
 		}
+		// Solved again while already let in: the reload for the first
+		// pass has not reached the visitor yet (see RefreshPasses).
+		again := false
+		if ip := net.ParseIP(in.IP); ip != nil {
+			a.central.mu.Lock()
+			_, again = a.centralPassMap()[ip.String()]
+			a.central.mu.Unlock()
+		}
 		if err := a.centralPassFor(in.Minutes, ips...); err != nil {
 			return nil, err
+		}
+		if again {
+			if err := a.WAF.RefreshPasses(); err != nil {
+				a.Log.Warn("reload for a repeated CAPTCHA pass failed", "err", err)
+			}
 		}
 		for _, ip := range ips {
 			a.centralLiftBan(ip)

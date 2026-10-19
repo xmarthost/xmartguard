@@ -235,7 +235,7 @@ func (a *Agent) applyTrustedConfig(ctx context.Context, c trustedConfig) error {
 	}
 	patch, _ := json.Marshal(map[string]any{"firewall": map[string]any{
 		"trusted_services": c.Enabled, "trusted_disabled": c.Disabled, "trusted_custom": c.Custom}})
-	if _, err := a.Handlers()["settings.set"](ctx, patch); err != nil {
+	if _, err := a.setSettings(ctx, patch, ""); err != nil {
 		return err
 	}
 	_ = store.SetKV(a.DB, "trusted_version", strconv.FormatInt(c.Version, 10))

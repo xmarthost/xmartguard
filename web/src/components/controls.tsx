@@ -153,6 +153,36 @@ export function useAction() {
   return { run, busy };
 }
 
+/**
+ * Saved settings are applied by the server in the background (the save
+ * answers at once): follows that apply and tells how it went. A failure
+ * also shows among the server's problems on the dashboard.
+ */
+export function useApplyWatch() {
+  const toast = useToast();
+  return useCallback(
+    (serverId: string, saved: unknown) => {
+      if ((saved as { apply?: { state?: string } } | undefined)?.apply?.state !== 'applying') return;
+      const started = Date.now();
+      const tick = () =>
+        agentCall<{ state: string; error?: string; warning?: string }>(serverId, 'settings.apply_status').then(
+          (s) => {
+            if (s.state === 'applying') {
+              if (Date.now() - started < 10 * 60_000) setTimeout(tick, 3000);
+              return;
+            }
+            if (s.state === 'failed') toast('err', `Saved, but the server could not apply it: ${s.error}`);
+            else if (s.warning) toast('err', `Applied, but the WAF reported: ${s.warning}`);
+            else toast('ok', 'Changes applied on the server');
+          },
+          () => undefined,
+        );
+      setTimeout(tick, 2000);
+    },
+    [toast],
+  );
+}
+
 // ------------------------------------------------------------------ inputs
 
 export function Toggle({ on, onChange, disabled }: { on: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {

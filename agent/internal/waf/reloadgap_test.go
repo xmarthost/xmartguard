@@ -11,6 +11,7 @@ import (
 // Tests change address lists and check the result at once.
 func TestMain(m *testing.M) {
 	ListReloadGap = func(bool, bool) time.Duration { return 0 }
+	PassSettle = 0
 	os.Exit(m.Run())
 }
 
@@ -127,4 +128,32 @@ func TestAddressListsWaitForTheReloadGap(t *testing.T) {
 		t.Fatal("no reload scheduled for the background refresh")
 	}
 	m.deferred.Stop()
+}
+
+// A visitor solving the CAPTCHA again although already on the pass list:
+// the server is reloaded again (LiteSpeed's old processes still served the
+// visitor), but not more than every 20 seconds.
+func TestRepeatedPassReloadsAgain(t *testing.T) {
+	tg, calls := countReloads(t, true)
+	m := &Manager{RulesDir: t.TempDir(), target: tg}
+	if err := m.RefreshPasses(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(calls(), ","); got != "lswsctrl" {
+		t.Fatalf("calls = %s, want one LiteSpeed restart", got)
+	}
+	if err := m.RefreshPasses(); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(strings.Join(calls(), ","), "lswsctrl"); n != 1 {
+		t.Fatalf("%d restarts within 20 seconds", n)
+	}
+	m.lastReload = time.Now().Add(-time.Minute)
+	if err := m.RefreshPasses(); err != nil || strings.Count(strings.Join(calls(), ","), "lswsctrl") != 2 {
+		t.Fatalf("no restart after the gap: %v %v", calls(), err)
+	}
+	// No web server with ModSecurity: nothing to reload.
+	if err := (&Manager{}).RefreshPasses(); err != nil {
+		t.Fatal(err)
+	}
 }

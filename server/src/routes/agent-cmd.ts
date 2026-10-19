@@ -18,6 +18,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'scanner.paths': { role: 'viewer', mutates: false },
   'findings.list': { role: 'viewer', mutates: false },
   'settings.get': { role: 'viewer', mutates: false },
+  'settings.apply_status': { role: 'viewer', mutates: false },
   'fw.list': { role: 'viewer', mutates: false },
   'fw.check': { role: 'viewer', mutates: false },
   'fw.events': { role: 'viewer', mutates: false },

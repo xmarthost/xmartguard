@@ -488,6 +488,9 @@ func (a *Agent) serviceProblems() []map[string]string {
 			out = append(out, map[string]string{"name": s.Name, "problem": s.Problem, "link": s.Link})
 		}
 	}
+	if p := a.settingsProblem(); p != "" {
+		out = append(out, map[string]string{"name": "Settings", "problem": p, "link": "settings"})
+	}
 	return out
 }
 
@@ -820,4 +823,19 @@ func (a *Agent) removeSignatures() error {
 	os.RemoveAll(scanner.FeedYARADir())
 	scanner.ReloadFeeds()
 	return store.SetKV(a.DB, "sig_etag", "")
+}
+
+// settingsProblem: saved settings that the server could not apply (they
+// are applied in the background).
+func (a *Agent) settingsProblem() string {
+	ap := a.settingsApply.status()
+	switch {
+	case ap.State == "failed":
+		return "saved settings could not be applied: " + ap.Error
+	case ap.State == "applied" && ap.Warning != "":
+		return "saved settings applied, but the WAF reported: " + ap.Warning
+	case ap.State == "applying" && time.Since(time.Unix(ap.Started, 0)) > 15*time.Minute:
+		return "saved settings are still being applied after 15 minutes"
+	}
+	return ""
 }

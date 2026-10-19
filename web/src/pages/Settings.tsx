@@ -5,7 +5,7 @@ import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
-import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
+import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { LearnedExclusions, RuleExclusionsEditor, type LearnedExclusion, type RuleExclusion } from '../components/RuleExclusions';
 import { SettingsHistory } from '../components/SettingsHistory';
 import { AccountExceptions } from '../components/AccountExceptions';
@@ -284,6 +284,7 @@ export default function SettingsPage() {
   const res = useAgent<{ settings: AllSettings; meta: Meta }>(id, 'settings.get');
   const [st, setSt] = useState<AllSettings | null>(null);
   const { run, busy } = useAction();
+  const watch = useApplyWatch();
   const admin = can(user, 'admin');
   useEffect(() => {
     if (res.data) setSt(res.data.settings);
@@ -292,6 +293,7 @@ export default function SettingsPage() {
   const save = async (patch: Partial<Record<keyof AllSettings, any>>, msg = 'Settings saved') => {
     const r = await run(() => agentCall<{ settings: AllSettings }>(id!, 'settings.set', patch), msg);
     if (r) setSt((cur) => ({ ...(cur as AllSettings), ...r.settings }));
+    if (r) watch(id!, r);
     return r;
   };
   const setScanner = (p: Partial<ScannerS>) => save({ scanner: p });

@@ -6,7 +6,7 @@ import { downloadCSV, useCountries } from '../components/geo';
 import { flag } from '../components/WorldMap';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
-import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent } from '../components/controls';
+import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { useServerName } from './Scanner';
 
 // ISO 3166-1 alpha-2 codes; names come from the browser (Intl.DisplayNames).
@@ -665,6 +665,7 @@ export function FirewallPage() {
   const [providerOpen, setProviderOpen] = useState(false);
   const [provider, setProvider] = useState<'iptables' | 'nftables'>('iptables');
   const { run, busy } = useAction();
+  const watch = useApplyWatch();
   const isAdmin = can(user, 'admin');
   useEffect(() => {
     if (s.data) {
@@ -682,6 +683,7 @@ export function FirewallPage() {
   const saveAny = (patch: Record<string, unknown>, msg = 'Settings saved') =>
     run(async () => {
       const r = await agentCall(id!, 'settings.set', patch);
+      watch(id!, r);
       await Promise.all([s.reload(), meta.reload()]);
       return r;
     }, msg);

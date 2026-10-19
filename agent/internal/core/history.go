@@ -95,7 +95,7 @@ func (a *Agent) rollbackSettings(ctx context.Context, id, before int64) (any, er
 	if err != nil {
 		return nil, errors.New("no settings change to undo in that time")
 	}
-	return a.setSettings(ctx, json.RawMessage(raw), "rollback: settings before change #"+itoa(id))
+	return a.saveSettings(ctx, json.RawMessage(raw), "rollback: settings before change #"+itoa(id), true)
 }
 
 func itoa(n int64) string {

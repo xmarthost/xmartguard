@@ -483,6 +483,50 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	if out, err := m.runTimeout(reload, 120*time.Second); err != nil {
 		return fmt.Errorf("WAF rules written but reload failed: %s", strings.TrimSpace(out))
 	}
+	// A visitor who solved the CAPTCHA is sent back when this returns:
+	// give LiteSpeed's new server processes a moment to take over.
+	if urgent && t.LiteSpeed {
+		time.Sleep(PassSettle)
+	}
+	return nil
+}
+
+// PassSettle is how long a LiteSpeed restart for a solved CAPTCHA is given
+// to start its new server processes before the visitor is sent back.
+var PassSettle = 3 * time.Second
+
+// passRefreshGap is the least time between two reloads RefreshPasses asks for.
+const passRefreshGap = 20 * time.Second
+
+// RefreshPasses reloads the web server for an address that solved the
+// CAPTCHA again although it is already on the pass list: the earlier
+// reload has not reached it (LiteSpeed's old server processes keep a
+// visitor's open connections for a while after a graceful restart), and
+// the visitor is sent to the CAPTCHA page again and again. Reloads at most
+// every 20 seconds.
+func (m *Manager) RefreshPasses() error {
+	m.mu.Lock()
+	t := m.target
+	m.mu.Unlock()
+	if !t.ModSec || len(t.reload) == 0 {
+		return nil
+	}
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	if !m.lastReload.IsZero() && time.Since(m.lastReload) < passRefreshGap {
+		return nil
+	}
+	reload := t.reload
+	if t.LiteSpeed && !t.Plain {
+		reload = liteSpeedRestart
+	}
+	m.lastReload = time.Now()
+	if out, err := m.runTimeout(reload, 120*time.Second); err != nil {
+		return fmt.Errorf("reload failed: %s", strings.TrimSpace(out))
+	}
+	if t.LiteSpeed {
+		time.Sleep(PassSettle)
+	}
 	return nil
 }
 

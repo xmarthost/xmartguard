@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { CheckCircle2, Plus, Trash2 } from 'lucide-react';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, SectionLoader } from '../components/ui';
-import { Card, agentCall, isIPorCIDR, useAction, useAgent } from '../components/controls';
+import { Card, agentCall, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { exclusionError, type RuleExclusion } from '../components/RuleExclusions';
 import { useServerName } from './Scanner';
 
@@ -52,7 +52,9 @@ export default function AllowList() {
 
   const s = st.data?.settings;
   const reload = () => (st.reload(), fw.reload());
-  const setList = (section: keyof Settings, field: string, list: unknown) => agentCall(id!, 'settings.set', { [section]: { [field]: list } });
+  const watch = useApplyWatch();
+  const setList = (section: keyof Settings, field: string, list: unknown) =>
+    agentCall(id!, 'settings.set', { [section]: { [field]: list } }).then((r) => (watch(id!, r), r));
 
   const entries: Entry[] = !s
     ? []

@@ -44,6 +44,7 @@ func newTestAgent(t *testing.T, settingsJSON string) *Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.syncSettings = true
 	t.Cleanup(func() { a.DB.Close() })
 	return a
 }
