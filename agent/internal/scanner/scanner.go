@@ -555,10 +555,16 @@ func binaryCheck(path string, head []byte) (*Detection, error) {
 	// Build and package folders hold real programs and libraries: npm's
 	// node_modules (and copies of it), Python virtual environments,
 	// Composer's vendor, Android/CMake build output.
-	if reDevDir.MatchString(path) {
-		return nil, nil
-	}
 	lib := reSharedLib.MatchString(base)
+	if reDevDir.MatchString(path) {
+		// WordPress plugins ship PHP packages, not programs: in wp-content
+		// a package folder holds only image tools (webp-convert's
+		// cwebp-120-linux-x86-64) and libraries. Malware hid a botnet
+		// program in wp-rocket/vendor/monolog/.../SyslogUdp/.
+		if !strings.Contains(path, "/wp-content/") || lib || imageTools[strings.ToLower(strings.SplitN(base, "-", 2)[0])] {
+			return nil, nil
+		}
+	}
 	web, wpContent := false, false
 	for i, part := range parts {
 		switch {

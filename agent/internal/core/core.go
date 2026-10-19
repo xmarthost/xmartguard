@@ -1080,6 +1080,7 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 	recheck := func(p json.RawMessage) (scanner.RecheckReport, []int64, error) {
 		in, err := decode[struct {
 			Signature string  `json:"signature"`
+			BeforeID  int64   `json:"before_id"`
 			Limit     int     `json:"limit"`
 			IDs       []int64 `json:"ids"`
 		}](p)
@@ -1091,7 +1092,7 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 			v, ok := ai.Cached(a.DB, sha)
 			return ok && v.Verdict == ai.Malicious
 		}
-		rep, err := a.Scanner.Recheck(in.Signature, in.Limit, keep)
+		rep, err := a.Scanner.Recheck(scanner.RecheckFilter{Signature: in.Signature, BeforeID: in.BeforeID, IDs: in.IDs, Limit: in.Limit}, keep)
 		return rep, in.IDs, err
 	}
 	h["findings.recheck"] = func(_ context.Context, p json.RawMessage) (any, error) {

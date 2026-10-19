@@ -15,6 +15,8 @@ func TestBinaryPlaces(t *testing.T) {
 		"/home/u/public_html/wp-content/uploads/kthreadd":                                                             "Binary.ELF.FakeSystemService",
 		"/home/u/public_html/wp-content/plugins/woocommerce/wpbooster":                                                "Binary.ELF.InWordPressContent",
 		"/home/u/public_html/ffmpeg":                                                                                  "Binary.ELF.InWebOrTempDir",
+		// A program hidden in a plugin's Composer folder (2026-10-19).
+		"/home/u/tutorials.example.com/wp-content/plugins/wp-rocket/vendor/monolog/monolog/src/Monolog/Handler/SyslogUdp/16e2277f8b31_A": "Binary.ELF.InWordPressContent",
 	}
 	for p, want := range cases {
 		d, _ := binaryCheck(p, elf)
@@ -34,6 +36,8 @@ func TestBinaryPlaces(t *testing.T) {
 	// 2026-10-18: quarantining them broke EWWW and Node/Python apps).
 	for _, p := range []string{
 		"/home/u/public_html/wp-content/ewww/jpegtran", "/home/u/public_html/wp-content/ewww/pngquant",
+		"/home/u/public_html/wp-content/plugins/webp-express/vendor/rosell-dk/webp-convert/src/Convert/Converters/Binaries/cwebp-120-linux-x86-64",
+		"/home/u/public_html/news/app/ThirdParty/webp-convert/vendor/rosell-dk/webp-convert/src/Convert/Converters/Binaries/cwebp-060-fbsd",
 		"/home/u/public_html/app/node_modules/.bin/esbuild", "/home/u/star.example.com/backend/node_modules_old/@esbuild/linux-x64/bin/esbuild",
 		"/home/u/askmedicalfacts.com/venv/lib/python3.12/site-packages/pydantic_core/_core.cpython-312-x86_64-linux-gnu.so",
 		"/home/u/vet.example.com/vendor/phpstan/phpstan/phpstan_turbo-8.5.so", "/home/u/store.example.pk/cscart/app/payments/lib/x.so",

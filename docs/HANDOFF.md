@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.9** (see `VERSION`).
+- Current release: **0.22.10** (see `VERSION`).
 
 ## Working rules
 
@@ -142,7 +142,19 @@ project. It holds the rules, the current state and what is still open.
   and lists the files it would no longer flag. `findings.recheck_apply`
   (`ids`) restores the listed ones; files the AI cache calls malicious are
   always kept. Run it after scanner false-positive fixes, and restore only
-  after the owner approves.
+  after the owner approves. Since 0.22.10 it takes `before_id` (page on
+  with the returned `next_before_id`; the connector times out after 60 s,
+  so use `limit` 200 on big servers) and `ids` (judge only those).
+  It judges content only: an ELF judged by name or folder must be looked
+  at by hand, and nothing from a hacked account is restored (pakshahe on
+  business200 had a botnet program in `wp-rocket/vendor/monolog/`).
+- **Scanner false positives fixed in 0.22.10**: empty `auto_prepend_file`
+  settings (cPanel's MultiPHP INI editor writes `= ""`); a site's own forms
+  that mail the visitor (`PHP.Spam.Mailer` now needs a standalone script or
+  tester signs such as `error_reporting(0)`, self-delete or `goto`);
+  base64 certificates and keys (composer/ca-bundle, payment callbacks).
+  ELF programs in a `vendor/` folder under wp-content are flagged again
+  unless they are image tools (`cwebp-…`) or libraries.
 - **Spike guard**: a signature with more than 500 detections in an hour is
   paused (`scanner.paused_signatures`). An admin unpauses it.
 - **AI distrust**: the AI's clean verdict is only advice, never a restore,
@@ -169,10 +181,10 @@ project. It holds the rules, the current state and what is still open.
    missing type to `AllowedContentTypes` if it is a real one.
 4. **Still open from the 0.22.6 review**: mrwowea `tg_relay` (920540),
    hapetsupplies admin-ajax from a Pakistani IP (942100), digimedia-verse.
-5. **Scanner false positives** still to fix (business500 scan 31): spam
-   mailer on app password mailers, AutoPrepend on SureMails `.user.ini`,
-   EncodedPayload on `composer/ca-bundle` and gateway callbacks, vendor
-   tests. Use `findings.recheck` after each fix.
+5. **Scanner false positives**: fixed in 0.22.10 and the verified files
+   restored (business500, 200, 600, 700, 900). Still to look at:
+   `td-subscription/includes/tds_ajax.php` (adsanews, business500) and
+   recheck business100, server1 and superfast page by page.
 6. **Reinfection on s5**: uitscom and ebwaccounting re-drop
    `ridge-compiler-live.php` about every 10 minutes. Clean these accounts
    (look for the dropper in cron, mu-plugins and the database) and change

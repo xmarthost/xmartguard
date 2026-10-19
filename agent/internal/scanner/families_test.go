@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"archive/zip"
+	"bytes"
+	"encoding/base64"
 	"os"
 	"strings"
 	"testing"
@@ -146,5 +148,57 @@ func TestImagesAndArchives(t *testing.T) {
 	good := mk("backup.zip", map[string]string{"site/index.php": "<?php require 'wp-blog-header.php';", "site/tests/eval.php": "<?php @eval($_POST['a']);"})
 	if d := scanZip(good, 1000); d != nil {
 		t.Fatalf("clean zip flagged: %+v", d)
+	}
+}
+
+// Seen on hosting servers: cPanel's empty auto_prepend_file settings and a
+// site's own forms that mail the visitor were quarantined; attackers' mail
+// testers and real prepend loaders must still be caught.
+func TestConfigAndMailerFalsePositives(t *testing.T) {
+	flagged := []struct{ name, ext, src, want string }{
+		{"htaccess prepend", ".htaccess", "php_value auto_prepend_file /home/u/public_html/wp-includes/x.php\n", "PHP.Config.AutoPrepend"},
+		{"ini prepend", ".ini", "auto_prepend_file = '/home/u/.cache/.p'\n", "PHP.Config.AutoPrependLoader"},
+		{"self-deleting tester", ".php", `<?php goto a; a: if (!empty($_GET["to"])) { $to = $_GET["to"]; @mail($to, "Sending emails 1", "Test", "From: x@example.com"); echo "##SENT##"; } unlink(basename(__FILE__));`, "PHP.Spam.Mailer"},
+		{"upload tester", ".php", `<?php error_reporting(0); ?><form method="post"><input name="email"></form><?php if (!empty($_POST['email'])) { $x = rand(); @mail($_POST['email'], "Result Report Test - ".$x, "WORKING !"); }`, "PHP.Spam.Mailer"},
+		{"standalone tester", ".php", `<?php if (isset($_POST['email'])) { $rnd = rand(); mail($_POST['email'], "Email Sending Test Report ID: " . $rnd, "WORKING!"); }`, "PHP.Spam.Mailer"},
+	}
+	for _, c := range flagged {
+		if d := analyze(c.ext, []byte(c.src)); d == nil || d.Signature != c.want {
+			t.Errorf("%s: got %+v, want %s", c.name, d, c.want)
+		}
+	}
+	clean := []struct{ name, ext, src string }{
+		{"cpanel user.ini", ".ini", "; cPanel-generated php ini directives, do not edit\n[PHP]\nauto_append_file = \"\"\nauto_prepend_file = \"\"\ndisplay_errors = Off\n"},
+		{"stackcp user.ini", ".ini", ";+StackCP\nauto_append_file = \nauto_prepend_file = \ndisplay_errors = 0\n"},
+		{"hardening user.ini", ".ini", "; Prevent auto-prepend/append attacks\nauto_prepend_file =\nauto_append_file =\n"},
+		{"register form", ".php", `<?php require_once '../config/db.php'; $email = trim(strtolower($_POST['email'] ?? '')); if (!filter_var($email, FILTER_VALIDATE_EMAIL)) { exit; } $body = "Welcome"; @mail($email, 'Welcome - Verify Your Email', $body, 'From: '.ADMIN_EMAIL); header('Location: /account/dashboard.php');`},
+		{"confirm email controller", ".php", `<?php if ($panel["panel_status"] == "frozen"): include 'app/views/frozen.twig'; exit(); endif; $newemail = $_POST["newemail"]; $update = $conn->prepare("UPDATE clients SET email=:email"); $send = mail($newemail, "Email Confirmation", $msg);`},
+		{"feedback copy", ".php", `<?php include "common/param.php"; if ($_REQUEST['pname'] != "") { $MSG = "Name: ".$_REQUEST["pname"]; mail($email_to, "Feedback Form", $MSG, $headers); mail($_REQUEST["email"], "Feedback Form", $MSG, $headers); header("Location: ".$web_url_1."submit-inquiry"); }`},
+	}
+	for _, c := range clean {
+		if d := analyze(c.ext, []byte(c.src)); d != nil {
+			t.Errorf("%s flagged: %+v", c.name, d)
+		}
+	}
+}
+
+// Certificates and keys kept as base64 in code (composer/ca-bundle's test
+// certificate, a payment gateway's RSA key) are not encoded payloads; base64
+// code next to a decoder still is.
+func TestCertificateBlobs(t *testing.T) {
+	der := append([]byte{0x30, 0x82, 0x01, 0x53}, bytes.Repeat([]byte{0x02, 0x01, 0x00, 0x30, 0x0d}, 80)...)
+	pem := "-----BEGIN CERTIFICATE-----\n" + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x30, 0x82, 0x04, 0xa4}, 60)) + "\n-----END CERTIFICATE-----\n"
+	clean := map[string]string{
+		"pem certificate": `<?php $cert = '` + base64.StdEncoding.EncodeToString([]byte(pem)) + `'; $info = openssl_x509_parse(base64_decode($cert));`,
+		"der key":         `<?php $HARDCODE_BASE64 = '` + base64.StdEncoding.EncodeToString(der) + `'; $bin = base64_decode($_POST['status']);`,
+	}
+	for name, src := range clean {
+		if d := analyze(".php", []byte(src)); d != nil {
+			t.Errorf("%s flagged: %+v", name, d)
+		}
+	}
+	code := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("<?php echo 'x'; "), 30))
+	if d := analyze(".php", []byte(`<?php $p = '`+code+`'; $f = base64_decode($p); eval('?>'.$f);`)); d == nil {
+		t.Error("encoded code with eval not flagged")
 	}
 }

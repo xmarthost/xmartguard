@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"math"
 	"regexp"
@@ -187,7 +188,13 @@ func analyzePHP(content []byte) *verdict {
 	// (not a mail library, which defines classes).
 	// Only when the recipient comes from the request: a contact form sends
 	// visitor text to a fixed address, a spam relay sends to anyone.
-	if m(reMailInput) && hasInput && argOnInput(reMailTo, s) && !library && n < 60000 {
+	// A site's own form (registration, password reset, a copy of a
+	// contact message to the visitor) is part of an application: it loads
+	// the site's config or layout and does not hide its errors. Mail
+	// testers and relays dropped by attackers stand alone, silence errors,
+	// run without a time limit or delete themselves.
+	if m(reMailInput) && hasInput && argOnInput(reMailTo, s) && !library && n < 60000 &&
+		(!m(reAppInclude) || m(reMailerTool)) {
 		return &verdict{CatSuspicious, "PHP.Spam.Mailer"}
 	}
 
@@ -289,6 +296,11 @@ func hasCodeBlob(s []byte) bool {
 		if txt, ok := hexText(blob[:len(blob)-1]); ok && readableText(txt) && !reCodeLike.Match(txt) {
 			continue
 		}
+		// Certificates and keys (an SSL test certificate, a payment
+		// gateway's RSA key) are data: DER (an ASN.1 sequence) or PEM.
+		if certOrKey(blob[:len(blob)-1]) {
+			continue
+		}
 		img := false
 		for _, p := range imageB64 {
 			if bytes.HasPrefix(blob, p) {
@@ -301,6 +313,18 @@ func hasCodeBlob(s []byte) bool {
 		}
 	}
 	return false
+}
+
+// certOrKey reports base64 that decodes to a DER or PEM certificate or key.
+func certOrKey(b64 []byte) bool {
+	raw, err := base64.StdEncoding.DecodeString(string(b64))
+	if err != nil {
+		return false
+	}
+	if len(raw) > 4 && raw[0] == 0x30 && (raw[1] == 0x82 || raw[1] == 0x81) {
+		return true
+	}
+	return bytes.HasPrefix(raw, []byte("-----BEGIN ")) && reCodeLike.Find(raw) == nil
 }
 
 // analyzeJS scores JavaScript.
@@ -503,7 +527,11 @@ func pregEvalModifier() *regexp.Regexp {
 var (
 	reEvalArg       = regexp.MustCompile(`(?i)\b(?:eval|assert)\s*\(([^;]{0,300})`)
 	reCreateFuncArg = regexp.MustCompile(`(?i)\bcreate_function\s*\(([^;]{0,300})`)
-	reMailTo        = regexp.MustCompile(`(?i)\bmail\s*\(([^,;]{0,200})`)
+	// Signs of an application around a mail() call: it loads the site's
+	// files or templates, queries its database or redirects back to a page.
+	reAppInclude = regexp.MustCompile(`(?i)\b(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__\s*\.\s*)?['"][^'"]+\.(?:php|inc|twig|tpl)['"]|->\s*prepare\s*\(|\bheader\s*\(\s*["']location\s*:`)
+	reMailerTool = regexp.MustCompile(`(?i)error_reporting\s*\(\s*0\s*\)|set_time_limit\s*\(\s*0\s*\)|unlink\s*\(\s*(?:basename\s*\(\s*)?__FILE__|\bgoto\s+\w+\s*;|##(?:NOT)?SENT##`)
+	reMailTo     = regexp.MustCompile(`(?i)\bmail\s*\(([^,;]{0,200})`)
 )
 
 // evalOnInput reports eval/assert whose argument contains request data or a

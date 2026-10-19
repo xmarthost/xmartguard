@@ -219,7 +219,9 @@ func randomName(name string) bool {
 }
 
 var (
-	reAutoPrepend = regexp.MustCompile(`(?im)^\s*(?:php_value\s+)?auto_(?:prepend|append)_file\s*=?\s*["']?([^"'\s]+)`)
+	// The value on the same line only: an empty setting (auto_prepend_file =
+	// "", which cPanel's MultiPHP INI editor writes) loads nothing.
+	reAutoPrepend = regexp.MustCompile(`(?im)^[ \t]*(?:php_value[ \t]+auto_(?:prepend|append)_file[ \t]+|auto_(?:prepend|append)_file[ \t]*=[ \t]*)["']?([^"'\s;#]+)`)
 	// Security plugins that legitimately load through auto_prepend_file.
 	knownPrepend = []string{"wordfence-waf.php", "ninjafirewall", "nfwlog", "malcare", "bv-", "sucuri", "wp-defender", "patchstack", "/usr/local/", "/opt/"}
 	// A redirect or a frame: what SEO-spam and phishing pages hidden under
