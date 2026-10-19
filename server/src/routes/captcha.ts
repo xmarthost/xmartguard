@@ -41,10 +41,19 @@ export const CaptchaConfig = z.object({
   // The page's look and the seconds shown before the visitor goes back.
   design: z.enum(CAPTCHA_DESIGNS).default('classic'),
   countdown: z.number().int().min(0).max(15).default(5),
+  // Servers whose websites show the check on their own address (the
+  // server's CAPTCHA port, this page in a full-window frame, a pass cookie:
+  // no web server reload). The others send visitors to this domain.
+  site_servers: z.array(z.string().uuid()).max(5000).default([]),
 });
 export type CaptchaConfig = z.infer<typeof CaptchaConfig>;
 
-const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5 };
+const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [] };
+
+/** Where a server's websites show the check: 'site' on their own address, '' here. */
+export function modeFor(c: CaptchaConfig, serverId: string): 'site' | '' {
+  return c.site_servers.includes(serverId) ? 'site' : '';
+}
 
 /** The check the page shows ('' = not usable: Turnstile chosen without keys). */
 export function effectiveProvider(c: CaptchaConfig): 'turnstile' | 'altcha' | 'auto' | '' {
@@ -254,6 +263,10 @@ export function parseParams(rawUrl: string) {
     h: (head.get('h') ?? '').toLowerCase(),
     u,
     preview: head.get('preview') === '1',
+    // Shown in a frame on the website's own address: n is that page's
+    // ticket number (the server trades the portal's word for a cookie).
+    n: /^[a-f0-9]{32}$/.test(head.get('n') ?? '') ? (head.get('n') as string) : '',
+    frame: head.get('frame') === '1',
     // Previews may show another design than the saved one.
     design: (CAPTCHA_DESIGNS as readonly string[]).includes(d) ? (d as CaptchaDesign) : undefined,
   };
@@ -345,7 +358,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (Math.random() < 0.02) await pool.query("DELETE FROM captcha_events WHERE at < now() - interval '30 days'").catch(() => undefined);
   }
 
-  const html = (reply: import('fastify').FastifyReply, body: string, code = 200) =>
+  // frameHost: the website that may show the page in a frame (its own
+  // address, any port); otherwise no one may.
+  const html = (reply: import('fastify').FastifyReply, body: string, code = 200, frameHost = '') =>
     reply
       .code(code)
       .type('text/html; charset=utf-8')
@@ -354,7 +369,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       .header('X-Robots-Tag', 'noindex, nofollow, noarchive')
       .header(
         'Content-Security-Policy',
-        "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors " +
+          (frameHost ? `https://${frameHost}:* https://${frameHost} http://${frameHost}:* http://${frameHost}` : "'none'"),
       )
       .send(body);
 
@@ -388,7 +404,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!config.enabled || !provider) {
       return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
     }
-    const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
+    const frame = !p.preview && p.frame && p.n !== '';
+    const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : frame ? { s: p.s, ip: p.ip, h: p.h, u: p.u, n: p.n } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
     const design = (p.preview && p.design) || config.design;
     // The page names the website only when its server confirms the site is
     // one of its own: a made-up link can not make this domain show another
@@ -397,7 +414,15 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (site === 'no') {
       return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
     }
-    return html(reply, renderPage({ host: site === 'yes' ? p.h : '', visitorIp: shownIP(ip, p.ip), params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown }));
+    // In a frame only on a website its server confirmed (the frame is on
+    // the website's own address).
+    if (frame && site === 'yes') (req as FastifyRequest & { xgFrame?: boolean }).xgFrame = true;
+    return html(
+      reply,
+      renderPage({ host: site === 'yes' ? p.h : '', visitorIp: shownIP(ip, p.ip), params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown, frame: frame && site === 'yes' }),
+      200,
+      frame && site === 'yes' ? p.h.replace(/\.$/, '') : '',
+    );
   });
 
   // ALTCHA: the widget (from this portal, not a CDN) and its checks.
@@ -415,6 +440,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     u: z.string(),
     token: z.string().min(1).max(4096).optional(),
     altcha: z.string().min(1).max(8192).optional(),
+    // Opened in a frame on the website's own address (see /v).
+    n: z.string().regex(/^[a-f0-9]{32}$/).optional(),
     preview: z.boolean().optional(),
   });
   app.post(
@@ -502,7 +529,13 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           // Also the address the visitor solved it from: on mobile networks
           // (CGNAT) the next request to the site may come from that one.
           const short = method === 'altcha' && provider === 'auto' ? { minutes: Math.min(config.minutes, ALTCHA_FALLBACK_MINUTES) } : {};
-          await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip, ...short }, 90_000);
+          if (b.data.n) {
+            // On the website's own address the server gives a ticket the
+            // page there trades for a pass cookie: no reload, no wait.
+            await hub.command(p.s, 'captcha.ticket', { ip: p.ip, host: p.h, nonce: b.data.n }, 15_000);
+          } else {
+            await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip, ...short }, 90_000);
+          }
         } catch (e) {
           await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
           req.log.warn({ err: (e as Error).message, server: p.s, host: p.h }, 'captcha pass refused');
@@ -510,7 +543,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         }
         if (method === 'altcha') noteAltchaPass(altchaKeys);
         await record(accountId, p.s, p.ip, p.h, 'passed', method, ip);
-        return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}` });
+        return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}`, ...(b.data.n ? { frame: true } : {}) });
       };
       const pending = run();
       if (key) verifying.set(key, pending);
@@ -527,8 +560,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const acc = req.user!.accountId;
     const cur = await load(pool, acc);
     const { rows } = await pool.query(
-      `SELECT result, count(*)::int AS n FROM captcha_events WHERE account_id = $1 AND at > now() - interval '24 hours' GROUP BY result`,
-      [acc],
+      `SELECT result, count(*)::int AS n FROM captcha_events WHERE account_id = ANY($1::uuid[]) AND at > now() - interval '24 hours' GROUP BY result`,
+      [await scopeAccounts(pool, acc)],
     );
     const last24h: Record<string, number> = { passed: 0, failed: 0, rejected: 0, offline: 0 };
     for (const r of rows) last24h[r.result] = r.n;
@@ -542,6 +575,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         strict_ip: cur.config.strict_ip,
         design: cur.config.design,
         countdown: cur.config.countdown,
+        site_servers: cur.config.site_servers,
       },
       version: cur.version,
       updated_at: cur.updated_at,
@@ -561,6 +595,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     strict_ip: z.boolean().default(false),
     design: z.enum(CAPTCHA_DESIGNS).default('classic'),
     countdown: z.number().int().min(0).max(15).default(5),
+    site_servers: z.array(z.string().uuid()).max(5000).default([]),
   });
   app.put('/api/captcha', admin, async (req, reply) => {
     const b = Save.safeParse(req.body);
@@ -568,6 +603,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const acc = req.user!.accountId;
     const cur = await load(pool, acc);
     const c: CaptchaConfig = { ...b.data, secret_key: b.data.secret_key || cur.config.secret_key };
+    // Only servers this account reaches.
+    const reach = new Set((await servers(acc)).map((s) => s.id));
+    c.site_servers = [...new Set(c.site_servers)].filter((id) => reach.has(id));
     if (c.enabled && c.provider === 'turnstile' && (!c.site_key || !c.secret_key)) {
       return reply.code(400).send({ error: 'Add the Cloudflare Turnstile site key and secret key, or choose ALTCHA, before turning the CAPTCHA page on.' });
     }
@@ -579,7 +617,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       [acc, JSON.stringify(c)],
     );
     const version = Number(rows[0].version);
-    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes, provider: c.provider, strict_ip: c.strict_ip, design: c.design, countdown: c.countdown }, ip: req.ip });
+    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes, provider: c.provider, strict_ip: c.strict_ip, design: c.design, countdown: c.countdown, site_servers: c.site_servers.length }, ip: req.ip });
     let pushed = 0;
     let offline = 0;
     for (const s of await servers(acc)) {
@@ -588,7 +626,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         continue;
       }
       pushed++;
-      void hub.command(s.id, 'captcha.central', { version, enabled: c.enabled, url: pageUrl, minutes: c.minutes }, 120_000).catch(() => undefined);
+      void hub.command(s.id, 'captcha.central', { version, enabled: c.enabled, url: pageUrl, minutes: c.minutes, mode: modeFor(c, s.id) }, 120_000).catch(() => undefined);
     }
     return { version, pushed, offline };
   });
@@ -605,8 +643,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const f = Events.safeParse(req.query);
     if (!f.success) return reply.code(400).send({ error: 'invalid filter' });
     const acc = req.user!.accountId;
-    const where = ['e.account_id = $1'];
-    const args: unknown[] = [acc];
+    // The master account sees the checks of its customers' servers too.
+    const where = ['e.account_id = ANY($1::uuid[])'];
+    const args: unknown[] = [await scopeAccounts(pool, acc)];
     if (f.data.result) {
       args.push(f.data.result);
       where.push(`e.result = $${args.length}`);
@@ -632,8 +671,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!b.success) return reply.code(400).send({ error: 'invalid request' });
     const acc = req.user!.accountId;
     const r = b.data.ids
-      ? await pool.query('DELETE FROM captcha_events WHERE account_id = $1 AND id = ANY($2::bigint[])', [acc, b.data.ids])
-      : await pool.query('DELETE FROM captcha_events WHERE account_id = $1', [acc]);
+      ? await pool.query('DELETE FROM captcha_events WHERE account_id = ANY($1::uuid[]) AND id = ANY($2::bigint[])', [await scopeAccounts(pool, acc), b.data.ids])
+      : await pool.query('DELETE FROM captcha_events WHERE account_id = ANY($1::uuid[])', [await scopeAccounts(pool, acc)]);
     await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.events_deleted', detail: { count: r.rowCount, all: !b.data.ids }, ip: req.ip });
     return { deleted: r.rowCount };
   });
@@ -644,6 +683,6 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!r) return;
     const cur = await load(pool, r.accountId);
     if (cur.version === 0 || cur.version === r.data.version) return { unchanged: true };
-    return { config: { version: cur.version, enabled: cur.config.enabled, url: pageUrl, minutes: cur.config.minutes } };
+    return { config: { version: cur.version, enabled: cur.config.enabled, url: pageUrl, minutes: cur.config.minutes, mode: modeFor(cur.config, r.serverId) } };
   });
 }

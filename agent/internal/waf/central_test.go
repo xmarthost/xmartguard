@@ -139,3 +139,91 @@ func TestCentralRuleOnApache(t *testing.T) {
 		t.Fatalf("normal visitor sent to the CAPTCHA: %d", code)
 	}
 }
+
+// On the website's own address: suspects go to this server's CAPTCHA port
+// and pass with the cookie, without a reload (checked on a real Apache).
+func TestCentralSiteMode(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.LoginURLs = []string{"/wp-login.php"}
+	tok := "0123456789abcdef0123456789abcdef"
+	ct := &Central{URL: "https://captcha.xpguard.org/v", ServerID: "15d69a72-653a-47b6-90f6-fde737bce061", Site: true, Tokens: []string{tok}, HTTPSPort: 7743}
+	out := Render(c, Options{Dir: "/etc/xpguard/waf", Central: ct})
+	for _, want := range []string{
+		"id:7700904", "id:7700907", "id:7700906", "id:7700908",
+		"redirect:https://%{REQUEST_HEADERS.Host}:7743/.xpguard/gate?back=%{REQUEST_URI}",
+		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none,chain"`, `SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:` + tok + `)\s*(?:;|$)" "t:none,chain"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(out, "captcha.xpguard.org/v?s=") || strings.Contains(out, "!@ipMatchFromFile /etc/xpguard/waf/captcha-pass.txt") {
+		t.Error("site mode still sends to the portal's domain or reads the pass list")
+	}
+	// No valid token or port: back to the portal's domain.
+	if out := Render(c, Options{Dir: "/x", Central: &Central{URL: ct.URL, ServerID: ct.ServerID, Site: true, Tokens: []string{"bad token"}, HTTPSPort: 7743}}); !strings.Contains(out, "captcha.xpguard.org/v?s=") {
+		t.Error("site mode without a token")
+	}
+
+	if os.Getenv("XG_DESTRUCTIVE_TESTS") != "1" || os.Geteuid() != 0 {
+		t.Skip("set XG_DESTRUCTIVE_TESTS=1 (as root) for the Apache part")
+	}
+	tg := Detect()
+	if tg.Name != "debian" || !tg.ModSec || exists(tg.IncludeFile) {
+		t.Skipf("needs Debian Apache with mod_security2 and no include, detected %+v", tg)
+	}
+	dir := t.TempDir()
+	os.Chmod(dir, 0o755)
+	os.Chmod(filepath.Dir(dir), 0o755)
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
+	db, _ := store.Open()
+	defer db.Close()
+	st, _ := settings.Load()
+	st.Patch([]byte(`{"waf":{"upload_scan":false,"login_urls":["/wp-login.php"]}}`))
+	ct.Suspects = []string{"127.0.0.1"}
+	m := &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), RulesDir: filepath.Join(dir, "waf"),
+		NoSelfTest: true, Central: func() *Central { return ct }}
+	os.MkdirAll("/var/www/html", 0o755)
+	os.WriteFile("/var/www/html/wp-login.php", []byte("login"), 0o644)
+	defer os.Remove("/var/www/html/wp-login.php")
+	exec.Command("apache2ctl", "start").Run()
+	defer exec.Command("apache2ctl", "stop").Run()
+	defer func() {
+		st.Patch([]byte(`{"waf":{"enabled":false}}`))
+		m.Apply()
+		exec.Command("a2disconf", "xpguard-waf").Run()
+	}()
+	if err := m.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	get := func(cookie string) (int, string) {
+		req, _ := http.NewRequest("GET", "http://127.0.0.1/wp-login.php?redirect_to=/wp-admin/&reauth=1", nil)
+		req.Host = "shop.example.com"
+		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) Firefox/130.0")
+		req.Header.Set("Accept", "text/html,*/*")
+		if cookie != "" {
+			req.Header.Set("Cookie", cookie)
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode, res.Header.Get("Location")
+	}
+	want := "https://shop.example.com:7743/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1"
+	for _, cookie := range []string{"", "wordpress_test_cookie=WP+Cookie+check", "xg_gate=ffffffffffffffffffffffffffffffff"} {
+		if code, loc := get(cookie); code != 302 || loc != want {
+			t.Fatalf("suspect with cookie %q: %d %q", cookie, code, loc)
+		}
+	}
+	// The pass cookie lets the visitor in at once: no reload in between.
+	for _, cookie := range []string{"xg_gate=" + tok, "wordpress_test_cookie=WP+Cookie+check; xg_gate=" + tok} {
+		if code, _ := get(cookie); code != 200 {
+			t.Fatalf("passed visitor (%q) still sent to the CAPTCHA: %d", cookie, code)
+		}
+	}
+}

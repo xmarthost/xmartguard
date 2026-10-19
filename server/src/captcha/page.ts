@@ -16,7 +16,7 @@ export interface PageData {
   /** Address the visitor is seen with here. */
   visitorIp: string;
   /** Request parameters, sent back with the solved check. */
-  params: { s: string; ip: string; h: string; u: string; preview?: boolean } | null;
+  params: { s: string; ip: string; h: string; u: string; preview?: boolean; n?: string } | null;
   /** Cloudflare Turnstile site key ('' = not set up). */
   siteKey: string;
   /** The check: Turnstile, ALTCHA, or Turnstile with ALTCHA when it cannot load. */
@@ -27,6 +27,11 @@ export interface PageData {
   design?: CaptchaDesign;
   /** Seconds counted down before the visitor is sent back (0: at once). */
   countdown?: number;
+  /**
+   * Shown in a frame on the website's own address: once verified, the page
+   * tells that page (postMessage), which sets the pass and goes back.
+   */
+  frame?: boolean;
 }
 
 /**
@@ -138,7 +143,7 @@ export function renderPage(d: PageData): string {
     d.error || !d.params
       ? ''
       : `<script>
-var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
+var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},FRAME=${d.frame ? 'true' : 'false'},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
 function show(t,c){st.className='status'+(c?' '+c:'');st.innerHTML=t}
 // After an error the check is not restarted by itself (it would solve again
 // and repeat the same error): the visitor chooses to try again.
@@ -157,6 +162,8 @@ function back(url){
   var iv=setInterval(function(){left--;nEl.textContent=Math.max(left,0);bar.style.width=(Math.max(left-1,0)/WAIT*100)+'%';
     if(left<=0){clearInterval(iv);location.replace(url)}},1000);
 }
+// In a frame: the website's page reports when the pass could not be set.
+window.addEventListener('message',function(e){if(FRAME&&e.source===window.parent&&e.data&&e.data.xg==='error')fail(e.data.error||'The check could not be confirmed. Please reload the page.')});
 ag.onclick=function(){ag.hidden=true;bd.className='badge';if(usingAltcha){startAltcha()}else{show('Please confirm you are not a robot.');if(window.turnstile)turnstile.reset()}};
 function done(sol){
   show('<span class="spin"></span>Checking…');
@@ -166,6 +173,7 @@ function done(sol){
     if(!x.ok){fail(x.j.error||'The check failed. Please try again.');return}
     if(x.j.preview){stopClock();bd.className='badge done';show('Preview: the check works. A real visitor would now count down and go back to the website.','ok');
       if(WAIT>0){cn.hidden=false;cn.innerHTML='<p>You will be taken back to <b>'+HOST+'</b> in <span class="nw"><span class="n">'+WAIT+'</span> seconds</span></p><div class="bar"><span></span></div>'}return}
+    if(FRAME&&x.j.frame&&window.parent!==window){stopClock();bd.className='badge done';show('Verified. Taking you back to '+HOST+'…','ok');window.parent.postMessage({xg:'pass',n:P.n},'*');return}
     back(x.j.redirect);
   }).catch(function(){fail('Network error. Please try again.')});
 }

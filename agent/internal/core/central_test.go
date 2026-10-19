@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"github.com/xmarthost/xmartguard/agent/internal/captcha"
 	"net"
 	"os"
 	"path/filepath"
@@ -180,5 +181,54 @@ func TestCentralCaptchaAgent(t *testing.T) {
 	}
 	if s := check("198.51.100.9"); s != "blocked" {
 		t.Fatalf("permanent block lifted: %s", s)
+	}
+}
+
+// The portal's check on the websites' own addresses: the portal's config
+// turns it on per server, the WAF gets the cookie pass, and the portal's
+// ticket reaches the CAPTCHA server (only for this server's websites).
+func TestCentralCaptchaOnSite(t *testing.T) {
+	a := newTestAgent(t, `{"waf":{"enabled":true,"login_urls":["/wp-login.php"]}}`)
+	a.Cfg.ServerID = "15d69a72-653a-47b6-90f6-fde737bce061"
+	old := UserDomainsPath
+	UserDomainsPath = filepath.Join(t.TempDir(), "userdomains")
+	defer func() { UserDomainsPath = old }()
+	os.WriteFile(UserDomainsPath, []byte("shop.example.com: shop\n*: nobody\n"), 0o644)
+	h := a.Handlers()
+	ctx := context.Background()
+	ticket := func(host string) error {
+		p, _ := json.Marshal(map[string]string{"ip": "203.0.113.5", "host": host, "nonce": "0123456789abcdef0123456789abcdef"})
+		_, err := h["captcha.ticket"](ctx, p)
+		return err
+	}
+	cfg, _ := json.Marshal(centralConfig{Version: 3, Enabled: true, URL: "https://captcha.xpguard.org/v", Minutes: 30})
+	if _, err := h["captcha.central"](ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if w := a.centralWAF(); w == nil || w.Site {
+		t.Fatalf("site mode without the portal asking for it: %+v", w)
+	}
+	if ticket("shop.example.com") == nil {
+		t.Fatal("ticket taken on the portal's domain")
+	}
+	cfg, _ = json.Marshal(centralConfig{Version: 4, Enabled: true, URL: "https://captcha.xpguard.org/v", Minutes: 30, Mode: "site"})
+	if _, err := h["captcha.central"](ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	w := a.centralWAF()
+	if w == nil || !w.Site || w.HTTPSPort != 7743 || len(w.Tokens) != 2 || w.Tokens[0] != captcha.GateTokens(a.gateSecret, time.Now())[0] {
+		t.Fatalf("site mode %+v", w)
+	}
+	if err := ticket("shop.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if ticket("evil.example") == nil {
+		t.Fatal("ticket for a website that is not here")
+	}
+	// Any other mode word is the portal's domain.
+	cfg, _ = json.Marshal(centralConfig{Version: 5, Enabled: true, URL: "https://captcha.xpguard.org/v", Minutes: 30, Mode: "x"})
+	h["captcha.central"](ctx, cfg)
+	if a.Settings.Get().Captcha.CentralMode != "" {
+		t.Fatal("unknown mode kept")
 	}
 }

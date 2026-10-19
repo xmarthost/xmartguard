@@ -42,7 +42,7 @@ func (a *Agent) gateLoop(ctx context.Context) {
 			continue
 		}
 		day = d
-		if captcha.GateWanted(a.Settings.Get()) {
+		if st := a.Settings.Get(); captcha.GateWanted(st) || captcha.SiteWanted(st) {
 			if err := a.WAF.Apply(); err != nil {
 				a.Log.Warn("WAF re-apply for the login-page CAPTCHA failed", "err", err)
 			}

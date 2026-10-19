@@ -60,13 +60,13 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
   it('is off until the Turnstile keys are saved', async () => {
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5 });
+    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [] });
     expect(g.body.url).toBe('https://captcha.example.org/v');
     const page = await h.app.inject({ method: 'GET', url: link() });
     expect(page.statusCode).toBe(503);
@@ -81,12 +81,12 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(put.status).toBe(200);
     expect(put.body.version).toBe(1);
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5 });
+    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [] });
     expect(JSON.stringify(g.body)).not.toContain('0x4AAAAAAAsecret');
     // Saving without a secret keeps the saved one.
     expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 })).status).toBe(200);
     const a = await agent('/api/agent/captcha/config', { version: 0 });
-    expect(a.body.config).toEqual({ version: 2, enabled: true, url: 'https://captcha.example.org/v', minutes: 60 });
+    expect(a.body.config).toEqual({ version: 2, enabled: true, url: 'https://captcha.example.org/v', minutes: 60, mode: '' });
   });
 
   it('shows the branded page with the site, the address and the check', async () => {
@@ -423,5 +423,78 @@ describe('CAPTCHA page: no passing bots through', () => {
       turnstile.url = old;
       srv.close();
     }
+  });
+});
+
+describe('CAPTCHA on the website’s own address', () => {
+  const nonce = '0123456789abcdef0123456789abcdef';
+  it('turns on per server and tells the server (both ways of getting the setting)', async () => {
+    const commands: { action: string; params: any }[] = [];
+    const before = h.hub.command;
+    h.hub.command = async (id: string, action: string, params: unknown) => {
+      commands.push({ action, params });
+      return before(id, action, params);
+    };
+    try {
+      const put = await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, site_servers: [serverId, '00000000-0000-4000-8000-000000000009'] });
+      expect(put.status).toBe(200);
+      const g = await admin.req('GET', '/api/captcha');
+      // A server this account does not have is dropped.
+      expect(g.body.config.site_servers).toEqual([serverId]);
+      expect(commands.find((c) => c.action === 'captcha.central')?.params.mode).toBe('site');
+      const a = await agent('/api/agent/captcha/config', { version: 0 });
+      expect(a.body.config.mode).toBe('site');
+    } finally {
+      h.hub.command = before;
+    }
+  });
+
+  it('may be framed by that website only, and gives the server a ticket instead of a reload', async () => {
+    const url = `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&n=${nonce}&frame=1&u=/wp-login.php`;
+    const page = await fetch(h.url + url, { headers: { 'cf-connecting-ip': '203.0.113.88' } });
+    const body = await page.text();
+    expect(page.status).toBe(200);
+    expect(page.headers.get('x-frame-options')).toBeNull();
+    expect(page.headers.get('content-security-policy')).toContain('frame-ancestors https://shop.example.com:* https://shop.example.com');
+    expect(body).toContain('FRAME=true');
+    expect(body).toContain(`"n":"${nonce}"`);
+    // Without the frame parameters: no one may frame it.
+    const plain = await fetch(h.url + `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-login.php`, { headers: { 'cf-connecting-ip': '203.0.113.88' } });
+    expect(plain.headers.get('x-frame-options')).toBe('DENY');
+    expect(plain.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    // A site its server does not confirm is never framed.
+    const evil = await fetch(h.url + `/v?s=${serverId}&ip=203.0.113.88&h=paypal.com&n=${nonce}&frame=1&u=/`);
+    expect(evil.status).toBe(404);
+    expect(evil.headers.get('x-frame-options')).toBe('DENY');
+
+    const commands: { action: string; params: any }[] = [];
+    const before = h.hub.command;
+    h.hub.command = async (id: string, action: string, params: unknown) => {
+      commands.push({ action, params });
+      return before(id, action, params);
+    };
+    try {
+      const r = await verify({ s: serverId, ip: '203.0.113.88', h: 'shop.example.com', u: '/wp-login.php', n: nonce, token: 'good-token' }, '203.0.113.88');
+      expect(r.status).toBe(200);
+      expect(r.body.frame).toBe(true);
+      expect(commands.map((c) => c.action)).toEqual(['captcha.ticket']);
+      expect(commands[0].params).toEqual({ ip: '203.0.113.88', host: 'shop.example.com', nonce });
+      // Recorded like any other check.
+      const ev = await admin.req('GET', '/api/captcha/events?q=203.0.113.88');
+      expect(ev.body.events[0]).toMatchObject({ ip: '203.0.113.88', result: 'passed', method: 'turnstile' });
+    } finally {
+      h.hub.command = before;
+    }
+  });
+
+  it('shows the checks of customers’ servers to the master account', async () => {
+    const { rows: acc } = await h.pool.query("INSERT INTO accounts (name) VALUES ('Customer Co') RETURNING id");
+    const { rows: srv } = await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'cust-1', 'x') RETURNING id", [acc[0].id]);
+    await h.pool.query("INSERT INTO captcha_events (account_id, server_id, ip, host, result, method) VALUES ($1, $2, '198.51.100.201', 'customer-site.example', 'failed', 'altcha')", [acc[0].id, srv[0].id]);
+    const ev = await admin.req('GET', '/api/captcha/events?q=customer-site.example');
+    expect(ev.body.total).toBe(1);
+    expect(ev.body.events[0]).toMatchObject({ server: 'cust-1', result: 'failed' });
+    const g = await admin.req('GET', '/api/captcha');
+    expect(g.body.last24h.failed).toBeGreaterThan(0);
   });
 });

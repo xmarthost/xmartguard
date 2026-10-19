@@ -53,6 +53,9 @@ import (
 
 // Agent holds every module.
 type Agent struct {
+	// gateSecret signs the CAPTCHA pass cookie (login-page CAPTCHA and the
+	// portal's check on the website's own address).
+	gateSecret []byte
 	// settingsApply applies saved settings in the background; syncSettings
 	// (tests) applies them before settings.set answers.
 	settingsApply settingsApply
@@ -219,6 +222,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			return out
 		}}
 	gateSecret := loadGateSecret(db)
+	a.gateSecret = gateSecret
 	a.Captcha = &captcha.Server{Settings: st, Log: log, GateSecret: gateSecret, ServerID: cfg.ServerID, Solved: func(ip string) error {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
@@ -235,6 +239,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			return &waf.Gate{Tokens: captcha.GateTokens(gateSecret, time.Now()), HTTPPort: cur.Captcha.HTTPPort, HTTPSPort: cur.Captcha.HTTPSPort}
 		}}
 	a.WAF.Central = a.centralWAF
+	a.Captcha.Passed = a.centralLiftBan
 	a.WAF.OnBotBlocked = a.onBotBlocked
 	a.CMS = &cms.Manager{Zone: func() *time.Location { return scanner.ScheduleZone(st.Get().Scanner.ScheduleTZ) }, DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
 		Accounts: func() []cms.Account {

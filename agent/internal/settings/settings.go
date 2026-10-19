@@ -159,6 +159,11 @@ type Captcha struct {
 	Central        bool   `json:"central"`
 	CentralURL     string `json:"central_url"`
 	CentralMinutes int    `json:"central_minutes"`
+	// CentralMode is where the portal's check is shown: "" on the portal's
+	// CAPTCHA domain, "site" on the website's own address (this server's
+	// CAPTCHA port, the check in a full-page frame). A pass on the
+	// website's address is a cookie: the web server is not reloaded.
+	CentralMode string `json:"central_mode"`
 }
 
 // AI gives files a second opinion ("AI scanner"). The default provider is

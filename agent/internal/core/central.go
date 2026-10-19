@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -35,6 +36,8 @@ type centralConfig struct {
 	Enabled bool   `json:"enabled"`
 	URL     string `json:"url"`
 	Minutes int    `json:"minutes"`
+	// Mode "site": the check is shown on the websites' own addresses.
+	Mode string `json:"mode"`
 }
 
 const (
@@ -61,6 +64,9 @@ func (a *Agent) centralWAF() *waf.Central {
 	// The login-page CAPTCHA for everyone uses the portal's page too.
 	all := captcha.GateWanted(cur)
 	w := &waf.Central{URL: c.CentralURL, ServerID: a.Cfg.ServerID, All: all, Pass: a.centralPassList()}
+	if captcha.SiteWanted(cur) {
+		w.Site, w.Tokens, w.HTTPSPort = true, captcha.GateTokens(a.gateSecret, time.Now()), c.HTTPSPort
+	}
 	if !all {
 		w.Suspects = a.centralSuspects()
 	}
@@ -317,8 +323,12 @@ func (a *Agent) applyCentralConfig(ctx context.Context, c centralConfig) error {
 	if c.Enabled && (err != nil || u.Scheme != "https" || u.Host == "") {
 		return fmt.Errorf("invalid CAPTCHA page address %q", c.URL)
 	}
+	mode := ""
+	if c.Mode == "site" {
+		mode = "site"
+	}
 	patch, _ := json.Marshal(map[string]any{"captcha": map[string]any{
-		"central": c.Enabled, "central_url": c.URL, "central_minutes": c.Minutes}})
+		"central": c.Enabled, "central_url": c.URL, "central_minutes": c.Minutes, "central_mode": mode}})
 	if _, err := a.setSettings(ctx, patch, ""); err != nil {
 		return err
 	}
@@ -441,5 +451,28 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 			minutes = in.Minutes
 		}
 		return map[string]any{"ok": true, "minutes": minutes}, nil
+	}
+	// captcha.ticket: the visitor solved the portal's check shown on the
+	// website's own address. The page there trades the ticket for the pass
+	// cookie: no web server reload, so the visitor is back at once.
+	h["captcha.ticket"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IP    string `json:"ip"`
+			Host  string `json:"host"`
+			Nonce string `json:"nonce"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if !captcha.SiteWanted(a.Settings.Get()) {
+			return nil, errors.New("the check is not shown on the websites' own addresses on this server")
+		}
+		if !a.siteHere(in.IP, in.Host) {
+			return nil, fmt.Errorf("%s is not a website on this server", in.Host)
+		}
+		if !a.Captcha.AddTicket(in.Nonce, in.IP) {
+			return nil, errors.New("invalid ticket")
+		}
+		return map[string]any{"ok": true}, nil
 	}
 }

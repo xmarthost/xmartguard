@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.24** (see `VERSION`).
+- Current release: **0.22.25** (see `VERSION`).
 
 ## Working rules
 
@@ -206,6 +206,20 @@ project. It holds the rules, the current state and what is still open.
   still in progress (same link, visitor and solution) the first request's
   answer. Proxy setting: External App `xpguard_portal` Initial Request
   Timeout 120 (more than the portal's 90 s).
+- **CAPTCHA on the website's own address** (0.22.25): CAPTCHA Page »
+  "Where the check opens" picks per server (`site_servers`): portal address
+  (recaptcha.world, pass list + web server reload) or the website's own
+  address (`central_mode: "site"`). Site mode: the WAF sends a suspect to
+  `https://<host>:<CAPTCHA HTTPS port>/.xpguard/gate?back=`, the agent page
+  shows the portal check in a borderless full-window frame (`&n=&frame=1`;
+  portal sets frame-ancestors for that host only), the portal verifies,
+  records the event and sends `captcha.ticket` (nonce, IP; single use,
+  10 min); the frame postMessages the parent, which POSTs `/.xpguard/pass`
+  and gets the `xg_gate` cookie (daily `GateTokens`, rules 7700907/7700908
+  check it), so no reload. Lifts a temp ban too. Sites behind the
+  Cloudflare proxy cannot reach port 7743: keep those servers on the portal
+  address. Also: CAPTCHA events and stats now use `scopeAccounts`, so the
+  master sees customer-bought servers' passes and fails.
 - **Plugin zips judged like the installed plugin** (0.22.16): on s5,
   `Archive.PHP.Obfuscated.PackedOneLiner` was paused after 911
   quarantines of one file, WP-CLI's download cache

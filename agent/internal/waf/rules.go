@@ -122,6 +122,11 @@ const (
 	// IDCentralNoBrowser: a suspicious address that is not a browser opening
 	// a page (xmlrpc.php posts, scripts) gets a 403, not the CAPTCHA page.
 	IDCentralNoBrowser = 7700906
+	// On the website's own address (Central.Site) the pass is a cookie:
+	// IDCentralGate and IDCentralNoBrowser then test a missing cookie,
+	// these two a wrong or expired one.
+	IDCentralGateBadCookie      = 7700907
+	IDCentralNoBrowserBadCookie = 7700908
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -370,6 +375,12 @@ type Central struct {
 	All      bool
 	Suspects []string
 	Pass     []string
+	// Site shows the check on the website's own address: suspects go to
+	// this server's CAPTCHA port (HTTPSPort) and pass with a cookie that
+	// holds one of Tokens (no web server reload for a pass).
+	Site      bool
+	Tokens    []string
+	HTTPSPort int
 }
 
 // Files the central CAPTCHA rule reads.
@@ -472,6 +483,9 @@ func Render(c settings.WAF, o Options) string {
 		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,setvar:tx.xg_trusted=1,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d-%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
 			o.Dir, FileTrustedIPs, IDTrusted, IDBadBots, IDSEOBots, IDCustomBots, IDFakeSearchBot, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000, IDXMLRPCGet,
 			IDGateNoCookie, IDCentralGate, IDSoftCaptcha, IDSoftDeny, IDNoUAPost)
+		// The same for the second rule of the CAPTCHA on the website's own address.
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+			o.Dir, FileTrustedIPs, IDTrusted+2000, IDGateBadCookie, IDCentralGateBadCookie, IDCentralNoBrowserBadCookie)
 		// LiteSpeed ignores ctl:ruleRemoveById, so the bot rules also test
 		// tx.xg_trusted. Behind Cloudflare the visitor is CF-Connecting-IP,
 		// which Cloudflare sets itself (X-Forwarded-For can be forged).
@@ -695,24 +709,57 @@ func Render(c settings.WAF, o Options) string {
 		// page last: it may hold "&"). Logged, not counted as an attack.
 		// Only a browser opening a page (it accepts HTML) is sent to the
 		// CAPTCHA page; bots and scripts (xmlrpc.php posts) get a 403.
-		gateRule := func(id int, action, msg, browser string) {
+		// The visitor has not passed yet: not on the pass list, or (on the
+		// website's own address) without a valid pass cookie, missing or
+		// wrong (two rules: what LiteSpeed's engine runs too).
+		type notPassed struct {
+			gate, deny int
+			cond       string
+		}
+		var pending []notPassed
+		var toks []string
+		for _, t := range ct.Tokens {
+			if reGateToken.MatchString(t) {
+				toks = append(toks, t)
+			}
+		}
+		site := ct.Site && len(toks) > 0 && ct.HTTPSPort > 0 && ct.HTTPSPort < 65536
+		if site {
+			pass := fmt.Sprintf(`(?:^|;)\s*%s=(?:%s)\s*(?:;|$)`, GateCookie, strings.Join(toks, "|"))
+			pending = []notPassed{
+				{IDCentralGate, IDCentralNoBrowser, `SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none`},
+				{IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, fmt.Sprintf(`SecRule REQUEST_HEADERS:Cookie "!@rx %s" "t:none`, pass)},
+			}
+		} else {
+			pending = []notPassed{{IDCentralGate, IDCentralNoBrowser, fmt.Sprintf(`SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none`, o.Dir, FileCaptchaPass)}}
+		}
+		gateRule := func(id int, cond, action, msg, browser string) {
 			w(`SecRule REQUEST_FILENAME "@rx (?:%s)$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,%s,log,msg:'%s',tag:'xpguard/captcha',chain"`,
 				strings.Join(urls, "|"), id, action, msg)
 			if !ct.All {
 				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
 			}
 			if browser == "" {
-				w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileCaptchaPass)
+				w(`  %s"`, cond)
 				return
 			}
-			w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaPass)
+			w(`  %s,chain"`, cond)
 			w(`  SecRule REQUEST_HEADERS:Accept "%s" "t:none,t:lowercase"`, browser)
 		}
-		gateRule(IDCentralGate, fmt.Sprintf("redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI}", ct.URL, ct.ServerID),
-			"xPGuard - suspicious visitor sent to the CAPTCHA", "@contains text/html")
+		redirect := fmt.Sprintf("redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI}", ct.URL, ct.ServerID)
+		if site {
+			// This server's CAPTCHA port on the same address: the page there
+			// shows the portal's check and sets the pass cookie.
+			redirect = fmt.Sprintf("redirect:https://%%{REQUEST_HEADERS.Host}:%d/.xpguard/gate?back=%%{REQUEST_URI}", ct.HTTPSPort)
+		}
+		for _, p := range pending {
+			gateRule(p.gate, p.cond, redirect, "xPGuard - suspicious visitor sent to the CAPTCHA", "@contains text/html")
+		}
 		// After the redirect: whatever it did not send away (also requests
 		// without an Accept header) is not a browser.
-		gateRule(IDCentralNoBrowser, "deny,status:403", "xPGuard - suspicious visitor blocked (not a browser)", "")
+		for _, p := range pending {
+			gateRule(p.deny, p.cond, "deny,status:403", "xPGuard - suspicious visitor blocked (not a browser)", "")
+		}
 	}
 	if c.Webshell {
 		rule(IDWebshell, `SecRule REQUEST_FILENAME "@rx /(?:%s)[0-9]?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell request blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(WebshellNames), "|"), IDWebshell)
@@ -889,7 +936,7 @@ func Render(c settings.WAF, o Options) string {
 		// LiteSpeed ignores the trusted rule's ctl:ruleRemoveById: the
 		// rules it removes also test tx.xg_trusted.
 		out = guardChains(out, `SecRule &TX:xg_trusted "@eq 0" "t:none,chain"`, IDRootProbe, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000,
-			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot)
+			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot)
 	}
 	// Same for the shop filter rules' same-origin exemption (IDShopScrape+2000;
 	// a negated header test would not match a request without the header).

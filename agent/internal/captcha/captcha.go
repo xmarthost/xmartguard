@@ -50,8 +50,12 @@ type Server struct {
 	// page is on (settings Captcha.Central), visitors are sent there
 	// instead of this server's own page.
 	ServerID string
+	// Passed is called when a visitor solved the portal's check on the
+	// website's own address (lifts a temporary ban).
+	Passed func(ip string)
 
 	key      []byte
+	tickets  map[string]ticket
 	mu       sync.Mutex
 	attempts map[string][]time.Time
 	running  [2]*http.Server
@@ -79,7 +83,14 @@ func (s *Server) Run(ctx context.Context) {
 
 // Wanted reports whether any CAPTCHA option is on.
 func Wanted(st settings.Settings) bool {
-	return st.Firewall.Enabled && (st.Firewall.Captcha || (st.IPDB.Enabled && st.IPDB.Captcha)) || GateWanted(st)
+	return st.Firewall.Enabled && (st.Firewall.Captcha || (st.IPDB.Enabled && st.IPDB.Captcha)) || GateWanted(st) || SiteWanted(st)
+}
+
+// SiteWanted reports whether the portal's check is shown on the websites'
+// own addresses (settings Captcha.CentralMode "site").
+func SiteWanted(st settings.Settings) bool {
+	c := st.Captcha
+	return c.Central && c.CentralURL != "" && c.CentralMode == "site" && st.WAF.Enabled
 }
 
 // GateWanted reports whether the login pages show the CAPTCHA.
@@ -210,6 +221,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	if SiteWanted(s.Settings.Get()) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == pathPrefix+"pass":
+			s.sitePass(w, r, ip)
+		case r.URL.Path == pathPrefix+"gate" || r.URL.Path == legacyPrefix+"gate":
+			back := "/"
+			if i := strings.Index(r.URL.RawQuery, "back="); i >= 0 {
+				back = r.URL.RawQuery[i+5:]
+			}
+			s.sitePage(w, r, ip, back, http.StatusOK)
+		default:
+			// A banned visitor (the firewall sends it here), on any page.
+			s.sitePage(w, r, ip, r.URL.RequestURI(), http.StatusForbidden)
+		}
+		return
+	}
 	if to := s.centralURL(r, ip); to != "" {
 		http.Redirect(w, r, to, http.StatusFound)
 		return

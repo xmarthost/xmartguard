@@ -91,9 +91,11 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   });
   await app.register(websocket, { options: { maxPayload: 4 * 1024 * 1024 } });
 
-  app.addHook('onSend', async (_req, reply) => {
+  app.addHook('onSend', async (req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff');
-    reply.header('X-Frame-Options', 'DENY');
+    // The CAPTCHA page shown in a frame on a website's own address says
+    // who may frame it in its CSP (frame-ancestors); everything else: no one.
+    if (!(req as { xgFrame?: boolean }).xgFrame) reply.header('X-Frame-Options', 'DENY');
     reply.header('Referrer-Policy', 'same-origin');
   });
 

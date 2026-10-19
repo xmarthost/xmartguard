@@ -7,7 +7,7 @@ import { Card, Pager, SettingRow, Toggle, useAction } from '../components/contro
 import { useApi } from '../hooks';
 
 interface Resp {
-  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean; design?: Design; countdown?: number };
+  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean; design?: Design; countdown?: number; site_servers?: string[] };
   version: number;
   updated_at: string | null;
   url: string;
@@ -69,6 +69,8 @@ export default function CaptchaPage() {
   const [strictIP, setStrictIP] = useState(false);
   const [design, setDesign] = useState<Design>('classic');
   const [countdown, setCountdown] = useState(5);
+  const [siteServers, setSiteServers] = useState<string[]>([]);
+  const [filter, setFilter] = useState('');
 
   useEffect(() => {
     if (!res.data) return;
@@ -79,6 +81,7 @@ export default function CaptchaPage() {
     setStrictIP(Boolean(res.data.config.strict_ip));
     setDesign(res.data.config.design ?? 'classic');
     setCountdown(res.data.config.countdown ?? 5);
+    setSiteServers(res.data.config.site_servers ?? []);
     setSecret('');
   }, [res.data]);
 
@@ -93,12 +96,13 @@ export default function CaptchaPage() {
     provider !== (d.config.provider ?? 'auto') ||
     strictIP !== Boolean(d.config.strict_ip) ||
     design !== (d.config.design ?? 'classic') ||
-    countdown !== (d.config.countdown ?? 5);
+    countdown !== (d.config.countdown ?? 5) ||
+    [...siteServers].sort().join() !== [...(d.config.site_servers ?? [])].sort().join();
   const online = d.servers.filter((s) => s.online).length;
   const preview = d.servers[0] ? `${d.url}?s=${d.servers[0].id}&preview=1` : '';
   const save = () =>
     run(
-      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP, design, countdown }).then((r) => (res.reload(), r)),
+      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP, design, countdown, site_servers: siteServers }).then((r) => (res.reload(), r)),
       (r) => `Saved: applied on ${r.pushed} online server${r.pushed === 1 ? '' : 's'}${r.offline ? `; ${r.offline} offline will follow when they reconnect` : ''}`,
     );
 
@@ -207,6 +211,50 @@ export default function CaptchaPage() {
             </a>
           )}
         </div>
+      </Card>
+
+      <Card
+        title="Where the check opens"
+        desc="Per server. Portal address: the visitor goes to the page address above and comes back after the check. Website's own address: the visitor stays on the website's own address (on the server's CAPTCHA port) and the same check shows there, full window, with no frame or border to see; the pass is a cookie, so the web server is not reloaded and the visitor is back at once. Passed and failed checks are listed below either way."
+      >
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-2.5 left-2.5 h-4 w-4 text-slate-400" />
+            <input className="input w-64 pl-8" placeholder="Find a server" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Find a server" />
+          </div>
+          <span className="text-xs text-slate-500">
+            On the website's own address: <b className="text-navy-900">{siteServers.length}</b> of {d.servers.length}
+          </span>
+        </div>
+        <div className="mt-3 max-h-80 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
+          {d.servers
+            .filter((x) => x.hostname.toLowerCase().includes(filter.trim().toLowerCase()))
+            .map((x) => {
+              const site = siteServers.includes(x.id);
+              return (
+                <div key={x.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${x.online ? 'bg-emerald-500' : 'bg-slate-300'}`} title={x.online ? 'Online' : 'Offline'} />
+                    <span className="truncate font-medium text-navy-900">{x.hostname}</span>
+                  </span>
+                  <select
+                    className="input w-60"
+                    value={site ? 'site' : 'portal'}
+                    disabled={!admin || busy}
+                    aria-label={`Where the check opens on ${x.hostname}`}
+                    onChange={(e) => setSiteServers((v) => (e.target.value === 'site' ? [...v.filter((y) => y !== x.id), x.id] : v.filter((y) => y !== x.id)))}
+                  >
+                    <option value="portal">Portal address</option>
+                    <option value="site">Website's own address</option>
+                  </select>
+                </div>
+              );
+            })}
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Website's own address needs the server's WAF on and its CAPTCHA HTTPS port (shown in Firewall » CAPTCHA, 7743 by default) reachable. Websites behind the Cloudflare
+          proxy cannot reach that port, so keep the portal address on servers whose websites use the Cloudflare proxy.
+        </p>
       </Card>
 
       <Card title="Look" desc="How the page looks to visitors. An animation runs while the check is done; once verified the page counts the seconds down and sends the visitor back.">
