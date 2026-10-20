@@ -80,9 +80,16 @@ export function withoutMalwareExpert<T extends { vendors: { id: string; url: str
   return { ...c, vendors: c.vendors.filter((v) => !isMalwareExpert(v)), remote: c.remote.filter((r) => !isMalwareExpert(r)) };
 }
 
-/** Whether a feed or vendor applies to a server. */
-export function linkedTo(item: { servers?: string[] }, serverId: string): boolean {
-  return !item.servers?.length || item.servers.includes(serverId);
+/**
+ * Whether a server receives a licensed feed or vendor: a remote feed's key,
+ * or a vendor link with a query (where licences go), is the operator's
+ * secret, and a customer has root on their server. With no servers chosen
+ * these go to the platform's own servers only; a customer's server gets
+ * them only when the operator lists it.
+ */
+export function licensedTo(item: { servers?: string[]; key?: string; url: string }, serverId: string, platformServer: boolean): boolean {
+  if (item.servers?.length) return item.servers.includes(serverId);
+  return platformServer || (!item.key && !item.url.includes('?'));
 }
 
 export const RuleSetsConfig = z.object({

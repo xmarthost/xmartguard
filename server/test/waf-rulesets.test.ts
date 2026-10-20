@@ -171,6 +171,39 @@ describe('remote rule feeds', () => {
     const bad = await admin.req('PUT', '/api/waf/rulesets', config({ remote: [{ ...remote[0], key: 'x" exec' }] }));
     expect(bad.status).toBe(400);
   });
+
+  it("keeps licence keys off customers' servers unless the operator links them", async () => {
+    const ck = crypto.generateKeyPairSync('ed25519');
+    const cpub = ck.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    const { rows: acc } = await h.pool.query("INSERT INTO accounts (name) VALUES ('WAF Customer') RETURNING id");
+    const { rows: srv } = await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'cust-waf', $2) RETURNING id", [acc[0].id, cpub]);
+    const asCustomer = async () => {
+      const raw = JSON.stringify({ version: 0, crs_version: '' });
+      const ts = String(Math.floor(Date.now() / 1000));
+      const signature = crypto.sign(null, Buffer.from(envelopeMessage(srv[0].id, ts, raw)), ck.privateKey).toString('base64');
+      const r = await fetch(h.url + '/api/agent/waf/config', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ server_id: srv[0].id, ts, signature, payload: raw }) });
+      return (await r.json()).config;
+    };
+    const remote = [{ id: 'feed', name: 'Licensed feed', key: 'LICENSE-KEY-9876', url: 'https://rules.example/modsec.conf', enabled: true }];
+    const vendors = [
+      { id: 'plain', name: 'Plain vendor', url: 'https://waf.example/meta.yaml', enabled: true },
+      { id: 'keyed', name: 'Keyed vendor', url: 'https://waf.example/meta.yaml?license=VENDOR-LICENSE', enabled: true },
+    ];
+    expect((await admin.req('PUT', '/api/waf/rulesets', config({ remote, vendors }))).status).toBe(200);
+    let c = await asCustomer();
+    expect(JSON.stringify(c)).not.toContain('LICENSE-KEY-9876');
+    expect(JSON.stringify(c)).not.toContain('VENDOR-LICENSE');
+    expect(c.vendors.map((v: { id: string }) => v.id)).toEqual(['plain']);
+    // The platform's own server still gets everything.
+    const own = (await agent('/api/agent/waf/config', { version: 0, crs_version: '' })).body.config;
+    expect(own.remote[0].key).toBe('LICENSE-KEY-9876');
+    expect(own.vendors).toHaveLength(2);
+    // Linked by the operator: sent.
+    const g = await admin.req('GET', '/api/waf/rulesets');
+    expect((await admin.req('PUT', '/api/waf/rulesets', { ...g.body.config, remote: g.body.config.remote.map((r: object) => ({ ...r, servers: [srv[0].id] })) })).status).toBe(200);
+    c = await asCustomer();
+    expect(c.remote[0].key).toBe('LICENSE-KEY-9876');
+  });
 });
 
 describe('linking feeds to servers', () => {
