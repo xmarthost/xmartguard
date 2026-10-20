@@ -970,8 +970,18 @@ func Render(c settings.WAF, o Options) string {
 		}
 	}
 	if c.IPDBPost && !off[IDIPDBPost] {
-		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_api=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
-			reAPIHeader.String(), IDIPDBPostAPI, IDIPDBPost, IDIPDBPost+1000, IDIPDBPost+3000)
+		// An API header alone costs a bot nothing: the call must also look
+		// like one (no cookies, an API, webhook or callback path, or the
+		// REST API / WooCommerce API of the front controller, +1000), so
+		// logins, comments and contact forms stay refused.
+		api := func(id int, path string) {
+			w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, reAPIHeader.String(), id)
+			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
+			w(`  %s,setvar:tx.xg_api=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, path, IDIPDBPost, IDIPDBPost+1000, IDIPDBPost+3000)
+		}
+		api(IDIPDBPostAPI, `SecRule REQUEST_FILENAME "@rx `+apiPath+`" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase`)
+		api(IDIPDBPostAPI+1000, `SecRule ARGS_GET_NAMES "@rx ^(?:rest_route|wc-api)$" "t:none,t:lowercase,chain"`+"\n"+
+			`  SecRule REQUEST_FILENAME "@rx (?:^|/)(?:index\.php)?$" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase`)
 		rblRule(IDIPDBPost, true, FileIPDBIPs, "POST from an IPDB-listed address blocked", "")
 	}
 	switch TorMode(c.TorAction, o.Central != nil && o.Gate == nil) {
@@ -1109,6 +1119,10 @@ func quoteAll(l []string) []string {
 	}
 	return out
 }
+
+// apiPath: paths of API calls, webhooks and payment callbacks (not
+// wp-login.php, xmlrpc.php, comment or contact form scripts).
+const apiPath = `/(?:wp-json|api|apis|webhooks?|hooks?|callbacks?|ipn|notify|notifications?|oauth|rest|graphql|v[0-9]+)(?:/|$)|/(?:api|webhook|callback|ipn|notify)[^/]*\.php(?:/|$)`
 
 // reAPIHeader: header names (lowercase) of authenticated API calls and
 // signed webhooks; such calls skip the IPDB POST rule.
