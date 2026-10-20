@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 
@@ -125,6 +128,32 @@ describe('downloads', () => {
       const u = await c.req('GET', `/${name}`);
       expect(u.status).toBe(200);
       expect(u.body).toMatch(/^#!\/usr\/bin\/env bash/);
+    }
+  });
+
+  it('streams agent binaries instead of reading them into memory', async () => {
+    // A sparse 3 GiB file: fs.readFile refuses anything over 2 GiB, so only a
+    // streamed download can serve it (and it takes no disk space).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xg-dl-'));
+    const big = path.join(dir, 'xpguard-agent-linux-arm64');
+    fs.writeFileSync(big, '');
+    fs.truncateSync(big, 3 * 1024 ** 3);
+    fs.writeFileSync(path.join(dir, 'xpguard-agent-linux-amd64.sha256'), 'abc  xpguard-agent-linux-amd64\n');
+    const old = h.cfg.downloadsDir;
+    h.cfg.downloadsDir = dir;
+    try {
+      const ctl = new AbortController();
+      const r = await fetch(h.url + '/downloads/xpguard-agent-linux-arm64', { signal: ctl.signal, headers: { 'accept-encoding': 'identity' } });
+      expect(r.status).toBe(200);
+      expect(r.headers.get('content-length')).toBe(String(3 * 1024 ** 3));
+      ctl.abort();
+      const s = await fetch(h.url + '/downloads/xmartguard-agent-linux-amd64.sha256');
+      expect(s.status).toBe(200);
+      expect(await s.text()).toBe('abc  xpguard-agent-linux-amd64\n');
+      expect((await fetch(h.url + '/downloads/xpguard-agent-linux-amd64')).status).toBe(404);
+    } finally {
+      h.cfg.downloadsDir = old;
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
