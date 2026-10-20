@@ -158,7 +158,11 @@ export function ManualScans() {
   const { user } = useAuth();
   const [offset, setOffset] = useState(0);
   const pageSize = 25;
-  const scans = useAgent<{ scans: Scan[]; total?: number; last_full?: Scan }>(id, 'scan.list', { limit: pageSize, offset }, 3000);
+  // Every 3 s while a scan runs or waits, every 30 s otherwise.
+  const [active, setActive] = useState(true);
+  const scans = useAgent<{ scans: Scan[]; total?: number; last_full?: Scan }>(id, 'scan.list', { limit: pageSize, offset }, active ? 3000 : 30_000);
+  const anyActive = !scans.data || scans.data.scans.some((s) => s.status === 'running' || s.status === 'queued');
+  useEffect(() => setActive(anyActive), [anyActive]);
   const paths = useAgent<{ users: HostingUser[] }>(id, 'scanner.paths');
   const { run, busy } = useAction();
   const [quick, setQuick] = useState('');
@@ -351,7 +355,11 @@ function ReportCard({ icon, children }: { icon: React.ReactNode; children: React
 
 /** cPGuard-style report header for one scan. */
 function ScanReport({ serverId, scanId }: { serverId: string; scanId: number }) {
-  const r = useAgent<ScanReportData>(serverId, 'scan.report', { id: scanId }, 5000);
+  // Polled only while the scan runs: a finished report does not change.
+  const [done, setDone] = useState(false);
+  const r = useAgent<ScanReportData>(serverId, 'scan.report', { id: scanId }, done ? undefined : 5000);
+  const finished = !!r.data && r.data.scan.status !== 'running' && r.data.scan.status !== 'queued';
+  useEffect(() => setDone(finished), [finished]);
   if (!r.data) return r.error ? <ErrorBox message={r.error} /> : <SectionLoader />;
   const d = r.data;
   const sc = d.scan;

@@ -93,6 +93,7 @@ export default function ServerIPDB() {
     setSeries([]);
     const load = async () => {
       if (busy) return; // never stack requests on a slow link
+      if (document.hidden && tick > 0) return; // a background tab does not poll
       busy = true;
       try {
         const wantStatus = tick++ % 10 === 0;
