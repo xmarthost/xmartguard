@@ -158,3 +158,19 @@ func TestPatchDoesNotWriteIntoSharedLists(t *testing.T) {
 		t.Fatal("non-object accepted")
 	}
 }
+
+// Audit A3 F6: login URLs that would add text to a WAF rule are refused.
+func TestLoginURLsChecked(t *testing.T) {
+	s := Defaults()
+	s.WAF.LoginURLs = []string{"my-login.php"}
+	normalize(&s)
+	if err := validate(s); err != nil || s.WAF.LoginURLs[0] != "/my-login.php" {
+		t.Fatalf("%v %v", err, s.WAF.LoginURLs)
+	}
+	for _, bad := range []string{`/a" "id:1,exec:/x`, "/b c", "/x|y"} {
+		s.WAF.LoginURLs = []string{bad}
+		if validate(s) == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

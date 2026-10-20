@@ -312,6 +312,20 @@ var (
 	reExclPath   = regexp.MustCompile(`^/[A-Za-z0-9._~/-]*$`)
 )
 
+var reLoginURL = regexp.MustCompile(`^/[A-Za-z0-9._~%/-]{1,200}$`)
+
+// ValidLoginURL reports a login page path usable in the WAF rules.
+func ValidLoginURL(u string) bool { return reLoginURL.MatchString(u) }
+
+// ValidAddr reports an IP address or network.
+func ValidAddr(a string) bool {
+	if net.ParseIP(a) != nil {
+		return true
+	}
+	_, _, err := net.ParseCIDR(a)
+	return err == nil
+}
+
 // ValidDomain reports a website name usable in an exclusion
 // ("*.example.com" for its subdomains).
 func ValidDomain(d string) bool {
@@ -763,6 +777,11 @@ func normalize(s *Settings) {
 	for _, p := range []*string{&s.Firewall.TCPIn, &s.Firewall.UDPIn, &s.Firewall.TCPOut, &s.Firewall.UDPOut} {
 		*p = strings.Join(splitPorts(*p), ",")
 	}
+	for i, u := range s.WAF.LoginURLs {
+		if u = strings.TrimSpace(u); u != "" && !strings.HasPrefix(u, "/") {
+			s.WAF.LoginURLs[i] = "/" + u
+		}
+	}
 	s.WAF.LoginURLs = clean(s.WAF.LoginURLs, false)
 	s.WAF.WhitelistDomains = clean(lower(s.WAF.WhitelistDomains), false)
 	// Custom bots of older versions join the Bad Bot blocker list.
@@ -999,7 +1018,8 @@ func validate(s Settings) error {
 		}
 	}
 	for _, u := range s.WAF.LoginURLs {
-		if !strings.HasPrefix(u, "/") || strings.ContainsAny(u, " \"'\\\n") {
+		// It goes into the WAF rules (audit A3 F6).
+		if !ValidLoginURL(u) {
 			return fmt.Errorf("invalid URL path %q (must start with /)", u)
 		}
 	}

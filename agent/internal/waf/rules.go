@@ -10,7 +10,6 @@ package waf
 
 import (
 	"fmt"
-	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -478,6 +477,11 @@ func Render(c settings.WAF, o Options) string {
 		// Low: no blocks by reputation alone.
 		c.IPDBPost, c.TorAction = false, "off"
 	}
+	// Settings are checked when saved; a bad value from elsewhere is
+	// dropped here so it can neither break the file nor add actions.
+	c.WhitelistIPs = filter(c.WhitelistIPs, validAddr)
+	c.WhitelistDomains = filter(c.WhitelistDomains, settings.ValidDomain)
+	c.LoginURLs = filter(c.LoginURLs, settings.ValidLoginURL)
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	w("# xPGuard WAF rules. Managed by the xPGuard agent: changes here are overwritten.")
@@ -1110,12 +1114,16 @@ func modsecAddr(a string) string {
 	return strings.TrimSuffix(a, "/32")
 }
 
-func validAddr(a string) bool {
-	if net.ParseIP(a) != nil {
-		return true
+func validAddr(a string) bool { return settings.ValidAddr(a) }
+
+func filter(l []string, ok func(string) bool) []string {
+	var out []string
+	for _, v := range l {
+		if ok(v) {
+			out = append(out, v)
+		}
 	}
-	_, _, err := net.ParseCIDR(a)
-	return err == nil
+	return out
 }
 
 func quoteAll(l []string) []string {

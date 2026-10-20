@@ -93,3 +93,23 @@ func TestRenderRespectsSettings(t *testing.T) {
 		t.Error("upload scan rendered while disabled")
 	}
 }
+
+// Audit A3 F6: a bad whitelist or login value that bypassed the settings
+// check is dropped, so it can neither break the rules file nor add actions.
+func TestRenderDropsBadSettingValues(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.WhitelistIPs = []string{"198.51.100.7", "example.com", "1.2.3.4/33", `1.2.3.4" "id:1,exec:/x`}
+	c.WhitelistDomains = []string{"ok.example", `x" "id:1,exec:/x`, "bad domain.example"}
+	c.LoginURLs = []string{"/wp-login.php", `/a" "id:1,exec:/x`, "/b c"}
+	r := Render(c, Options{Dir: "/d"})
+	for _, bad := range []string{"example.com,", "/33", "exec:", "bad domain", "/b c"} {
+		if strings.Contains(r, bad) {
+			t.Errorf("rules contain %q", bad)
+		}
+	}
+	for _, good := range []string{`"@ipMatch 198.51.100.7"`, `ok\.example`} {
+		if !strings.Contains(r, good) {
+			t.Errorf("rules miss %q", good)
+		}
+	}
+}
