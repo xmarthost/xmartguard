@@ -118,37 +118,58 @@ func yaraScan(ctx context.Context, files []string, threads int) map[string]strin
 	if bin == "" || len(rules) == 0 || len(files) == 0 {
 		return out
 	}
-	list, err := os.CreateTemp("", "xg-yara-*.lst")
-	if err != nil {
-		return out
-	}
-	defer os.Remove(list.Name())
-	w := bufio.NewWriter(list)
+	// The scan list is one name per line: a name holding a newline would
+	// be read as two (another file scanned, the real one missed), so such
+	// files are scanned one by one.
+	var listed, odd []string
 	for _, f := range files {
-		w.WriteString(f + "\n")
+		if strings.ContainsAny(f, "\n\r") {
+			odd = append(odd, f)
+		} else {
+			listed = append(listed, f)
+		}
 	}
-	w.Flush()
-	list.Close()
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
-	args := append([]string{"-w", "-e", "-p", strconv.Itoa(max(threads, 1)), "--scan-list"}, rules...)
-	args = append(args, list.Name())
-	cmd := bin
-	if p, err := exec.LookPath("ionice"); err == nil {
-		args = append([]string{"-c3", cmd}, args...)
-		cmd = p
+	run := func(target ...string) []byte {
+		args := append([]string{"-w", "-e", "-p", strconv.Itoa(max(threads, 1))}, target[:len(target)-1]...)
+		args = append(append(args, rules...), target[len(target)-1])
+		cmd := bin
+		if p, err := exec.LookPath("ionice"); err == nil {
+			args = append([]string{"-c3", cmd}, args...)
+			cmd = p
+		}
+		if p, err := exec.LookPath("nice"); err == nil {
+			args = append([]string{"-n", "19", cmd}, args...)
+			cmd = p
+		}
+		raw, _ := exec.CommandContext(cctx, cmd, args...).Output()
+		return raw
 	}
-	if p, err := exec.LookPath("nice"); err == nil {
-		args = append([]string{"-n", "19", cmd}, args...)
-		cmd = p
-	}
-	raw, _ := exec.CommandContext(cctx, cmd, args...).Output()
-	for _, line := range bytes.Split(raw, []byte("\n")) {
-		rule, path, ok := strings.Cut(string(line), " ")
-		if ok && rule != "" && path != "" {
-			if _, seen := out[path]; !seen {
-				out[path] = rule
+	if len(listed) > 0 {
+		list, err := os.CreateTemp("", "xg-yara-*.lst")
+		if err != nil {
+			return out
+		}
+		defer os.Remove(list.Name())
+		w := bufio.NewWriter(list)
+		for _, f := range listed {
+			w.WriteString(f + "\n")
+		}
+		w.Flush()
+		list.Close()
+		for _, line := range bytes.Split(run("--scan-list", list.Name()), []byte("\n")) {
+			rule, path, ok := strings.Cut(string(line), " ")
+			if ok && rule != "" && path != "" {
+				if _, seen := out[path]; !seen {
+					out[path] = rule
+				}
 			}
+		}
+	}
+	for _, f := range odd {
+		if rule, _, ok := strings.Cut(string(run(f)), " "); ok && rule != "" {
+			out[f] = rule
 		}
 	}
 	return out

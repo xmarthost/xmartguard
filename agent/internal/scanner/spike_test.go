@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +26,7 @@ func TestSpikePausesSignatureAndBulkActions(t *testing.T) {
 		p := filepath.Join(dir, fmt.Sprintf("site%d", i), "exec.php")
 		os.MkdirAll(filepath.Dir(p), 0o755)
 		os.WriteFile(p, []byte(malicious["exec.php"]+fmt.Sprintf("\n// %d", i)), 0o644)
+		os.Chown(p, 60000+i, 60000+i) // one file in each of five accounts
 		s.ScanFile(p)
 	}
 	list, _, _ := s.ListFindings(FindingFilter{Limit: 10})
@@ -69,5 +72,71 @@ func TestSpikePausesSignatureAndBulkActions(t *testing.T) {
 	}
 	if _, err := s.BulkApply(BulkFilter{Action: "restore"}, nil); err == nil {
 		t.Fatal("bulk without a signature")
+	}
+}
+
+// A2 F13: known malware by exact hash is never paused.
+func TestSpikeSkipsKnownBadHash(t *testing.T) {
+	old := SpikeLimit
+	SpikeLimit = 2
+	t.Cleanup(func() { SpikeLimit = old })
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	body := "<?php echo 'inert known-bad fixture';"
+	sum := sha256.Sum256([]byte(body))
+	os.MkdirAll(filepath.Dir(HashDBPath()), 0o700)
+	os.WriteFile(HashDBPath(), []byte(fmt.Sprintf("%d %s XG-TEST.KnownBad\n", len(body), hex.EncodeToString(sum[:]))), 0o600)
+	ReloadHashDB()
+	t.Cleanup(func() { os.Remove(HashDBPath()); ReloadHashDB() })
+	dir := t.TempDir()
+	for i := 0; i < 6; i++ {
+		p := filepath.Join(dir, fmt.Sprint(i), "x.php")
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+		os.Chown(p, 60000+i, 60000+i)
+		s.ScanFile(p)
+	}
+	if _, n, _ := s.ListFindings(FindingFilter{Status: "quarantined", Limit: 10}); n != 6 || len(s.Paused()) != 0 {
+		t.Fatalf("quarantined %d, paused %+v", n, s.Paused())
+	}
+}
+
+// A2 F13: one account producing many hits of a signature does not pause
+// it for the other accounts (only its own further files wait), and known
+// malware by exact hash is never paused.
+func TestSpikeOneAccountDoesNotPauseServer(t *testing.T) {
+	old := SpikeLimit
+	SpikeLimit = 3
+	t.Cleanup(func() { SpikeLimit = old })
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	var paused []string
+	s.OnSignaturePaused = func(sig string, n int) { paused = append(paused, sig) }
+	dir := t.TempDir()
+	write := func(name string, uid, i int) string {
+		p := filepath.Join(dir, name, fmt.Sprint(i), "exec.php")
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(malicious["exec.php"]+fmt.Sprintf("\n// %s %d", name, i)), 0o644)
+		os.Chown(p, uid, uid)
+		s.ScanFile(p)
+		return p
+	}
+	for i := 0; i < 6; i++ {
+		write("noisy", 65534, i)
+	}
+	other := write("other", 0, 0)
+	if len(paused) != 0 || len(s.Paused()) != 0 {
+		t.Fatalf("one account paused the signature: %v", paused)
+	}
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Fatal("another account's file was not quarantined")
+	}
+	_, waiting, _ := s.ListFindings(FindingFilter{Status: "detected", Limit: 10})
+	if waiting != 3 {
+		t.Fatalf("noisy account's extra files waiting: %d", waiting)
 	}
 }

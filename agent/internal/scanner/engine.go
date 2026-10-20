@@ -45,11 +45,14 @@ type EngineReq struct {
 
 // engineMsg is one line the engine writes on stdout.
 type engineMsg struct {
-	T       string `json:"t"` // total | progress | hit | done
-	N       int64  `json:"n,omitempty"`
-	Done    int    `json:"done,omitempty"` // progress: units finished
-	Unit    string `json:"unit,omitempty"` // progress: the account or folder now
-	Path    string `json:"path,omitempty"`
+	T    string `json:"t"` // total | progress | hit | done
+	N    int64  `json:"n,omitempty"`
+	Done int    `json:"done,omitempty"` // progress: units finished
+	Unit string `json:"unit,omitempty"` // progress: the account or folder now
+	Path string `json:"path,omitempty"`
+	// RawPath is a hit's path as bytes (base64 in JSON): a file name that
+	// is not valid UTF-8 would be changed by a JSON string and not found.
+	RawPath []byte `json:"raw_path,omitempty"`
 	Cat     string `json:"cat,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Recheck bool   `json:"recheck,omitempty"`
@@ -119,8 +122,12 @@ func (s *Scanner) runEngine(ctx context.Context, roots []string, since time.Time
 				h.progress(m.N, m.Path, m.Done, m.Unit)
 			}
 		case "hit":
+			if m.RawPath != nil {
+				m.Path = string(m.RawPath)
+			}
 			info, err := os.Lstat(m.Path)
 			if err != nil {
+				s.Log.Warn("scan engine hit on a file that is gone", "path", m.Path, "signature", m.Name, "err", err)
 				continue
 			}
 			d := Detection{m.Cat, m.Name}
@@ -209,7 +216,7 @@ func RunEngine(ctx context.Context, s *Scanner, in io.Reader, out io.Writer) err
 			// Signature and heuristic hits are checked again by the agent;
 			// symlinks and YARA matches are final.
 			recheck := d.Category != CatSymlink && !strings.HasPrefix(d.Signature, "YARA.")
-			emit(engineMsg{T: "hit", Path: path, Cat: d.Category, Name: d.Signature, Recheck: recheck})
+			emit(engineMsg{T: "hit", RawPath: []byte(path), Cat: d.Category, Name: d.Signature, Recheck: recheck})
 		},
 	})
 	m := engineMsg{T: "done", N: files}

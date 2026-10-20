@@ -160,7 +160,7 @@ func (s *Scanner) Trim(id int64, cuts []Cut, maxPercent int) error {
 	default:
 		return fmt.Errorf("cannot trim a %s file", r.status)
 	}
-	orig, err := os.ReadFile(src)
+	orig, err := readFinding(src)
 	if err != nil {
 		return err
 	}
@@ -228,6 +228,14 @@ func (s *Scanner) Trim(id int64, cuts []Cut, maxPercent int) error {
 // replaceLive keeps the current content (orig) in quarantine and puts
 // replacement live at the finding's path with its original owner and mode.
 func (s *Scanner) replaceLive(id int64, r row, orig, replacement []byte, status string) error {
+	// Written through the pinned folder with a random, exclusively created
+	// temporary name: a link planted at a predictable name or in place of
+	// a folder cannot redirect root's write.
+	p, err := pin(r.path, true)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
 	if err := os.MkdirAll(QuarantineDir(), 0o700); err != nil {
 		return err
 	}
@@ -244,19 +252,7 @@ func (s *Scanner) replaceLive(id int64, r row, orig, replacement []byte, status 
 	if mode == 0 {
 		mode = 0o644
 	}
-	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
-		return err
-	}
-	next := filepath.Join(filepath.Dir(r.path), "."+filepath.Base(r.path)+".xg-new")
-	if err := os.WriteFile(next, replacement, mode); err != nil {
-		return err
-	}
-	if r.uid >= 0 {
-		_ = os.Lchown(next, r.uid, r.gid)
-	}
-	_ = os.Chmod(next, mode)
-	if err := os.Rename(next, r.path); err != nil {
-		os.Remove(next)
+	if err := p.write(bytes.NewReader(replacement), r.uid, r.gid, mode, true); err != nil {
 		return err
 	}
 	return s.setStatus(id, status, backup)
@@ -281,7 +277,7 @@ func (s *Scanner) ReplaceWithOfficial(id int64, official []byte) error {
 	default:
 		return fmt.Errorf("cannot replace a %s file", r.status)
 	}
-	orig, err := os.ReadFile(src)
+	orig, err := readFinding(src)
 	if err != nil {
 		return err
 	}
@@ -330,19 +326,17 @@ func (s *Scanner) Content(id int64, limit int64) ([]byte, bool, error) {
 	if r.status == "deleted" {
 		return nil, false, errors.New("the file was deleted")
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		return nil, false, err
+	return ReadFileLimit(p, limit)
+}
+
+// maxEdit is the largest file Trim and the cleaners read whole.
+const maxEdit = 64 << 20
+
+// readFinding reads a finding's file whole through OpenFile.
+func readFinding(path string) ([]byte, error) {
+	b, more, err := ReadFileLimit(path, maxEdit)
+	if err == nil && more {
+		err = fmt.Errorf("%s is larger than %d MB", path, maxEdit>>20)
 	}
-	defer f.Close()
-	buf := make([]byte, limit+1)
-	n, _ := f.Read(buf)
-	for n < len(buf) {
-		m, err := f.Read(buf[n:])
-		n += m
-		if err != nil {
-			break
-		}
-	}
-	return buf[:min(n, int(limit))], n > int(limit), nil
+	return b, err
 }

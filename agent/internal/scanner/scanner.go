@@ -420,9 +420,10 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 		return d, nil
 	}
+	shapeOK := false
 	if ScriptExts[ext] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
 		var err error
-		if content, err = os.ReadFile(path); err != nil {
+		if content, err = readScanned(path, info, int64(cfg.MaxFileSizeMB)<<20); err != nil {
 			return nil, err
 		}
 		sum := md5.Sum(content)
@@ -432,13 +433,10 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		if s.KnownGoodPath != nil && s.KnownGoodPath(path, sum) {
 			return nil, ErrTrusted
 		}
-		// Softaculous and WP Toolkit login helpers (see hostingtools.go).
-		if trustedHostingTool(path, content) {
-			return nil, ErrTrusted
-		}
-		if translationFile(path, content) {
-			return nil, ErrTrusted
-		}
+		// Softaculous and WP Toolkit login helpers (see hostingtools.go)
+		// and translation files: trusted by shape, but only after the
+		// known-bad hash lookup below.
+		shapeOK = trustedHostingTool(path, content) || translationFile(path, content)
 		if s.Cleared != nil {
 			sum := sha256.Sum256(content)
 			hs := hex.EncodeToString(sum[:])
@@ -466,6 +464,9 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			}
 			return final(&Detection{CatVirus, label})
 		}
+	}
+	if shapeOK {
+		return nil, ErrTrusted
 	}
 	if content != nil {
 		// A program, whatever it is called (also disguised as an image).
@@ -502,7 +503,7 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 		return d, nil
 	}
-	f, err := os.Open(path)
+	f, err := openScanned(path, info)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +518,16 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		return d, err
 	}
 	return nil, nil
+}
+
+// knownBadHash reports a finding whose exact content is in the known-bad
+// hash DB.
+func (s *Scanner) knownBadHash(path string, f *Finding) bool {
+	hdb := activeHashDB()
+	if f.SHA256 == "" || !hdb.SizeKnown(f.Size) {
+		return false
+	}
+	return hdb.LookupSums(f.Size, func() (string, string) { return f.SHA256, md5File(path) }) != ""
 }
 
 // clearedFile reports whether the AI scanner or an administrator cleared
@@ -647,7 +658,7 @@ func homeDepth(parts []string) int {
 }
 
 func md5File(path string) string {
-	f, err := os.Open(path)
+	f, err := openScanned(path, nil)
 	if err != nil {
 		return ""
 	}
@@ -660,7 +671,7 @@ func md5File(path string) string {
 }
 
 func sha256File(path string) string {
-	f, err := os.Open(path)
+	f, err := openScanned(path, nil)
 	if err != nil {
 		return ""
 	}
@@ -721,7 +732,7 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		var qid int64
 		var repeats int64
 		if err := s.DB.QueryRow(`SELECT id, repeats FROM findings WHERE path = ? AND sha256 = ? AND status = 'quarantined' ORDER BY id DESC LIMIT 1`, path, f.SHA256).Scan(&qid, &repeats); err == nil && s.actionFor(d.Category, f.Owner) == settings.ActionQuarantine {
-			if sha256File(path) == f.SHA256 && os.Remove(path) == nil {
+			if sha256File(path) == f.SHA256 && removeFile(path) == nil {
 				repeats++
 				_, _ = s.DB.Exec(`UPDATE findings SET repeats = ?, updated_at = ?, scan_id = CASE WHEN ? > 0 THEN ? ELSE scan_id END WHERE id = ?`, repeats, now, scanID, scanID, qid)
 				f.ID, f.Status, f.Repeats = qid, "quarantined", repeats
@@ -819,7 +830,7 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 	case CatSymlink:
 		action = settings.ActionNotify
 		if cfg.DeleteSymlinks {
-			if err := os.Remove(path); err == nil {
+			if err := removeFile(path); err == nil {
 				f.Status = "deleted"
 				_ = s.setStatus(f.ID, "deleted", "")
 			}
@@ -830,7 +841,12 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 		action = settings.ActionNotify
 	}
 	if action == settings.ActionQuarantine || action == settings.ActionDisable {
-		if ok, paused := s.spikeAllows(d.Signature); !ok {
+		// Known-bad content (exact hash) is never a wrong rule: not paused.
+		ok, paused := true, false
+		if !s.knownBadHash(path, f) {
+			ok, paused = s.spikeAllows(d.Signature, f.Owner)
+		}
+		if !ok {
 			action = settings.ActionNotify
 			f.Note = NotePaused
 			_, _ = s.DB.Exec(`UPDATE findings SET note = ? WHERE id = ?`, NotePaused, f.ID)
@@ -1485,14 +1501,22 @@ func NewOffline() *Scanner {
 	return &Scanner{users: map[uint32]string{}, cancels: map[int64]context.CancelFunc{}, KnownGood: wpcore.Default().Known}
 }
 
-// capHeuristic reports heuristic detections in test suites and PHP archives
-// as suspicious: test code exercises eval, exec and uploads on purpose, and a
-// .phar bundles whole libraries. The AI scanner then confirms them.
-var reBuilderThumbs = regexp.MustCompile(`/wp-content/uploads/(?:master_addons|elementor|envato-elements|templately|starter-templates|astra-sites|ocdi)/`)
+// capHeuristic reports heuristic detections in packages' test suites and in
+// PHP archives as suspicious: test code exercises eval, exec and uploads on
+// purpose, and a .phar bundles whole libraries. The AI scanner then
+// confirms them. A "test" folder of its own in a site (public_html/test/)
+// is where attackers drop shells too, so only a test folder inside a
+// package (a Composer vendor folder, an npm module, a WordPress
+// plugin or theme) is capped.
+var (
+	reBuilderThumbs = regexp.MustCompile(`/wp-content/uploads/(?:master_addons|elementor|envato-elements|templately|starter-templates|astra-sites|ocdi)/`)
+	rePackageTests  = regexp.MustCompile(`/(?:vendor/[^/]+|node_modules/(?:@[^/]+/)?[^/]+|wp-content/(?:plugins|themes)/[^/]+)/(?:[^/]+/)*tests?/`)
+	reComposerPkg   = regexp.MustCompile(`/vendor/[^/]+/[^/]+/`)
+)
 
 func capHeuristic(path, ext string, d *Detection) *Detection {
 	// Composer packages (PHPStan) start from their own .phar.
-	if d.Signature == "PHP.Suspicious.PharInclude" && strings.Contains(path, "/vendor/") {
+	if d.Signature == "PHP.Suspicious.PharInclude" && reComposerPkg.MatchString(path) {
 		return nil
 	}
 	// Template-kit thumbnails page builders download into their own upload
@@ -1503,7 +1527,7 @@ func capHeuristic(path, ext string, d *Detection) *Detection {
 	if d.Category != CatVirus {
 		return d
 	}
-	if ext == ".phar" || strings.Contains(path, "/tests/") || strings.Contains(path, "/test/") {
+	if ext == ".phar" || rePackageTests.MatchString(path) {
 		return &Detection{CatSuspicious, d.Signature}
 	}
 	return d

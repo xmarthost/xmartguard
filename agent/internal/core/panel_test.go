@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/ai"
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/local"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
@@ -228,6 +229,34 @@ func TestPanelSocketIsolatesAccounts(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(alice.HomeDir, "public_html/shell.php")); !os.IsNotExist(err) {
 		t.Fatal("file still in place after quarantine")
 	}
+	// A1 F1: her restore puts the file back but clears nothing for the
+	// server: the same content stays flagged on every account.
+	r = as(alice, "finding.action", map[string]any{"ids": []int64{aliceFinding}, "action": "restore"})
+	if !strings.Contains(string(r.Data), `"done":1`) {
+		t.Fatalf("restore: %+v %s", r, r.Data)
+	}
+	if f, _ := a.Scanner.Get(aliceFinding); f.SHA256 == "" || ai.IsCleared(a.DB, f.SHA256) {
+		t.Fatalf("an account's restore cleared the content server-wide: %+v", f)
+	}
+	// A1 F2: quarantined again, then public_html swapped for her link to a
+	// root folder: the restore must not create the file there.
+	as(alice, "finding.action", map[string]any{"ids": []int64{aliceFinding}, "action": "quarantine"})
+	rootDir := filepath.Join(dir, "rootonly")
+	os.MkdirAll(rootDir, 0o755)
+	aweb := filepath.Join(alice.HomeDir, "public_html")
+	os.Rename(aweb, aweb+".old")
+	auid, _ := strconv.Atoi(alice.Uid)
+	os.Symlink(rootDir, aweb)
+	os.Lchown(aweb, auid, auid)
+	r = as(alice, "finding.action", map[string]any{"ids": []int64{aliceFinding}, "action": "restore"})
+	if strings.Contains(string(r.Data), `"done":1`) {
+		t.Fatalf("restore followed a linked folder: %s", r.Data)
+	}
+	if _, err := os.Lstat(filepath.Join(rootDir, "shell.php")); err == nil {
+		t.Fatal("root wrote the account's file into a linked root folder")
+	}
+	os.Remove(aweb)
+	os.Rename(aweb+".old", aweb)
 	// A system account with no hosting account gets nothing.
 	nobody, err := user.Lookup("nobody")
 	if err == nil {

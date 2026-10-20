@@ -39,32 +39,6 @@ func (s *Scanner) setStatus(id int64, status, qpath string) error {
 	return err
 }
 
-// moveFile renames, falling back to copy+remove across filesystems.
-func moveFile(src, dst string, mode os.FileMode) error {
-	if err := os.Rename(src, dst); err == nil {
-		return nil
-	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(dst)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(dst)
-		return err
-	}
-	return os.Remove(src)
-}
-
 // Quarantine moves a detected (or disabled) file into the root-only quarantine.
 func (s *Scanner) Quarantine(id int64) error {
 	r, err := s.load(id)
@@ -74,12 +48,16 @@ func (s *Scanner) Quarantine(id int64) error {
 	if r.status != "detected" && r.status != "disabled" && r.status != "restored" && r.status != StatusAIRestored {
 		return fmt.Errorf("cannot quarantine a %s file", r.status)
 	}
-	st, err := os.Lstat(r.path)
+	p, err := pin(r.path, false)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrFileGone, r.path)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrFileGone, r.path)
+		}
+		return err
 	}
-	if !st.Mode().IsRegular() {
-		return errors.New("not a regular file")
+	defer p.Close()
+	if _, err := p.lstat(); err != nil {
+		return fmt.Errorf("%w: %s", ErrFileGone, r.path)
 	}
 	dir := QuarantineDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -87,7 +65,7 @@ func (s *Scanner) Quarantine(id int64) error {
 	}
 	_ = os.Chmod(dir, 0o700)
 	dst := filepath.Join(dir, strconv.FormatInt(id, 10)+".q")
-	if err := moveFile(r.path, dst, 0o000); err != nil {
+	if err := p.takeTo(dst); err != nil {
 		return err
 	}
 	_ = os.Chmod(dst, 0o000)
@@ -104,50 +82,66 @@ func (s *Scanner) Disable(id int64) error {
 	if r.status != "detected" && r.status != "restored" && r.status != StatusAIRestored {
 		return fmt.Errorf("cannot disable a %s file", r.status)
 	}
-	if err := os.Chmod(r.path, 0o000); err != nil {
+	p, err := pin(r.path, false)
+	if err != nil {
+		return err
+	}
+	defer p.Close()
+	if err := p.setOwner(-1, -1, 0o000); err != nil {
 		return err
 	}
 	return s.setStatus(id, "disabled", "")
 }
 
 // Restore puts a quarantined file back (never overwriting) or re-enables a
-// disabled one, with its original owner and permissions.
+// disabled one, with its original owner and permissions. The folders on
+// the path are opened without following links an account planted.
 func (s *Scanner) Restore(id int64) error {
 	r, err := s.load(id)
 	if err != nil {
 		return err
 	}
+	mode := os.FileMode(r.mode)
 	switch r.status {
 	case "quarantined":
-		if _, err := os.Lstat(r.path); err == nil {
-			return fmt.Errorf("a file already exists at %s; move it away first", r.path)
-		}
-		if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
+		p, err := pin(r.path, true)
+		if err != nil {
 			return err
 		}
-		if err := moveFile(r.qpath, r.path, os.FileMode(r.mode)); err != nil {
+		defer p.Close()
+		if _, err := p.lstat(); err == nil {
+			return fmt.Errorf("a file already exists at %s; move it away first", r.path)
+		}
+		if err := p.putFrom(r.qpath, r.uid, r.gid, mode, false); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("a file already exists at %s; move it away first", r.path)
+			}
 			return err
 		}
 	case "disabled":
+		p, err := pin(r.path, false)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		if err := p.setOwner(r.uid, r.gid, mode); err != nil {
+			return err
+		}
 	case "trimmed", "cleaned":
 		if r.qpath == "" {
 			return fmt.Errorf("cannot restore a %s file", r.status)
 		}
 		// Put the original (untrimmed / unreplaced) file back.
-		if err := moveFile(r.qpath, r.path+".xg-restore", os.FileMode(r.mode)); err != nil {
+		p, err := pin(r.path, true)
+		if err != nil {
 			return err
 		}
-		if err := os.Rename(r.path+".xg-restore", r.path); err != nil {
+		defer p.Close()
+		if err := p.putFrom(r.qpath, r.uid, r.gid, mode, true); err != nil {
 			return err
 		}
 	default:
 		return fmt.Errorf("cannot restore a %s file", r.status)
-	}
-	if r.uid >= 0 {
-		_ = os.Lchown(r.path, r.uid, r.gid)
-	}
-	if err := os.Chmod(r.path, os.FileMode(r.mode)); err != nil {
-		return err
 	}
 	return s.setStatus(id, "restored", "")
 }
@@ -158,10 +152,12 @@ func (s *Scanner) Delete(id int64) error {
 	if err != nil {
 		return err
 	}
-	target := r.path
 	switch r.status {
 	case "quarantined":
-		target = r.qpath
+		if err := os.Remove(r.qpath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return s.setStatus(id, "deleted", "")
 	case "detected", "disabled", "restored", "ignored", StatusAIRestored:
 	case "trimmed", "cleaned":
 		if r.qpath != "" {
@@ -170,10 +166,50 @@ func (s *Scanner) Delete(id int64) error {
 	default:
 		return fmt.Errorf("cannot delete a %s file", r.status)
 	}
-	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+	p, err := pin(r.path, false)
+	if err == nil {
+		err = p.remove()
+		p.Close()
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return s.setStatus(id, "deleted", "")
+}
+
+// PruneKept removes the originals kept for trimmed and cleaned files whose
+// finding is older than cut (the cleaned file stays live), then the
+// findings themselves: retention for them as for quarantined files.
+func (s *Scanner) PruneKept(cut int64) int {
+	rows, err := s.DB.Query(`SELECT id, qpath FROM findings WHERE status IN ('trimmed','cleaned') AND updated_at < ?`, cut)
+	if err != nil {
+		return 0
+	}
+	type kept struct {
+		id    int64
+		qpath string
+	}
+	var list []kept
+	for rows.Next() {
+		var k kept
+		if rows.Scan(&k.id, &k.qpath) == nil {
+			list = append(list, k)
+		}
+	}
+	rows.Close()
+	n := 0
+	for _, k := range list {
+		if k.qpath != "" {
+			if err := os.Remove(k.qpath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				s.Log.Warn("retention: remove a kept original", "path", k.qpath, "err", err)
+				continue
+			}
+		}
+		if _, err := s.DB.Exec(`DELETE FROM findings WHERE id = ?`, k.id); err == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // Ignore marks a finding as a false positive and whitelists the file path.

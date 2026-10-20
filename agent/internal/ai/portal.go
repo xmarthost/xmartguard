@@ -118,8 +118,14 @@ func (a *Analyzer) analyzePortal(ctx context.Context, jobs []Job, cfg settings.A
 		base, _ = ml.Base()
 	}
 	for i, j := range jobs {
-		raw, err := os.ReadFile(j.Path)
+		// The bytes sent must be the content the verdict is saved under: a
+		// file changed since detection would otherwise be judged and its
+		// verdict stored (and possibly cleared) under the flagged hash.
+		raw, more, err := scanner.ReadFileLimit(j.Path, maxJobBytes)
 		if err != nil {
+			continue
+		}
+		if sum := sha256.Sum256(raw); j.SHA256 != "" && (more || hex.EncodeToString(sum[:]) != j.SHA256) {
 			continue
 		}
 		text, lines, truncated := Excerpt(raw, cfg.MaxKB*1024)

@@ -119,4 +119,14 @@ func TestStripPHPComments(t *testing.T) {
 			t.Errorf("kept comment %q: %q", gone, out)
 		}
 	}
+	// A2 F14: "<?xml" (or a stray "<?") does not open PHP, so a "#" in the
+	// text after it cannot blank the real code on that line.
+	in = "<?xml version=\"1.0\" # <?php $f = $_GET['f']; $f(1); ?>"
+	out = string(stripPHPComments([]byte(in)))
+	if !strings.Contains(out, "$f = $_GET['f']; $f(1);") {
+		t.Errorf("code after <?xml blanked: %q", out)
+	}
+	if out = string(stripPHPComments([]byte("<?= $x // gone\n?><?PHP # gone\n"))); strings.Contains(out, "gone") {
+		t.Errorf("<?= or <?PHP not opened: %q", out)
+	}
 }

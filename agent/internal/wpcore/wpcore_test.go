@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,6 +90,26 @@ func TestOfficialVerifiesChecksum(t *testing.T) {
 	os.WriteFile(q, []byte("<?php"), 0o644)
 	if _, _, _, err := Official(context.Background(), src, q); !errors.Is(err, ErrNotCore) {
 		t.Fatalf("plugin: %v", err)
+	}
+}
+
+// A2 F15: the version comes from the site's own version.php; one holding a
+// slash or ".." must not choose which cache file is read as official.
+func TestVersionMustBePlain(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "wp-includes"), 0o755)
+	for v, ok := range map[string]bool{"6.5.2": true, "6.6-RC1": true, "../../x": false, "6.5/../../y": false, "a6": false, "6..5": false} {
+		os.WriteFile(filepath.Join(root, "wp-includes", "version.php"), []byte("<?php\n$wp_version = '"+v+"';\n"), 0o644)
+		if got := Version(root); (got == v) != ok {
+			t.Errorf("version %q read as %q", v, got)
+		}
+	}
+	cache := t.TempDir()
+	// "wp-checksums-" + "/../../planted" + "-en_US.json" leaves the cache.
+	os.WriteFile(filepath.Join(cache, "planted-en_US.json"), []byte(`{"checksums":{"wp-login.php":"00"}}`), 0o600)
+	d := &Direct{CacheDir: filepath.Join(cache, "sub"), API: "http://127.0.0.1:1", Client: http.DefaultClient}
+	if m, err := d.Checksums(context.Background(), "/../../planted"); err == nil {
+		t.Fatalf("version with a path read %v", m)
 	}
 }
 

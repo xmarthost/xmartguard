@@ -81,6 +81,7 @@ type Realtime struct {
 	lastSweep time.Time
 	sweeping  atomic.Bool
 	work      chan string
+	trees     chan string // new folders to watch, off the event reader
 	scanned   atomic.Int64
 	overflow  atomic.Int64
 	events    atomic.Int64
@@ -301,6 +302,7 @@ func (r *Realtime) init(roots []string) error {
 	r.fd, r.dirs, r.byPath, r.pending, r.watches, r.homes = fd, map[int]string{}, map[string]int{}, map[string]time.Time{}, 0, homes
 	r.limit, r.unwatched, r.lastSweep = maxWatches(), map[string]bool{}, time.Now()
 	r.work = make(chan string, 20000)
+	r.trees = make(chan string, 4096)
 	r.mu.Unlock()
 	r.addLevels(roots)
 	return nil
@@ -436,6 +438,20 @@ func (r *Realtime) loop(ctx context.Context) {
 			}
 		}()
 	}
+	// New folders are walked and watched here, not in the event reader:
+	// a large tree moved in would stall reading and overflow the queue.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-wctx.Done():
+				return
+			case p := <-r.trees:
+				r.addTree(p, true)
+			}
+		}
+	}()
 	defer func() {
 		stopWorkers()
 		wg.Wait()
@@ -519,8 +535,14 @@ func (r *Realtime) addWatchKeeping(dir string, reserve int) bool {
 	if err != nil {
 		return true // unreadable dir: skip but keep walking
 	}
+	// A renamed folder keeps its watch: the kernel returns the same wd,
+	// which then only moves to the new name.
+	if old, ok := r.dirs[wd]; ok {
+		delete(r.byPath, old)
+	} else {
+		r.watches++
+	}
 	r.dirs[wd], r.byPath[dir] = dir, wd
-	r.watches++
 	return true
 }
 
@@ -586,9 +608,20 @@ func (r *Realtime) queue(path string) {
 		return
 	}
 	r.mu.Lock()
-	r.pending[path] = time.Now()
+	_, known := r.pending[path]
+	full := !known && len(r.pending) >= MaxPending
+	if !full {
+		r.pending[path] = time.Now()
+	}
 	r.mu.Unlock()
+	if full {
+		// Bounded: past this a catch-up walk covers the files instead.
+		r.requestCatchUp(time.Now().Add(-10 * time.Minute))
+	}
 }
+
+// MaxPending caps the files waiting to be scanned by realtime protection.
+var MaxPending = 200000
 
 // inOverflow is set by the kernel when events were lost.
 const inOverflow = unix.IN_Q_OVERFLOW
@@ -631,7 +664,11 @@ func (r *Realtime) handle(buf []byte) {
 		full := filepath.Join(dir, name)
 		if ev.Mask&unix.IN_ISDIR != 0 {
 			if ev.Mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 && !r.skip(full, name) {
-				r.addTree(full, true)
+				select {
+				case r.trees <- full:
+				default:
+					r.addTree(full, true) // the worker is far behind
+				}
 			}
 			continue
 		}

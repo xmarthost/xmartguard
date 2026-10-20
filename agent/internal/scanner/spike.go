@@ -28,8 +28,9 @@ const NotePaused = "Signature paused: it quarantined too many files at once. Rev
 const kvPaused = "scanner.paused_signatures"
 
 type spikeCount struct {
-	start int64
-	n     int
+	start  int64
+	n      int
+	owners map[string]int
 }
 
 // PausedSignature is a signature whose quarantine is paused.
@@ -71,10 +72,14 @@ func (s *Scanner) Unpause(sig string) {
 	delete(s.spikes, sig)
 }
 
-// spikeAllows counts one quarantine of sig and reports whether it may go
-// ahead; it pauses the signature when the limit is passed (paused = true
-// the first time, for the alert).
-func (s *Scanner) spikeAllows(sig string) (ok, paused bool) {
+// spikeAllows counts one quarantine of sig in owner's files and reports
+// whether it may go ahead; it pauses the signature when the limit is passed
+// (paused = true the first time, for the alert). One account cannot pause a
+// signature for the whole server: only files outside the account with the
+// most hits count toward the limit, and an account passing the limit on its
+// own has only its further files listed instead of quarantined (for the
+// window).
+func (s *Scanner) spikeAllows(sig, owner string) (ok, paused bool) {
 	if SpikeLimit <= 0 {
 		return true, false
 	}
@@ -90,11 +95,19 @@ func (s *Scanner) spikeAllows(sig string) (ok, paused bool) {
 	now := store.Now()
 	c := s.spikes[sig]
 	if c == nil || now-c.start >= int64(SpikeWindow/time.Second) {
-		c = &spikeCount{start: now}
+		c = &spikeCount{start: now, owners: map[string]int{}}
 		s.spikes[sig] = c
 	}
+	c.owners[owner]++
+	if c.owners[owner] > SpikeLimit {
+		return false, false
+	}
 	c.n++
-	if c.n <= SpikeLimit {
+	top := 0
+	for _, n := range c.owners {
+		top = max(top, min(n, SpikeLimit))
+	}
+	if c.n-top < SpikeLimit {
 		return true, false
 	}
 	m[sig] = PausedSignature{Signature: sig, At: now}

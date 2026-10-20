@@ -64,6 +64,25 @@ func TestScanInEngineProcess(t *testing.T) {
 	t.Logf("engine process seen at nice 19: %v", seen)
 }
 
+// A2 F9: a hit on a file whose name is not valid UTF-8 reaches the agent
+// with the exact name (a JSON string would replace the byte and the file
+// would not be found).
+func TestEngineHitOnNonUTF8Name(t *testing.T) {
+	useEngine(t)
+	s := newScanner(t)
+	name := "caf\xe9.php"
+	root := writeTree(t, map[string]string{name: malicious["exec.php"]})
+	id, err := s.Start("path", root, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitScan(t, s, id)
+	fs, n, _ := s.ListFindings(FindingFilter{ScanID: id, Limit: 10})
+	if n != 1 || fs[0].Path != filepath.Join(root, name) {
+		t.Fatalf("findings: %d %+v", n, fs)
+	}
+}
+
 // engineAtNice19 looks for the engine process and checks every thread's
 // nice value (field 19 of /proc/PID/task/TID/stat).
 func engineAtNice19(t *testing.T) bool {

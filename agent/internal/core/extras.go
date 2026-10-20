@@ -550,6 +550,8 @@ func (a *Agent) pruneOld() {
 	// The monthly report reads last month's WAF events and the IPDB page 30
 	// days of countries: those logs keep at least 32 days.
 	logCut := min(cut, store.Now()-32*86400)
+	// Originals kept for trimmed and cleaned files too (the live file stays).
+	a.Scanner.PruneKept(cut)
 	for _, q := range []string{
 		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored','ai_restored','cleared') AND updated_at < ?`,
 		`DELETE FROM fw_events WHERE status != 'blocked' AND created_at < ?`,
