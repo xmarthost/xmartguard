@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/logtail"
+	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -1071,12 +1072,55 @@ func (m *Manager) noteSource(path string) {
 }
 
 func (m *Manager) record(e Event) {
+	if e.User == "" {
+		// The hosting account owning the website: its panel lists the event.
+		e.User = siteOwner(e.Host)
+	}
 	_, _ = m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`, e.At, e.IP, e.Method, e.Host, e.URI, e.RuleID, e.Msg, e.Category, e.Action, e.User, e.Detail)
-	// Keep the table bounded.
-	if e.ID%512 == 0 {
+	// Keep the table bounded: an old-row cleanup every 512 events (e.ID is
+	// not set here, so it can not count them).
+	if recorded.Add(1)%512 == 0 {
 		_, _ = m.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, store.Now()-30*86400)
 	}
+}
+
+// recorded counts the events record stored.
+var recorded atomic.Int64
+
+// UserDomainsPath is cPanel's list of websites and their accounts.
+var UserDomainsPath = "/etc/userdomains"
+
+// owners caches UserDomainsPath (read at most once a minute).
+var owners struct {
+	sync.Mutex
+	at     time.Time
+	byHost map[string]string
+}
+
+// siteOwner is the hosting account of a website (also its www. name and,
+// for a subdomain, the nearest listed parent), "" when not known.
+func siteOwner(host string) string {
+	h := NormHost(host)
+	if h == "" {
+		return ""
+	}
+	owners.Lock()
+	defer owners.Unlock()
+	if owners.byHost == nil || time.Since(owners.at) > time.Minute {
+		owners.byHost, owners.at = reputation.HostedDomains(UserDomainsPath), time.Now()
+	}
+	for d := h; d != ""; {
+		if u := owners.byHost[d]; u != "" {
+			return u
+		}
+		_, rest, ok := strings.Cut(d, ".")
+		if !ok || !strings.Contains(rest, ".") {
+			break
+		}
+		d = rest
+	}
+	return ""
 }
 
 func (m *Manager) maybeBan(e Event, c *counter) {

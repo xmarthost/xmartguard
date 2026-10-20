@@ -1,10 +1,13 @@
 package waf
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
+	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
 type banRecorder struct{ ips []string }
@@ -68,5 +71,48 @@ func TestLoginRulesCountFailures(t *testing.T) {
 		if re.MatchString(body) != want {
 			t.Errorf("XML-RPC %s counted: %v", body, !want)
 		}
+	}
+}
+
+// Audit A3 F11/F12: every stored event names the hosting account of its
+// website (the cPanel panel lists an account's events only), and the old
+// rows are cleaned up every 512 events, not after each one.
+func TestRecordedEventsHaveTheirOwner(t *testing.T) {
+	m := learnManager(t)
+	f := filepath.Join(t.TempDir(), "userdomains")
+	os.WriteFile(f, []byte("shop.example.com: ali\nexample.org: sara\n*: nobody\n"), 0o644)
+	old := UserDomainsPath
+	UserDomainsPath = f
+	owners.Lock()
+	owners.byHost = nil
+	owners.Unlock()
+	t.Cleanup(func() {
+		UserDomainsPath = old
+		owners.Lock()
+		owners.byHost = nil
+		owners.Unlock()
+	})
+	for _, h := range []string{"shop.example.com", "WWW.shop.example.com:443", "blog.example.org", "other.example.net"} {
+		m.record(Event{At: store.Now(), IP: "198.51.100.1", Host: h, URI: "/", RuleID: IDWebshell})
+	}
+	for user, want := range map[string]int{"ali": 2, "sara": 1} {
+		if _, n, err := m.Events(EventFilter{User: user, Limit: 10}); err != nil || n != want {
+			t.Errorf("%s: %d events (%v), want %d", user, n, err, want)
+		}
+	}
+	// The cleanup runs on every 512th event, not on each.
+	recorded.Store(1)
+	m.record(Event{At: 1, Host: "old.example.com"})
+	m.record(Event{At: store.Now(), Host: "x"})
+	var n int
+	m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE at = 1`).Scan(&n)
+	if n != 1 {
+		t.Error("cleanup ran on an ordinary event")
+	}
+	recorded.Store(511)
+	m.record(Event{At: store.Now(), Host: "x"})
+	m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE at = 1`).Scan(&n)
+	if n != 0 {
+		t.Error("cleanup did not run on the 512th event")
 	}
 }
