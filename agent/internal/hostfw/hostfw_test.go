@@ -167,3 +167,14 @@ func TestCPHulkWhitelistFlushes(t *testing.T) {
 		t.Fatalf("calls:\n%s", got)
 	}
 }
+
+// The other firewalls are never told to trust a mapped range that is the
+// whole IPv4 Internet.
+func TestNormAddrMappedCIDR(t *testing.T) {
+	for in, want := range map[string]string{"::ffff:0:0/96": "", "::ffff:64.0.0.0/98": "", "0.0.0.0/1": "",
+		"::ffff:198.51.100.0/120": "198.51.100.0/24", "198.51.100.7": "198.51.100.7", "127.0.0.0/8": ""} {
+		if got := normAddr(in); got != want {
+			t.Errorf("normAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

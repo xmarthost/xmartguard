@@ -200,3 +200,12 @@ func has(list []string, v string) bool {
 	}
 	return false
 }
+
+// A mapped range from a list or the custom trusted list is its IPv4 range
+// and meets the IPv4 limit (it used to become 0.0.0.0/0).
+func TestCleanMappedCIDR(t *testing.T) {
+	got := clean([]string{"::ffff:0:0/96", "::ffff:64.0.0.0/98", "::ffff:198.51.100.0/120"})
+	if strings.Join(got, ",") != "198.51.100.0/24" {
+		t.Fatalf("got %v", got)
+	}
+}

@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 )
 
 // Comment marks the portal's entries; WhitelistComment the addresses an
@@ -325,11 +327,13 @@ func normAddr(s string) string {
 		}
 		return p.String()
 	}
-	if _, n, err := net.ParseCIDR(s); err == nil {
-		if ones, _ := n.Mask.Size(); ones == 0 || n.IP.IsLoopback() {
+	// An IPv4-mapped range is its IPv4 range, with the same size limit as
+	// xPGuard's own lists ("::ffff:0:0/96" would trust 0.0.0.0/0).
+	if p, err := firewall.ParseCIDR(s); err == nil {
+		if firewall.TooLarge(p) || p.Addr().IsLoopback() {
 			return ""
 		}
-		return n.String()
+		return p.String()
 	}
 	return ""
 }

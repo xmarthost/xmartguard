@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os/exec"
 	"sort"
 	"strings"
@@ -564,18 +565,43 @@ func ParseAddr(s string) (string, error) {
 		}
 		return ip.String(), nil
 	}
-	ip, n, err := net.ParseCIDR(s)
+	p, err := ParseCIDR(s)
 	if err != nil {
-		return "", fmt.Errorf("invalid IP address or CIDR: %q", s)
+		return "", err
 	}
-	ones, bits := n.Mask.Size()
-	if (bits == 32 && ones < 8) || (bits == 128 && ones < 16) {
+	if TooLarge(p) {
 		return "", fmt.Errorf("CIDR %s is too large", s)
 	}
-	if ip.To4() != nil && ones == 32 || ip.To4() == nil && ones == 128 {
-		return ip.String(), nil
+	if p.IsSingleIP() {
+		return p.Addr().String(), nil
 	}
-	return n.String(), nil
+	return p.String(), nil
+}
+
+// ParseCIDR parses a network in canonical (masked) form. An IPv4-mapped
+// IPv6 range ("::ffff:a.b.c.d/n") is its IPv4 range (n-96 bits): read as
+// IPv6 its size was checked against the IPv6 limit while its text became
+// IPv4, so "::ffff:0:0/96" turned into 0.0.0.0/0.
+func ParseCIDR(s string) (netip.Prefix, error) {
+	p, err := netip.ParsePrefix(strings.TrimSpace(s))
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("invalid IP address or CIDR: %q", s)
+	}
+	if a := p.Addr(); a.Is4In6() {
+		if p.Bits() < 96 {
+			return netip.Prefix{}, fmt.Errorf("CIDR %s is too large", s)
+		}
+		p = netip.PrefixFrom(a.Unmap(), p.Bits()-96)
+	}
+	return p.Masked(), nil
+}
+
+// TooLarge reports networks wider than /8 (IPv4) or /16 (IPv6).
+func TooLarge(p netip.Prefix) bool {
+	if p.Addr().Is4() {
+		return p.Bits() < 8
+	}
+	return p.Bits() < 16
 }
 
 // Contains reports whether ip falls inside addr (IP or CIDR).

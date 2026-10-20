@@ -696,3 +696,19 @@ func TestCaptchaAndPortFilterOnKernel(t *testing.T) {
 		}
 	})
 }
+
+// IPv4-mapped IPv6 ranges are their IPv4 range and meet the IPv4 limit:
+// "::ffff:0:0/96" used to pass the IPv6 check and be stored as 0.0.0.0/0.
+func TestParseAddrMappedCIDR(t *testing.T) {
+	for _, bad := range []string{"::ffff:0:0/96", "::ffff:64.0.0.0/98", "::ffff:0:0/80", "::ffff:10.0.0.0/103"} {
+		if got, err := ParseAddr(bad); err == nil {
+			t.Errorf("ParseAddr(%q) = %q, accepted", bad, got)
+		}
+	}
+	good := map[string]string{"::ffff:198.51.100.0/120": "198.51.100.0/24", "::ffff:198.51.100.7/128": "198.51.100.7", "::ffff:10.0.0.0/104": "10.0.0.0/8"}
+	for in, want := range good {
+		if got, err := ParseAddr(in); err != nil || got != want {
+			t.Errorf("ParseAddr(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+}
