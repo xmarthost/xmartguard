@@ -1053,6 +1053,18 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 		m.expire()
 		cfg := m.Settings.Get().Firewall
+		// Country lists are downloaded here, never while a ruleset is
+		// built: new countries within a minute, all of them daily (the
+		// WAF uses the whitelisted ones with the firewall off too).
+		if codes := append(append(append([]string{}, cfg.BlockedCountries...), cfg.AllowedCountries...), cfg.IgnoredCountries...); m.Geo != nil && len(codes) > 0 {
+			daily := time.Since(lastGeo) > 24*time.Hour
+			if daily {
+				lastGeo = time.Now()
+			}
+			if m.Geo.Refresh(codes, daily) && cfg.Enabled {
+				_ = m.Apply()
+			}
+		}
 		if !cfg.Enabled {
 			continue
 		}
@@ -1073,11 +1085,6 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 		if m.Settings.Get().IPDB.Enabled {
 			m.pollIPDBHits()
-		}
-		if m.Geo != nil && time.Since(lastGeo) > 24*time.Hour && len(cfg.BlockedCountries)+len(cfg.AllowedCountries)+len(cfg.IgnoredCountries) > 0 {
-			lastGeo = time.Now()
-			m.Geo.Refresh(append(append(cfg.BlockedCountries, cfg.AllowedCountries...), cfg.IgnoredCountries...), true)
-			_ = m.Apply()
 		}
 	}
 }

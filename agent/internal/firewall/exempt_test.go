@@ -205,3 +205,39 @@ func TestDeleteEventLiftsOnlyItsBlock(t *testing.T) {
 		t.Fatalf("blacklist entry kept: %+v", d)
 	}
 }
+
+// Building the ruleset never downloads country lists (a firewall change
+// waited minutes for each list while the portal was down); the
+// maintenance loop refreshes them, and a failed country waits before it
+// is tried again.
+func TestBuildDoesNotDownloadCountries(t *testing.T) {
+	m := unitManager(t)
+	old := GeoURL
+	GeoURL = "http://127.0.0.1:1/%s"
+	defer func() { GeoURL = old }()
+	calls := 0
+	m.Geo = &Geo{Dir: t.TempDir(), Log: m.Log, Portal: func(string) ([]string, error) {
+		calls++
+		return nil, os.ErrDeadlineExceeded
+	}}
+	if _, err := m.Settings.Patch([]byte(`{"firewall":{"blocked_countries":["ZZ"],"ignored_countries":["YY"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Build(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("Build asked the portal %d times", calls)
+	}
+	if m.Geo.Refresh([]string{"ZZ", "YY"}, false) || calls != 2 {
+		t.Fatalf("first refresh: %d calls", calls)
+	}
+	m.Geo.Refresh([]string{"ZZ", "YY"}, false)
+	if calls != 2 {
+		t.Fatalf("failed countries retried at once: %d calls", calls)
+	}
+	m.Geo.Refresh([]string{"ZZ"}, true)
+	if calls != 3 {
+		t.Fatalf("forced refresh skipped: %d calls", calls)
+	}
+}
