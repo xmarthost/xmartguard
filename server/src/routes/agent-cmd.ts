@@ -90,6 +90,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'clamav.reload': { role: 'admin', mutates: true, timeoutMs: 1_500_000 },
   'waf.apply': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'waf.rule': { role: 'admin', mutates: true, timeoutMs: 180_000 },
+  // Learned exclusions: an administrator accepts, rejects or forgets one (re-applies the WAF).
+  'waf.auto_exclusion': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'waf.sync': { role: 'admin', mutates: true, timeoutMs: 300_000 },
   'cms.update': { role: 'admin', mutates: true, timeoutMs: 660_000 },
   'osm.release': { role: 'admin', mutates: true, timeoutMs: 120_000 },
@@ -165,10 +167,28 @@ export function agentCommandRoutes(app: FastifyInstance, pool: Pool, cfg: Config
   });
 }
 
-/** Keeps audit entries small and free of large payloads. */
-function summarize(params: Record<string, unknown>): Record<string, unknown> {
+/** Setting names that hold secrets (smtp_password, telegram_token, secret_key, safe_browsing_key …). */
+const SECRET = /password|secret|token|_key$/i;
+
+/** A copy with every secret value (at any depth) replaced by "***". */
+export function redactSecrets(v: unknown, depth = 0): unknown {
+  if (depth > 20 || v === null || typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map((x) => redactSecrets(x, depth + 1));
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(params)) {
+  for (const [k, x] of Object.entries(v)) {
+    out[k] = SECRET.test(k) && x !== '' && x !== null && typeof x !== 'object' ? '***' : redactSecrets(x, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * Keeps audit entries small and free of large payloads and of secrets: the
+ * audit log is shown to every admin of the account (and the master's to
+ * the master), while settings.get masks the same fields.
+ */
+export function summarize(params: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(redactSecrets(params) as Record<string, unknown>)) {
     const s = typeof v === 'string' ? v : JSON.stringify(v);
     out[k] = s && s.length > 300 ? s.slice(0, 300) + '…' : v;
   }

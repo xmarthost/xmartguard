@@ -7,7 +7,7 @@ import { audit, requireRole } from '../auth.js';
 import { isPlatform, scopeAccounts } from '../tenancy.js';
 import { randomToken, sha256 } from '../security.js';
 import { currentRelease } from '../agents/release.js';
-import { ACTIONS } from './agent-cmd.js';
+import { ACTIONS, summarize } from './agent-cmd.js';
 
 /**
  * MCP (Model Context Protocol) endpoint, so an AI assistant (Claude "custom
@@ -97,7 +97,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     try {
       const data = await hub.command(srv.id, action, params, spec.timeoutMs ?? 30_000);
       if (spec.mutates) {
-        await audit(pool, { accountId: ctx.accountId, userId: ctx.userId ?? undefined, serverId: srv.id, action: `mcp.${action}`, detail: { token: ctx.id, params: trimParams(params) }, ip: ctx.ip });
+        await audit(pool, { accountId: ctx.accountId, userId: ctx.userId ?? undefined, serverId: srv.id, action: `mcp.${action}`, detail: { token: ctx.id, params: summarize(params) }, ip: ctx.ip });
       }
       return data ?? {};
     } catch (err) {
@@ -553,13 +553,4 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     await audit(pool, { accountId: req.user!.accountId, userId: req.user!.id, action: 'mcp.token_revoked', detail: { id }, ip: req.ip });
     return { ok: true };
   });
-}
-
-function trimParams(params: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(params)) {
-    const s = typeof v === 'string' ? v : JSON.stringify(v);
-    out[k] = s && s.length > 300 ? s.slice(0, 300) + '…' : v;
-  }
-  return out;
 }
