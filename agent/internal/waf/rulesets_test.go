@@ -80,6 +80,9 @@ func TestValidateCustomRules(t *testing.T) {
 		"exec action":      "SecRule ARGS \"@rx x\" \"id:1000002,phase:2,pass,exec:/tmp/x.sh\"",
 		"inspectFile":      "SecRule FILES_TMPNAMES \"@inspectFile /tmp/x\" \"id:1000003,phase:2,deny\"",
 		"from file":        "SecRule REMOTE_ADDR \"@ipMatchFromFile /etc/shadow\" \"id:1000004,phase:1,deny\"",
+		"pmf alias":        "SecRule ARGS \"@pmf /etc/shadow\" \"id:1000005,phase:2,deny\"",
+		"ipMatchF alias":   "SecRule REMOTE_ADDR \"@ipMatchF /etc/shadow\" \"id:1000006,phase:1,deny\"",
+		"proxy action":     "SecRule ARGS \"@rx x\" \"id:1000007,phase:1,proxy:http://198.51.100.9/\"",
 		"reserved id":      "SecAction \"id:7700009,phase:1,pass,nolog\"",
 		"include":          "Include /etc/passwd",
 	} {

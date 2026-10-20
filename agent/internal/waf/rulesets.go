@@ -382,7 +382,7 @@ var (
 		"secruleremovebymsg": true, "secruleupdatetargetbyid": true, "secruleupdatetargetbytag": true,
 		"secruleupdatetargetbymsg": true, "secruleupdateactionbyid": true,
 	}
-	reForbiddenAction = regexp.MustCompile(`(?i)(?:\bexec\s*:|@inspectfile\b|@\w+fromfile\b|\bsetenv\s*:)`)
+	reForbiddenAction = regexp.MustCompile(`(?i)(?:\bexec\s*:|@inspectfile\b|@\w+fromfile\b|@pmf\b|@ipmatchf\b|\bsetenv\s*:|\bproxy\s*:)`)
 )
 
 // ValidateCustomRules checks custom rules before they are installed.
