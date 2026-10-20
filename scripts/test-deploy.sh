@@ -132,6 +132,10 @@ if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --git-dir >/dev/nu
   done
 fi
 
+echo "== CI actions are pinned by commit =="
+unpinned=$(grep -hE '^[[:space:]-]*uses:' "$ROOT"/.github/workflows/*.yml | grep -vE 'uses: [^@ ]+@[0-9a-f]{40}( |$)' || true)
+check "every uses: names a commit SHA" '[ -z "$unpinned" ]'
+
 echo ""
 echo "deploy script tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
