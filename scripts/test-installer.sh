@@ -94,6 +94,10 @@ check "unit written"              'grep -q "ExecStart=/opt/xpguard/bin/xpguard-a
 check "agent running"             'systemctl is-active --quiet xpguard-agent'
 check "process shows xpguard"     'pgrep -f "/opt/xpguard/bin/xpguard-agent run" >/dev/null && ! pgrep -f "xmartguard-agent run" >/dev/null'
 check "local uninstaller saved"   '[ -x /opt/xpguard/uninstall.sh ]'
+check "agent log rotated"         '[ ! -d /etc/logrotate.d ] || { grep -q "^/opt/xpguard/logs/agent.log " /etc/logrotate.d/xpguard-agent && grep -q "^file /etc/logrotate.d/xpguard-agent$" /opt/xpguard/manifest; }'
+if command -v logrotate >/dev/null 2>&1; then
+  check "logrotate accepts the file" 'logrotate -d /etc/logrotate.d/xpguard-agent >/dev/null 2>&1'
+fi
 sleep 3
 check "server appears in portal"  '[ "$(server_count)" -eq $((before+1)) ]'
 check "agent log shows connection" 'grep -q "connected to portal" /opt/xpguard/logs/agent.log'
@@ -137,6 +141,7 @@ check "config removed"             '[ ! -e /etc/xpguard ] && [ ! -e /etc/xmartgu
 check "state and logs removed"     '[ ! -e /opt/xmartguard ] && [ ! -L /opt/xmartguard ] && [ ! -e /var/lib/xmartguard ]'
 check "socket removed"             '[ ! -e /run/xpguard ] && [ ! -e /run/xmartguard ]'
 check "unit removed"               '[ ! -e /etc/systemd/system/xpguard-agent.service ] && [ ! -e /etc/systemd/system/xmartguard-agent.service ]'
+check "logrotate file removed"     '[ ! -e /etc/logrotate.d/xpguard-agent ]'
 check "agent stopped"              '! pgrep -f "xpguard-agent run" >/dev/null'
 check "server removed from portal" '[ "$(server_count)" -eq "$before" ]'
 

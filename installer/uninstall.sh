@@ -73,6 +73,7 @@ safe_path() {
     /usr/local/bin/xpguard-agent) return 0 ;;
     /etc/sysctl.d/xmartguard.conf) return 0 ;;
     /etc/systemd/system/nftables.service.d/xpguard-agent.conf) return 0 ;;
+    /etc/logrotate.d/xpguard-agent) return 0 ;;
   esac
   return 1
 }
@@ -96,7 +97,7 @@ if [ -f "$MANIFEST" ]; then
   ok "Loaded install manifest (${#FILES[@]} files, ${#DIRS[@]} directories)"
 else
   warn "No install manifest found; removing the default locations."
-  FILES=("$BIN" "$HOME_DIR/bin/xpguard-agent" /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli)
+  FILES=("$BIN" "$HOME_DIR/bin/xpguard-agent" /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli /etc/logrotate.d/xpguard-agent)
   DIRS=("$CONF_DIR" "$HOME_DIR" "$OLD_CONF" "$OLD_HOME" "${LEGACY_DIRS[@]}")
   UNITS=("/etc/systemd/system/$UNIT_NAME" "/etc/systemd/system/$OLD_UNIT_NAME")
 fi
@@ -193,7 +194,7 @@ KEEP_HOME=()
 for p in "$BIN" /usr/local/bin/xpguard-agent /usr/local/bin/xmartguard-agent /usr/local/bin/xmartguard /usr/local/bin/xgcli "$CONF_DIR" "$OLD_CONF" "${KEEP_HOME[@]}" /run/xpguard /run/xmartguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xpguard /usr/local/cpanel/base/frontend/jupiter/xpguard \
          /usr/local/cpanel/whostmgr/docroot/cgi/xmartguard /usr/local/cpanel/base/frontend/jupiter/xmartguard \
-         "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME; do
+         "${LEGACY_DIRS[@]}" /etc/systemd/system/$UNIT_NAME /etc/logrotate.d/xpguard-agent; do
   { [ -e "$p" ] || [ -L "$p" ]; } && LEFT+=("$p")
 done
 [ "$KEEP_LOGS" -eq 0 ] && [ -e "$LOG_DIR" ] && LEFT+=("$LOG_DIR")

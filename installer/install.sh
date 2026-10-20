@@ -250,6 +250,26 @@ EOF
 chmod 0644 "$UNIT"
 record unit "$UNIT"
 record file "$LOG_DIR/agent.log"
+# agent.log grows for as long as the agent runs: rotate it by size so it
+# never fills the disk (copytruncate: systemd keeps the file open).
+LOGROTATE=/etc/logrotate.d/xpguard-agent
+if [ -d /etc/logrotate.d ]; then
+  cat >"$LOGROTATE" <<EOF
+# xPGuard agent logs (written by install.sh, removed by uninstall.sh).
+$LOG_DIR/agent.log $LOG_DIR/install.log {
+    size 20M
+    rotate 5
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+EOF
+  chmod 0644 "$LOGROTATE"
+  record file "$LOGROTATE"
+else
+  warn "logrotate is not installed: $LOG_DIR/agent.log will not be rotated"
+fi
 # The service of older versions is replaced by xpguard-agent.
 if [ -f "$OLD_UNIT" ]; then
   systemctl disable xmartguard-agent >/dev/null 2>&1 || true

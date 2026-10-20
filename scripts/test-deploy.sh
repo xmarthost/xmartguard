@@ -49,6 +49,19 @@ for a in "--server https://portal.example.com" "--server http://localhost:8080" 
   check "accepted: $a" '! grep -Eq "$URLERR" <<<"$out" && grep -Eq "missing --token|please run as root" <<<"$out"'
 done
 
+echo "== install.sh rotates the agent log; uninstall.sh may remove that file =="
+sed -n '/^  cat >"\$LOGROTATE" <<EOF/,/^EOF/p' "$ROOT/installer/install.sh" >"$WORK/lr.sh"
+LOGROTATE=$WORK/logrotate.conf LOG_DIR=/opt/xpguard/logs bash "$WORK/lr.sh"
+check "rotates agent.log by size"  'grep -q "^/opt/xpguard/logs/agent.log " "$WORK/logrotate.conf" && grep -Eq "^ +size " "$WORK/logrotate.conf" && grep -Eq "^ +copytruncate" "$WORK/logrotate.conf" && grep -Eq "^ +rotate " "$WORK/logrotate.conf"'
+check "install.sh records it"      'grep -qF "record file \"\$LOGROTATE\"" "$ROOT/installer/install.sh"'
+if command -v logrotate >/dev/null 2>&1; then
+  check "logrotate accepts it"     'logrotate -d "$WORK/logrotate.conf" >/dev/null 2>&1'
+fi
+sed -n '/^safe_path() {/,/^}/p' "$ROOT/installer/uninstall.sh" >"$WORK/safe.sh"
+# shellcheck source=/dev/null
+. "$WORK/safe.sh"
+check "uninstall may remove it"    'safe_path /etc/logrotate.d/xpguard-agent && ! safe_path /etc/logrotate.d/httpd'
+
 echo ""
 echo "deploy script tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
