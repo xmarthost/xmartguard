@@ -100,3 +100,29 @@ func TestExemptStillMeetsPortFilter(t *testing.T) {
 		t.Errorf("ipset: %s", sets)
 	}
 }
+
+// Blocked countries are dropped on IPv6 too (the portal's lists carry
+// IPv6 networks, and Check reports them as blocked).
+func TestCountryBlockIPv6(t *testing.T) {
+	rs := Ruleset{CountryBlock: []string{"198.18.0.0/15", "2001:db8:aa::/48"}}
+	nft := rs.Render()
+	for _, want := range []string{"set country_block6 {", "2001:db8:aa::/48", `ip6 saddr @country_block6 counter jump drop_country comment "xg-country"`,
+		`ip saddr @country_block4 counter jump drop_country`} {
+		if !strings.Contains(nft, want) {
+			t.Errorf("nft missing %q", want)
+		}
+	}
+	if v6 := renderRules(rs, true); !strings.Contains(v6, `-m set --match-set xg_cblock6 src -m comment --comment "xg-country" -j XPGUARD_CTRY`) {
+		t.Errorf("ip6tables: %s", v6)
+	}
+	if v4 := renderRules(rs, false); !strings.Contains(v4, "xg_cblock4 src") {
+		t.Errorf("iptables: %s", v4)
+	}
+	if s := renderIPSet(rs); !strings.Contains(s, "create xg_cblock6 hash:net family inet6") || !strings.Contains(s, "add xg_cblock6_n 2001:db8:aa::/48") {
+		t.Errorf("ipset: %s", s)
+	}
+	// IPv4 only: no IPv6 country rule.
+	if v6 := renderRules(Ruleset{CountryBlock: []string{"198.18.0.0/15"}}, true); strings.Contains(v6, "xg_cblock6") {
+		t.Errorf("empty v6 list rendered: %s", v6)
+	}
+}

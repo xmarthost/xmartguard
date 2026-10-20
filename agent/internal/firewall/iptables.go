@@ -93,6 +93,7 @@ func ipsets() []ipset {
 		{"xg_tallow4", "hash:ip", "inet", true, false}, {"xg_tallow6", "hash:ip", "inet6", true, false},
 		{"xg_tban4", "hash:ip", "inet", true, false}, {"xg_tban6", "hash:ip", "inet6", true, false},
 		{"xg_cblock4", "hash:net", "inet", false, false}, {"xg_callow4", "hash:net", "inet", false, false},
+		{"xg_cblock6", "hash:net", "inet6", false, false}, {"xg_callow6", "hash:net", "inet6", false, false},
 		{"xg_ipdb4", "hash:net", "inet", false, true}, {"xg_ipdb6", "hash:net", "inet6", false, true},
 	}
 }
@@ -186,8 +187,8 @@ func renderIPSet(r Ruleset) string {
 	a4, a6 := split(r.Allow)
 	i4, i6 := split(r.Ignore)
 	d4, d6 := split(r.Deny)
-	cb4, _ := split(r.CountryBlock)
-	ca4, _ := split(r.CountryAllow)
+	cb4, cb6 := split(r.CountryBlock)
+	ca4, ca6 := split(r.CountryAllow)
 	p4, p6 := split(r.IPDB)
 	timed := func(m map[string]time.Duration, v6 bool) []string {
 		var out []string
@@ -204,7 +205,7 @@ func renderIPSet(r Ruleset) string {
 		"xg_allow4": a4, "xg_allow6": a6, "xg_exempt4": i4, "xg_exempt6": i6, "xg_deny4": d4, "xg_deny6": d6,
 		"xg_tallow4": timed(r.TempAllow, false), "xg_tallow6": timed(r.TempAllow, true),
 		"xg_tban4": timed(r.TempBan, false), "xg_tban6": timed(r.TempBan, true),
-		"xg_cblock4": cb4, "xg_callow4": ca4, "xg_ipdb4": p4, "xg_ipdb6": p6,
+		"xg_cblock4": cb4, "xg_callow4": ca4, "xg_cblock6": cb6, "xg_callow6": ca6, "xg_ipdb4": p4, "xg_ipdb6": p6,
 	}
 	var b strings.Builder
 	for _, s := range ipsets() {
@@ -373,11 +374,21 @@ func renderRules(r Ruleset, v6 bool) string {
 	}
 	jump("-m set --match-set xg_deny"+sfx+" src", "xg-deny", ChainDeny)
 	jump("-m set --match-set xg_tban"+sfx+" src", "xg-tempban", ChainTempBan)
-	if !v6 && len(r.CountryBlock) > 0 {
-		if len(r.CountryAllow) > 0 {
-			add("-m set --match-set xg_callow4 src -j RETURN")
+	// Country lists hold both families (the portal's GeoIP lists have
+	// IPv6 networks; ipdeny's are IPv4 only).
+	family := func(list []string) bool {
+		for _, c := range list {
+			if strings.Contains(c, ":") == v6 {
+				return true
+			}
 		}
-		jump("-m set --match-set xg_cblock4 src", "xg-country", ChainCountry)
+		return false
+	}
+	if family(r.CountryBlock) {
+		if family(r.CountryAllow) {
+			add("-m set --match-set xg_callow" + sfx + " src -j RETURN")
+		}
+		jump("-m set --match-set xg_cblock"+sfx+" src", "xg-country", ChainCountry)
 	}
 	if r.DoS {
 		ban := r.DoSBanSeconds

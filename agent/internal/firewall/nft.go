@@ -37,7 +37,7 @@ type Ruleset struct {
 	// one direction (rendered one rule each).
 	AllowRules                 []Rule
 	TempAllow, TempBan         map[string]time.Duration
-	CountryBlock, CountryAllow []string // IPv4 CIDRs
+	CountryBlock, CountryAllow []string // IPs/CIDRs (both families)
 	DoS                        bool
 	DoSPerMinute               int
 	DoSBanSeconds              int
@@ -149,8 +149,8 @@ func (r Ruleset) Render() string {
 	i4, i6 := split(r.Ignore)
 	ta4, ta6 := splitTimed(r.TempAllow)
 	tb4, tb6 := splitTimed(r.TempBan)
-	cb4, _ := split(r.CountryBlock)
-	ca4, _ := split(r.CountryAllow)
+	cb4, cb6 := split(r.CountryBlock)
+	ca4, ca6 := split(r.CountryAllow)
 	// Ignored countries can overlap user entries; interval sets reject overlaps.
 	set(&b, "allow4", "ipv4_addr", "interval", Collapse(a4))
 	set(&b, "allow6", "ipv6_addr", "interval", Collapse(a6))
@@ -164,6 +164,8 @@ func (r Ruleset) Render() string {
 	set(&b, "tempban6", "ipv6_addr", "timeout", tb6)
 	set(&b, "country_allow4", "ipv4_addr", "interval", ca4)
 	set(&b, "country_block4", "ipv4_addr", "interval", cb4)
+	set(&b, "country_allow6", "ipv6_addr", "interval", ca6)
+	set(&b, "country_block6", "ipv6_addr", "interval", cb6)
 	p4, p6 := split(Collapse(r.IPDB))
 	counterSet(&b, "ipdb4", "ipv4_addr", !r.NoSetCounters, p4)
 	counterSet(&b, "ipdb6", "ipv6_addr", !r.NoSetCounters, p6)
@@ -275,6 +277,12 @@ func (r Ruleset) Render() string {
 			b.WriteString("\t\tip saddr @country_allow4 accept\n")
 		}
 		jump("ip saddr @country_block4", "drop_country", "xg-country")
+	}
+	if len(cb6) > 0 {
+		if len(ca6) > 0 {
+			b.WriteString("\t\tip6 saddr @country_allow6 accept\n")
+		}
+		jump("ip6 saddr @country_block6", "drop_country", "xg-country")
 	}
 	if r.DoS {
 		ban := r.DoSBanSeconds
