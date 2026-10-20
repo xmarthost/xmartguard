@@ -33,6 +33,7 @@ const prune = setInterval(() => {
   pool
     .query("DELETE FROM server_metrics WHERE ts < now() - make_interval(days => $1)", [cfg.metricsRetentionDays])
     .then(() => pool.query('DELETE FROM sessions WHERE expires_at < now()'))
+    .then(() => pool.query("DELETE FROM captcha_events WHERE at < now() - interval '30 days'"))
     .catch((err) => app.log.error({ err }, 'prune failed'));
 }, 3600_000);
 

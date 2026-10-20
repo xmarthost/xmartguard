@@ -14,6 +14,10 @@ const ProfileBody = z.object({
 });
 const PasswordBody = z.object({ current_password: z.string().min(1).max(200), new_password: z.string().min(10).max(200) });
 
+/** Failed sign-ins for one email within LOGIN_LOCK_MINUTES after which it is locked for that long. */
+export const LOGIN_MAX_FAILURES = 10;
+export const LOGIN_LOCK_MINUTES = 15;
+
 // A real hash so unknown-email logins take as long as wrong-password ones.
 const DUMMY_HASH = hashPassword('xpguard-timing-dummy');
 
@@ -32,7 +36,16 @@ export function authRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void 
     const { email, password } = parsed.data;
     const { rows } = await pool.query('SELECT id, account_id, password_hash FROM users WHERE lower(email) = lower($1)', [email]);
     const u = rows[0];
-    const ok = await verifyPassword(password, u ? u.password_hash : await DUMMY_HASH);
+    // Per account, not only per address: a botnet (many addresses) guessing
+    // one owner's password is stopped after LOGIN_MAX_FAILURES in a window.
+    // The answer stays the same 401, so this tells nothing about the email.
+    const failed = await pool.query(
+      `SELECT count(*)::int AS n FROM audit_events
+        WHERE action = 'auth.login_failed' AND lower(detail->>'email') = lower($1) AND created_at > now() - make_interval(mins => $2)`,
+      [email, LOGIN_LOCK_MINUTES],
+    );
+    const locked = failed.rows[0].n >= LOGIN_MAX_FAILURES;
+    const ok = (await verifyPassword(password, u ? u.password_hash : await DUMMY_HASH)) && !locked;
     if (!u || !ok) {
       await audit(pool, { accountId: u?.account_id, userId: u?.id, action: 'auth.login_failed', detail: { email }, ip: req.ip });
       return reply.code(401).send({ error: 'invalid email or password' });

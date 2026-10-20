@@ -62,3 +62,24 @@ describe('notification links from agents', () => {
     for (const bad of ['https://evil.example/x', '//evil.example', '/admin', '../../settings', 'javascript:alert(1)', 'a b', 'x?u=//evil.example', 7]) expect(safePageLink(bad)).toBe('');
   });
 });
+
+describe('password guessing against one account', () => {
+  it('locks the email after many failures from any addresses, with the same answer', async () => {
+    // Ten failures already recorded for the owner (from many addresses).
+    await h.pool.query(
+      "INSERT INTO audit_events (action, detail, ip) SELECT 'auth.login_failed', jsonb_build_object('email', $1::text), '198.51.100.' || g FROM generate_series(1, 10) g",
+      [OWNER.email.toUpperCase()],
+    );
+    const r = await new Client(h.url).req('POST', '/api/auth/login', { email: OWNER.email, password: OWNER.password });
+    expect(r.status).toBe(401);
+    expect(r.body.error).toBe('invalid email or password');
+    // After the window the right password works again.
+    await h.pool.query("UPDATE audit_events SET created_at = now() - interval '1 hour' WHERE action = 'auth.login_failed'");
+    expect((await new Client(h.url).req('POST', '/api/auth/login', { email: OWNER.email, password: OWNER.password })).status).toBe(200);
+  });
+
+  it('has indexes for the hourly prunes and lookups', async () => {
+    const { rows } = await h.pool.query("SELECT indexname FROM pg_indexes WHERE indexname = ANY($1)", [['server_metrics_ts_idx', 'captcha_events_at_idx', 'ai_kb_match_idx', 'audit_login_failed_idx']]);
+    expect(rows).toHaveLength(4);
+  });
+});

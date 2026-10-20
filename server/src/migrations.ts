@@ -744,4 +744,17 @@ CREATE TABLE ai_kb_account (
 ALTER TABLE mcp_tokens ADD COLUMN expires_at timestamptz;
 `,
   },
+  {
+    version: '028_prune_and_login_indexes',
+    sql: `
+-- The hourly prunes and lookups by time or signature scanned whole tables
+-- (server_metrics' key starts with server_id; captcha_events' index with
+-- account_id; ai_kb had none on match). Failed sign-ins are counted per
+-- email to slow down password guessing against one account.
+CREATE INDEX server_metrics_ts_idx ON server_metrics USING brin (ts);
+CREATE INDEX captcha_events_at_idx ON captcha_events (at);
+CREATE INDEX ai_kb_match_idx ON ai_kb (match) WHERE match <> '';
+CREATE INDEX audit_login_failed_idx ON audit_events (lower(detail->>'email'), created_at) WHERE action = 'auth.login_failed';
+`,
+  },
 ];
