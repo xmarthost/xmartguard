@@ -101,9 +101,15 @@ func TestBuiltinFlow(t *testing.T) {
 	}
 	// Wrong answer.
 	res, _ = http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"id": {id}, "answer": {"00000x"}, "back": {"/wp-login.php"}})
+	body, _ = io.ReadAll(res.Body)
 	res.Body.Close()
 	if len(*solved) != 0 {
 		t.Fatal("wrong answer accepted")
+	}
+	// A wrong answer spends the image: the page shows a new one.
+	id = strings.ReplaceAll(regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(string(body))[1], "&#43;", "+")
+	if digits, ok = s.open("127.0.0.1", id); !ok {
+		t.Fatal("cannot open the new id")
 	}
 	// Right answer; an off-site "back" is not followed.
 	res, _ = http.PostForm(srv.URL+"/.xpguard/verify", url.Values{"id": {id}, "answer": {digits}, "back": {"//evil.example/"}})
