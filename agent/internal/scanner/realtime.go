@@ -519,8 +519,14 @@ func (r *Realtime) addWatchKeeping(dir string, reserve int) bool {
 	if err != nil {
 		return true // unreadable dir: skip but keep walking
 	}
+	// A renamed folder keeps its watch: the kernel returns the same wd,
+	// which then only moves to the new name.
+	if old, ok := r.dirs[wd]; ok {
+		delete(r.byPath, old)
+	} else {
+		r.watches++
+	}
 	r.dirs[wd], r.byPath[dir] = dir, wd
-	r.watches++
 	return true
 }
 
