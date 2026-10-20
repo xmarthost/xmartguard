@@ -668,8 +668,12 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule RESPONSE_STATUS "@streq 200" "t:none"`)
 		}
 		if !off[IDLoginXMLRPC] {
+			// Only calls that log in (wp.*, blogger.*, metaWeblog.*, mt.*,
+			// multicall): not pingbacks, Jetpack's own jetpack.* calls or
+			// system.listMethods.
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: XML-RPC',tag:'xpguard/login',chain"`, IDLoginXMLRPC)
-			w(`  SecRule REQUEST_FILENAME "@rx /xmlrpc\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase"`)
+			w(`  SecRule REQUEST_FILENAME "@rx /xmlrpc\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"`)
+			w(`  SecRule REQUEST_BODY "@rx <methodname>\s*(?:wp\.|blogger\.|metaweblog\.|mt\.|system\.multicall)" "t:none,t:lowercase"`)
 		}
 		if !off[IDLoginJoomla] {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: Joomla',tag:'xpguard/login',chain"`, IDLoginJoomla)
@@ -677,9 +681,11 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule ARGS:task "@streq login" "t:none,t:lowercase"`)
 		}
 		if !off[IDLoginOpenCart] {
-			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: OpenCart',tag:'xpguard/login',chain"`, IDLoginOpenCart)
+			// A successful login redirects (302); a failed one shows the form (200).
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:3,pass,log,msg:'xPGuard - Login attempt: OpenCart',tag:'xpguard/login',chain"`, IDLoginOpenCart)
 			w(`  SecRule REQUEST_FILENAME "@rx /admin/index\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"`)
-			w(`  SecRule ARGS:route "@rx ^common/login" "t:none,t:lowercase"`)
+			w(`  SecRule ARGS:route "@rx ^common/login" "t:none,t:lowercase,chain"`)
+			w(`  SecRule RESPONSE_STATUS "@streq 200" "t:none"`)
 		}
 		var custom []string
 		for _, u := range c.LoginURLs {
@@ -688,8 +694,11 @@ func Render(c settings.WAF, o Options) string {
 			}
 		}
 		if len(custom) > 0 && !off[IDLoginCustom] {
-			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Login attempt: protected URL',tag:'xpguard/login',chain"`, IDLoginCustom)
-			w(`  SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase"`, strings.Join(custom, "|"))
+			// Like WordPress: a failed login shows the form again (200), a
+			// successful one redirects.
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:3,pass,log,msg:'xPGuard - Login attempt: protected URL',tag:'xpguard/login',chain"`, IDLoginCustom)
+			w(`  SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"`, strings.Join(custom, "|"))
+			w(`  SecRule RESPONSE_STATUS "@streq 200" "t:none"`)
 		}
 	}
 	if g := o.Gate; g != nil && len(g.Tokens) > 0 && len(c.LoginURLs) > 0 {
