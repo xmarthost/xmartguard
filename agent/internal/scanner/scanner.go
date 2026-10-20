@@ -1486,14 +1486,22 @@ func NewOffline() *Scanner {
 	return &Scanner{users: map[uint32]string{}, cancels: map[int64]context.CancelFunc{}, KnownGood: wpcore.Default().Known}
 }
 
-// capHeuristic reports heuristic detections in test suites and PHP archives
-// as suspicious: test code exercises eval, exec and uploads on purpose, and a
-// .phar bundles whole libraries. The AI scanner then confirms them.
-var reBuilderThumbs = regexp.MustCompile(`/wp-content/uploads/(?:master_addons|elementor|envato-elements|templately|starter-templates|astra-sites|ocdi)/`)
+// capHeuristic reports heuristic detections in packages' test suites and in
+// PHP archives as suspicious: test code exercises eval, exec and uploads on
+// purpose, and a .phar bundles whole libraries. The AI scanner then
+// confirms them. A "test" folder of its own in a site (public_html/test/)
+// is where attackers drop shells too, so only a test folder inside a
+// package (a Composer vendor folder, an npm module, a WordPress
+// plugin or theme) is capped.
+var (
+	reBuilderThumbs = regexp.MustCompile(`/wp-content/uploads/(?:master_addons|elementor|envato-elements|templately|starter-templates|astra-sites|ocdi)/`)
+	rePackageTests  = regexp.MustCompile(`/(?:vendor/[^/]+|node_modules/(?:@[^/]+/)?[^/]+|wp-content/(?:plugins|themes)/[^/]+)/(?:[^/]+/)*tests?/`)
+	reComposerPkg   = regexp.MustCompile(`/vendor/[^/]+/[^/]+/`)
+)
 
 func capHeuristic(path, ext string, d *Detection) *Detection {
 	// Composer packages (PHPStan) start from their own .phar.
-	if d.Signature == "PHP.Suspicious.PharInclude" && strings.Contains(path, "/vendor/") {
+	if d.Signature == "PHP.Suspicious.PharInclude" && reComposerPkg.MatchString(path) {
 		return nil
 	}
 	// Template-kit thumbnails page builders download into their own upload
@@ -1504,7 +1512,7 @@ func capHeuristic(path, ext string, d *Detection) *Detection {
 	if d.Category != CatVirus {
 		return d
 	}
-	if ext == ".phar" || strings.Contains(path, "/tests/") || strings.Contains(path, "/test/") {
+	if ext == ".phar" || rePackageTests.MatchString(path) {
 		return &Detection{CatSuspicious, d.Signature}
 	}
 	return d

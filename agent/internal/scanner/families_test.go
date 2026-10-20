@@ -112,6 +112,25 @@ func TestCapHeuristicInTestsAndPhar(t *testing.T) {
 	if d := capHeuristic("/home/u/public_html/x.php", ".php", v); d.Category != CatVirus {
 		t.Errorf("normal file capped: %+v", d)
 	}
+	// A2 F8: a site's own test folder is no excuse (attackers drop shells
+	// in public_html/test/), nor is a file loose in vendor/.
+	for _, p := range []string{"/home/u/public_html/test/x.php", "/home/u/public_html/tests/x.php", "/home/u/public_html/wp-content/uploads/test/x.php"} {
+		if d := capHeuristic(p, ".php", v); d.Category != CatVirus {
+			t.Errorf("%s capped: %+v", p, d)
+		}
+	}
+	for _, p := range []string{"/home/u/public_html/node_modules/pkg/test/a.php", "/home/u/public_html/wp-content/plugins/demo/tests/unit/a.php"} {
+		if d := capHeuristic(p, ".php", v); d.Category != CatSuspicious {
+			t.Errorf("%s not capped: %+v", p, d)
+		}
+	}
+	phar := &Detection{CatSuspicious, "PHP.Suspicious.PharInclude"}
+	if d := capHeuristic("/home/u/public_html/vendor/phpstan/phpstan/bootstrap.php", ".php", phar); d != nil {
+		t.Errorf("composer phar loader flagged: %+v", d)
+	}
+	if d := capHeuristic("/home/u/public_html/vendor/x.php", ".php", phar); d == nil {
+		t.Error("phar include loose in vendor/ dropped")
+	}
 }
 
 func TestImagesAndArchives(t *testing.T) {
