@@ -38,7 +38,7 @@ jobs:
         run: npm ci && npm run typecheck && npm test
       - name: Web build
         working-directory: web
-        run: npm ci && npm run build
+        run: npm ci && npm test && npm run build
       - name: Shell lint
         run: shellcheck -S warning installer/*.sh scripts/*.sh deploy/*.sh
       - name: Installer and deploy script checks
