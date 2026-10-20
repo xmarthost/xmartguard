@@ -22,10 +22,21 @@ func stripPHPComments(src []byte) []byte {
 	for i := 0; i < n; {
 		c := src[i]
 		if !inPHP {
+			// Only "<?php" and "<?=" open code (short_open_tag is off on
+			// current PHP): text after "<?xml" or a stray "<?" is HTML, and
+			// treating it as PHP would blank a "#" or "//" line there and
+			// with it real code that follows.
 			if c == '<' && i+1 < n && src[i+1] == '?' {
-				inPHP = true
-				i += 2
-				continue
+				if i+2 < n && src[i+2] == '=' {
+					inPHP = true
+					i += 3
+					continue
+				}
+				if i+5 <= n && (src[i+2]|0x20) == 'p' && (src[i+3]|0x20) == 'h' && (src[i+4]|0x20) == 'p' {
+					inPHP = true
+					i += 5
+					continue
+				}
 			}
 			i++
 			continue
