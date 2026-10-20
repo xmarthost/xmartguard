@@ -716,13 +716,13 @@ func normalize(s *Settings) {
 	s.Reputation.IPs = clean(s.Reputation.IPs, false)
 	s.Reputation.RBLs = clean(s.Reputation.RBLs, false)
 	s.WAF.CustomBots = clean(s.WAF.CustomBots, false)
-	s.WAF.WhitelistIPs = clean(s.WAF.WhitelistIPs, false)
+	s.WAF.WhitelistIPs = clean(canonAddrs(s.WAF.WhitelistIPs), false)
 	if s.WAF.DisabledRules == nil {
 		s.WAF.DisabledRules = []int{}
 	}
 	s.OSM.SpamPatterns = clean(s.OSM.SpamPatterns, false)
 	s.OSM.WhitelistSenders = clean(s.OSM.WhitelistSenders, false)
-	s.OSM.WhitelistIPs = clean(s.OSM.WhitelistIPs, false)
+	s.OSM.WhitelistIPs = clean(canonAddrs(s.OSM.WhitelistIPs), false)
 	s.OSM.WhitelistPaths = clean(s.OSM.WhitelistPaths, false)
 	s.AutoSuspend.ExcludeUsers = clean(s.AutoSuspend.ExcludeUsers, false)
 	s.AutoSuspend.WhitelistDomains = clean(lower(s.AutoSuspend.WhitelistDomains), false)
@@ -1119,12 +1119,43 @@ func portListed(s string, port int) bool {
 // PortListed reports whether port is in a port list.
 func PortListed(s string, port int) bool { return portListed(s, port) }
 
+// validIPorCIDR accepts an address or a range no wider than /8 (IPv4) or
+// /16 (IPv6), like the firewall: "0.0.0.0/0" in a whitelist would exempt
+// every visitor.
 func validIPorCIDR(s string) bool {
 	if net.ParseIP(s) != nil {
 		return true
 	}
-	_, _, err := net.ParseCIDR(s)
-	return err == nil
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		return false
+	}
+	ones, bits := n.Mask.Size()
+	return !(bits == 32 && ones < 8) && !(bits == 128 && ones < 16)
+}
+
+// canonAddrs writes addresses the way they are matched: "::ffff:1.2.3.4"
+// as 1.2.3.4 (REMOTE_ADDR and mail sources are plain IPv4) and ranges as
+// their network. Values that do not parse are left for validate.
+func canonAddrs(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, a := range list {
+		a = strings.TrimSpace(a)
+		if ip := net.ParseIP(a); ip != nil {
+			if v4 := ip.To4(); v4 != nil {
+				ip = v4
+			}
+			a = ip.String()
+		} else if ip, n, err := net.ParseCIDR(a); err == nil {
+			ones, bits := n.Mask.Size()
+			if v4 := ip.To4(); v4 != nil && bits == 128 && ones >= 96 {
+				n = &net.IPNet{IP: v4.Mask(net.CIDRMask(ones-96, 32)), Mask: net.CIDRMask(ones-96, 32)}
+			}
+			a = n.String()
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // DefaultRBLs are widely used, free-to-query DNS blocklists.

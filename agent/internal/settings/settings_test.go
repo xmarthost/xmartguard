@@ -85,6 +85,30 @@ func TestAllowedCountriesBecomeWhitelisted(t *testing.T) {
 	}
 }
 
+// Audit A10 F6: whitelist ranges wider than the firewall accepts are
+// refused, and IPv4-mapped addresses are stored as the IPv4 that matches.
+func TestWhitelistAddresses(t *testing.T) {
+	t.Setenv("XG_CONFIG_DIR", t.TempDir())
+	st, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"0.0.0.0/0", "::/0", "10.0.0.0/7", "2001::/15", "999.1.1.1"} {
+		for _, sec := range []string{"waf", "osm"} {
+			if _, err := st.Patch([]byte(`{"` + sec + `":{"whitelist_ips":["` + bad + `"]}}`)); err == nil {
+				t.Errorf("%s.whitelist_ips accepted %q", sec, bad)
+			}
+		}
+	}
+	s, err := st.Patch([]byte(`{"waf":{"whitelist_ips":["::ffff:192.0.2.7","192.0.2.9/24","::ffff:198.51.100.0/120","2001:db8::1"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(s.WAF.WhitelistIPs, ","); got != "192.0.2.7,192.0.2.0/24,198.51.100.0/24,2001:db8::1" {
+		t.Fatalf("stored %s", got)
+	}
+}
+
 // Audit A10 F1: Patch decoded over the live struct, writing into the slice
 // arrays that Get() copies share.
 func TestPatchDoesNotWriteIntoSharedLists(t *testing.T) {
