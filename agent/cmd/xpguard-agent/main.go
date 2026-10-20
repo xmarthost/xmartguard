@@ -259,6 +259,7 @@ func cmdRun() error {
 	ensureCLILink(log)
 	a.Start(ctx)
 	go dropOldPaths(ctx, log)
+	go capLog(ctx, log)
 	go func() {
 		if err := a.LocalServer().Run(ctx); err != nil {
 			log.Warn("local control socket unavailable", "err", err)
@@ -522,6 +523,59 @@ func ensureCLILink(log *slog.Logger) {
 	if err := os.Symlink(self, link); err != nil {
 		log.Debug("xgcli link not created", "err", err)
 	}
+}
+
+// logLimit caps agent.log: systemd appends the agent's output to it and
+// nothing rotates it, so over months it would fill the disk.
+const logLimit = 50 << 20
+
+// capLog keeps the log file behind stderr (when it is one) under logLimit:
+// the full file moves to agent.log.1 and the file starts again (like
+// logrotate's copytruncate; systemd opened it for appending).
+func capLog(ctx context.Context, log *slog.Logger) {
+	path, err := os.Readlink("/proc/self/fd/2")
+	if err != nil || !strings.HasPrefix(path, "/") {
+		return
+	}
+	for {
+		if rotated, err := rotateLog(os.Stderr, path, logLimit); err != nil {
+			log.Debug("log not rotated", "err", err)
+		} else if rotated {
+			log.Info("agent log rotated", "old", path+".1")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Minute):
+		}
+	}
+}
+
+func rotateLog(f *os.File, path string, limit int64) (bool, error) {
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() <= limit {
+		return false, err
+	}
+	src, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer src.Close()
+	if same, err := os.Stat(path); err != nil || !os.SameFile(fi, same) {
+		return false, errors.New("stderr is not " + path)
+	}
+	dst, err := os.OpenFile(path+".1", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o640)
+	if err != nil {
+		return false, err
+	}
+	_, err = io.Copy(dst, src)
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, f.Truncate(0)
 }
 
 // dropOldPaths removes the links left at /etc/xmartguard and /opt/xmartguard
