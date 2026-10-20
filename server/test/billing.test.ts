@@ -17,9 +17,17 @@ async function call(path: string, payload: unknown, opts?: { secret?: string; ts
   return new Client(h.url).req('POST', path, s.body, s.headers);
 }
 const inAYear = () => new Date(Date.now() + 365 * 86400_000).toISOString();
+/** Signs a customer in through the website's one-time link (no rate-limited password step). */
+async function signIn(email: string): Promise<Client> {
+  const u = new URL((await call('/api/billing/login-link', { email })).body.url);
+  const res = await fetch(h.url + u.pathname + u.search, { redirect: 'manual' });
+  const c = new Client(h.url);
+  c.cookie = res.headers.getSetCookie()[0].split(';')[0];
+  return c;
+}
 
 beforeAll(async () => {
-  h = await startHarness({ billingSecret: SECRET, billingSiteUrl: 'https://shop.example.com' });
+  h = await startHarness({ billingSecret: SECRET, billingSiteUrl: 'https://shop.example.com', trustProxy: true });
   owner = new Client(h.url);
   await owner.login();
 });
@@ -201,5 +209,76 @@ describe('billing API (website -> portal)', () => {
     // Customers see the platform's look.
     await owner.req('PUT', '/api/appearance', { theme: 'emerald', mode: 'light' });
     expect((await c.req('GET', '/api/appearance')).body.appearance.theme).toBe('emerald');
+  });
+
+  it('binds a purchase only to the owner of the account billing made, never to any user with the email', async () => {
+    await call('/api/billing/provision', { email: 'shop-a@example.com', plan: 'pro', max_servers: 1, period_end: inAYear() });
+    const link = await call('/api/billing/password-link', { email: 'shop-a@example.com' });
+    const a = new Client(h.url);
+    await a.req('POST', '/api/auth/set-password', { token: new URL(link.body.url).searchParams.get('token'), password: 'shop-a-long-password' });
+    const licences = async () => (await h.pool.query('SELECT count(*)::int AS n FROM account_licenses')).rows[0].n;
+    const before = await licences();
+    // Customer A adds a user with an address that has no portal account yet.
+    expect((await a.req('POST', '/api/users', { email: 'buyer@example.com', password: 'sub-user-long-password', role: 'admin' })).status).toBe(200);
+    // The buyer of that address pays on the website: refused, nothing written to A.
+    const p = await call('/api/billing/provision', { email: 'buyer@example.com', plan: 'pro', max_servers: 50, period_end: inAYear() });
+    expect(p.status).toBe(409);
+    expect(await licences()).toBe(before);
+    expect((await a.req('GET', '/api/license')).body.license.max_servers).toBe(1);
+    for (const path of ['/api/billing/login-link', '/api/billing/password-link', '/api/billing/usage']) {
+      expect((await call(path, { email: 'buyer@example.com' })).status, path).toBe(409);
+    }
+    // The same with A's owner changing their own login to the buyer's address.
+    expect((await a.req('PUT', '/api/auth/profile', { name: 'A', email: 'buyer2@example.com', current_password: 'shop-a-long-password' })).status).toBe(200);
+    expect((await call('/api/billing/provision', { email: 'buyer2@example.com', plan: 'pro', max_servers: 50, period_end: inAYear() })).status).toBe(409);
+    expect((await call('/api/billing/login-link', { email: 'buyer2@example.com' })).status).toBe(409);
+    expect(await licences()).toBe(before);
+    // The address A bought with still reaches A's owner.
+    const again = await call('/api/billing/provision', { email: 'shop-a@example.com', plan: 'pro', max_servers: 2, period_end: inAYear() });
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ created: false });
+    expect((await a.req('GET', '/api/license')).body.license.max_servers).toBe(2);
+  });
+
+  it('ends every earlier set-password link once a password is set', async () => {
+    await call('/api/billing/provision', { email: 'links@example.com', plan: 'pro', max_servers: 1, period_end: inAYear() });
+    const t = async () => new URL((await call('/api/billing/login-link', { email: 'links@example.com' })).body.set_password_url).searchParams.get('token')!;
+    const first = await t();
+    const second = await t();
+    const c = new Client(h.url);
+    expect((await c.req('POST', '/api/auth/set-password', { token: first, password: 'links-long-password' })).status).toBe(200);
+    expect((await new Client(h.url).req('GET', `/api/auth/set-password?token=${second}`)).status).toBe(404);
+    // A link made later (forgotten password) also ends with a change in the portal.
+    const later = new URL((await call('/api/billing/password-link', { email: 'links@example.com' })).body.url).searchParams.get('token')!;
+    expect((await c.req('POST', '/api/auth/password', { current_password: 'links-long-password', new_password: 'links-newer-password' })).status).toBe(200);
+    expect((await new Client(h.url).req('GET', `/api/auth/set-password?token=${later}`)).status).toBe(404);
+  });
+
+  it('refuses a second trial from an address that had one, whatever the inventory says', async () => {
+    const key = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    await call('/api/billing/provision', { email: 'trial-c@example.com', plan: 'free-trial', max_servers: 1, period_end: inAYear(), trial: true });
+    const c = await signIn('trial-c@example.com');
+    await h.pool.query("INSERT INTO trial_hosts (ip, hostname, trial_until) VALUES ('203.0.113.90', 'earlier.example.com', now())");
+    const t = await c.req('POST', '/api/enrollment-tokens', { label: 'again' });
+    // No addresses in the inventory; the server connects from the recorded one.
+    const r = await new Client(h.url).req('POST', '/api/agent/enroll', { token: t.body.token, public_key: key(), agent_version: '0.22.0', inventory: { hostname: 'renamed.example.com', ips: [] } }, { 'x-forwarded-for': '203.0.113.90' });
+    expect(r.status).toBe(402);
+  });
+
+  it('lets two servers enrolling at once take the last licence only once', async () => {
+    const key = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    await call('/api/billing/provision', { email: 'race@example.com', plan: 'pro', max_servers: 1, period_end: inAYear() });
+    const c = await signIn('race@example.com');
+    const t1 = await c.req('POST', '/api/enrollment-tokens', { label: 'one' });
+    // A second unused token, as two token requests racing leave behind.
+    const t2 = 'race-second-token-0123456789';
+    await h.pool.query(
+      "INSERT INTO enrollment_tokens (account_id, token_hash, label, expires_at) SELECT account_id, encode(sha256($2::bytea), 'hex'), 'two', now() + interval '1 hour' FROM enrollment_tokens WHERE id = $1",
+      [t1.body.id, t2],
+    );
+    const enroll = (token: string) => new Client(h.url).req('POST', '/api/agent/enroll', { token, public_key: key(), agent_version: '0.22.0', inventory: { hostname: 'race.example.com' } });
+    const [a, b] = await Promise.all([enroll(t1.body.token), enroll(t2)]);
+    expect([a.status, b.status].sort()).toEqual([200, 402]);
+    expect((await c.req('GET', '/api/license')).body.servers_used).toBe(1);
   });
 });

@@ -364,8 +364,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         sameIP(solver, ip) ? '' : solver,
       ])
       .catch(() => undefined);
-    // Keep 30 days.
-    if (Math.random() < 0.02) await pool.query("DELETE FROM captcha_events WHERE at < now() - interval '30 days'").catch(() => undefined);
+    // Kept 30 days (pruned hourly, see index.ts).
   }
 
   // frameHost: the website that may show the page in a frame (its own

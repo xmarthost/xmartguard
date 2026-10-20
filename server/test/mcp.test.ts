@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toText } from '../src/routes/mcp.js';
-import { Client, startHarness, type Harness } from './helpers.js';
+import { Client, OWNER, startHarness, type Harness } from './helpers.js';
+import { createOwner } from '../src/routes/users.js';
 
 let h: Harness;
 let c: Client;
@@ -117,6 +118,31 @@ describe('mcp endpoint', () => {
     expect(a.rowCount).toBe(1);
   });
 
+  it("keeps the fleet knowledge base from customers; the master's tokens reach customers' servers", async () => {
+    await createOwner(h.pool, 'mcp-cust@example.com', 'customer-long-password', 'MCP Customer');
+    const cust = new Client(h.url);
+    await cust.login('mcp-cust@example.com', 'customer-long-password');
+    const { rows: acc } = await h.pool.query("SELECT account_id FROM users WHERE email = 'mcp-cust@example.com'");
+    await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'cust.example.com', 'k-cust')", [acc[0].account_id]);
+    const t = await cust.req('POST', '/api/mcp/tokens', { label: 'mine', scope: 'write' });
+    const names = (await rpc(t.body.url, 'tools/list')).body.result.tools.map((x: any) => x.name);
+    expect(names).not.toContain('ai_knowledge');
+    expect(names).not.toContain('mark_file');
+    const kb = await rpc(t.body.url, 'tools/call', { name: 'ai_knowledge', arguments: { q: '%' } });
+    expect(kb.body.error).toBeTruthy();
+    expect(JSON.stringify(kb.body)).not.toContain('a'.repeat(64));
+    const o = text(await rpc(t.body.url, 'tools/call', { name: 'fleet_overview', arguments: {} }));
+    expect(o.ai_knowledge_base).toBeUndefined();
+    expect(o.totals.servers).toBe(1);
+    // The customer sees only their server; the master reaches it too.
+    expect(text(await rpc(t.body.url, 'tools/call', { name: 'list_servers', arguments: {} })).servers.map((s: any) => s.hostname)).toEqual(['cust.example.com']);
+    expect(text(await rpc(readUrl, 'tools/call', { name: 'list_servers', arguments: {} })).servers.map((s: any) => s.hostname)).toContain('cust.example.com');
+    const d = await rpc(readUrl, 'tools/call', { name: 'server_dashboard', arguments: { server: 'cust.example.com' } });
+    expect(d.body.result.content[0].text).toContain('offline');
+    const other = await rpc(t.body.url, 'tools/call', { name: 'server_dashboard', arguments: { server: 'web1.example.com' } });
+    expect(other.body.result.content[0].text).toContain('server not found');
+  });
+
   it('stops working once revoked', async () => {
     expect((await c.req('DELETE', `/api/mcp/tokens/${readId}`)).status).toBe(200);
     expect((await rpc(readUrl, 'ping')).status).toBe(401);
@@ -199,7 +225,7 @@ describe('mcp oauth sign-in', () => {
     expect(tok).toMatchObject({ token_type: 'Bearer', scope: 'write' });
     expect(tok.access_token).toMatch(/^xgm_/);
     expect(tok.refresh_token).toMatch(/^xgr_/);
-    expect(tok.expires_in).toBeUndefined();
+    expect(tok.expires_in).toBe(24 * 3600);
     const tools = (await rpc(`${h.url}/mcp`, 'tools/list', undefined, { authorization: `Bearer ${tok.access_token}` })).body.result.tools.map((x: any) => x.name);
     expect(tools).toContain('finding_action');
     expect(tools).toContain('update_settings');
@@ -233,6 +259,25 @@ describe('mcp oauth sign-in', () => {
     expect(tok.scope).toBe('read');
     const tools = (await rpc(`${h.url}/mcp`, 'tools/list', undefined, { authorization: `Bearer ${tok.access_token}` })).body.result.tools.map((x: any) => x.name);
     expect(tools).not.toContain('finding_action');
+  });
+
+  it('ends access tokens after a day, and every token of a user who changes the password', async () => {
+    const ping = async (a: string) => (await rpc(`${h.url}/mcp`, 'ping', undefined, { authorization: `Bearer ${a}` })).status;
+    const tok = await (await form({ grant_type: 'authorization_code', code: await approve(), redirect_uri: redirect, client_id: clientId, code_verifier: verifier })).json();
+    expect(await ping(tok.access_token)).toBe(200);
+    await h.pool.query("UPDATE mcp_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1", [createHash('sha256').update(tok.access_token).digest('hex')]);
+    expect(await ping(tok.access_token)).toBe(401);
+    const fresh = await (await form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: clientId })).json();
+    expect(await ping(fresh.access_token)).toBe(200);
+    // A token made on the AI Connector page and the OAuth connection both end
+    // when the user changes the password (an intruder's tokens with it).
+    const page = (await c.req('POST', '/api/mcp/tokens', { label: 'page token', scope: 'write' })).body.token;
+    expect(await ping(page)).toBe(200);
+    expect((await c.req('POST', '/api/auth/password', { current_password: OWNER.password, new_password: 'a-new-long-password' })).status).toBe(200);
+    expect(await ping(page)).toBe(401);
+    expect(await ping(fresh.access_token)).toBe(401);
+    expect((await (await form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: clientId })).json()).error).toBe('invalid_grant');
+    expect((await c.req('POST', '/api/auth/password', { current_password: 'a-new-long-password', new_password: OWNER.password })).status).toBe(200);
   });
 });
 

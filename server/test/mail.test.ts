@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
+import { syncMail } from '../src/routes/mail.js';
+import type { AgentHub } from '../src/agents/hub.js';
 
 let h: Harness;
 let c: Client;
@@ -45,5 +47,25 @@ describe('domain reputation', () => {
     await c.req('PUT', '/api/mail-protection', { dqs_key: '' });
     const after = await h.pool.query('SELECT dqs_key, safe_browsing_key FROM account_mail');
     expect(after.rows[0]).toMatchObject({ dqs_key: '', safe_browsing_key: 'AIzaSyA1234567890abcdefXYZ' });
+  });
+});
+
+describe("the master's keys", () => {
+  it("are sent to the platform's servers only, never to a customer's", async () => {
+    await c.login();
+    await c.req('PUT', '/api/mail-protection', { dqs_key: 'masterdqskey0123456789' });
+    await c.req('PUT', '/api/domain-reputation', { safe_browsing_key: 'AIzaMasterSafeBrowsing' });
+    const sent = new Map<string, unknown>();
+    const hub = { command: async (id: string, _a: string, p: unknown) => void sent.set(id, p) } as unknown as AgentHub;
+    const master = (await h.pool.query('SELECT id FROM accounts WHERE platform')).rows[0].id;
+    const cust = (await h.pool.query("INSERT INTO accounts (name) VALUES ('Mail Customer') RETURNING id")).rows[0].id;
+    const srv = async (acc: string, key: string) =>
+      (await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'm', $2) RETURNING id", [acc, key])).rows[0].id as string;
+    const own = await srv(master, 'k-mail-own');
+    const theirs = await srv(cust, 'k-mail-cust');
+    await syncMail(h.pool, hub, own);
+    await syncMail(h.pool, hub, theirs);
+    expect(sent.get(own)).toEqual({ dqs_key: 'masterdqskey0123456789', safe_browsing_key: 'AIzaMasterSafeBrowsing' });
+    expect(sent.get(theirs)).toEqual({ dqs_key: '', safe_browsing_key: '' });
   });
 });

@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { Pool } from '../db.js';
-import { masterAccount } from '../tenancy.js';
+import { isPlatform, masterAccount } from '../tenancy.js';
 import { distrustClean } from './learning.js';
 import type { Config } from '../config.js';
 import { complete, ProviderError, type ProviderRow } from './providers.js';
@@ -72,18 +72,27 @@ export class AIGateway {
 
   async judge(accountId: string, serverId: string, files: FileIn[]): Promise<Result[]> {
     const shas = files.map((f) => f.sha256.toLowerCase());
+    const fleet = await isPlatform(this.pool, accountId);
     const { rows } = await this.pool.query(
       `UPDATE ai_kb SET hits = hits + 1 WHERE sha256 = ANY($1)
        RETURNING sha256, verdict, confidence, reason, injected, cut, model`,
       [shas],
     );
     const known = new Map(rows.map((r) => [r.sha256, r]));
+    if (!fleet && known.size < shas.length) {
+      // The account's own earlier verdicts (customer servers never write the fleet's).
+      const own = await this.pool.query(
+        'SELECT sha256, verdict, confidence, reason, injected, cut, model FROM ai_kb_account WHERE account_id = $1 AND sha256 = ANY($2)',
+        [accountId, shas.filter((s) => !known.has(s))],
+      );
+      for (const r of own.rows) known.set(r.sha256, r);
+    }
     const out: Promise<Result>[] = [];
     for (const f of files) {
       const k = known.get(f.sha256.toLowerCase());
       if (k) {
         // Another server already had this exact file judged: no tokens spent.
-        await this.saveSample(f, k.verdict, k.confidence);
+        if (fleet) await this.saveSample(f, k.verdict, k.confidence);
         out.push(
           Promise.resolve({ id: f.id, verdict: k.verdict, confidence: k.confidence, reason: k.reason, injected: k.injected, cut: k.cut, model: k.model, source: 'fleet' }),
         );
@@ -119,14 +128,26 @@ export class AIGateway {
     let chars = 0;
     for (const it of q.items) {
       if (batch.length && (chars + it.file.excerpt.length > BATCH_CHARS || batch.length >= this.cfg.aiBatchFiles)) {
-        void this.run(accountId, batch);
+        this.launch(accountId, batch);
         batch = [];
         chars = 0;
       }
       batch.push(it);
       chars += it.file.excerpt.length;
     }
-    if (batch.length) void this.run(accountId, batch);
+    if (batch.length) this.launch(accountId, batch);
+  }
+
+  /**
+   * Runs a batch from a timer. Nothing may escape as an unhandled
+   * rejection (Node ends the process on one, taking the whole portal down):
+   * a failure answers every file of the batch that is still waiting.
+   */
+  private launch(accountId: string, batch: Pending[]): void {
+    this.run(accountId, batch).catch((err) => {
+      this.log.error({ err: (err as Error).message }, 'AI batch failed');
+      for (const p of batch) p.resolve({ id: p.file.id, error: 'the portal could not judge this file; it is tried again later' });
+    });
   }
 
   private async run(accountId: string, batch: Pending[], attempt = 0): Promise<void> {
@@ -164,7 +185,7 @@ export class AIGateway {
           a.confidence = Math.min(a.confidence, 60);
         }
       }
-      await this.store(p, a, model);
+      await this.store(accountId, p, a, model);
       p.resolve({ id: p.file.id, verdict: a.verdict, confidence: a.confidence, reason: a.reason, injected: a.injected, cut: a.cut, model, source: 'ai' });
     }
     if (missing.length) {
@@ -221,8 +242,25 @@ export class AIGateway {
     throw Object.assign(new Error('all AI API keys failed: ' + errors.join('; ').slice(0, 600)), { badRequest: allBadRequest });
   }
 
-  private async store(p: Pending, a: Judgement, model: string): Promise<void> {
+  /**
+   * Keeps a verdict. Only the platform's own servers write the fleet
+   * knowledge base (and the training samples) that every server receives:
+   * the portal cannot check that an agent's excerpt belongs to the hash it
+   * names, so a customer's server could otherwise mark any file clean on
+   * every other account's servers. Customers' verdicts serve their account.
+   */
+  private async store(accountId: string, p: Pending, a: Judgement, model: string): Promise<void> {
     const f = p.file;
+    if (!(await isPlatform(this.pool, accountId))) {
+      await this.pool.query(
+        `INSERT INTO ai_kb_account (account_id, sha256, verdict, confidence, reason, injected, cut, model)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (account_id, sha256) DO UPDATE SET verdict = excluded.verdict, confidence = excluded.confidence,
+           reason = excluded.reason, injected = excluded.injected, cut = excluded.cut, model = excluded.model, updated_at = now()`,
+        [accountId, f.sha256.toLowerCase(), a.verdict, a.confidence, a.reason, a.injected, JSON.stringify(a.cut), model],
+      );
+      return;
+    }
     await this.pool.query(
       `INSERT INTO ai_kb (sha256, size, verdict, confidence, reason, injected, cut, model, name, match, server_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)

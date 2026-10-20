@@ -699,4 +699,62 @@ ALTER TABLE captcha_events ADD COLUMN solver_ip text NOT NULL DEFAULT '';
 CREATE INDEX captcha_events_account_solver ON captcha_events (account_id, solver_ip) WHERE solver_ip <> '';
 `,
   },
+  {
+    version: '025_billing_email',
+    sql: `
+-- The website's purchases are bound to the account billing created, by the
+-- email it was created for: never to any portal user who happens to use
+-- that address (an owner could add a user with a buyer's email and take
+-- over the licence and the servers installed from it). Existing customer
+-- accounts (those with a licence) get their first owner's email.
+ALTER TABLE accounts ADD COLUMN billing_email text;
+UPDATE accounts a SET billing_email = lower(o.email)
+  FROM (SELECT DISTINCT ON (account_id) account_id, email FROM users WHERE role = 'owner' ORDER BY account_id, created_at) o
+ WHERE o.account_id = a.id AND NOT a.platform AND EXISTS (SELECT 1 FROM account_licenses l WHERE l.account_id = a.id);
+CREATE UNIQUE INDEX accounts_billing_email_uq ON accounts (billing_email) WHERE billing_email IS NOT NULL;
+`,
+  },
+  {
+    version: '026_ai_kb_account',
+    sql: `
+-- AI verdicts on files from customer accounts' servers. A customer has root
+-- on their server and can sign any judge request (a harmless excerpt under
+-- a web shell's hash), so these verdicts serve only that account's servers;
+-- the fleet knowledge base (ai_kb, sent to every server) takes verdicts from
+-- the platform's servers and administrators only.
+CREATE TABLE ai_kb_account (
+  account_id  uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  sha256      text NOT NULL,
+  verdict     text NOT NULL CHECK (verdict IN ('malicious','suspicious','clean')),
+  confidence  integer NOT NULL DEFAULT 0,
+  reason      text NOT NULL DEFAULT '',
+  injected    boolean NOT NULL DEFAULT false,
+  cut         jsonb NOT NULL DEFAULT '[]'::jsonb,
+  model       text NOT NULL DEFAULT '',
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, sha256)
+);
+`,
+  },
+  {
+    version: '027_mcp_token_expiry',
+    sql: `
+-- OAuth access tokens expire (clients refresh them); tokens made on the AI
+-- Connector page keep no expiry.
+ALTER TABLE mcp_tokens ADD COLUMN expires_at timestamptz;
+`,
+  },
+  {
+    version: '028_prune_and_login_indexes',
+    sql: `
+-- The hourly prunes and lookups by time or signature scanned whole tables
+-- (server_metrics' key starts with server_id; captcha_events' index with
+-- account_id; ai_kb had none on match). Failed sign-ins are counted per
+-- email to slow down password guessing against one account.
+CREATE INDEX server_metrics_ts_idx ON server_metrics USING brin (ts);
+CREATE INDEX captcha_events_at_idx ON captcha_events (at);
+CREATE INDEX ai_kb_match_idx ON ai_kb (match) WHERE match <> '';
+CREATE INDEX audit_login_failed_idx ON audit_events (lower(detail->>'email'), created_at) WHERE action = 'auth.login_failed';
+`,
+  },
 ];

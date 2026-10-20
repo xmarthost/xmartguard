@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
-import { audit, requireRole, requirePlatform } from '../auth.js';
+import { audit, requirePlatform } from '../auth.js';
 import { sha256 } from '../security.js';
 import { verifyAgent } from '../agent-sign.js';
 import { TRAIN_MIN_PER_CLASS, type AIGateway } from '../ai/gateway.js';
@@ -25,6 +25,22 @@ export function aiPayloadV2(serverId: string, ts: string, payload: string): stri
 }
 
 const MASK = '********';
+
+/**
+ * An API address a stored key may be sent to: https, or plain http to this
+ * host only (a local model server). Anything else would send the key in
+ * clear text over the network.
+ */
+export function keyAddressOK(u: string): boolean {
+  if (u.includes('ACCOUNT_ID')) return false;
+  try {
+    const x = new URL(u);
+    if (x.protocol === 'https:') return x.hostname !== '';
+    return x.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(x.hostname);
+  } catch {
+    return false;
+  }
+}
 const mask = (k: string) => (k ? MASK + k.slice(-4) : '');
 
 const ProviderBody = z.object({
@@ -44,6 +60,9 @@ const Envelope = z.object({
   payload: z.string().max(4_000_000),
 });
 
+/** Agent text the database can store: no NUL characters. */
+const text = (max: number) => z.string().max(max).transform((v) => v.replace(/\u0000/g, ''));
+
 const JudgeBody = z.object({
   scope: z.string().max(20).optional(),
   files: z
@@ -51,18 +70,20 @@ const JudgeBody = z.object({
       z.object({
         id: z.string().max(20),
         sha256: z.string().regex(/^[0-9a-fA-F]{64}$/),
-        size: z.number().int().min(0),
-        name: z.string().max(300),
-        match: z.string().max(200).optional(),
+        // Bounded to what the columns hold: an out-of-range value made the
+        // insert fail inside the batch worker.
+        size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        name: text(300),
+        match: text(200).optional(),
         // Where a flagged file is (home folder shortened to ~) and the code the signature matched.
-        path: z.string().max(1000).optional(),
-        line: z.number().int().min(0).optional(),
-        snippet: z.string().max(4000).optional(),
-        excerpt: z.string().max(200_000),
-        lines: z.number().int().min(0),
+        path: text(1000).optional(),
+        line: z.number().int().min(0).max(1e9).optional(),
+        snippet: text(4000).optional(),
+        excerpt: text(200_000),
+        lines: z.number().int().min(0).max(1e9),
         truncated: z.boolean(),
-        base: z.string().max(80).optional(),
-        z: z.number().optional(),
+        base: text(80).optional(),
+        z: z.number().finite().min(-1e6).max(1e6).optional(),
         features: z.array(z.number().int()).max(40_000).optional(),
       }),
     )
@@ -108,7 +129,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
     if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid provider' });
     const pre = preset(b.data.kind)!;
     const baseUrl = (b.data.base_url ?? pre.baseUrl).replace(/\/+$/, '');
-    if (!/^https?:\/\//.test(baseUrl) || baseUrl.includes('ACCOUNT_ID')) return reply.code(400).send({ error: 'set the API address' });
+    if (!keyAddressOK(baseUrl)) return reply.code(400).send({ error: 'set the API address (https://)' });
     const { rows } = await pool.query(
       `INSERT INTO ai_providers (account_id, kind, name, base_url, api_key, model, priority, enabled)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
@@ -118,7 +139,8 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
     return { id: rows[0].id };
   });
 
-  app.patch('/api/ai/providers/:id', { preHandler: requireRole('admin') }, async (req, reply) => {
+  // AI keys are master settings, like the other provider routes.
+  app.patch('/api/ai/providers/:id', { preHandler: requirePlatform('admin') }, async (req, reply) => {
     const id = (req.params as { id: string }).id;
     if (!z.string().uuid().safeParse(id).success) return reply.code(404).send({ error: 'not found' });
     const b = ProviderBody.partial().safeParse(req.body);
@@ -129,9 +151,19 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
       args.push(v);
       sets.push(`${col} = $${args.length}`);
     };
+    const prev = await pool.query('SELECT base_url FROM ai_providers WHERE id = $1 AND account_id = $2', [id, req.user!.accountId]);
+    if (!prev.rows[0]) return reply.code(404).send({ error: 'not found' });
+    const newKey = b.data.api_key !== undefined && !b.data.api_key.startsWith(MASK);
     if (b.data.name !== undefined) put('name', b.data.name);
-    if (b.data.base_url !== undefined) put('base_url', b.data.base_url.replace(/\/+$/, ''));
-    if (b.data.api_key !== undefined && !b.data.api_key.startsWith(MASK)) put('api_key', b.data.api_key.trim());
+    if (b.data.base_url !== undefined) {
+      const baseUrl = b.data.base_url.replace(/\/+$/, '');
+      if (!keyAddressOK(baseUrl)) return reply.code(400).send({ error: 'set the API address (https://)' });
+      put('base_url', baseUrl);
+      // The stored key never follows the provider to a new address (it
+      // would be sent there): a new address needs the key typed again.
+      if (baseUrl !== prev.rows[0].base_url && !newKey) put('api_key', '');
+    }
+    if (newKey) put('api_key', b.data.api_key!.trim());
     if (b.data.model !== undefined) put('model', b.data.model.trim());
     if (b.data.priority !== undefined) put('priority', b.data.priority);
     if (b.data.enabled !== undefined) put('enabled', b.data.enabled);
@@ -139,6 +171,13 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
     sets.push('cooldown_until = NULL');
     const { rowCount } = await pool.query(`UPDATE ai_providers SET ${sets.join(', ')} WHERE id = $1 AND account_id = $2`, args);
     if (!rowCount) return reply.code(404).send({ error: 'not found' });
+    await audit(pool, {
+      accountId: req.user!.accountId,
+      userId: req.user!.id,
+      action: 'ai.provider_update',
+      detail: { id, fields: Object.keys(b.data).filter((k) => k !== 'api_key' || newKey) },
+      ip: req.ip,
+    });
     return { ok: true };
   });
 
@@ -162,9 +201,11 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
     if (b.data.provider_id && (!key || key.startsWith(MASK))) {
       const { rows } = await pool.query('SELECT api_key, base_url FROM ai_providers WHERE id = $1 AND account_id = $2', [b.data.provider_id, req.user!.accountId]);
       if (!rows[0]) return reply.code(404).send({ error: 'not found' });
+      // A stored key is only ever sent to its own stored address.
       key = rows[0].api_key;
-      baseUrl = b.data.base_url || rows[0].base_url;
+      baseUrl = rows[0].base_url;
     }
+    if (key && !keyAddressOK(baseUrl)) return reply.code(400).send({ error: 'set the API address (https://)' });
     try {
       return { models: await listModels({ kind: b.data.kind, base_url: baseUrl, api_key: key, model: '' }) };
     } catch (err) {

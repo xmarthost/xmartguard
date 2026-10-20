@@ -18,6 +18,7 @@ import {
 } from './abuseipdb.js';
 import { MAIL_MIN_AGENT, syncMail } from '../routes/mail.js';
 import { eachLimit, single } from '../agents/limit.js';
+import { platformAccount } from '../tenancy.js';
 
 /** Agents older than this do not implement the ipdb.* commands. */
 export const IPDB_MIN_AGENT = '0.3.0';
@@ -68,6 +69,27 @@ export function entryText(cidr: string): string {
 /** Days a CAPTCHA-solved address stays off the list while public feeds still name it. */
 export const CLEARED_DAYS = 30;
 
+/**
+ * Most entries taken from one ipdb.sync answer (what an agent sends at
+ * most); an agent is a customer's machine and may send anything.
+ */
+export const SYNC_MAX = { reports: 1000, probes: 2000, hits: 2000, solved: 500 };
+/** Addresses of a customer's server that are never listed (its inventory is the customer's word). */
+export const PROTECTED_PER_SERVER = 8;
+
+/** Text from an agent that Postgres can store (no NUL), at most `max` characters. */
+function text(v: unknown, max: number): string {
+  return String(v ?? '').replace(/\u0000/g, '').slice(0, max);
+}
+
+/** A Unix time from an agent, kept between 90 days ago and an hour ahead (now when invalid). */
+export function agentTime(v: unknown): number {
+  const now = Date.now() / 1000;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return now;
+  return Math.min(now + 3600, Math.max(now - 90 * 86400, n));
+}
+
 interface SyncResult {
   enabled?: boolean;
   version?: string;
@@ -92,6 +114,8 @@ export class IPDBService {
   builtAt = 0;
   private dirty = true;
   private timers: NodeJS.Timeout[] = [];
+  /** One-shot timers of agent connections (removed when they run). */
+  private once = new Set<NodeJS.Timeout>();
   private syncing = new Set<string>();
   private building: Promise<void> | null = null;
 
@@ -145,30 +169,42 @@ export class IPDBService {
   stop(): void {
     for (const t of this.timers) clearTimeout(t);
     this.timers = [];
+    for (const t of this.once) clearTimeout(t);
+    this.once.clear();
+  }
+
+  /** Runs fn once after ms; forgotten once it ran (agents reconnect all the time). */
+  private later(ms: number, fn: () => void): void {
+    const t = setTimeout(() => {
+      this.once.delete(t);
+      fn();
+    }, ms);
+    this.once.add(t);
+  }
+
+  /** Pending one-shot timers (tests). */
+  pendingTimers(): number {
+    return this.once.size;
   }
 
   /** Called when an agent connects so it gets the list quickly. */
   onConnect(serverId: string, agentVersion: string): void {
     if (!versionLess(agentVersion, MAIL_MIN_AGENT)) {
-      this.timers.push(
-        setTimeout(() => {
-          syncMail(this.pool, this.hub, serverId).catch((err) => this.log.warn({ serverId, err: (err as Error).message }, 'mail settings sync failed'));
-        }, 4_000),
-      );
+      this.later(4_000, () => {
+        syncMail(this.pool, this.hub, serverId).catch((err) => this.log.warn({ serverId, err: (err as Error).message }, 'mail settings sync failed'));
+      });
     }
     if (!versionLess(agentVersion, FLEET_MIN_AGENT)) {
-      const f = setTimeout(() => {
+      this.later(3_000, () => {
         this.syncFleet(serverId).catch((err) => this.log.warn({ serverId, err: (err as Error).message }, 'fleet sync failed'));
-      }, 3_000);
-      this.timers.push(f);
+      });
     }
     if (!this.cfg.ipdbSync || versionLess(agentVersion, IPDB_MIN_AGENT)) return;
-    const t = setTimeout(() => {
+    this.later(5_000, () => {
       this.ensureBuilt()
         .then(() => this.syncServer(serverId))
         .catch((err) => this.log.warn({ serverId, err: (err as Error).message }, 'ipdb sync failed'));
-    }, 5_000);
-    this.timers.push(t);
+    });
   }
 
   async ensureBuilt(): Promise<void> {
@@ -189,6 +225,10 @@ export class IPDBService {
   private async doRebuild(): Promise<void> {
     this.dirty = false;
     const c = this.cfg;
+    // Reports from the platform's own servers list an address on the usual
+    // threshold. A customer controls their server and can report anyone (a
+    // competitor, a payment gateway), so customers' reports count only when
+    // servers of at least two different accounts agree.
     const { rows: agg } = await this.pool.query(
       `SELECT ip::cidr::text AS cidr, count(DISTINCT server_id)::int AS reporters, count(*)::int AS reports,
               min(created_at) AS first_seen, max(created_at) AS last_seen,
@@ -196,8 +236,10 @@ export class IPDBService {
          FROM ipdb_reports
         WHERE created_at > now() - make_interval(days => $1)
         GROUP BY ip
-       HAVING count(DISTINCT server_id) >= $2 OR count(*) >= $3`,
-      [c.ipdbWindowDays, c.ipdbMinReporters, c.ipdbMinReports],
+       HAVING count(DISTINCT server_id) FILTER (WHERE $4::uuid IS NULL OR account_id = $4) >= $2
+           OR count(*) FILTER (WHERE $4::uuid IS NULL OR account_id = $4) >= $3
+           OR (count(DISTINCT account_id) >= 2 AND count(DISTINCT server_id) >= $2)`,
+      [c.ipdbWindowDays, c.ipdbMinReporters, c.ipdbMinReports, await platformAccount(this.pool)],
     );
     if (agg.length) {
       await this.pool.query(
@@ -289,13 +331,22 @@ export class IPDBService {
     });
   }
 
-  /** Every enrolled server's addresses: never listed. */
+  /**
+   * Every enrolled server's addresses: never listed. A customer's server
+   * names its own addresses, so it protects at most PROTECTED_PER_SERVER
+   * (else one inventory could keep any attacker off the fleet's list).
+   */
   async protectedIPs(): Promise<string[]> {
-    const { rows } = await this.pool.query("SELECT primary_ip, inventory->'ips' AS ips FROM servers WHERE status = 'active'");
+    const platform = await platformAccount(this.pool);
+    const { rows } = await this.pool.query("SELECT account_id, primary_ip, inventory->'ips' AS ips FROM servers WHERE status = 'active'");
     const out = new Set<string>();
     for (const r of rows) {
+      const own = platform === null || String(r.account_id) === platform;
+      let n = 0;
       for (const ip of [r.primary_ip, ...(Array.isArray(r.ips) ? r.ips : [])]) {
-        if (typeof ip === 'string' && net.isIP(ip)) out.add(ip);
+        if (typeof ip !== 'string' || !net.isIP(ip)) continue;
+        if (!own && ++n > PROTECTED_PER_SERVER) break;
+        out.add(ip);
       }
     }
     return [...out];
@@ -348,54 +399,71 @@ export class IPDBService {
         60_000,
       )) as SyncResult;
       const valid = (r: { id?: unknown; ip?: unknown }) => typeof r?.id === 'number' && reportable(String(r.ip));
-      const reports = [...(data.reports ?? []).filter(valid), ...(data.probes ?? []).filter(valid)];
+      const reports = [...(data.reports ?? []).slice(0, SYNC_MAX.reports).filter(valid), ...(data.probes ?? []).slice(0, SYNC_MAX.probes).filter(valid)];
       let cursor = Number(srv.ipdb_cursor);
-      for (const r of data.reports ?? []) if (typeof r?.id === 'number' && r.id > cursor) cursor = r.id;
-      const probeCursor = Number.isFinite(data.probe_cursor) ? Math.max(Number(data.probe_cursor), Number(srv.ipdb_probe_cursor)) : Number(srv.ipdb_probe_cursor);
+      for (const r of data.reports ?? []) if (typeof r?.id === 'number' && Number.isSafeInteger(r.id) && r.id > cursor) cursor = r.id;
+      const probeCursor = Number.isSafeInteger(data.probe_cursor) ? Math.max(Number(data.probe_cursor), Number(srv.ipdb_probe_cursor)) : Number(srv.ipdb_probe_cursor);
+      // One bad row must not stop this server's sync for good: the cursor
+      // moves on and the list is still pushed when an insert fails.
+      const keep = async (what: string, fn: () => Promise<unknown>) => {
+        try {
+          await fn();
+        } catch (err) {
+          this.log.warn({ serverId, err: (err as Error).message }, `ipdb ${what} from the agent dropped`);
+        }
+      };
       if (reports.length) {
-        await this.pool.query(
-          `INSERT INTO ipdb_reports (ip, server_id, account_id, source, reason, reported_at)
-           SELECT x.ip, $1, $2, x.source, x.reason, to_timestamp(x.at)
-             FROM unnest($3::inet[], $4::text[], $5::text[], $6::float8[]) AS x(ip, source, reason, at)`,
-          [
-            serverId,
-            srv.account_id,
-            reports.map((r) => r.ip),
-            reports.map((r) => String(r.source ?? '').slice(0, 30)),
-            reports.map((r) => String(r.reason ?? '').slice(0, 200)),
-            reports.map((r) => (Number.isFinite(r.at) ? r.at : Date.now() / 1000)),
-          ],
+        await keep('reports', () =>
+          this.pool.query(
+            `INSERT INTO ipdb_reports (ip, server_id, account_id, source, reason, reported_at)
+             SELECT x.ip, $1, $2, x.source, x.reason, to_timestamp(x.at)
+               FROM unnest($3::inet[], $4::text[], $5::text[], $6::float8[]) AS x(ip, source, reason, at)`,
+            [
+              serverId,
+              srv.account_id,
+              reports.map((r) => r.ip),
+              reports.map((r) => text(r.source, 30)),
+              reports.map((r) => text(r.reason, 200)),
+              reports.map((r) => agentTime(r.at)),
+            ],
+          ),
         );
         this.dirty = true;
       }
-      const hits = (data.hits ?? []).filter((h) => h && parseCidr(String(h.entry)) && Number(h.hits) > 0);
+      const hits = (data.hits ?? []).slice(0, SYNC_MAX.hits).filter((h) => h && parseCidr(String(h.entry)) && Number.isFinite(Number(h.hits)) && Number(h.hits) > 0);
       if (hits.length) {
-        await this.pool.query(
-          `INSERT INTO ipdb_hits (server_id, entry, day, country, hits, last_seen)
-           SELECT $1, x.entry, to_timestamp(x.ts)::date, x.cc, x.hits, to_timestamp(x.ts)
-             FROM unnest($2::text[], $3::text[], $4::bigint[], $5::float8[]) AS x(entry, cc, hits, ts)
-           ON CONFLICT (server_id, entry, day) DO UPDATE SET
-             hits = ipdb_hits.hits + excluded.hits, last_seen = greatest(ipdb_hits.last_seen, excluded.last_seen),
-             country = CASE WHEN excluded.country <> '' THEN excluded.country ELSE ipdb_hits.country END`,
-          [
-            serverId,
-            hits.map((h) => String(h.entry)),
-            hits.map((h) => (/^[A-Z]{2}$/.test(String(h.country)) ? h.country : this.geo.lookup(String(h.entry)))),
-            hits.map((h) => Math.floor(Number(h.hits))),
-            hits.map((h) => (Number.isFinite(h.last_seen) ? h.last_seen : Date.now() / 1000)),
-          ],
+        await keep('hits', () =>
+          this.pool.query(
+            `INSERT INTO ipdb_hits (server_id, entry, day, country, hits, last_seen)
+             SELECT $1, x.entry, to_timestamp(x.ts)::date, x.cc, x.hits, to_timestamp(x.ts)
+               FROM unnest($2::text[], $3::text[], $4::bigint[], $5::float8[]) AS x(entry, cc, hits, ts)
+             ON CONFLICT (server_id, entry, day) DO UPDATE SET
+               hits = ipdb_hits.hits + excluded.hits, last_seen = greatest(ipdb_hits.last_seen, excluded.last_seen),
+               country = CASE WHEN excluded.country <> '' THEN excluded.country ELSE ipdb_hits.country END`,
+            [
+              serverId,
+              hits.map((h) => String(h.entry)),
+              hits.map((h) => (/^[A-Z]{2}$/.test(String(h.country)) ? h.country : this.geo.lookup(String(h.entry)))),
+              hits.map((h) => Math.min(1e9, Math.max(1, Math.floor(Number(h.hits))))),
+              hits.map((h) => agentTime(h.last_seen)),
+            ],
+          ),
         );
       }
       // A person proved they are behind the address: it leaves the list
       // until a server reports it again (public feeds: for CLEARED_DAYS).
-      const solved = (data.solved ?? []).filter((s) => s && reportable(String(s.ip)));
+      // Taken from the platform's own servers only: a customer's agent could
+      // name any address (an attacker's) to take it off every server's list.
+      const solved = (await this.trusted(srv.account_id)) ? (data.solved ?? []).slice(0, SYNC_MAX.solved).filter((s) => s && reportable(String(s.ip))) : [];
       if (solved.length) {
-        await this.pool.query(
-          `INSERT INTO ipdb_cleared (ip, server_id, cleared_at, until)
-           SELECT x.ip, $1, to_timestamp(x.at), to_timestamp(x.at) + make_interval(days => $4)
-             FROM unnest($2::inet[], $3::float8[]) AS x(ip, at)
-           ON CONFLICT (ip) DO UPDATE SET server_id = excluded.server_id, cleared_at = excluded.cleared_at, until = excluded.until`,
-          [serverId, solved.map((s) => String(s.ip)), solved.map((s) => (Number.isFinite(s.at) ? Math.min(s.at, Date.now() / 1000) : Date.now() / 1000)), CLEARED_DAYS],
+        await keep('solved', () =>
+          this.pool.query(
+            `INSERT INTO ipdb_cleared (ip, server_id, cleared_at, until)
+             SELECT x.ip, $1, to_timestamp(x.at), to_timestamp(x.at) + make_interval(days => $4)
+               FROM unnest($2::inet[], $3::float8[]) AS x(ip, at)
+             ON CONFLICT (ip) DO UPDATE SET server_id = excluded.server_id, cleared_at = excluded.cleared_at, until = excluded.until`,
+            [serverId, solved.map((s) => String(s.ip)), solved.map((s) => Math.min(agentTime(s.at), Date.now() / 1000)), CLEARED_DAYS],
+          ),
         );
         this.dirty = true;
       }
@@ -409,6 +477,12 @@ export class IPDBService {
     } finally {
       this.syncing.delete(serverId);
     }
+  }
+
+  /** Whether an account's servers may change the fleet's list on their own word. */
+  private async trusted(accountId: string): Promise<boolean> {
+    const p = await platformAccount(this.pool);
+    return p === null || String(accountId) === p;
   }
 
   /** Makes one feed's entries exactly `cidrs` (note = the feed's name). */

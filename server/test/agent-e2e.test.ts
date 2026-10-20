@@ -178,7 +178,7 @@ describe('agent end-to-end', () => {
         const body = JSON.parse(raw || '{}');
         calls.push(body);
         const user: string = body.messages?.[1]?.content ?? '';
-        const results = [...user.matchAll(/<file id=(\d+)[^>]*>\n([\s\S]*?)\n<\/file>/g)].map(([, id, text]) => {
+        const results = [...user.matchAll(/<file id=(\d+)[^>]*>\n([\s\S]*?)\n<\/file[^>]*>/g)].map(([, id, text]) => {
           const bad = text.split('\n').filter((l) => l.includes('eval(')).map((l) => Number(l.split('|')[0]));
           return bad.length
             ? { id, verdict: 'malicious', confidence: 96, reason: 'eval of POST data added to a plugin', injected: true, cut: bad.map((n) => ({ from: n, to: n })) }

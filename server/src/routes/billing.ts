@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
-import { SESSION_COOKIE, audit, createSession, requireRole } from '../auth.js';
+import { SESSION_COOKIE, audit, createSession, endUserAccess, requireRole } from '../auth.js';
 import { hashPassword, randomToken, sha256 } from '../security.js';
 import { isPlatform } from '../tenancy.js';
 
@@ -24,7 +24,7 @@ export interface License {
   status: 'active' | 'expired' | 'suspended' | 'cancelled';
 }
 
-export async function loadLicense(pool: Pool, accountId: string): Promise<License | null> {
+export async function loadLicense(pool: { query: Pool['query'] }, accountId: string): Promise<License | null> {
   const { rows } = await pool.query(
     'SELECT plan, plan_name, max_servers, period_end, status, trial FROM account_licenses WHERE account_id = $1',
     [accountId],
@@ -35,7 +35,7 @@ export async function loadLicense(pool: Pool, accountId: string): Promise<Licens
 }
 
 /** Servers connected plus install tokens not used yet. */
-export async function serversInUse(pool: Pool, accountId: string, withTokens = true): Promise<number> {
+export async function serversInUse(pool: { query: Pool['query'] }, accountId: string, withTokens = true): Promise<number> {
   const { rows } = await pool.query(
     `SELECT (SELECT count(*) FROM servers WHERE account_id = $1 AND status = 'active')::int AS servers,
             (SELECT count(*) FROM enrollment_tokens WHERE account_id = $1 AND used_at IS NULL AND expires_at > now())::int AS tokens`,
@@ -48,7 +48,7 @@ export async function serversInUse(pool: Pool, accountId: string, withTokens = t
  * Why another server cannot be added to this account ('' when it can).
  * `withTokens`: count unused install tokens too (when making one).
  */
-export async function serverLimitError(pool: Pool, accountId: string, withTokens: boolean): Promise<string> {
+export async function serverLimitError(pool: { query: Pool['query'] }, accountId: string, withTokens: boolean): Promise<string> {
   const lic = await loadLicense(pool, accountId);
   if (!lic) return '';
   const expired = lic.status !== 'active' || (lic.period_end !== null && new Date(lic.period_end).getTime() < Date.now());
@@ -109,6 +109,12 @@ const Provision = z.object({
 });
 const ByEmail = z.object({ email: z.string().trim().toLowerCase().email().max(200) });
 
+interface Customer {
+  id: string;
+  account_id: string;
+  password_hash: string;
+}
+
 export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void {
   const cookieOpts = { path: '/', httpOnly: true, sameSite: 'lax' as const, secure: cfg.cookieSecure, maxAge: cfg.sessionTtlHours * 3600 };
 
@@ -162,13 +168,28 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
     return p.data;
   }
 
-  async function userByEmail(email: string) {
-    const { rows } = await pool.query(
-      'SELECT u.id, u.account_id, u.password_hash, a.platform FROM users u JOIN accounts a ON a.id = u.account_id WHERE lower(u.email) = lower($1)',
-      [email],
-    );
-    return rows[0] as { id: string; account_id: string; password_hash: string; platform: boolean } | undefined;
+  /**
+   * The customer the website means by an email: an owner of the account
+   * billing created for that email (accounts.billing_email). Any other
+   * portal user with the address is a conflict, never a match: portal users
+   * choose their email freely, so an owner could add a user (or change their
+   * own login) to a buyer's address and receive the buyer's licence, sign-in
+   * links and servers.
+   */
+  async function customerByEmail(email: string): Promise<{ user?: Customer; conflict?: boolean }> {
+    const acc = await pool.query('SELECT id FROM accounts WHERE billing_email = lower($1) AND NOT platform', [email]);
+    if (acc.rows[0]) {
+      const { rows } = await pool.query(
+        `SELECT id, account_id, password_hash FROM users WHERE account_id = $1 AND role = 'owner'
+          ORDER BY (lower(email) = lower($2)) DESC, created_at LIMIT 1`,
+        [acc.rows[0].id, email],
+      );
+      return rows[0] ? { user: rows[0] as Customer } : { conflict: true };
+    }
+    const other = await pool.query('SELECT 1 FROM users WHERE lower(email) = lower($1)', [email]);
+    return { conflict: (other.rowCount ?? 0) > 0 };
   }
+  const CONFLICT = 'this email belongs to a portal user who is not the owner of a customer account made by the website';
 
   async function userLink(userId: string, purpose: 'set_password' | 'login', minutes: number): Promise<string> {
     const token = randomToken();
@@ -184,17 +205,18 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
   app.post('/api/billing/provision', { bodyLimit: 16 * 1024 }, async (req, reply) => {
     const b = await signed(req, reply, Provision);
     if (!b) return;
-    let user = await userByEmail(b.email);
-    if (user?.platform) return reply.code(409).send({ error: 'this email belongs to the portal operator' });
+    const found = await customerByEmail(b.email);
+    if (found.conflict) return reply.code(409).send({ error: CONFLICT });
+    let user = found.user;
     let created = false;
     if (!user) {
-      const acc = await pool.query('INSERT INTO accounts (name) VALUES ($1) RETURNING id', [b.name || b.email]);
+      const acc = await pool.query('INSERT INTO accounts (name, billing_email) VALUES ($1, $2) RETURNING id', [b.name || b.email, b.email]);
       // No usable password until the customer sets one from the link.
       const u = await pool.query(
         "INSERT INTO users (account_id, email, name, password_hash, role) VALUES ($1, $2, $3, $4, 'owner') RETURNING id",
         [acc.rows[0].id, b.email, b.name, '!' + (await hashPassword(randomToken()))],
       );
-      user = { id: u.rows[0].id, account_id: acc.rows[0].id, password_hash: '!', platform: false };
+      user = { id: u.rows[0].id, account_id: acc.rows[0].id, password_hash: '!' };
       created = true;
     }
     await pool.query(
@@ -218,7 +240,8 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
   app.post('/api/billing/usage', async (req, reply) => {
     const b = await signed(req, reply, ByEmail);
     if (!b) return;
-    const user = await userByEmail(b.email);
+    const { user, conflict } = await customerByEmail(b.email);
+    if (conflict) return reply.code(409).send({ error: CONFLICT });
     if (!user) return reply.code(404).send({ error: 'no portal account for this email' });
     const { rows } = await pool.query(
       "SELECT hostname, (connected) AS online, last_seen_at FROM servers WHERE account_id = $1 AND status = 'active' ORDER BY hostname",
@@ -231,15 +254,17 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
   app.post('/api/billing/login-link', async (req, reply) => {
     const b = await signed(req, reply, ByEmail);
     if (!b) return;
-    const user = await userByEmail(b.email);
-    if (!user || user.platform) return reply.code(404).send({ error: 'no customer account for this email' });
+    const { user, conflict } = await customerByEmail(b.email);
+    if (conflict) return reply.code(409).send({ error: CONFLICT });
+    if (!user) return reply.code(404).send({ error: 'no customer account for this email' });
     return { url: await userLink(user.id, 'login', 5), set_password_url: user.password_hash.startsWith('!') ? await userLink(user.id, 'set_password', 7 * 24 * 60) : null };
   });
   app.post('/api/billing/password-link', async (req, reply) => {
     const b = await signed(req, reply, ByEmail);
     if (!b) return;
-    const user = await userByEmail(b.email);
-    if (!user || user.platform) return reply.code(404).send({ error: 'no customer account for this email' });
+    const { user, conflict } = await customerByEmail(b.email);
+    if (conflict) return reply.code(409).send({ error: CONFLICT });
+    if (!user) return reply.code(404).send({ error: 'no customer account for this email' });
     return { url: await userLink(user.id, 'set_password', 24 * 60) };
   });
 
@@ -288,7 +313,8 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
     const u = await consume(b.data.token, 'set_password');
     if (!u) return reply.code(404).send({ error: 'This link has expired or was already used. Ask for a new one on the website.' });
     await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [u.user_id, await hashPassword(b.data.password)]);
-    await pool.query('DELETE FROM sessions WHERE user_id = $1', [u.user_id]);
+    // Other set-password links (each login-link made one) stop working too.
+    await endUserAccess(pool, u.user_id);
     reply.setCookie(SESSION_COOKIE, await createSession(pool, cfg, u.user_id, req), cookieOpts);
     await audit(pool, { accountId: u.account_id, userId: u.user_id, action: 'auth.password_set', ip: req.ip });
     return { ok: true };

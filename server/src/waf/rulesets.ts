@@ -80,9 +80,16 @@ export function withoutMalwareExpert<T extends { vendors: { id: string; url: str
   return { ...c, vendors: c.vendors.filter((v) => !isMalwareExpert(v)), remote: c.remote.filter((r) => !isMalwareExpert(r)) };
 }
 
-/** Whether a feed or vendor applies to a server. */
-export function linkedTo(item: { servers?: string[] }, serverId: string): boolean {
-  return !item.servers?.length || item.servers.includes(serverId);
+/**
+ * Whether a server receives a licensed feed or vendor: a remote feed's key,
+ * or a vendor link with a query (where licences go), is the operator's
+ * secret, and a customer has root on their server. With no servers chosen
+ * these go to the platform's own servers only; a customer's server gets
+ * them only when the operator lists it.
+ */
+export function licensedTo(item: { servers?: string[]; key?: string; url: string }, serverId: string, platformServer: boolean): boolean {
+  if (item.servers?.length) return item.servers.includes(serverId);
+  return platformServer || (!item.key && !item.url.includes('?'));
 }
 
 export const RuleSetsConfig = z.object({
@@ -128,8 +135,10 @@ export function validateCustomRules(text: string): string | null {
   const logical: string[] = [];
   let cur = '';
   for (const l of text.replace(/\r/g, '').split('\n')) {
+    // Apache removes backslash-newline and inserts nothing: "ex\" + "ec:"
+    // is read as "exec:", so the lines are joined the same way here.
     if (l.endsWith('\\')) {
-      cur += l.slice(0, -1) + ' ';
+      cur += l.slice(0, -1);
       continue;
     }
     logical.push(cur + l);
@@ -141,7 +150,7 @@ export function validateCustomRules(text: string): string | null {
     if (!t || t.startsWith('#')) continue;
     const word = t.split(/\s+/)[0];
     if (!ALLOWED.has(word.toLowerCase())) return `rule ${i + 1}: only SecRule, SecAction, SecMarker and SecRuleRemove…/SecRuleUpdate… directives are allowed (found "${word}")`;
-    const bad = t.match(FORBIDDEN);
+    const bad = t.match(FORBIDDEN) ?? t.replace(/[\s\\]+/g, '').match(FORBIDDEN);
     if (bad) return `rule ${i + 1}: "${bad[0]}" is not allowed in custom rules`;
     const id = t.match(/\bid\s*:\s*'?(\d+)/);
     if (id && +id[1] >= 7700000 && +id[1] <= 7709999) return `rule ${i + 1}: ids 7700000-7709999 are reserved for xPGuard`;

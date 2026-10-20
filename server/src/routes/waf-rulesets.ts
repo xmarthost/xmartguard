@@ -3,9 +3,9 @@ import { z } from 'zod';
 import type { Pool } from '../db.js';
 import type { AgentHub } from '../agents/hub.js';
 import { audit, requirePlatform } from '../auth.js';
-import { scopeAccounts } from '../tenancy.js';
+import { isPlatform, scopeAccounts } from '../tenancy.js';
 import { signedPayload } from '../agent-sign.js';
-import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, linkedTo, loadConfig, validateCustomRules } from '../waf/rulesets.js';
+import { CRSService, DEFAULT_CONFIG, PRESET_REMOTE, PRESET_VENDORS, RuleSetsConfig, licensedTo, loadConfig, validateCustomRules } from '../waf/rulesets.js';
 
 /**
  * WAF Rule Sets: one ModSecurity configuration for all servers. Saving it
@@ -147,15 +147,17 @@ export function wafRulesetRoutes(app: FastifyInstance, pool: Pool, hub: AgentHub
     // they turn our rules and the CRS back on.
     const ownCurrent = !r.data.own_replaced_by;
     if (cur.version === r.data.version && crsCurrent && ownCurrent) return { unchanged: true };
+    const own = await isPlatform(pool, r.accountId);
     const config = {
       version: cur.version,
       // Unset until the account saves its rule sets, so existing per-server
       // WAF switches are left alone.
       xmartguard: cur.version ? c.xmartguard : undefined,
       crs: { ...c.crs, enabled: crsOn, version: crsVersion ?? '' },
-      // Licensed feeds go only to the servers they are linked to.
-      vendors: c.vendors.filter((v) => linkedTo(v, r.serverId)).map(({ servers: _s, ...v }) => v),
-      remote: c.remote.filter((x) => linkedTo(x, r.serverId)).map(({ servers: _s, ...x }) => x),
+      // Licensed feeds go only to the servers they are linked to (none
+      // chosen: the platform's own servers).
+      vendors: c.vendors.filter((v) => licensedTo(v, r.serverId, own)).map(({ servers: _s, ...v }) => v),
+      remote: c.remote.filter((x) => licensedTo(x, r.serverId, own)).map(({ servers: _s, ...x }) => x),
       custom: c.custom,
     };
     const out: Record<string, unknown> = { config };

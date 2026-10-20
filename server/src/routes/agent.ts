@@ -78,10 +78,14 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
         );
         const tok = rows[0];
         if (!tok) return null;
-        // The plan's server limit, checked again as the server joins.
-        if (await serverLimitError(pool, tok.account_id, false)) return 'limit' as const;
-        // Free trials: once per server, recognised by its public addresses.
-        const lic = await loadLicense(pool, tok.account_id);
+        // The plan's server limit, checked again as the server joins. The
+        // account row is locked so two servers enrolling at the same moment
+        // (with two unused tokens) cannot both take the last licence.
+        await c.query('SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE', [tok.account_id]);
+        if (await serverLimitError(c, tok.account_id, false)) return 'limit' as const;
+        // Free trials: once per server, recognised by its public addresses
+        // and the address it enrols from (proxy-verified, see proxy.ts).
+        const lic = await loadLicense(c, tok.account_id);
         const ips = lic?.trial ? publicIPs(inv.primary_ip, inv.ips, req.ip) : [];
         if (lic?.trial) {
           const used = await trialHostError(c, tok.account_id, lic.period_end, ips, null, s(inv.hostname));

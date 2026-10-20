@@ -8,6 +8,11 @@ const pool = createPool(cfg.databaseUrl);
 
 const applied = await migrate(pool);
 const { app } = await buildApp(cfg, pool);
+
+// A promise nobody waited for that fails must not end the portal (Node exits
+// on an unhandled rejection): every agent, CAPTCHA page and user would go
+// with it. Logged; the code that let it escape is the bug to fix.
+process.on('unhandledRejection', (err) => app.log.error({ err }, 'unhandled promise rejection'));
 if (applied.length) app.log.info({ applied }, 'database migrated');
 
 // Nobody is connected right after a restart.
@@ -28,6 +33,7 @@ const prune = setInterval(() => {
   pool
     .query("DELETE FROM server_metrics WHERE ts < now() - make_interval(days => $1)", [cfg.metricsRetentionDays])
     .then(() => pool.query('DELETE FROM sessions WHERE expires_at < now()'))
+    .then(() => pool.query("DELETE FROM captcha_events WHERE at < now() - interval '30 days'"))
     .catch((err) => app.log.error({ err }, 'prune failed'));
 }, 3600_000);
 

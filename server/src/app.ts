@@ -55,9 +55,34 @@ export interface App {
   crs: CRSService;
 }
 
+/**
+ * A request path for the log without the secrets some URLs carry: MCP
+ * tokens (/mcp/<token>, never expiring, write scope) and one-time links
+ * (?token= of sign-in and set-password links, OAuth codes).
+ */
+export function redactUrl(url: string): string {
+  return url.replace(/^(\/mcp\/)[^/?#]+/, '$1***').replace(/([?&](?:token|code|refresh_token|access_token)=)[^&#]*/gi, '$1***');
+}
+
+/** Fastify logger options: request lines carry redacted URLs. */
+export function logOptions(level: string) {
+  return {
+    level,
+    serializers: {
+      req: (req: { method: string; url: string; host?: string; ip?: string; socket?: { remotePort?: number } }) => ({
+        method: req.method,
+        url: redactUrl(req.url),
+        host: req.host,
+        remoteAddress: req.ip,
+        remotePort: req.socket?.remotePort,
+      }),
+    },
+  };
+}
+
 export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean } = {}): Promise<App> {
   const app = Fastify({
-    logger: opts.logger === false ? false : { level: cfg.logLevel },
+    logger: opts.logger === false ? false : logOptions(cfg.logLevel),
     // Only known proxies may name the visitor (see proxy.ts).
     trustProxy: cfg.trustProxy ? (addr: string) => trustedProxy(addr) : false,
     bodyLimit: 256 * 1024,

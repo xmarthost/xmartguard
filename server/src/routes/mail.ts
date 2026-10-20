@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
-import { masterAccount, scopeAccounts } from '../tenancy.js';
+import { isPlatform, masterAccount, scopeAccounts } from '../tenancy.js';
 import type { AgentHub } from '../agents/hub.js';
 import { audit, requirePlatform, requireRole } from '../auth.js';
 import { versionLess } from '../agents/release.js';
@@ -30,11 +30,18 @@ export async function loadGlobalKeys(pool: Pool, accountId: string): Promise<{ d
   return { dqs_key: String(rows[0]?.dqs_key ?? ''), safe_browsing_key: String(rows[0]?.safe_browsing_key ?? '') };
 }
 
-/** Sends one server its account's keys (always both: the agent replaces them together). */
+/**
+ * Sends one server its keys (always both: the agent replaces them together).
+ * The master's paid keys go to the platform's own servers only: the agent
+ * writes the DQS key into Exim's configuration, and a customer has root on
+ * their server (they would read the key, and use up the master's licence).
+ * Customers' servers get empty keys and use the keys set on the server.
+ */
 export async function syncMail(pool: Pool, hub: AgentHub, serverId: string): Promise<void> {
   const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [serverId]);
   if (!rows[0]) return;
-  await hub.command(serverId, 'mail.global', await loadGlobalKeys(pool, rows[0].account_id), 60_000);
+  const own = await isPlatform(pool, String(rows[0].account_id));
+  await hub.command(serverId, 'mail.global', own ? await loadGlobalKeys(pool, rows[0].account_id) : { dqs_key: '', safe_browsing_key: '' }, 60_000);
 }
 
 /** The key is a secret: only its ends are shown. */
