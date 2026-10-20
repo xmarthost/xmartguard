@@ -201,6 +201,23 @@ describe('AI gateway', () => {
     expect(r.body).toMatchObject({ verdict: 'malicious', confidence: 90, model: 'custom/big-model' });
   });
 
+  it('answers an error, and keeps running, when a batch cannot be stored', async () => {
+    // Values no column can hold are refused at the door.
+    expect((await agentPost('/api/agent/ai/judge', envelope({ files: [file('s', '1|<?php echo 1;', { size: 1e20 })] }))).status).toBe(400);
+    expect((await agentPost('/api/agent/ai/judge', envelope({ files: [file('s', '1|<?php echo 1;', { z: 1e300 })] }))).status).toBe(400);
+    // A database failure inside the batch worker answers the waiting files.
+    await h.pool.query("ALTER TABLE ai_kb ADD CONSTRAINT test_refuse CHECK (name <> 'refused.php') NOT VALID");
+    try {
+      const r = await agentPost('/api/agent/ai/judge', envelope({ files: [file('t', '1|<?php echo "stored? \u0000";', { name: 'refused.php' })] }));
+      expect(r.status).toBe(200);
+      expect(r.body.results[0].error).toMatch(/could not judge/);
+    } finally {
+      await h.pool.query('ALTER TABLE ai_kb DROP CONSTRAINT test_refuse');
+    }
+    const r = await agentPost('/api/agent/ai/judge', envelope({ files: [file('u', '1|<?php echo "after";')] }));
+    expect(r.body.results[0]).toMatchObject({ verdict: 'clean' });
+  });
+
   it("never lets a customer's server change the verdicts other servers receive", async () => {
     // A customer account's server signs a judge request naming the hash of one
     // file with a harmless excerpt of another (inert text stands in for both).

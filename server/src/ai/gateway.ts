@@ -128,14 +128,26 @@ export class AIGateway {
     let chars = 0;
     for (const it of q.items) {
       if (batch.length && (chars + it.file.excerpt.length > BATCH_CHARS || batch.length >= this.cfg.aiBatchFiles)) {
-        void this.run(accountId, batch);
+        this.launch(accountId, batch);
         batch = [];
         chars = 0;
       }
       batch.push(it);
       chars += it.file.excerpt.length;
     }
-    if (batch.length) void this.run(accountId, batch);
+    if (batch.length) this.launch(accountId, batch);
+  }
+
+  /**
+   * Runs a batch from a timer. Nothing may escape as an unhandled
+   * rejection (Node ends the process on one, taking the whole portal down):
+   * a failure answers every file of the batch that is still waiting.
+   */
+  private launch(accountId: string, batch: Pending[]): void {
+    this.run(accountId, batch).catch((err) => {
+      this.log.error({ err: (err as Error).message }, 'AI batch failed');
+      for (const p of batch) p.resolve({ id: p.file.id, error: 'the portal could not judge this file; it is tried again later' });
+    });
   }
 
   private async run(accountId: string, batch: Pending[], attempt = 0): Promise<void> {

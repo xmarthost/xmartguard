@@ -44,6 +44,9 @@ const Envelope = z.object({
   payload: z.string().max(4_000_000),
 });
 
+/** Agent text the database can store: no NUL characters. */
+const text = (max: number) => z.string().max(max).transform((v) => v.replace(/\u0000/g, ''));
+
 const JudgeBody = z.object({
   scope: z.string().max(20).optional(),
   files: z
@@ -51,18 +54,20 @@ const JudgeBody = z.object({
       z.object({
         id: z.string().max(20),
         sha256: z.string().regex(/^[0-9a-fA-F]{64}$/),
-        size: z.number().int().min(0),
-        name: z.string().max(300),
-        match: z.string().max(200).optional(),
+        // Bounded to what the columns hold: an out-of-range value made the
+        // insert fail inside the batch worker.
+        size: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        name: text(300),
+        match: text(200).optional(),
         // Where a flagged file is (home folder shortened to ~) and the code the signature matched.
-        path: z.string().max(1000).optional(),
-        line: z.number().int().min(0).optional(),
-        snippet: z.string().max(4000).optional(),
-        excerpt: z.string().max(200_000),
-        lines: z.number().int().min(0),
+        path: text(1000).optional(),
+        line: z.number().int().min(0).max(1e9).optional(),
+        snippet: text(4000).optional(),
+        excerpt: text(200_000),
+        lines: z.number().int().min(0).max(1e9),
         truncated: z.boolean(),
-        base: z.string().max(80).optional(),
-        z: z.number().optional(),
+        base: text(80).optional(),
+        z: z.number().finite().min(-1e6).max(1e6).optional(),
         features: z.array(z.number().int()).max(40_000).optional(),
       }),
     )
