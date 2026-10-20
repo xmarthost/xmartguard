@@ -4,6 +4,7 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -592,8 +593,20 @@ func (st *Store) Get() Settings {
 func (st *Store) Patch(patch json.RawMessage) (Settings, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	next := st.cur
-	if err := json.Unmarshal(patch, &next); err != nil {
+	// Merged as JSON and decoded into a fresh value: decoding over st.cur
+	// wrote list elements into the arrays st.cur and every Get() copy share
+	// (stale fields merged into new elements, the caller's "before" snapshot
+	// changed, a rejected value left live).
+	cur, err := json.Marshal(st.cur)
+	if err != nil {
+		return st.cur, err
+	}
+	merged, err := mergeJSON(cur, patch)
+	if err != nil {
+		return st.cur, fmt.Errorf("invalid settings: %w", err)
+	}
+	var next Settings
+	if err := json.Unmarshal(merged, &next); err != nil {
 		return st.cur, fmt.Errorf("invalid settings: %w", err)
 	}
 	normalize(&next)
@@ -605,6 +618,41 @@ func (st *Store) Patch(patch json.RawMessage) (Settings, error) {
 	}
 	st.cur = next
 	return next, nil
+}
+
+// mergeJSON overlays a patch object on a document the way decoding into the
+// struct did: objects merge key by key, lists and values are replaced whole,
+// and a null leaves an object as it is.
+func mergeJSON(doc, patch json.RawMessage) (json.RawMessage, error) {
+	var d, p map[string]json.RawMessage
+	if err := json.Unmarshal(patch, &p); err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return doc, nil
+	}
+	if err := json.Unmarshal(doc, &d); err != nil || d == nil {
+		d = map[string]json.RawMessage{}
+	}
+	isObj := func(r json.RawMessage) bool {
+		r = bytes.TrimSpace(r)
+		return len(r) > 0 && r[0] == '{'
+	}
+	for k, v := range p {
+		old, ok := d[k]
+		switch {
+		case ok && isObj(old) && isObj(v):
+			m, err := mergeJSON(old, v)
+			if err != nil {
+				return nil, err
+			}
+			d[k] = m
+		case ok && isObj(old) && string(bytes.TrimSpace(v)) == "null":
+		default:
+			d[k] = v
+		}
+	}
+	return json.Marshal(d)
 }
 
 func save(s Settings) error {
