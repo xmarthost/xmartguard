@@ -7,10 +7,10 @@ import "testing"
 func TestBinaryPlaces(t *testing.T) {
 	elf := []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0x3e, 0}
 	cases := map[string]string{
-		"/home/murtajez/murtajez.com/wp-includes/sodium_compat/src/Core/SecretStream/.a1b2c3":                         "Binary.ELF.InWordPressCore",
-		"/home/murtajez/murtajez.com/wp-content/plugins/woocommerce/assets/js/.mini-cart-title-items-counter-block/x": "Binary.ELF.HiddenInWebsite",
-		"/home/murtajez/murtajez.com/wp-content/plugins/woocommerce/.cache/polkitd":                                   "Binary.ELF.HiddenInWebsite",
-		"/home/murtajez/murtajez.com/bridgemgr":                                                                       "Binary.ELF.InWebOrTempDir",
+		"/home/acct1/addon.example.com/wp-includes/sodium_compat/src/Core/SecretStream/.a1b2c3":                         "Binary.ELF.InWordPressCore",
+		"/home/acct1/addon.example.com/wp-content/plugins/woocommerce/assets/js/.mini-cart-title-items-counter-block/x": "Binary.ELF.HiddenInWebsite",
+		"/home/acct1/addon.example.com/wp-content/plugins/woocommerce/.cache/polkitd":                                   "Binary.ELF.HiddenInWebsite",
+		"/home/acct1/addon.example.com/bridgemgr":                                                                       "Binary.ELF.InWebOrTempDir",
 		"/home/u/example.com/gdm3":                                                                                    "Binary.ELF.FakeSystemService",
 		"/home/u/public_html/wp-content/uploads/kthreadd":                                                             "Binary.ELF.FakeSystemService",
 		"/home/u/public_html/wp-content/plugins/woocommerce/wpbooster":                                                "Binary.ELF.InWordPressContent",

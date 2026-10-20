@@ -377,16 +377,16 @@ describe('CAPTCHA page: no passing bots through', () => {
     expect(ev.body.events.map((x: { method: string }) => x.method).sort()).toEqual(['altcha', 'altcha', 'altcha', 'turnstile']);
     // Carrier-grade NAT (a neighbouring address) and Cloudflare WARP / iCloud Private Relay are the visitor's own network.
     expect((await verify({ ...p('203.0.113.229'), altcha: await solve() }, '203.0.113.228')).status).toBe(200);
-    expect((await verify({ ...p('104.29.197.209'), altcha: await solve() }, '104.29.194.57')).status).toBe(200);
+    expect((await verify({ ...p('104.29.10.1'), altcha: await solve() }, '104.29.20.2')).status).toBe(200);
   }, 60_000);
 
   it('knows the own network', () => {
-    expect(sameNetwork('103.70.171.229', '103.70.171.228')).toBe(true);
-    expect(sameNetwork('104.29.197.209', '104.28.38.72')).toBe(true);
-    expect(sameNetwork('43.119.100.74', '198.163.195.35')).toBe(false);
-    expect(sameNetwork('43.119.100.74', '43.119.104.138')).toBe(false);
-    expect(sameNetwork('2a09:bac2:4f77:25b9::3c2:25', '2a09:bac2:4f77::1')).toBe(true);
-    expect(sameNetwork('2a09:bac2:4f77::1', '2a09:bac3::1')).toBe(false);
+    expect(sameNetwork('198.51.100.229', '198.51.100.228')).toBe(true);
+    expect(sameNetwork('104.29.10.1', '104.28.30.3')).toBe(true);
+    expect(sameNetwork('203.0.113.74', '198.51.100.35')).toBe(false);
+    expect(sameNetwork('198.18.100.74', '198.18.104.138')).toBe(false);
+    expect(sameNetwork('2001:db8:4f77:25b9::3c2:25', '2001:db8:4f77::1')).toBe(true);
+    expect(sameNetwork('2001:db8:4f77::1', '2001:db8:4f78::1')).toBe(false);
     expect(sameNetwork('192.0.2.1', '2001:db8::1')).toBe(false);
   });
 

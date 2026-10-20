@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-// The botnet of murtajez.com (2026-10-17): programs in an addon domain's
+// A botnet found on a live server (2026-10-17): programs in an addon domain's
 // WordPress posing as system services, and sh watchdogs whose script was
 // deleted.
 func TestMasqueradingProcesses(t *testing.T) {
 	home := t.TempDir()
-	site := filepath.Join(home, "murtajez.com")
+	site := filepath.Join(home, "addon.example.com")
 	os.MkdirAll(filepath.Join(site, "wp-content"), 0o755)
 	live := filepath.Join(site, "cron.sh")
 	os.WriteFile(live, []byte("#!/bin/sh\n"), 0o644)

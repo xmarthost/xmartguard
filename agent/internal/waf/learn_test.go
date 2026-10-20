@@ -44,8 +44,8 @@ func TestLearnFalsePositives(t *testing.T) {
 	sqli := "Matched rules: 942100 (REQUEST_COOKIES:cart)"
 	// Real shoppers of one shop, different networks: product images blocked.
 	for _, ip := range []string{"39.45.1.10", "39.45.1.11", "119.73.4.2", "175.29.8.9"} {
-		addEvent(t, m, now-600, ip, "www.hapetsupplies.com", "/wp-content/uploads/2026/09/brush-variation-1-100x100.png", 949110, sqli)
-		addEvent(t, m, now-5000, ip, "hapetsupplies.com", "/wp-content/uploads/2026/09/scoop-variation-2.png", 949110, sqli)
+		addEvent(t, m, now-600, ip, "www.petshop.example.com", "/wp-content/uploads/2026/09/brush-variation-1-100x100.png", 949110, sqli)
+		addEvent(t, m, now-5000, ip, "petshop.example.com", "/wp-content/uploads/2026/09/scoop-variation-2.png", 949110, sqli)
 	}
 	// An attack campaign: the same rule, but the addresses hit many sites
 	// and other rules.
@@ -72,7 +72,7 @@ func TestLearnFalsePositives(t *testing.T) {
 	}
 	// A path that ends in a domain name.
 	for i := 0; i < 12; i++ {
-		addEvent(t, m, now-300-int64(i)*3000, fmt.Sprintf("%d.3.3.%d", 120+i, i), "quad.example.com", "/shop/page/3ymarketers.com", 949110, "Matched rules: 920440")
+		addEvent(t, m, now-300-int64(i)*3000, fmt.Sprintf("%d.3.3.%d", 120+i, i), "quad.example.com", "/shop/page/listing.example.com", 949110, "Matched rules: 920440")
 	}
 	// A burst: five clean addresses within minutes is a scan, not visitors.
 	for i := 0; i < 5; i++ {
@@ -104,7 +104,7 @@ func TestLearnFalsePositives(t *testing.T) {
 		t.Fatalf("changed=%v, learned %+v", changed, got)
 	}
 	e := got[0]
-	if e.Rule != 942100 || e.Domain != "hapetsupplies.com" || e.Path != "/wp-content/uploads/" || e.State != "suggested" || e.IPs != 4 || e.Where != "REQUEST_COOKIES:cart" {
+	if e.Rule != 942100 || e.Domain != "petshop.example.com" || e.Path != "/wp-content/uploads/" || e.State != "suggested" || e.IPs != 4 || e.Where != "REQUEST_COOKIES:cart" {
 		t.Fatalf("learned %+v", e)
 	}
 	// Only a suggestion: nothing changes until an administrator accepts it.
@@ -150,12 +150,12 @@ func TestLearnDropsLooseExclusions(t *testing.T) {
 		return AutoExclusion{RuleExclusion: settings.RuleExclusion{Rule: rule, Domain: domain, Path: path}, Key: fmt.Sprintf("%d|%s|%s", rule, domain, path), IPs: ips, Learned: now - 86400, Expires: now + 86400, State: "active"}
 	}
 	m.saveAuto([]AutoExclusion{
-		ex(934100, "hawkdevops.net", "", 6),
-		ex(942550, "hawkdevops.net", "/_probe-does-not-exist-9f3c", 5),
-		ex(920420, "meetap.net", "", 5),
-		ex(920440, "quadaxisglobal.com", "/shop/page/3ymarketers.com", 4),
-		ex(920420, "pakluck.com", "", 9),
-		ex(942290, "webco.pk", "/solar/wp-admin/admin-ajax.php", 3),
+		ex(934100, "hawk.example.net", "", 6),
+		ex(942550, "hawk.example.net", "/_probe-does-not-exist-9f3c", 5),
+		ex(920420, "meet.example.net", "", 5),
+		ex(920440, "quad.example.net", "/shop/page/listing.example.com", 4),
+		ex(920420, "luck.example.com", "", 9),
+		ex(942290, "webco.example.org", "/solar/wp-admin/admin-ajax.php", 3),
 	})
 	changed, err := m.Learn(now)
 	if err != nil || !changed {
@@ -166,7 +166,7 @@ func TestLearnDropsLooseExclusions(t *testing.T) {
 		left = append(left, e.Key)
 	}
 	sort.Strings(left)
-	if strings.Join(left, ",") != "920420|pakluck.com|,942290|webco.pk|/solar/wp-admin/admin-ajax.php" {
+	if strings.Join(left, ",") != "920420|luck.example.com|,942290|webco.example.org|/solar/wp-admin/admin-ajax.php" {
 		t.Fatalf("left %v", left)
 	}
 }
@@ -182,10 +182,10 @@ func TestLearnDemotesSelfLearnedAttackRules(t *testing.T) {
 		return AutoExclusion{RuleExclusion: settings.RuleExclusion{Rule: rule, Domain: domain, Path: path}, Key: fmt.Sprintf("%d|%s|%s", rule, domain, path), IPs: 9, Learned: now - 86400, Expires: now + 86400, State: "active", Accepted: accepted}
 	}
 	m.saveAuto([]AutoExclusion{
-		ex(941100, "abranzia.com", "/product-category/men/", false),
-		ex(942100, "uploadarticle.com", "/wp-login.php", false),
-		ex(920420, "lakevista.net", "", false),
-		ex(942290, "webco.pk", "/solar/wp-admin/admin-ajax.php", true),
+		ex(941100, "fashion.example.com", "/product-category/men/", false),
+		ex(942100, "articles.example.com", "/wp-login.php", false),
+		ex(920420, "lake.example.net", "", false),
+		ex(942290, "webco.example.org", "/solar/wp-admin/admin-ajax.php", true),
 	})
 	changed, err := m.Learn(now)
 	if err != nil || !changed {
@@ -195,20 +195,20 @@ func TestLearnDemotesSelfLearnedAttackRules(t *testing.T) {
 	for _, e := range m.AutoExclusions() {
 		state[e.Domain] = e.State
 	}
-	want := map[string]string{"abranzia.com": "suggested", "uploadarticle.com": "suggested", "lakevista.net": "active", "webco.pk": "active"}
+	want := map[string]string{"fashion.example.com": "suggested", "articles.example.com": "suggested", "lake.example.net": "active", "webco.example.org": "active"}
 	for d, w := range want {
 		if state[d] != w {
 			t.Errorf("%s: %q, want %q", d, state[d], w)
 		}
 	}
-	if err := m.SetAutoExclusion("941100|abranzia.com|/product-category/men/", "accept"); err != nil {
+	if err := m.SetAutoExclusion("941100|fashion.example.com|/product-category/men/", "accept"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Learn(now); err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range m.AutoExclusions() {
-		if e.Domain == "abranzia.com" && (e.State != "active" || !e.Accepted) {
+		if e.Domain == "fashion.example.com" && (e.State != "active" || !e.Accepted) {
 			t.Fatalf("accepted exclusion demoted again: %+v", e)
 		}
 	}
