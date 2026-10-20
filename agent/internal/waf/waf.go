@@ -1067,13 +1067,21 @@ func (m *Manager) noteSource(path string) {
 }
 
 func (m *Manager) record(e Event) {
-	_, _ = m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail)
+	res, err := m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`, e.At, e.IP, e.Method, e.Host, e.URI, e.RuleID, e.Msg, e.Category, e.Action, e.User, e.Detail)
-	// Keep the table bounded.
-	if e.ID%512 == 0 {
-		_, _ = m.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, store.Now()-30*86400)
+	if err != nil {
+		return
+	}
+	// Keep the table bounded: every 512th row (e.ID was never set, so this
+	// ran on every insert). 32 days, so the monthly report on the 1st
+	// still sees the whole last month.
+	if id, err := res.LastInsertId(); err == nil && id%512 == 0 {
+		_, _ = m.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, store.Now()-RetainDays*86400)
 	}
 }
+
+// RetainDays is how long WAF events are kept at least.
+const RetainDays = 32
 
 func (m *Manager) maybeBan(e Event, c *counter) {
 	cfg := m.Settings.Get().WAF
