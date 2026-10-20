@@ -284,9 +284,11 @@ func (m *Manager) Build() (Ruleset, error) {
 			rs.TempBan[r.CIDR] = time.Duration(r.ExpiresAt-now) * time.Second
 		}
 	}
-	// Protected addresses are always exempt.
+	// Protected addresses (this server, the portal) pass every rule. The
+	// rest below is only exempt from blocks: whitelisting a country or a
+	// CDN does not open the ports the port filter closes.
 	if m.Protected != nil {
-		rs.Ignore = append(rs.Ignore, m.Protected()...)
+		rs.Allow = append(rs.Allow, m.Protected()...)
 	}
 	if m.Trusted != nil {
 		rs.Ignore = append(rs.Ignore, m.Trusted()...)
@@ -818,7 +820,7 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 				res.CountryLists = append(res.CountryLists, CountryList{CC: cc, Kind: l.kind, Networks: m.Geo.Loaded(cc), Source: m.Geo.Source(cc)})
 			}
 		}
-		// A whitelisted country is in the kernel's allow set: it wins over
+		// A whitelisted country is in the kernel's exempt set: it wins over
 		// blocks, like a whitelisted address.
 		if cc := m.Geo.Lookup(res.IP, cfg.IgnoredCountries); cc != "" {
 			res.Country = cc
