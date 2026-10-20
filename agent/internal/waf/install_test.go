@@ -140,6 +140,32 @@ func TestRuleChangesAreTestedAndReloaded(t *testing.T) {
 	}
 }
 
+// Audit A3 F10: a reload that failed leaves the new rules on disk but not
+// running; the next apply reloads again (and reports the error again)
+// even though no file changed, until a reload succeeds.
+func TestFailedReloadIsRetried(t *testing.T) {
+	dir := t.TempDir()
+	marker, fail := filepath.Join(dir, "reloads"), filepath.Join(dir, "fail")
+	os.WriteFile(fail, nil, 0o644)
+	tgt := Target{Name: "test", ModSec: true, IncludeFile: filepath.Join(dir, "inc.conf"), Engine: "On",
+		configTest: []string{"/bin/true"}, reload: []string{"/bin/sh", "-c", "echo x >> " + marker + "; test ! -e " + fail}}
+	m := &Manager{RulesDir: filepath.Join(dir, "rules")}
+	reloads := func() int { b, _ := os.ReadFile(marker); return strings.Count(string(b), "x") }
+	if err := m.install(tgt, "SecRule A", nil); err == nil || reloads() != 1 {
+		t.Fatalf("failed reload not reported: %v %d", err, reloads())
+	}
+	if err := m.install(tgt, "SecRule A", nil); err == nil || reloads() != 2 {
+		t.Fatalf("failed reload not retried or error lost: %v %d", err, reloads())
+	}
+	os.Remove(fail)
+	if err := m.install(tgt, "SecRule A", nil); err != nil || reloads() != 3 {
+		t.Fatalf("retry: %v %d", err, reloads())
+	}
+	if err := m.install(tgt, "SecRule A", nil); err != nil || reloads() != 3 {
+		t.Fatalf("reloaded again after success: %v %d", err, reloads())
+	}
+}
+
 // On cPanel the installed module decides, not only "httpd -M" (LiteSpeed's
 // httpd wrapper and config errors in other files make it fail); when it is
 // asked, its answer explains a missing ModSecurity.
