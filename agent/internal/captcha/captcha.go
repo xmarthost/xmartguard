@@ -60,8 +60,10 @@ type Server struct {
 	tickets  map[string]ticket
 	mu       sync.Mutex
 	attempts map[string][]time.Time
+	spent    map[string]int64 // answered challenge ids -> expiry
 	running  [2]*http.Server
 	ports    [2]int
+	bindErr  string // last listen error (logged once)
 }
 
 // Run keeps the listeners in line with the settings until ctx ends: they run
@@ -126,22 +128,46 @@ func (s *Server) sync() {
 	if !want || s.running[0] != nil {
 		return
 	}
-	s.ports = ports
 	plain := HTTPServer(ports[0], s)
 	secure := HTTPServer(ports[1], s)
 	secure.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.certs().Get}
+	// Bind both ports here: the firewall redirects banned visitors to them,
+	// so a port that failed to bind (taken, a transient error) is retried
+	// on the next sync instead of being marked running with nobody behind.
+	lp, err := net.Listen("tcp", plain.Addr)
+	if err != nil {
+		s.bindFailed(err)
+		return
+	}
+	ls, err := net.Listen("tcp", secure.Addr)
+	if err != nil {
+		lp.Close()
+		s.bindFailed(err)
+		return
+	}
+	s.bindErr = ""
+	s.ports = ports
 	s.running = [2]*http.Server{plain, secure}
 	go func() {
-		if err := plain.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := plain.Serve(lp); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.Log.Warn("captcha http server", "err", err)
 		}
 	}()
 	go func() {
-		if err := secure.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := secure.ServeTLS(ls, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.Log.Warn("captcha https server", "err", err)
 		}
 	}()
 	s.Log.Info("captcha server listening", "http", ports[0], "https", ports[1])
+}
+
+// bindFailed logs a listener that could not bind, once per distinct error
+// (sync retries every 15 seconds).
+func (s *Server) bindFailed(err error) {
+	if err.Error() != s.bindErr {
+		s.bindErr = err.Error()
+		s.Log.Warn("captcha server can not listen; retrying", "err", err)
+	}
 }
 
 // HTTPServer builds a CAPTCHA listener. Keep-alive is off:
@@ -189,7 +215,23 @@ func (s *Server) tooMany(ip string) bool {
 	if s.attempts == nil {
 		s.attempts = map[string][]time.Time{}
 	}
+	// An IPv6 visitor is its /64: it can take any address in it.
+	if k := addrKey(ip); k != "" {
+		ip = k
+	}
 	cut := time.Now().Add(-10 * time.Minute)
+	if _, known := s.attempts[ip]; !known && len(s.attempts) >= 10000 {
+		// Bound memory under a flood by forgetting only what expired:
+		// clearing the map would reset every address's count.
+		for k, ts := range s.attempts {
+			if len(ts) == 0 || !ts[len(ts)-1].After(cut) {
+				delete(s.attempts, k)
+			}
+		}
+		if len(s.attempts) >= 100000 {
+			return true
+		}
+	}
 	var keep []time.Time
 	for _, t := range s.attempts[ip] {
 		if t.After(cut) {
@@ -198,9 +240,6 @@ func (s *Server) tooMany(ip string) bool {
 	}
 	keep = append(keep, time.Now())
 	s.attempts[ip] = keep
-	if len(s.attempts) > 10000 { // bound memory under a flood
-		s.attempts = map[string][]time.Time{ip: keep}
-	}
 	return len(keep) > 10
 }
 
@@ -336,6 +375,30 @@ func (s *Server) keystream(nonce []byte, n int) []byte {
 	return sum[:n]
 }
 
+// spend marks a challenge id as answered; it returns false when it already
+// was (one answer per image, so a wrong guess needs a new image).
+func (s *Server) spend(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().Unix()
+	if s.spent == nil {
+		s.spent = map[string]int64{}
+	}
+	if len(s.spent) >= 1000 {
+		for k, exp := range s.spent {
+			if exp < now {
+				delete(s.spent, k)
+			}
+		}
+	}
+	if _, used := s.spent[id]; used {
+		return false
+	}
+	exp := now + 300 // a valid id (open) expires within 5 minutes
+	s.spent[id] = exp
+	return true
+}
+
 // open returns the digits of a sealed id if it is valid for ip.
 func (s *Server) open(ip, id string) (string, bool) {
 	parts := strings.Split(id, ".")
@@ -391,9 +454,11 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 			ok = s.checkWork(ip, r.PostForm.Get("pow"), r.PostForm.Get("nonce"))
 			break
 		}
-		want, valid := s.open(ip, r.PostForm.Get("id"))
-		// Challenges expire after 5 minutes; the attempt limit bounds guessing.
-		ok = valid && want != "" && strings.TrimSpace(r.PostForm.Get("answer")) == want
+		id := r.PostForm.Get("id")
+		want, valid := s.open(ip, id)
+		// Challenges expire after 5 minutes and are good for one answer; the
+		// attempt limit bounds guessing.
+		ok = valid && want != "" && s.spend(id) && strings.TrimSpace(r.PostForm.Get("answer")) == want
 	}
 	gate := r.PostForm.Get("gate") == "1"
 	if !ok {
@@ -416,10 +481,7 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 		}
 	}
 	s.Log.Info("captcha solved; address allowed", "ip", ip)
-	back := r.PostForm.Get("back")
-	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") {
-		back = "/"
-	}
+	back := safeBack(r.PostForm.Get("back")) // "/\evil.com" would leave the site
 	// Close the redirected connection so the next request goes to the site.
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -552,9 +614,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, ip, msg string) {
 	if r.Method == http.MethodPost {
 		back = r.PostForm.Get("back")
 	}
-	if len(back) > 500 || strings.HasPrefix(back, pathPrefix) || strings.HasPrefix(back, legacyPrefix) {
-		back = "/"
-	}
+	back = safeBack(back) // one check for every way back
 	data := map[string]any{"IP": ip, "Msg": msg, "Back": back, "Provider": cfg.Provider, "SiteKey": cfg.SiteKey, "Host": r.Host}
 	s.challenge(data, cfg, ip)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

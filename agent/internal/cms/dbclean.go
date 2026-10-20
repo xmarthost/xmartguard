@@ -179,13 +179,29 @@ func (m *Manager) RestoreDBFindings(ctx context.Context, ids []int64) []DBCleanR
 }
 
 func (m *Manager) restoreOne(ctx context.Context, id int64) error {
-	var site, table, keyCol, key, col, old string
-	err := m.DB.QueryRow(`SELECT site_path, tbl, key_col, key_val, col, old_value FROM db_clean_backup WHERE finding_id = ? ORDER BY id DESC LIMIT 1`, id).
-		Scan(&site, &table, &keyCol, &key, &col, &old)
+	var site, dbName, table, keyCol, key, col, old string
+	err := m.DB.QueryRow(`SELECT site_path, db_name, tbl, key_col, key_val, col, old_value FROM db_clean_backup WHERE finding_id = ? ORDER BY id DESC LIMIT 1`, id).
+		Scan(&site, &dbName, &table, &keyCol, &key, &col, &old)
 	if err != nil {
 		return errors.New("no saved value for this finding")
 	}
 	cfg, err := ReadWPConfig(site)
+	if err != nil {
+		return err
+	}
+	// The value goes back only into the database it came from (a staging
+	// clone or a migrated site may use another one now).
+	if cfg.Name != dbName {
+		return fmt.Errorf("the site now uses database %s, not %s where the value was saved", cfg.Name, dbName)
+	}
+	// And only over the value the clean wrote: an edit made since then is
+	// not overwritten. The cleaned value is worked out again from the saved one.
+	var category string
+	_ = m.DB.QueryRow(`SELECT category FROM db_findings WHERE id = ?`, id).Scan(&category)
+	cleaned, err := CleanStoredValue(old)
+	if category == "siteurl" {
+		cleaned, err = cleanSiteURL(old)
+	}
 	if err != nil {
 		return err
 	}
@@ -200,9 +216,13 @@ func (m *Manager) restoreOne(ctx context.Context, id int64) error {
 	defer db.Close()
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	q := fmt.Sprintf("UPDATE `%s` SET `%s` = ? WHERE `%s` = ?", table, col, keyCol)
-	if _, err := db.ExecContext(cctx, q, old, key); err != nil {
+	q := fmt.Sprintf("UPDATE `%s` SET `%s` = ? WHERE `%s` = ? AND `%s` = ?", table, col, keyCol, col)
+	res, err := db.ExecContext(cctx, q, old, key, cleaned)
+	if err != nil {
 		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return errors.New("the value changed since it was cleaned (or the row is gone); not overwritten")
 	}
 	m.markDBFinding(id, "detected", "restored from the saved value")
 	return nil

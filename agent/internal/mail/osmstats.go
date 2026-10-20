@@ -17,8 +17,9 @@ const statsWindow = 24 * time.Hour
 
 type senderStat struct {
 	sender, source string
+	user           string        // the cPanel account a local script ran as
 	hours          map[int64]int // hour (unix/3600) -> messages
-	rcpts          int
+	rcpts          map[int64]int // hour -> recipients, pruned with hours
 	last           time.Time
 }
 
@@ -53,15 +54,16 @@ func (o *Monitor) count(m Message, now time.Time) {
 	if o.stats == nil {
 		o.stats = map[string]*senderStat{}
 	}
-	k := m.key()
+	k := m.senderKey()
 	s := o.stats[k]
 	if s == nil {
-		s = &senderStat{sender: firstNonEmpty(m.Auth, m.Sender), hours: map[int64]int{}}
+		s = &senderStat{sender: firstNonEmpty(m.Auth, m.Sender), hours: map[int64]int{}, rcpts: map[int64]int{}}
 		o.stats[k] = s
 	}
 	s.source = m.Source()
+	s.user = m.account()
 	s.hours[now.Unix()/3600]++
-	s.rcpts += max(m.Rcpts, 1)
+	s.rcpts[now.Unix()/3600] += max(m.Rcpts, 1)
 	if now.After(s.last) {
 		s.last = now
 	}
@@ -82,10 +84,16 @@ func (o *Monitor) prune(now time.Time) {
 				delete(s.hours, h)
 			}
 		}
+		for h := range s.rcpts {
+			if h < oldest {
+				delete(s.rcpts, h)
+			}
+		}
 		if len(s.hours) == 0 {
 			delete(o.stats, k)
 		}
 	}
+	o.pruneLimits(now)
 }
 
 // Seed counts the messages of the last 24 hours already in the log, so the
@@ -137,7 +145,10 @@ func (o *Monitor) Summary(limit int) Stats {
 	hour := now.Unix() / 3600
 	var all []SenderStat
 	for _, s := range o.stats {
-		x := SenderStat{Sender: s.sender, Source: s.source, Rcpts: s.rcpts, LastAt: s.last.Unix()}
+		x := SenderStat{Sender: s.sender, Source: s.source, User: s.user, LastAt: s.last.Unix()}
+		for _, n := range s.rcpts {
+			x.Rcpts += n
+		}
 		for h, n := range s.hours {
 			x.Day += n
 			if h == hour {
@@ -163,7 +174,7 @@ func (o *Monitor) Summary(limit int) Stats {
 		all = all[:limit]
 	}
 	for i := range all {
-		if o.Owner != nil {
+		if all[i].User == "" && o.Owner != nil {
 			all[i].User = o.Owner(all[i].Sender)
 		}
 	}

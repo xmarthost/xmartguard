@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -88,8 +89,39 @@ func ParseArrival(line string) (Message, bool) {
 	return msg, true
 }
 
-// key is who we count: the authenticated login, else the local account.
+// CPanelUsersDir lists the cPanel accounts (overridable in tests).
+var CPanelUsersDir = "/var/cpanel/users"
+
+// account is the cPanel account a local submission ran as (Exim's U=,
+// which the script can not choose, unlike the envelope sender it passes
+// with -f). "" for logins and for system users (nobody, mailnull, root)
+// that the log does not tie to one account.
+func (m Message) account() string {
+	u := m.LocalU
+	if m.Auth != "" || u == "" || u == "root" || strings.ContainsAny(u, "/\\") || strings.HasPrefix(u, ".") {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(CPanelUsersDir, u)); err != nil {
+		return ""
+	}
+	return u
+}
+
+// key is who we count against the limits: the authenticated login, else
+// the local account (a script rotating its -f sender is still one
+// account), else the system user and the sender.
 func (m Message) key() string {
+	if m.Auth != "" {
+		return m.Auth
+	}
+	if a := m.account(); a != "" {
+		return a
+	}
+	return m.senderKey()
+}
+
+// senderKey is one sender in the summary.
+func (m Message) senderKey() string {
 	if m.Auth != "" {
 		return m.Auth
 	}
@@ -269,6 +301,9 @@ func (o *Monitor) Observe(m Message) {
 	}
 	keep = append(keep, now)
 	o.counts[k] = keep
+	if len(o.counts)%256 == 0 {
+		o.pruneLimits(now)
+	}
 	perMin := 0
 	for _, t := range keep {
 		if now.Sub(t) < time.Minute {
@@ -327,6 +362,21 @@ func (o *Monitor) Observe(m Message) {
 	}
 }
 
+// pruneLimits forgets counters and flags older than their window (called
+// with o.mu held), so senders that sent once do not stay in memory.
+func (o *Monitor) pruneLimits(now time.Time) {
+	for k, ts := range o.counts {
+		if len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= time.Hour {
+			delete(o.counts, k)
+		}
+	}
+	for k, t := range o.flagged {
+		if now.Sub(t) >= time.Hour {
+			delete(o.flagged, k)
+		}
+	}
+}
+
 func firstNonEmpty(a ...string) string {
 	for _, s := range a {
 		if s != "" {
@@ -338,7 +388,11 @@ func firstNonEmpty(a ...string) string {
 
 func (o *Monitor) raise(cfg settings.OSM, e Event, m Message) {
 	e.At = store.Now()
-	if o.Owner != nil {
+	// A local script's account is the one it ran as: the envelope sender's
+	// domain may belong to another account (-f is free to choose).
+	if a := m.account(); a != "" {
+		e.User = a
+	} else if o.Owner != nil {
 		e.User = o.Owner(firstNonEmpty(m.Auth, m.Sender))
 	}
 	if e.User == "" && m.LocalU != "" {

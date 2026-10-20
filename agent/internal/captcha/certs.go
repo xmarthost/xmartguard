@@ -31,8 +31,9 @@ type CertStore struct {
 	// index maps every name a stored certificate covers to its folder: cPanel
 	// names the folder after the vhost (e.g. addon.example.com for the addon
 	// domain example.net), not after each domain it serves.
-	index   map[string]string
-	indexAt time.Time
+	index    map[string]string
+	indexAt  time.Time
+	building bool // an index rebuild is running
 }
 
 func (c *CertStore) dirs() []string {
@@ -42,34 +43,42 @@ func (c *CertStore) dirs() []string {
 	return []string{"/var/cpanel/ssl/apache_tls", "/etc/letsencrypt/live"}
 }
 
-// Get implements tls.Config.GetCertificate.
+// Get implements tls.Config.GetCertificate. The lock is held only to read
+// and write the cache: the files are read outside it, so one slow lookup
+// (or the index rebuild) does not hold up every other handshake.
 func (c *CertStore) Get(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	name := strings.ToLower(strings.TrimSuffix(hello.ServerName, "."))
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cache == nil {
-		c.cache, c.loaded = map[string]*tls.Certificate{}, map[string]time.Time{}
-	}
 	if name != "" && !strings.ContainsAny(name, "/\\") && !strings.Contains(name, "..") {
-		if cert, ok := c.cache[name]; ok && time.Since(c.loaded[name]) < time.Hour {
+		c.mu.Lock()
+		if c.cache == nil {
+			c.cache, c.loaded = map[string]*tls.Certificate{}, map[string]time.Time{}
+		}
+		cert, ok := c.cache[name]
+		fresh := ok && time.Since(c.loaded[name]) < time.Hour
+		c.mu.Unlock()
+		if fresh {
 			if cert != nil {
 				return cert, nil
 			}
 		} else {
-			cert := c.load(name)
+			cert = c.load(name)
 			if cert == nil {
 				// www.example.com is usually covered by example.com's certificate.
 				cert = c.load(strings.TrimPrefix(name, "www."))
 			}
+			c.mu.Lock()
 			if len(c.cache) > 5000 {
 				c.cache, c.loaded = map[string]*tls.Certificate{}, map[string]time.Time{}
 			}
 			c.cache[name], c.loaded[name] = cert, time.Now()
+			c.mu.Unlock()
 			if cert != nil {
 				return cert, nil
 			}
 		}
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.selfSigned()
 }
 
@@ -77,32 +86,59 @@ func (c *CertStore) load(name string) *tls.Certificate {
 	if cert := c.loadDir(name); cert != nil {
 		return cert
 	}
-	if time.Since(c.indexAt) > 10*time.Minute {
-		c.buildIndex()
-	}
-	if dir, ok := c.index[name]; ok {
+	index := c.currentIndex()
+	if dir, ok := index[name]; ok {
 		return c.loadPath(dir)
 	}
 	// *.example.com covers a.example.com.
 	if i := strings.IndexByte(name, '.'); i > 0 {
-		if dir, ok := c.index["*"+name[i:]]; ok {
+		if dir, ok := index["*"+name[i:]]; ok {
 			return c.loadPath(dir)
 		}
 	}
 	return nil
 }
 
+// currentIndex returns the name index. The first one is built right away;
+// later ones (every 10 minutes) are rebuilt in the background while
+// handshakes keep using the previous index.
+func (c *CertStore) currentIndex() map[string]string {
+	c.mu.Lock()
+	index := c.index
+	// No index yet: every caller builds it (not "not found" for an hour).
+	stale := time.Since(c.indexAt) > 10*time.Minute && (!c.building || index == nil)
+	if stale {
+		c.building = true
+	}
+	c.mu.Unlock()
+	if !stale {
+		return index
+	}
+	rebuild := func() map[string]string {
+		next := c.buildIndex()
+		c.mu.Lock()
+		c.index, c.indexAt, c.building = next, time.Now(), false
+		c.mu.Unlock()
+		return next
+	}
+	if index == nil {
+		return rebuild()
+	}
+	go rebuild()
+	return index
+}
+
 // buildIndex reads the names in every stored certificate.
-func (c *CertStore) buildIndex() {
-	c.index, c.indexAt = map[string]string{}, time.Now()
+func (c *CertStore) buildIndex() map[string]string {
+	index := map[string]string{}
 	for _, d := range c.dirs() {
 		entries, err := os.ReadDir(d)
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
-			if len(c.index) > 50000 {
-				return
+			if len(index) > 50000 {
+				return index
 			}
 			dir := filepath.Join(d, e.Name())
 			raw, err := os.ReadFile(filepath.Join(dir, "combined"))
@@ -118,12 +154,13 @@ func (c *CertStore) buildIndex() {
 			}
 			for _, n := range leaf.DNSNames {
 				n = strings.ToLower(n)
-				if _, dup := c.index[n]; !dup {
-					c.index[n] = dir
+				if _, dup := index[n]; !dup {
+					index[n] = dir
 				}
 			}
 		}
 	}
+	return index
 }
 
 func firstCert(raw []byte) *x509.Certificate {

@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/cms"
 )
 
 // Item is one thing the audit found.
@@ -355,7 +357,7 @@ func archiveExt(name string) string {
 }
 
 func findSecret(path string) (string, string) {
-	b, err := os.ReadFile(path)
+	b, err := cms.ReadUserFile(path, textMax) // no symlink, FIFO or huge sparse file
 	if err != nil {
 		return "", ""
 	}
@@ -450,7 +452,9 @@ func wordpressChecks(dir string) []Item {
 		out = append(out, Item{Check: "wp_core", Severity: "medium", Title: "WordPress core files missing", Path: dir,
 			Detail: "Missing: " + strings.Join(missing, ", ") + ". Reinstall the core files (Dashboard » Updates » Re-install) after checking the site for malware."})
 	}
-	cfg, _ := os.ReadFile(filepath.Join(dir, "wp-config.php"))
+	// The account controls this file: a 1 TB sparse file or a FIFO must
+	// not stop the agent (cms.ReadUserFile).
+	cfg, _ := cms.ReadUserFile(filepath.Join(dir, "wp-config.php"), cms.MaxConfigSize)
 	if reWPDebugOn.Match(cfg) && !reWPDebugDisplay.Match(cfg) {
 		out = append(out, Item{Check: "wp_debug", Severity: "low", Title: "WordPress debug mode shows errors to visitors", Path: filepath.Join(dir, "wp-config.php"),
 			Detail: "WP_DEBUG is on: error messages reveal paths and plugin names. Turn it off on a live site."})
@@ -675,6 +679,29 @@ var (
 	reEveryMinute = regexp.MustCompile(`^\*(?:/1)?\s+\*\s+\*\s+\*\s+\*\s`)
 )
 
+// Secrets in cron lines, masked before a line goes into the report.
+var cronSecrets = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]+@`), "${1}***:***@"},                                                               // https://user:pass@host
+	{regexp.MustCompile(`([?&][^=\s&?#'"]+)=[^&\s#'"]+`), "${1}=***"},                                                              // ?key=SECRET&token=…
+	{regexp.MustCompile(`(?i)(authorization:\s*\w+\s+)[^\s'"]+`), "${1}***"},                                                       // -H "Authorization: Bearer …"
+	{regexp.MustCompile(`(?i)(\s--?[\w-]*(?:user|pass|passwd|password|token|secret|key)(?:\s+|=))(['"]?)[^\s'"]+`), "${1}${2}***"}, // --password x, --api-key=x
+	{regexp.MustCompile(`(\s-u\s*)(['"]?)[^\s'"]+`), "${1}${2}***"},                                                                // curl -u user:pass
+	{regexp.MustCompile(`(\s-p)[^\s'"-][^\s'"]*`), "${1}***"},                                                                      // mysql -pSECRET
+	{regexp.MustCompile(`(?i)\b(\w*(?:pass|pwd|token|secret|key)\w*=)(['"]?)[^\s'"]+`), "${1}${2}***"},                             // DB_PASS=…
+}
+
+// maskCron keeps a cron line readable without the passwords, tokens and
+// keys it often carries: the report goes to the portal's database and UI.
+func maskCron(s string) string {
+	for _, c := range cronSecrets {
+		s = c.re.ReplaceAllString(s, c.repl)
+	}
+	return s
+}
+
 func (a *Auditor) cronJobs() []Item {
 	dir := a.CronDir
 	if dir == "" {
@@ -716,7 +743,7 @@ func (a *Auditor) cronJobs() []Item {
 						sev = "medium"
 					}
 					out = append(out, Item{Check: "cron", Severity: sev, Title: m[1] + " cron job without a time limit", Owner: user, Path: filepath.Join(dir, user),
-						Detail: t + "\nWhen the site is slow, runs pile up and fill the account's process limit. Add " +
+						Detail: maskCron(t) + "\nWhen the site is slow, runs pile up and fill the account's process limit. Add " +
 							map[string]string{"wget": "-T 60 -t 1", "curl": "-m 60"}[m[1]] + "."})
 				}
 			}
@@ -725,10 +752,10 @@ func (a *Auditor) cronJobs() []Item {
 			key := reHomeDir.ReplaceAllString(cmd, "/home/")
 			if prev, ok := seen[key]; ok && prev != cmd {
 				out = append(out, Item{Check: "cron", Severity: "medium", Title: "Cron job runs for two home folders", Owner: user, Path: filepath.Join(dir, user),
-					Detail: prev + "\n" + cmd + "\nOne of them points to an old copy of the site. Remove it."})
+					Detail: maskCron(prev) + "\n" + maskCron(cmd) + "\nOne of them points to an old copy of the site. Remove it."})
 			} else if lines[t] {
 				out = append(out, Item{Check: "cron", Severity: "low", Title: "Cron job listed twice", Owner: user, Path: filepath.Join(dir, user),
-					Detail: t + "\nIt runs twice each time. Remove one line."})
+					Detail: maskCron(t) + "\nIt runs twice each time. Remove one line."})
 			}
 			lines[t] = true
 			seen[key] = cmd

@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,13 +48,23 @@ type Monitor struct {
 	OnEvent func(Event)
 
 	// Overridable for tests.
-	ProcRoot  string
-	CronDirs  []string
-	Rkhunter  string
-	killed    map[int]bool
+	ProcRoot string
+	CronDirs []string
+	Rkhunter string
+
+	initOnce sync.Once
+	// procMu guards killed and cpu (CheckProcesses); mu guards processed
+	// (once, called from the monitor loop and from a manual rkhunter run).
+	procMu sync.Mutex
+	mu     sync.Mutex
+	// killed is keyed by PID and start time: a later process that reuses
+	// a killed PID is judged again.
+	killed    map[cpuKey]bool
 	processed map[string]bool
 	// cpu is the previous CPU reading of each flagged process.
 	cpu map[cpuKey]cpuSample
+	// rkRunning is set while rkhunter runs (one run at a time).
+	rkRunning atomic.Bool
 }
 
 type cpuKey struct {
@@ -65,7 +77,9 @@ type cpuSample struct {
 	at    time.Time
 }
 
-func (m *Monitor) init() {
+func (m *Monitor) init() { m.initOnce.Do(m.setup) }
+
+func (m *Monitor) setup() {
 	if m.ProcRoot == "" {
 		m.ProcRoot = "/proc"
 	}
@@ -80,11 +94,9 @@ func (m *Monitor) init() {
 			}
 		}
 	}
-	if m.killed == nil {
-		m.killed = map[int]bool{}
-		m.processed = map[string]bool{}
-		m.cpu = map[cpuKey]cpuSample{}
-	}
+	m.killed = map[cpuKey]bool{}
+	m.processed = map[string]bool{}
+	m.cpu = map[cpuKey]cpuSample{}
 }
 
 // Run checks processes every minute, cron every 10 minutes and rootkits weekly.
@@ -102,7 +114,9 @@ func (m *Monitor) Run(ctx context.Context) {
 			m.CheckCron()
 		}
 		if st.Rootkit.Enabled && n%60 == 0 {
-			m.maybeRootkit(ctx)
+			// In the background: rkhunter can take up to an hour, and the
+			// process and cron checks must keep running meanwhile.
+			go m.maybeRootkit(ctx)
 		}
 		n++
 		select {
@@ -130,6 +144,11 @@ func (m *Monitor) record(e Event) {
 func (m *Monitor) once(key string) bool {
 	sum := sha256.Sum256([]byte(key))
 	k := hex.EncodeToString(sum[:12])
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.processed) > 20000 {
+		m.processed = map[string]bool{} // only a cache of the kv rows below
+	}
 	if m.processed[k] {
 		return false
 	}
@@ -463,6 +482,8 @@ func userName(uid uint32) string {
 // CheckProcesses scans running processes once.
 func (m *Monitor) CheckProcesses() {
 	m.init()
+	m.procMu.Lock()
+	defer m.procMu.Unlock()
 	cfg := m.Settings.Get().Processes
 	homes := map[string]string{}
 	if m.Users != nil {
@@ -494,10 +515,10 @@ func (m *Monitor) CheckProcesses() {
 		}
 		m.cpu[key] = cpuSample{p.CPUTicks, now}
 		action := "alerted"
-		if cfg.Kill && !m.killed[p.PID] && ShouldKill(level, p.Age, life, recent) {
+		if cfg.Kill && !m.killed[key] && ShouldKill(level, p.Age, life, recent) && m.samePID(p) {
 			if err := syscall.Kill(p.PID, syscall.SIGKILL); err == nil {
 				action = "killed"
-				m.killed[p.PID] = true
+				m.killed[key] = true
 				if level == Suspicious {
 					reason += fmt.Sprintf(", and kept %.0f%% of a CPU core busy for %s", recent*100, p.Age.Round(time.Minute))
 				}
@@ -512,6 +533,23 @@ func (m *Monitor) CheckProcesses() {
 			delete(m.cpu, k)
 		}
 	}
+	for k := range m.killed {
+		if !seen[k] {
+			delete(m.killed, k)
+		}
+	}
+}
+
+// samePID reports whether p's PID still belongs to the process that was
+// read (same start time), right before it is killed: a PID reused in the
+// meantime by another process, maybe root's, is left alone.
+func (m *Monitor) samePID(p ProcInfo) bool {
+	raw, err := os.ReadFile(filepath.Join(m.ProcRoot, strconv.Itoa(p.PID), "stat"))
+	if err != nil {
+		return false
+	}
+	start, _ := parseStat(string(raw))
+	return start == p.Start
 }
 
 func contains(list []string, s string) bool {
@@ -784,7 +822,7 @@ func (m *Monitor) EnableCron(user, line string) error {
 // ------------------------------------------------------------ rootkits
 
 func (m *Monitor) maybeRootkit(ctx context.Context) {
-	if m.Rkhunter == "" {
+	if m.Rkhunter == "" || m.rkRunning.Load() {
 		return
 	}
 	last, _ := strconv.ParseInt(store.GetKV(m.DB, "rkhunter_last"), 10, 64)
@@ -801,6 +839,10 @@ func (m *Monitor) RunRootkit(ctx context.Context) (int, error) {
 	if m.Rkhunter == "" {
 		return 0, fmt.Errorf("rkhunter is not installed (dnf install rkhunter / apt install rkhunter)")
 	}
+	if !m.rkRunning.CompareAndSwap(false, true) {
+		return 0, fmt.Errorf("rkhunter is already running")
+	}
+	defer m.rkRunning.Store(false)
 	cctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
 	out, _ := exec.CommandContext(cctx, m.Rkhunter, "--check", "--skip-keypress", "--nocolors", "--report-warnings-only").CombinedOutput()
