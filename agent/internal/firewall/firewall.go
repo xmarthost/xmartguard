@@ -941,6 +941,11 @@ func (m *Manager) expire() {
 
 // AutoBan is used by brute-force and DoS detection.
 func (m *Manager) AutoBan(ip, reason, source string) {
+	// With the firewall off nothing would be blocked: no ban is recorded,
+	// notified or reported to the IPDB.
+	if !m.Settings.Get().Firewall.Enabled {
+		return
+	}
 	c, err := ParseAddr(ip)
 	if err != nil || m.isProtected(c) {
 		return

@@ -147,3 +147,21 @@ func TestDoSCountsTCPOnly(t *testing.T) {
 		t.Error("iptables DoS rule not limited to TCP")
 	}
 }
+
+// With the firewall off, automatic bans (WAF, brute force) record,
+// notify and report nothing: nothing would be blocked.
+func TestAutoBanNeedsFirewall(t *testing.T) {
+	m := unitManager(t)
+	calls := 0
+	m.OnBan = func(Event) { calls++ }
+	if _, err := m.Settings.Patch([]byte(`{"firewall":{"enabled":false}}`)); err != nil {
+		t.Fatal(err)
+	}
+	m.AutoBan("203.0.113.70", "5 failed logins", "waf")
+	var rules, events int
+	m.DB.QueryRow(`SELECT count(*) FROM fw_rules`).Scan(&rules)
+	m.DB.QueryRow(`SELECT count(*) FROM fw_events`).Scan(&events)
+	if rules != 0 || events != 0 || calls != 0 {
+		t.Fatalf("firewall off: %d rules, %d events, %d notifications", rules, events, calls)
+	}
+}
