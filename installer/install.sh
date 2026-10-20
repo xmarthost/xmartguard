@@ -6,7 +6,7 @@
 # Options:
 #   --token TOKEN     one-time enrollment token from the portal (required)
 #   --server URL      portal URL (default: __XG_PORTAL_URL__)
-#   --insecure        accept a self-signed portal certificate (testing only)
+#   --insecure        accept a self-signed certificate of a portal on localhost (testing only)
 #   --force           re-install even if the agent is already installed
 #
 # Layout:
@@ -65,9 +65,22 @@ say "${c_bld}xPGuard installer${c_off}"
 say ""
 
 # ---------------------------------------------------------------- preflight
+# The agent, its commands and its updates come from this address and run as
+# root: over http, or with an unchecked certificate, anyone on the network
+# path could take the server over. Both are allowed only for a portal on
+# this machine (tests).
+URL_HOST=${PORTAL_URL#*://}; URL_HOST=${URL_HOST%%[/?#]*}; URL_HOST=${URL_HOST##*@}
+case "$URL_HOST" in \[*) URL_HOST="${URL_HOST%%]*}]" ;; *) URL_HOST=${URL_HOST%%:*} ;; esac
+LOOPBACK=0
+if [ "$URL_HOST" = localhost ] || [ "$URL_HOST" = "[::1]" ] || [[ "$URL_HOST" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then LOOPBACK=1; fi
+case "$PORTAL_URL" in
+  https://*) ;;
+  http://*) [ "$LOOPBACK" -eq 1 ] || die "the portal URL must start with https:// ($PORTAL_URL)" ;;
+  *) die "invalid --server URL: $PORTAL_URL" ;;
+esac
+[ "$INSECURE" -eq 0 ] || [ "$LOOPBACK" -eq 1 ] || die "--insecure is only allowed for a portal on this machine (localhost)"
 [ "$(id -u)" -eq 0 ] || die "please run as root"
 [ -n "$TOKEN" ] || die "missing --token (copy the install command from the portal: Add Server)"
-case "$PORTAL_URL" in https://*|http://*) ;; *) die "invalid --server URL: $PORTAL_URL" ;; esac
 command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || die "systemd is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
