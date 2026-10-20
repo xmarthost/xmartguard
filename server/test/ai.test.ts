@@ -3,6 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
+import { createOwner } from '../src/routes/users.js';
 import { aiPayload, aiPayloadV2 } from '../src/routes/ai.js';
 import { parseAnswer } from '../src/ai/prompt.js';
 import { cooldownFor } from '../src/ai/providers.js';
@@ -357,5 +358,34 @@ describe('AI clean verdicts that do not restore', () => {
     // Not counted as a false positive in AI Learning.
     const l = await admin.req('GET', '/api/ai/learning');
     expect(l.body.signatures.find((s: any) => s.signature === 'PHP.Backdoor.GlobalsDispatch')).toBeUndefined();
+  });
+});
+
+describe('AI keys stay with their address', () => {
+  it('lets only the platform change providers, never moves a stored key to a new address, and audits changes', async () => {
+    await createOwner(h.pool, 'ai-cust@example.com', 'customer-long-password', 'AI Customer');
+    const cust = new Client(h.url);
+    await cust.login('ai-cust@example.com', 'customer-long-password');
+    const { rows: ca } = await h.pool.query("SELECT account_id FROM users WHERE email = 'ai-cust@example.com'");
+    // A customer's provider row from before keys became master settings.
+    const { rows: legacy } = await h.pool.query(
+      "INSERT INTO ai_providers (account_id, kind, name, base_url, api_key, model) VALUES ($1, 'custom', 'old', $2, 'k-legacy', 'm') RETURNING id",
+      [ca[0].account_id, apiUrl],
+    );
+    expect((await cust.req('PATCH', `/api/ai/providers/${legacy[0].id}`, { base_url: 'https://elsewhere.example/v1' })).status).toBe(403);
+
+    const p = await admin.req('POST', '/api/ai/providers', { kind: 'custom', name: 'Moved', base_url: apiUrl, api_key: 'k-good', model: 'big-model', priority: 900, enabled: false });
+    expect(p.status).toBe(200);
+    // The model list with a stored key goes to the stored address, whatever address is sent.
+    const m = await admin.req('POST', '/api/ai/models', { kind: 'custom', base_url: 'https://elsewhere.example/v1', provider_id: p.body.id });
+    expect(m.status).toBe(200);
+    // Plain http elsewhere is refused; a new https address drops the stored key.
+    expect((await admin.req('PATCH', `/api/ai/providers/${p.body.id}`, { base_url: 'http://elsewhere.example/v1' })).status).toBe(400);
+    expect((await admin.req('POST', '/api/ai/providers', { kind: 'custom', base_url: 'http://elsewhere.example/v1', api_key: 'k', model: 'm' })).status).toBe(400);
+    expect((await admin.req('PATCH', `/api/ai/providers/${p.body.id}`, { base_url: 'https://elsewhere.example/v1' })).status).toBe(200);
+    const { rows } = await h.pool.query('SELECT base_url, api_key FROM ai_providers WHERE id = $1', [p.body.id]);
+    expect(rows[0]).toEqual({ base_url: 'https://elsewhere.example/v1', api_key: '' });
+    expect((await h.pool.query("SELECT 1 FROM audit_events WHERE action = 'ai.provider_update'")).rowCount).toBeGreaterThan(0);
+    await admin.req('DELETE', `/api/ai/providers/${p.body.id}`);
   });
 });
