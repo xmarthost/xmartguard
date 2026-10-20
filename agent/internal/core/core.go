@@ -1790,17 +1790,19 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		if err != nil {
 			return nil, err
 		}
-		next, err := checkPortalURL(ctx, client.HTTPClient(a.Cfg.InsecureTLS), in.URL)
+		// The new address is checked with full certificate checks: an
+		// agent enrolled with --insecure does not carry that over.
+		next, err := checkPortalURL(ctx, client.HTTPClient(false), in.URL)
 		if err != nil {
 			return nil, err
 		}
 		if next == a.Cfg.ServerURL {
 			return map[string]any{"url": next, "changed": false}, nil
 		}
-		prev := a.Cfg.ServerURL
-		a.Cfg.ServerURL = next
+		prev, prevInsecure := a.Cfg.ServerURL, a.Cfg.InsecureTLS
+		a.Cfg.ServerURL, a.Cfg.InsecureTLS = next, false
 		if err := a.Cfg.Save(); err != nil {
-			a.Cfg.ServerURL = prev
+			a.Cfg.ServerURL, a.Cfg.InsecureTLS = prev, prevInsecure
 			return nil, err
 		}
 		a.Log.Info("portal address changed; restarting", "from", prev, "to", next)
@@ -1813,12 +1815,20 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 
 // checkPortalURL accepts a new portal address only when it answers as a
 // portal (GET /api/health returns {"ok":true}), so a wrong address can never
-// cut the server off.
+// cut the server off. Only https is accepted (a move to http would hand the
+// connection and updates to anyone on the path), and a redirect is never
+// followed.
 func checkPortalURL(ctx context.Context, hc *http.Client, raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" {
 		return "", fmt.Errorf("invalid portal address %q", raw)
 	}
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("the portal address must use https: %q", raw)
+	}
+	c := *hc
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc = &c
 	next := strings.TrimRight(u.Scheme+"://"+u.Host+u.Path, "/")
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()

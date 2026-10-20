@@ -41,6 +41,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
+	"github.com/xmarthost/xmartguard/agent/internal/updater"
 	"github.com/xmarthost/xmartguard/agent/internal/version"
 	"github.com/xmarthost/xmartguard/agent/internal/waf"
 )
@@ -221,6 +222,14 @@ func load() (*config.Config, *identity.Identity, error) {
 
 func cmdRun() error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// A freshly updated build that keeps failing to start gives way to the
+	// previous one: exit non-zero so systemd starts it.
+	if note, err := updater.Started(); err != nil {
+		log.Warn("update check", "err", err)
+	} else if note != "" {
+		log.Error(note)
+		os.Exit(3)
+	}
 	// Directories of versions before the xPGuard name move before anything
 	// opens them.
 	if os.Geteuid() == 0 {
@@ -276,7 +285,16 @@ func cmdRun() error {
 		log.Info("Exim RBL definitions added (off until enabled in WHM)", "rbls", added)
 	}
 
-	s := &client.Session{Cfg: cfg, ID: id, Log: log, Collector: sysinfo.NewCollector(), Security: a.SecuritySummary}
+	// The running build is kept once it reached the portal or ran for 10
+	// minutes (a portal that is down must not roll back a good build).
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Minute):
+			updater.Confirm()
+		}
+	}()
+	s := &client.Session{Cfg: cfg, ID: id, Log: log, Collector: sysinfo.NewCollector(), Security: a.SecuritySummary, OnConnected: updater.Confirm}
 	a.Session = s
 	s.Handlers = a.Handlers()
 	s.Handlers["ping"] = func(context.Context, json.RawMessage) (any, error) {

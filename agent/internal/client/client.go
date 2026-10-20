@@ -113,6 +113,8 @@ type Session struct {
 	Handlers  map[string]Handler
 	// Security, when set, is attached to every metrics sample.
 	Security func() any
+	// OnConnected, when set, runs after each completed handshake.
+	OnConnected func()
 
 	mu        sync.Mutex
 	liveUntil time.Time
@@ -254,6 +256,9 @@ func (s *Session) runOnce(ctx context.Context) error {
 		interval = time.Duration(wel.Config.MetricsInterval) * time.Second
 	}
 	s.Log.Info("connected to portal", "server_id", s.Cfg.ServerID)
+	if s.OnConnected != nil {
+		s.OnConnected()
+	}
 
 	cctx, stop := context.WithCancel(ctx)
 	defer stop()
