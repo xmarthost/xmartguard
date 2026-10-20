@@ -135,8 +135,10 @@ export function validateCustomRules(text: string): string | null {
   const logical: string[] = [];
   let cur = '';
   for (const l of text.replace(/\r/g, '').split('\n')) {
+    // Apache removes backslash-newline and inserts nothing: "ex\" + "ec:"
+    // is read as "exec:", so the lines are joined the same way here.
     if (l.endsWith('\\')) {
-      cur += l.slice(0, -1) + ' ';
+      cur += l.slice(0, -1);
       continue;
     }
     logical.push(cur + l);
@@ -148,7 +150,7 @@ export function validateCustomRules(text: string): string | null {
     if (!t || t.startsWith('#')) continue;
     const word = t.split(/\s+/)[0];
     if (!ALLOWED.has(word.toLowerCase())) return `rule ${i + 1}: only SecRule, SecAction, SecMarker and SecRuleRemove…/SecRuleUpdate… directives are allowed (found "${word}")`;
-    const bad = t.match(FORBIDDEN);
+    const bad = t.match(FORBIDDEN) ?? t.replace(/[\s\\]+/g, '').match(FORBIDDEN);
     if (bad) return `rule ${i + 1}: "${bad[0]}" is not allowed in custom rules`;
     const id = t.match(/\bid\s*:\s*'?(\d+)/);
     if (id && +id[1] >= 7700000 && +id[1] <= 7709999) return `rule ${i + 1}: ids 7700000-7709999 are reserved for xPGuard`;

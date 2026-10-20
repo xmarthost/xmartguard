@@ -109,6 +109,11 @@ describe('WAF rule sets', () => {
   it('rejects dangerous custom rules', async () => {
     expect(validateCustomRules('CustomLog "|/bin/sh" common')).toMatch(/only SecRule/);
     expect(validateCustomRules('SecRule ARGS "@rx x" "id:1,phase:2,pass,exec:/tmp/x"')).toMatch(/exec/);
+    // Apache joins a backslash continuation without a space: the split word is caught too.
+    expect(validateCustomRules('SecAction "id:1,phase:1,pass,nolog,ex\\\nec:/nonexistent/x"')).toMatch(/exec/);
+    expect(validateCustomRules('SecAction "id:1,phase:1,pass,nolog,set\\\nenv:X=1"')).toMatch(/setenv/);
+    // An ordinary continued rule is still fine.
+    expect(validateCustomRules('SecRule REQUEST_URI "@beginsWith /old" \\\n    "id:1000002,phase:1,deny,status:403,log"')).toBeNull();
     const bad = await admin.req('PUT', '/api/waf/rulesets', config({ custom: { enabled: true, rules: 'LoadModule x /tmp/x.so' } }));
     expect(bad.status).toBe(400);
     const badUrl = await admin.req('PUT', '/api/waf/rulesets', config({ vendors: [{ id: 'x', name: 'x', url: 'http://plain.example/v.yaml', enabled: true }] }));
