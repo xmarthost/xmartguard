@@ -714,4 +714,26 @@ UPDATE accounts a SET billing_email = lower(o.email)
 CREATE UNIQUE INDEX accounts_billing_email_uq ON accounts (billing_email) WHERE billing_email IS NOT NULL;
 `,
   },
+  {
+    version: '026_ai_kb_account',
+    sql: `
+-- AI verdicts on files from customer accounts' servers. A customer has root
+-- on their server and can sign any judge request (a harmless excerpt under
+-- a web shell's hash), so these verdicts serve only that account's servers;
+-- the fleet knowledge base (ai_kb, sent to every server) takes verdicts from
+-- the platform's servers and administrators only.
+CREATE TABLE ai_kb_account (
+  account_id  uuid NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  sha256      text NOT NULL,
+  verdict     text NOT NULL CHECK (verdict IN ('malicious','suspicious','clean')),
+  confidence  integer NOT NULL DEFAULT 0,
+  reason      text NOT NULL DEFAULT '',
+  injected    boolean NOT NULL DEFAULT false,
+  cut         jsonb NOT NULL DEFAULT '[]'::jsonb,
+  model       text NOT NULL DEFAULT '',
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, sha256)
+);
+`,
+  },
 ];

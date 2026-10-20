@@ -200,6 +200,41 @@ describe('AI gateway', () => {
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ verdict: 'malicious', confidence: 90, model: 'custom/big-model' });
   });
+
+  it("never lets a customer's server change the verdicts other servers receive", async () => {
+    // A customer account's server signs a judge request naming the hash of one
+    // file with a harmless excerpt of another (inert text stands in for both).
+    const ck = crypto.generateKeyPairSync('ed25519');
+    const cpub = ck.publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    const { rows: acc } = await h.pool.query("INSERT INTO accounts (name) VALUES ('Customer AI') RETURNING id");
+    const { rows: srv } = await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'cust-ai', $2) RETURNING id", [acc[0].id, cpub]);
+    const custEnvelope = (payload: unknown) => {
+      const ts = String(Math.floor(Date.now() / 1000));
+      const raw = JSON.stringify(payload);
+      const signature = crypto.sign(null, Buffer.from(aiPayloadV2(srv[0].id, ts, raw)), ck.privateKey).toString('base64');
+      return { server_id: srv[0].id, ts, signature, payload: raw };
+    };
+    const planted = '1|<?php eval($_POST["planted-marker"]);';
+    const harmless = '1|<?php echo esc_html($caption);';
+    const before = await agentPost('/api/agent/ai/sync', envelope({ cursor: 0, base: 'v1', model_version: 0 }));
+    calls.length = 0;
+    const r = await agentPost('/api/agent/ai/judge', custEnvelope({ files: [{ ...file('p', harmless), sha256: sha(planted) }] }));
+    expect(r.body.results[0]).toMatchObject({ verdict: 'clean', source: 'ai' });
+    expect(calls).toHaveLength(1);
+    // Not in the fleet knowledge base, not sent to any server.
+    expect((await h.pool.query('SELECT 1 FROM ai_kb WHERE sha256 = $1', [sha(planted)])).rowCount).toBe(0);
+    const after = await agentPost('/api/agent/ai/sync', envelope({ cursor: before.body.cursor, base: 'v1', model_version: 0 }));
+    expect(after.body.kb).toHaveLength(0);
+    // The customer's own servers reuse it without another API call.
+    calls.length = 0;
+    const again = await agentPost('/api/agent/ai/judge', custEnvelope({ files: [{ ...file('q', harmless), sha256: sha(planted) }] }));
+    expect(again.body.results[0]).toMatchObject({ verdict: 'clean', source: 'fleet' });
+    expect(calls).toHaveLength(0);
+    // A platform server holding the real file has it judged on its own content.
+    const own = await agentPost('/api/agent/ai/judge', envelope({ files: [file('m', planted)] }));
+    expect(own.body.results[0]).toMatchObject({ verdict: 'malicious', source: 'ai' });
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe('AI answer parsing', () => {
