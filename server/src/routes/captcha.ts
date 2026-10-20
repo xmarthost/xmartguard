@@ -1,3 +1,4 @@
+import { isCloudflare, plainIP } from '../proxy.js';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { isIP } from 'node:net';
@@ -218,11 +219,17 @@ async function load(pool: Pool, accountId: string) {
 const reHost = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\.?(?::\d{1,5})?$/i;
 const reUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The visitor's address: Cloudflare's header when the portal is behind a proxy. */
+/**
+ * The visitor's address. req.ip already walks back through the known proxies
+ * (proxy.ts); when the chain ends at Cloudflare itself (a front proxy that
+ * does not add its peer), Cloudflare's own header names the visitor. A
+ * header sent by anyone else is ignored.
+ */
 function visitorIP(req: FastifyRequest, trustProxy: boolean): string {
+  const ip = plainIP(req.ip);
   const cf = req.headers['cf-connecting-ip'];
-  if (trustProxy && typeof cf === 'string' && isIP(cf.trim())) return cf.trim();
-  return req.ip;
+  if (trustProxy && isCloudflare(ip) && typeof cf === 'string' && isIP(cf.trim())) return cf.trim();
+  return ip;
 }
 
 /**

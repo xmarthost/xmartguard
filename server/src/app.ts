@@ -43,6 +43,7 @@ import { trustedRoutes } from './routes/trusted.js';
 import { captchaRoutes } from './routes/captcha.js';
 import { wafIntelRoutes } from './routes/waf-intel.js';
 import { CRSService } from './waf/rulesets.js';
+import { refreshOwnProxies, setExtraProxies, trustedProxy } from './proxy.js';
 
 export interface App {
   app: FastifyInstance;
@@ -57,7 +58,8 @@ export interface App {
 export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean } = {}): Promise<App> {
   const app = Fastify({
     logger: opts.logger === false ? false : { level: cfg.logLevel },
-    trustProxy: cfg.trustProxy,
+    // Only known proxies may name the visitor (see proxy.ts).
+    trustProxy: cfg.trustProxy ? (addr: string) => trustedProxy(addr) : false,
     bodyLimit: 256 * 1024,
     // Firewalls in front of the portal often refuse PUT/PATCH/DELETE (OWASP
     // CRS allows only GET/HEAD/POST/OPTIONS by default), so the web app sends
@@ -69,6 +71,12 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
       return req.url ?? '/';
     },
   });
+  setExtraProxies(cfg.trustProxyIPs);
+  const loadProxies = () => refreshOwnProxies(pool).catch((err) => app.log.warn({ err }, 'could not load the own servers as proxies'));
+  void loadProxies();
+  const proxyTimer = setInterval(loadProxies, 5 * 60_000);
+  proxyTimer.unref();
+  app.addHook('onClose', async () => clearInterval(proxyTimer));
   const hub = new AgentHub(pool, app.log);
   const geo = new GeoDB();
   const ipdb = new IPDBService(pool, cfg, hub, geo, app.log);

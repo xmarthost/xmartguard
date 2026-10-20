@@ -1,0 +1,13 @@
+cmd/xpguard-agent/cli.go:112:4: should replace loop with out = append(out, strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' })...) (S1011)
+cmd/xpguard-agent/cli.go:1601:4: should replace loop with list = append(list, []string{"virus", "iprep"}...) (S1011)
+cmd/xpguard-agent/main.go:371:10: error strings should not end with punctuation or newlines (ST1005)
+internal/cms/discover.go:116:20: should omit comparison to bool constant, can be simplified to !strings.Contains(n, ".") (S1002)
+internal/core/core.go:187:47: possible nil pointer dereference (SA5011)
+	internal/core/core.go:191:5: this check suggests that the pointer can be nil
+internal/firewall/csf_test.go:38:5: identical expressions on the left and right side of the '||' operator (SA4000)
+internal/scanner/heuristics.go:30:2: var reCallUserFunc is unused (U1000)
+internal/scanner/heuristics.go:31:2: var reUploader is unused (U1000)
+internal/scanner/heuristics.go:32:2: var reFilesName is unused (U1000)
+internal/scanner/heuristics.go:53:2: var reStrReplace is unused (U1000)
+internal/scanner/heuristics.go:470:11: m[string(key)] would be more efficient than k := string(key); m[k] (SA6001)
+internal/scanner/scanner_test.go:281:2: this value of fs is never used (SA4006)

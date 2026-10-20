@@ -54,7 +54,7 @@ async function agent(path: string, payload: unknown) {
 const link = () => `/v?s=${serverId}&ip=203.0.113.5&h=shop.example.com&u=/wp-login.php?redirect_to=/wp-admin/&reauth=1`;
 
 async function verify(body: Record<string, string>, ip = '203.0.113.5') {
-  const r = await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'cf-connecting-ip': ip }, payload: body });
+  const r = await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'x-forwarded-for': ip }, payload: body });
   return { status: r.statusCode, body: r.json() };
 }
 
@@ -90,7 +90,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
   });
 
   it('shows the branded page with the site, the address and the check', async () => {
-    const page = await h.app.inject({ method: 'GET', url: link(), headers: { 'cf-connecting-ip': '203.0.113.5' } });
+    const page = await h.app.inject({ method: 'GET', url: link(), headers: { 'x-forwarded-for': '203.0.113.5' } });
     expect(page.statusCode).toBe(200);
     expect(page.body).toContain('shop.example.com');
     expect(page.body).toContain('is protected by <b>xPGuard</b>');
@@ -108,7 +108,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
   });
 
   it('keeps one slash for pages opened with a double slash (site.com//wp-admin/)', async () => {
-    const r = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=shop.example.com&u=//blog/wp-includes/wlwmanifest.xml`, headers: { 'cf-connecting-ip': '203.0.113.5' } });
+    const r = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=shop.example.com&u=//blog/wp-includes/wlwmanifest.xml`, headers: { 'x-forwarded-for': '203.0.113.5' } });
     expect(r.statusCode).toBe(200);
     expect(r.body).toContain('/blog/wp-includes/wlwmanifest.xml');
     expect(r.body).not.toContain('//blog/');
@@ -118,12 +118,12 @@ describe('CAPTCHA page for suspicious visitors', () => {
     // Behind Cloudflare and a front proxy every visitor arrives from the same
     // address; 70 visitors in a row must all get the page.
     for (let i = 1; i <= 70; i++) {
-      const r = await h.app.inject({ method: 'GET', url: link(), headers: { 'cf-connecting-ip': `198.18.0.${i}` } });
+      const r = await h.app.inject({ method: 'GET', url: link(), headers: { 'x-forwarded-for': `198.18.0.${i}` } });
       expect(r.statusCode, `visitor ${i}`).toBe(200);
     }
     // One visitor reloading it over and over is still limited.
     let last = 0;
-    for (let i = 0; i < 61; i++) last = (await h.app.inject({ method: 'GET', url: link(), headers: { 'cf-connecting-ip': '198.18.1.1' } })).statusCode;
+    for (let i = 0; i < 61; i++) last = (await h.app.inject({ method: 'GET', url: link(), headers: { 'x-forwarded-for': '198.18.1.1' } })).statusCode;
     expect(last).toBe(429);
   });
 
@@ -170,14 +170,14 @@ describe('CAPTCHA page for suspicious visitors', () => {
 
   it('previews: tests only the check, asks no server, records nothing', async () => {
     const before = passes.length;
-    const page = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&preview=1`, headers: { 'cf-connecting-ip': '198.51.100.20' } });
+    const page = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&preview=1`, headers: { 'x-forwarded-for': '198.51.100.20' } });
     expect(page.statusCode).toBe(200);
     expect(page.body).toContain('Preview of the page visitors see');
     expect(page.body).toContain('"preview":true');
     const p = { s: serverId, ip: '198.51.100.20', h: 'example.com', u: '/wp-login.php', preview: true };
-    const r = await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'cf-connecting-ip': '198.51.100.20' }, payload: { ...p, token: 'good-token' } });
+    const r = await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'x-forwarded-for': '198.51.100.20' }, payload: { ...p, token: 'good-token' } });
     expect(r.json()).toEqual({ ok: true, preview: true });
-    expect((await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'cf-connecting-ip': '198.51.100.20' }, payload: { ...p, token: 'bad' } })).statusCode).toBe(403);
+    expect((await h.app.inject({ method: 'POST', url: '/v/verify', headers: { 'x-forwarded-for': '198.51.100.20' }, payload: { ...p, token: 'bad' } })).statusCode).toBe(403);
     expect(passes.length).toBe(before);
     const g = await admin.req('GET', '/api/captcha');
     expect(g.status).toBe(200);
@@ -193,7 +193,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, design: 'minimal', countdown: 99 })).status).toBe(400);
     expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, design: 'minimal', countdown: 10 })).status).toBe(200);
     expect((await admin.req('GET', '/api/captcha')).body.config).toMatchObject({ design: 'minimal', countdown: 10 });
-    const hdr = { 'cf-connecting-ip': '198.51.100.20' };
+    const hdr = { 'x-forwarded-for': '198.51.100.20' };
     const page = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=198.51.100.20&h=shop.example.com&u=/wp-login.php`, headers: hdr });
     expect(page.body).toContain('<body class="d-minimal">');
     expect(page.body).toContain('WAIT=10');
@@ -211,21 +211,21 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(shownIP('::ffff:198.51.100.2', '2001:db8::1')).toBe('198.51.100.2');
     expect(shownIP('2001:db8::2', '2001:db8::1')).toBe('2001:db8::2');
     // Reached over IPv6, the website saw IPv4: the page shows the IPv4 one.
-    const page = await h.app.inject({ method: 'GET', url: link(), headers: { 'cf-connecting-ip': '2404:3100:19fc:6fcd:18db:6195:dd34:1' } });
+    const page = await h.app.inject({ method: 'GET', url: link(), headers: { 'x-forwarded-for': '2404:3100:19fc:6fcd:18db:6195:dd34:1' } });
     expect(page.body).toContain('Your IP address is <b>203.0.113.5</b>');
-    const v6 = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=2001:db8::7&h=shop.example.com&u=/`, headers: { 'cf-connecting-ip': '2001:db8::7' } });
+    const v6 = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=2001:db8::7&h=shop.example.com&u=/`, headers: { 'x-forwarded-for': '2001:db8::7' } });
     expect(v6.body).toContain('<p class="ip v6">Your IP address is <b>2001:<wbr>db8:<wbr>:<wbr>7</b>');
   });
 
   it('never names a website its server does not confirm', async () => {
     // A made-up link for a site that is not on the server: refused, the name not shown.
-    const spoof = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=paypal.com&u=/signin`, headers: { 'cf-connecting-ip': '203.0.113.5' } });
+    const spoof = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=paypal.com&u=/signin`, headers: { 'x-forwarded-for': '203.0.113.5' } });
     expect(spoof.statusCode).toBe(404);
     expect(spoof.body).not.toContain('paypal.com');
     // An older agent that cannot answer: the check works, the page says "this website".
     hostAnswer = () => undefined;
     try {
-      const old = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=old-agent.example.com&u=/`, headers: { 'cf-connecting-ip': '203.0.113.5' } });
+      const old = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=old-agent.example.com&u=/`, headers: { 'x-forwarded-for': '203.0.113.5' } });
       expect(old.statusCode).toBe(200);
       expect(old.body).not.toContain('<h1 class="site">old-agent.example.com');
       expect(old.body).toContain('this website');
@@ -452,7 +452,7 @@ describe('CAPTCHA on the website’s own address', () => {
 
   it('may be framed by that website only, and gives the server a ticket instead of a reload', async () => {
     const url = `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&n=${nonce}&frame=1&u=/wp-login.php`;
-    const page = await fetch(h.url + url, { headers: { 'cf-connecting-ip': '203.0.113.88' } });
+    const page = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.88' } });
     const body = await page.text();
     expect(page.status).toBe(200);
     expect(page.headers.get('x-frame-options')).toBeNull();
@@ -460,7 +460,7 @@ describe('CAPTCHA on the website’s own address', () => {
     expect(body).toContain('FRAME=true');
     expect(body).toContain(`"n":"${nonce}"`);
     // Without the frame parameters: no one may frame it.
-    const plain = await fetch(h.url + `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-login.php`, { headers: { 'cf-connecting-ip': '203.0.113.88' } });
+    const plain = await fetch(h.url + `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-login.php`, { headers: { 'x-forwarded-for': '203.0.113.88' } });
     expect(plain.headers.get('x-frame-options')).toBe('DENY');
     expect(plain.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     // A site its server does not confirm is never framed.

@@ -11,6 +11,8 @@ export interface Config {
   publicUrl: string;
   cookieSecure: boolean;
   trustProxy: boolean;
+  /** Extra proxies in front of the portal (comma separated addresses). */
+  trustProxyIPs: string;
   /** Directory holding built agent binaries and their .sha256 files. */
   downloadsDir: string;
   /** Directory holding install.sh / uninstall.sh templates. */
@@ -129,6 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientSessionDays: int(env.CLIENT_SESSION_DAYS, 30),
     cookieSecure: bool(env.COOKIE_SECURE, publicUrl.startsWith('https://')),
     trustProxy: bool(env.TRUST_PROXY, false),
+    trustProxyIPs: env.TRUST_PROXY_IPS ?? '',
     downloadsDir: path.resolve(env.DOWNLOADS_DIR || path.join(repoRoot, 'dist', 'downloads')),
     installerDir: path.resolve(env.INSTALLER_DIR || path.join(repoRoot, 'installer')),
     // Empty string disables static UI serving.
