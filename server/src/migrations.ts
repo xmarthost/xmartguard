@@ -699,4 +699,19 @@ ALTER TABLE captcha_events ADD COLUMN solver_ip text NOT NULL DEFAULT '';
 CREATE INDEX captcha_events_account_solver ON captcha_events (account_id, solver_ip) WHERE solver_ip <> '';
 `,
   },
+  {
+    version: '025_billing_email',
+    sql: `
+-- The website's purchases are bound to the account billing created, by the
+-- email it was created for: never to any portal user who happens to use
+-- that address (an owner could add a user with a buyer's email and take
+-- over the licence and the servers installed from it). Existing customer
+-- accounts (those with a licence) get their first owner's email.
+ALTER TABLE accounts ADD COLUMN billing_email text;
+UPDATE accounts a SET billing_email = lower(o.email)
+  FROM (SELECT DISTINCT ON (account_id) account_id, email FROM users WHERE role = 'owner' ORDER BY account_id, created_at) o
+ WHERE o.account_id = a.id AND NOT a.platform AND EXISTS (SELECT 1 FROM account_licenses l WHERE l.account_id = a.id);
+CREATE UNIQUE INDEX accounts_billing_email_uq ON accounts (billing_email) WHERE billing_email IS NOT NULL;
+`,
+  },
 ];

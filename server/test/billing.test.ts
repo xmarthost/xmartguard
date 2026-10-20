@@ -202,4 +202,33 @@ describe('billing API (website -> portal)', () => {
     await owner.req('PUT', '/api/appearance', { theme: 'emerald', mode: 'light' });
     expect((await c.req('GET', '/api/appearance')).body.appearance.theme).toBe('emerald');
   });
+
+  it('binds a purchase only to the owner of the account billing made, never to any user with the email', async () => {
+    await call('/api/billing/provision', { email: 'shop-a@example.com', plan: 'pro', max_servers: 1, period_end: inAYear() });
+    const link = await call('/api/billing/password-link', { email: 'shop-a@example.com' });
+    const a = new Client(h.url);
+    await a.req('POST', '/api/auth/set-password', { token: new URL(link.body.url).searchParams.get('token'), password: 'shop-a-long-password' });
+    const licences = async () => (await h.pool.query('SELECT count(*)::int AS n FROM account_licenses')).rows[0].n;
+    const before = await licences();
+    // Customer A adds a user with an address that has no portal account yet.
+    expect((await a.req('POST', '/api/users', { email: 'buyer@example.com', password: 'sub-user-long-password', role: 'admin' })).status).toBe(200);
+    // The buyer of that address pays on the website: refused, nothing written to A.
+    const p = await call('/api/billing/provision', { email: 'buyer@example.com', plan: 'pro', max_servers: 50, period_end: inAYear() });
+    expect(p.status).toBe(409);
+    expect(await licences()).toBe(before);
+    expect((await a.req('GET', '/api/license')).body.license.max_servers).toBe(1);
+    for (const path of ['/api/billing/login-link', '/api/billing/password-link', '/api/billing/usage']) {
+      expect((await call(path, { email: 'buyer@example.com' })).status, path).toBe(409);
+    }
+    // The same with A's owner changing their own login to the buyer's address.
+    expect((await a.req('PUT', '/api/auth/profile', { name: 'A', email: 'buyer2@example.com', current_password: 'shop-a-long-password' })).status).toBe(200);
+    expect((await call('/api/billing/provision', { email: 'buyer2@example.com', plan: 'pro', max_servers: 50, period_end: inAYear() })).status).toBe(409);
+    expect((await call('/api/billing/login-link', { email: 'buyer2@example.com' })).status).toBe(409);
+    expect(await licences()).toBe(before);
+    // The address A bought with still reaches A's owner.
+    const again = await call('/api/billing/provision', { email: 'shop-a@example.com', plan: 'pro', max_servers: 2, period_end: inAYear() });
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ created: false });
+    expect((await a.req('GET', '/api/license')).body.license.max_servers).toBe(2);
+  });
 });
