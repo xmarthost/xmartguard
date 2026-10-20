@@ -5,12 +5,59 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+
+	"github.com/xmarthost/xmartguard/agent/internal/config"
+	"github.com/xmarthost/xmartguard/agent/internal/identity"
 	"github.com/xmarthost/xmartguard/agent/internal/protocol"
+	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 )
+
+// Audit A1 F18: a portal that stops answering (a connection dropped without
+// a FIN) is noticed by the keepalive ping, not after TCP gives up.
+func TestKeepaliveNoticesDeadPortal(t *testing.T) {
+	defer func(e, to time.Duration) { pingEvery, pingTimeout = e, to }(pingEvery, pingTimeout)
+	pingEvery, pingTimeout = 100*time.Millisecond, 200*time.Millisecond
+	hold := make(chan struct{})
+	defer close(hold)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		wsjson.Write(ctx, c, protocol.Envelope{Type: protocol.TypeChallenge, Nonce: "n"})
+		var e protocol.Envelope
+		wsjson.Read(ctx, c, &e)
+		wsjson.Write(ctx, c, protocol.Envelope{Type: protocol.TypeWelcome})
+		<-hold // never reads again: pings get no answer
+	}))
+	defer srv.Close()
+	id, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Cfg: &config.Config{ServerURL: srv.URL, ServerID: "x"}, ID: id, Collector: sysinfo.NewCollector(),
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	done := make(chan error, 1)
+	go func() { done <- s.runOnce(context.Background()) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "ping") {
+			t.Fatalf("ended with %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("dead portal not noticed")
+	}
+}
 
 func result(t *testing.T, s *Session, action string) protocol.Envelope {
 	t.Helper()

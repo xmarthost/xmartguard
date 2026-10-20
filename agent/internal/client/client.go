@@ -139,6 +139,13 @@ func wsURL(base, serverID string) (string, error) {
 	return u.String(), nil
 }
 
+// pingEvery and pingTimeout: after a network drop without a FIN, reads
+// would block until TCP gives up (about 15 minutes).
+var (
+	pingEvery   = 45 * time.Second
+	pingTimeout = 20 * time.Second
+)
+
 // errNotFound: the WebSocket request was answered with 404 or 410.
 var errNotFound = errors.New("the portal answered that it does not know this server")
 
@@ -279,7 +286,25 @@ func (s *Session) runOnce(ctx context.Context) error {
 	}
 	_ = send(protocol.Envelope{Type: protocol.TypeMetrics, Data: s.sample()})
 
-	errc := make(chan error, 2)
+	errc := make(chan error, 3)
+	go func() { // keepalive: a connection dropped without a FIN is noticed
+		t := time.NewTicker(pingEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-cctx.Done():
+				return
+			case <-t.C:
+			}
+			pctx, c := context.WithTimeout(cctx, pingTimeout)
+			err := conn.Ping(pctx)
+			c()
+			if err != nil {
+				errc <- fmt.Errorf("portal did not answer a ping: %w", err)
+				return
+			}
+		}
+	}()
 	go func() { // metrics loop
 		next := time.Now().Add(interval)
 		t := time.NewTicker(time.Second)
@@ -322,7 +347,11 @@ func (s *Session) runOnce(ctx context.Context) error {
 		}
 	}()
 	err = <-errc
-	conn.Close(websocket.StatusNormalClosure, "")
+	if ctx.Err() != nil {
+		conn.Close(websocket.StatusNormalClosure, "")
+	}
+	// Otherwise the connection failed: closed at once (deferred CloseNow),
+	// not after waiting for a close handshake a dead peer never answers.
 	return err
 }
 
