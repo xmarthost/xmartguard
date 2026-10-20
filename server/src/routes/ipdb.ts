@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import net from 'node:net';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
-import { audit, hasRole, requireRole, type SessionUser } from '../auth.js';
+import { audit, hasRole, requirePlatform, requireRole, type SessionUser } from '../auth.js';
 import { entryText, parseCidr, type IPDBService } from '../ipdb/service.js';
 import { ABUSEIPDB_CHECK_SHARE, downloadEveryMs, keyHint, loadAbuseIPDB, testAbuseIPDB } from '../ipdb/abuseipdb.js';
 import { signedPayload } from '../agent-sign.js';
@@ -30,6 +30,9 @@ const AddWhite = z.object({ cidr: z.string().max(60), note: z.string().max(200).
  */
 export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService): void {
   const viewer = { preHandler: requireRole('viewer') };
+  // The list itself, its whitelist, notes and the fleet's reports are the
+  // operator's data: customers see only what reaches their own servers.
+  const platform = { preHandler: requirePlatform('viewer') };
 
   // The platform account's administrators manage the shared IPDB.
   async function isOperator(user: SessionUser): Promise<boolean> {
@@ -91,12 +94,13 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
       ),
     ]);
     const bySource: Record<string, number> = { community: 0, manual: 0, feed: 0 };
-    for (const r of sources.rows) bySource[r.source] = r.n;
+    const fleet = user.platform;
+    if (fleet) for (const r of sources.rows) bySource[r.source] = r.n;
     return {
       version: ipdb.version,
       listed: ipdb.entries.length,
       sources: bySource,
-      ...reports.rows[0],
+      ...(fleet ? reports.rows[0] : { reports_24h: 0, ips_24h: 0, reporters_24h: 0 }),
       hits_today: Number(hitsToday.rows[0].n),
       countries: countries.rows.map((r) => ({ country: r.country, hits: Number(r.hits), ips: r.ips })),
       daily: daily.rows.map((r) => ({ day: r.day, hits: Number(r.hits) })),
@@ -119,7 +123,7 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
     return { events: rows.map((r) => ({ ...r, hits: Number(r.hits) })) };
   });
 
-  app.get('/api/ipdb/entries', viewer, async (req, reply) => {
+  app.get('/api/ipdb/entries', platform, async (req, reply) => {
     const p = Paging.safeParse(req.query);
     if (!p.success) return reply.code(400).send({ error: 'invalid query' });
     const { q, source, limit, offset } = p.data;
@@ -190,10 +194,22 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
         [ip],
       ),
     ]);
+    const listed = entries.rows.length > 0 && white.rows.length === 0;
+    if (!req.user!.platform) {
+      // A customer learns whether the address is dropped (their servers hold
+      // the list), not the operator's reasons, notes or the fleet's reports.
+      return {
+        ip,
+        country: ipdb.geo.lookup(ip),
+        listed,
+        entries: entries.rows.map((r) => ({ cidr: entryText(r.cidr), source: r.source, country: r.country })),
+        whitelisted: white.rows.map((r) => ({ cidr: entryText(r.cidr) })),
+      };
+    }
     return {
       ip,
       country: ipdb.geo.lookup(ip),
-      listed: entries.rows.length > 0 && white.rows.length === 0,
+      listed,
       entries: entries.rows.map((r) => ({ ...r, cidr: entryText(r.cidr) })),
       whitelisted: white.rows.map((r) => ({ ...r, cidr: entryText(r.cidr) })),
       ...reports.rows[0],
@@ -235,7 +251,7 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
     return { ok: true };
   });
 
-  app.get('/api/ipdb/whitelist', viewer, async () => {
+  app.get('/api/ipdb/whitelist', platform, async () => {
     const { rows } = await pool.query('SELECT cidr::text AS cidr, note, created_at FROM ipdb_whitelist ORDER BY created_at DESC');
     return { whitelist: rows.map((r) => ({ ...r, cidr: entryText(r.cidr) })) };
   });
