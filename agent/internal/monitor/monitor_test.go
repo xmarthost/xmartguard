@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -247,5 +248,25 @@ func TestCronDevToolsAndRestore(t *testing.T) {
 	}
 	if actions[pm2] != "restored" || actions[hidden] != "alerted" || len(got) != 2 {
 		t.Fatalf("events %+v", got)
+	}
+}
+
+// Audit A10 F4: an rkhunter run cut by its deadline is an error, not
+// "0 warnings".
+func TestRootkitCutShortIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	db, _ := store.Open()
+	defer db.Close()
+	fake := filepath.Join(dir, "rkhunter")
+	os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755)
+	m := &Monitor{DB: db, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Rkhunter: fake}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := m.RunRootkit(ctx); err == nil {
+		t.Fatal("a killed run reported success")
+	}
+	if store.GetKV(db, "rkhunter_result") != "" {
+		t.Fatal("a killed run recorded as a result")
 	}
 }

@@ -79,6 +79,25 @@ func TestSettingsApplyInBackground(t *testing.T) {
 	}
 }
 
+// Audit A10 F1: a list edited to the same length still counts as a firewall
+// change (the "before" snapshot no longer shares the list with the patch).
+func TestSameLengthListChangeIsApplied(t *testing.T) {
+	a := newTestAgent(t, `{"firewall":{"enabled":false,"blocked_countries":["CN"]}}`)
+	a.syncSettings = false
+	var job settingsJob
+	a.applyFn = func(_ context.Context, j settingsJob) (string, error) {
+		job = j
+		return "", nil
+	}
+	if _, err := a.Handlers()["settings.set"](context.Background(), json.RawMessage(`{"firewall":{"blocked_countries":["RU"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, a, "applied")
+	if strings.Join(job.fw.BlockedCountries, ",") != "CN" || !fwChanged(job.fw, a.Settings.Get().Firewall) {
+		t.Fatalf("before %v, now %v", job.fw.BlockedCountries, a.Settings.Get().Firewall.BlockedCountries)
+	}
+}
+
 func waitState(t *testing.T, a *Agent, want string) {
 	t.Helper()
 	for i := 0; i < 3000; i++ { // up to a minute on a busy machine

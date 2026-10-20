@@ -17,6 +17,10 @@ var (
 	crawlerSem  = make(chan struct{}, 2)
 )
 
+// crawlerMax bounds the addresses remembered (a bot wave rotating IPv6
+// addresses would otherwise grow the map without limit).
+const crawlerMax = 20000
+
 func (a *Agent) onBotBlocked(ip, matched string) {
 	if a.Trusted == nil || !a.Settings.Get().Firewall.TrustedServices {
 		return
@@ -27,20 +31,31 @@ func (a *Agent) onBotBlocked(ip, matched string) {
 		crawlerMu.Unlock()
 		return
 	}
-	if len(crawlerSeen) > 20000 {
+	if len(crawlerSeen) >= crawlerMax {
 		for k, t := range crawlerSeen {
 			if now.Sub(t) >= 24*time.Hour {
 				delete(crawlerSeen, k)
 			}
 		}
+		// Still full: forget arbitrary addresses (they are only checked
+		// again on their next block).
+		for k := range crawlerSeen {
+			if len(crawlerSeen) < crawlerMax {
+				break
+			}
+			delete(crawlerSeen, k)
+		}
 	}
-	crawlerSeen[ip] = now
-	crawlerMu.Unlock()
 	select {
 	case crawlerSem <- struct{}{}:
 	default:
-		return // busy: the address is checked on a later block
+		// Busy: not marked seen, so the address is checked on a later
+		// block (not skipped for a day).
+		crawlerMu.Unlock()
+		return
 	}
+	crawlerSeen[ip] = now
+	crawlerMu.Unlock()
 	go func() {
 		defer func() { <-crawlerSem }()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

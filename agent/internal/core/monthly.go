@@ -135,6 +135,12 @@ func (a *Agent) sendMonthlyReports(now time.Time) {
 	}
 }
 
+// lastMonth is a time in the month before now's. From the first of the
+// month: AddDate(0, -1, 0) on 31 March gives 3 March.
+func lastMonth(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), 1, 12, 0, 0, 0, now.Location()).AddDate(0, -1, 0)
+}
+
 func (a *Agent) monthlyHandlers(h map[string]client.Handler) {
 	h["report.monthly"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
@@ -144,7 +150,7 @@ func (a *Agent) monthlyHandlers(h map[string]client.Handler) {
 		if err != nil {
 			return nil, err
 		}
-		t := time.Now().AddDate(0, -1, 0)
+		t := lastMonth(time.Now())
 		if in.Month != "" {
 			if t, err = time.ParseInLocation("2006-01", in.Month, time.Local); err != nil {
 				return nil, errors.New("month must look like 2026-09")

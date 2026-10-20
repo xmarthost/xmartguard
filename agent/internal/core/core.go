@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +64,8 @@ type Agent struct {
 	// (tests) applies them before settings.set answers.
 	settingsApply settingsApply
 	syncSettings  bool
+	// summary caches the database-heavy part of the metrics summary.
+	summary summaryCache
 	// applyFn replaces applySettings in tests.
 	applyFn     func(context.Context, settingsJob) (string, error)
 	mailGuard   atomic.Pointer[mail.EximGuardStatus]
@@ -503,17 +506,60 @@ func (a *Agent) onBan(e firewall.Event) {
 
 // SecuritySummary is attached to every metrics sample for dashboards.
 func (a *Agent) SecuritySummary() any {
-	sc := a.Scanner.Stats()
+	h := a.summary.get(a.heavySummary)
+	sc := h.scanner
 	sc.RealtimeWatch = a.Realtime.Watches()
 	fw := a.Firewall.Stats()
+	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": h.listed, "card": h.card,
+		"problems": a.serviceProblems()}
+}
+
+// summaryEvery is how often the counts over whole tables (and the cPanel
+// userdata files) behind the metrics summary are taken again. Metrics go
+// out every minute, or every 5 s while a portal page is open; the counts
+// run on the only database connection, in front of every writer.
+const summaryEvery = 5 * time.Minute
+
+type heavySummary struct {
+	scanner scanner.Stats
+	listed  int
+	card    map[string]any
+}
+
+type summaryCache struct {
+	mu   sync.Mutex
+	at   time.Time
+	busy bool
+	v    heavySummary
+}
+
+// get returns the cached value, computing it the first time and
+// refreshing it in the background once it is older than summaryEvery.
+func (c *summaryCache) get(compute func() heavySummary) heavySummary {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.at.IsZero() {
+		c.v, c.at = compute(), time.Now()
+	} else if time.Since(c.at) > summaryEvery && !c.busy {
+		c.busy = true
+		go func() {
+			v := compute()
+			c.mu.Lock()
+			c.v, c.at, c.busy = v, time.Now(), false
+			c.mu.Unlock()
+		}()
+	}
+	return c.v
+}
+
+func (a *Agent) heavySummary() heavySummary {
 	listed := 0
 	for _, ip := range a.repIPs() {
 		if r := reputation.Load(a.DB, ip); r != nil && r.ListedOn > 0 {
 			listed++
 		}
 	}
-	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": listed, "card": a.serverCard(),
-		"problems": a.serviceProblems()}
+	return heavySummary{scanner: a.Scanner.Stats(), listed: listed, card: a.serverCard()}
 }
 
 // serverCard holds the numbers of the portal's server list card: all-time
@@ -761,10 +807,9 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			case "ignore":
 				var path string
 				path, err = a.Scanner.Ignore(id)
-				if err == nil {
-					cur := a.Settings.Get().Scanner.WhitelistPaths
-					patch, _ := json.Marshal(map[string]any{"scanner": map[string]any{"whitelist_paths": append(cur, path)}})
-					_, err = a.Settings.Patch(patch)
+				if cur := a.Settings.Get().Scanner.WhitelistPaths; err == nil && !slices.Contains(cur, path) {
+					patch, _ := json.Marshal(map[string]any{"scanner": map[string]any{"whitelist_paths": append(slices.Clip(cur), path)}})
+					_, err = a.patchSettings(patch, "scanner.whitelist_paths: ignore "+path)
 				}
 			default:
 				return nil, fmt.Errorf("unknown action %q", in.Action)
@@ -820,7 +865,6 @@ func (a *Agent) setSettings(ctx context.Context, p json.RawMessage, summary stri
 // outcome is in settings.apply_status and, when it failed, among the
 // server's problems.
 func (a *Agent) saveSettings(ctx context.Context, p json.RawMessage, summary string, background bool) (any, error) {
-	a.recordSettings(p, summary)
 	cur := a.Settings.Get()
 	job := settingsJob{fw: cur.Firewall, ipdb: cur.IPDB, waf: cur.WAF, captcha: cur.Captcha, scan: cur.Scanner}
 	p = keepSecrets(p, cur)
@@ -828,6 +872,7 @@ func (a *Agent) saveSettings(ctx context.Context, p json.RawMessage, summary str
 	if err != nil {
 		return nil, err
 	}
+	a.recordSettings(cur, p, summary)
 	a.Trusted.SetCustom(next.Firewall.TrustedCustom)
 	if background && !a.syncSettings {
 		return map[string]any{"settings": masked(next), "apply": a.settingsApply.queue(a, job)}, nil
@@ -1536,7 +1581,7 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 			return nil, err
 		}
 		raw, _ := json.Marshal(map[string]any{"waf": patch})
-		if _, err := a.Settings.Patch(raw); err != nil {
+		if _, err := a.patchSettings(raw, ""); err != nil {
 			return nil, err
 		}
 		res := map[string]any{"rules": a.WAF.RuleCatalog()}
@@ -1790,17 +1835,19 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		if err != nil {
 			return nil, err
 		}
-		next, err := checkPortalURL(ctx, client.HTTPClient(a.Cfg.InsecureTLS), in.URL)
+		// The new address is checked with full certificate checks: an
+		// agent enrolled with --insecure does not carry that over.
+		next, err := checkPortalURL(ctx, client.HTTPClient(false), in.URL)
 		if err != nil {
 			return nil, err
 		}
 		if next == a.Cfg.ServerURL {
 			return map[string]any{"url": next, "changed": false}, nil
 		}
-		prev := a.Cfg.ServerURL
-		a.Cfg.ServerURL = next
+		prev, prevInsecure := a.Cfg.ServerURL, a.Cfg.InsecureTLS
+		a.Cfg.ServerURL, a.Cfg.InsecureTLS = next, false
 		if err := a.Cfg.Save(); err != nil {
-			a.Cfg.ServerURL = prev
+			a.Cfg.ServerURL, a.Cfg.InsecureTLS = prev, prevInsecure
 			return nil, err
 		}
 		a.Log.Info("portal address changed; restarting", "from", prev, "to", next)
@@ -1813,12 +1860,20 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 
 // checkPortalURL accepts a new portal address only when it answers as a
 // portal (GET /api/health returns {"ok":true}), so a wrong address can never
-// cut the server off.
+// cut the server off. Only https is accepted (a move to http would hand the
+// connection and updates to anyone on the path), and a redirect is never
+// followed.
 func checkPortalURL(ctx context.Context, hc *http.Client, raw string) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.RawQuery != "" {
 		return "", fmt.Errorf("invalid portal address %q", raw)
 	}
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("the portal address must use https: %q", raw)
+	}
+	c := *hc
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc = &c
 	next := strings.TrimRight(u.Scheme+"://"+u.Host+u.Path, "/")
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -1851,6 +1906,7 @@ var secretFields = [][2]string{
 	{"notifications", "slack_webhook"},
 	{"notifications", "smtp_password"},
 	{"scanner", "clamav_urls"},
+	{"reputation", "spamhaus_dqs_key"},
 }
 
 func maskValue(k string) string {
@@ -1871,6 +1927,7 @@ func masked(s settings.Settings) settings.Settings {
 	s.Notifications.SlackWebhook = maskValue(s.Notifications.SlackWebhook)
 	s.Notifications.SMTPPassword = maskValue(s.Notifications.SMTPPassword)
 	s.Scanner.ClamAVURLs = maskValue(s.Scanner.ClamAVURLs)
+	s.Reputation.SpamhausDQSKey = maskValue(s.Reputation.SpamhausDQSKey)
 	return s
 }
 
@@ -2043,8 +2100,12 @@ func (a *Agent) clearFinding(id int64) error {
 		return err
 	}
 	if f.SHA256 != "" {
+		// An administrator's decision: it stands here even for the
+		// signatures whose AI "clean" verdicts are not trusted. This row is
+		// only read on this server; the portal records the fleet-wide
+		// correction itself.
 		ai.Save(a.DB, ai.Verdict{SHA256: f.SHA256, Verdict: ai.Clean, Confidence: 100, Reason: "Marked as a false positive by an administrator.",
-			Model: "admin", Source: "ai", At: store.Now(), Size: f.Size})
+			Model: "admin", Source: ai.SourceAdmin, At: store.Now(), Size: f.Size})
 	}
 	return nil
 }

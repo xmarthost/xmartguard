@@ -547,16 +547,29 @@ func (a *Agent) pruneOld() {
 			}
 		}
 	}
+	// The monthly report reads last month's WAF events and the IPDB page 30
+	// days of countries: those logs keep at least 32 days.
+	logCut := min(cut, store.Now()-32*86400)
 	for _, q := range []string{
-		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored','ai_restored') AND updated_at < ?`,
+		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored','ai_restored','cleared') AND updated_at < ?`,
 		`DELETE FROM fw_events WHERE status != 'blocked' AND created_at < ?`,
-		`DELETE FROM waf_events WHERE at < ?`,
 		`DELETE FROM osm_events WHERE at < ?`,
 		`DELETE FROM monitor_events WHERE at < ?`,
 		`DELETE FROM scans WHERE status NOT IN ('queued','running') AND started_at < ?`,
+		// IPDB entries that stopped matching (the list changes daily), once
+		// sent to the portal.
+		`DELETE FROM ipdb_hits WHERE last_seen < ? AND pending = 0`,
+		`DELETE FROM db_clean_backup WHERE at < ?`,
 	} {
 		_, _ = a.DB.Exec(q, cut)
 	}
+	_, _ = a.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, logCut)
+	_, _ = a.DB.Exec(`DELETE FROM ipdb_country WHERE day < ?`, time.Unix(logCut, 0).UTC().Format("2006-01-02"))
+	// AI verdicts are a cache of files judged: kept while a finding names
+	// the file, and half a year otherwise. An administrator's decisions
+	// (here or from the portal) and the fleet's knowledge base stay.
+	_, _ = a.DB.Exec(`DELETE FROM ai_verdicts WHERE at < ? AND source NOT IN ('admin','fleet') AND model != 'admin'
+		AND sha256 NOT IN (SELECT sha256 FROM findings WHERE sha256 != '')`, min(cut, store.Now()-180*86400))
 }
 
 // maybeRepairCore replaces an infected WordPress core file with the official

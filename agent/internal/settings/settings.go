@@ -4,6 +4,7 @@
 package settings
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -593,8 +594,20 @@ func (st *Store) Get() Settings {
 func (st *Store) Patch(patch json.RawMessage) (Settings, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	next := st.cur
-	if err := json.Unmarshal(patch, &next); err != nil {
+	// Merged as JSON and decoded into a fresh value: decoding over st.cur
+	// wrote list elements into the arrays st.cur and every Get() copy share
+	// (stale fields merged into new elements, the caller's "before" snapshot
+	// changed, a rejected value left live).
+	cur, err := json.Marshal(st.cur)
+	if err != nil {
+		return st.cur, err
+	}
+	merged, err := mergeJSON(cur, patch)
+	if err != nil {
+		return st.cur, fmt.Errorf("invalid settings: %w", err)
+	}
+	var next Settings
+	if err := json.Unmarshal(merged, &next); err != nil {
 		return st.cur, fmt.Errorf("invalid settings: %w", err)
 	}
 	normalize(&next)
@@ -606,6 +619,41 @@ func (st *Store) Patch(patch json.RawMessage) (Settings, error) {
 	}
 	st.cur = next
 	return next, nil
+}
+
+// mergeJSON overlays a patch object on a document the way decoding into the
+// struct did: objects merge key by key, lists and values are replaced whole,
+// and a null leaves an object as it is.
+func mergeJSON(doc, patch json.RawMessage) (json.RawMessage, error) {
+	var d, p map[string]json.RawMessage
+	if err := json.Unmarshal(patch, &p); err != nil {
+		return nil, err
+	}
+	if p == nil {
+		return doc, nil
+	}
+	if err := json.Unmarshal(doc, &d); err != nil || d == nil {
+		d = map[string]json.RawMessage{}
+	}
+	isObj := func(r json.RawMessage) bool {
+		r = bytes.TrimSpace(r)
+		return len(r) > 0 && r[0] == '{'
+	}
+	for k, v := range p {
+		old, ok := d[k]
+		switch {
+		case ok && isObj(old) && isObj(v):
+			m, err := mergeJSON(old, v)
+			if err != nil {
+				return nil, err
+			}
+			d[k] = m
+		case ok && isObj(old) && string(bytes.TrimSpace(v)) == "null":
+		default:
+			d[k] = v
+		}
+	}
+	return json.Marshal(d)
 }
 
 func save(s Settings) error {
@@ -669,13 +717,13 @@ func normalize(s *Settings) {
 	s.Reputation.IPs = clean(s.Reputation.IPs, false)
 	s.Reputation.RBLs = clean(s.Reputation.RBLs, false)
 	s.WAF.CustomBots = clean(s.WAF.CustomBots, false)
-	s.WAF.WhitelistIPs = clean(s.WAF.WhitelistIPs, false)
+	s.WAF.WhitelistIPs = clean(canonAddrs(s.WAF.WhitelistIPs), false)
 	if s.WAF.DisabledRules == nil {
 		s.WAF.DisabledRules = []int{}
 	}
 	s.OSM.SpamPatterns = clean(s.OSM.SpamPatterns, false)
 	s.OSM.WhitelistSenders = clean(s.OSM.WhitelistSenders, false)
-	s.OSM.WhitelistIPs = clean(s.OSM.WhitelistIPs, false)
+	s.OSM.WhitelistIPs = clean(canonAddrs(s.OSM.WhitelistIPs), false)
 	s.OSM.WhitelistPaths = clean(s.OSM.WhitelistPaths, false)
 	s.AutoSuspend.ExcludeUsers = clean(s.AutoSuspend.ExcludeUsers, false)
 	s.AutoSuspend.WhitelistDomains = clean(lower(s.AutoSuspend.WhitelistDomains), false)
@@ -1083,12 +1131,43 @@ func portListed(s string, port int) bool {
 // PortListed reports whether port is in a port list.
 func PortListed(s string, port int) bool { return portListed(s, port) }
 
+// validIPorCIDR accepts an address or a range no wider than /8 (IPv4) or
+// /16 (IPv6), like the firewall: "0.0.0.0/0" in a whitelist would exempt
+// every visitor.
 func validIPorCIDR(s string) bool {
 	if net.ParseIP(s) != nil {
 		return true
 	}
-	_, _, err := net.ParseCIDR(s)
-	return err == nil
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		return false
+	}
+	ones, bits := n.Mask.Size()
+	return !(bits == 32 && ones < 8) && !(bits == 128 && ones < 16)
+}
+
+// canonAddrs writes addresses the way they are matched: "::ffff:1.2.3.4"
+// as 1.2.3.4 (REMOTE_ADDR and mail sources are plain IPv4) and ranges as
+// their network. Values that do not parse are left for validate.
+func canonAddrs(list []string) []string {
+	out := make([]string, 0, len(list))
+	for _, a := range list {
+		a = strings.TrimSpace(a)
+		if ip := net.ParseIP(a); ip != nil {
+			if v4 := ip.To4(); v4 != nil {
+				ip = v4
+			}
+			a = ip.String()
+		} else if ip, n, err := net.ParseCIDR(a); err == nil {
+			ones, bits := n.Mask.Size()
+			if v4 := ip.To4(); v4 != nil && bits == 128 && ones >= 96 {
+				n = &net.IPNet{IP: v4.Mask(net.CIDRMask(ones-96, 32)), Mask: net.CIDRMask(ones-96, 32)}
+			}
+			a = n.String()
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 // DefaultRBLs are widely used, free-to-query DNS blocklists.

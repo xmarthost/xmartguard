@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/xmarthost/xmartguard/agent/internal/client"
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
@@ -45,12 +46,25 @@ func patchSummary(p json.RawMessage) string {
 	return s
 }
 
-// recordSettings keeps the current settings before a change.
-func (a *Agent) recordSettings(p json.RawMessage, summary string) {
+// patchSettings saves a settings change and, once it is saved, remembers
+// the settings from before it (a rejected change leaves no history row).
+// Every change goes through here so each one can be undone.
+func (a *Agent) patchSettings(p json.RawMessage, summary string) (settings.Settings, error) {
+	cur := a.Settings.Get()
+	next, err := a.Settings.Patch(p)
+	if err != nil {
+		return next, err
+	}
+	a.recordSettings(cur, p, summary)
+	return next, nil
+}
+
+// recordSettings keeps the settings from before a change.
+func (a *Agent) recordSettings(cur settings.Settings, p json.RawMessage, summary string) {
 	if summary == "" {
 		summary = patchSummary(p)
 	}
-	before, err := json.Marshal(a.Settings.Get())
+	before, err := json.Marshal(cur)
 	if err != nil {
 		return
 	}

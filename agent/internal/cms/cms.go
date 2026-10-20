@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -553,7 +554,7 @@ func (m *Manager) Update(ctx context.Context, path, what, slug string) (string, 
 		_ = m.DB.QueryRow(`SELECT version FROM cms_sites WHERE path = ?`, path).Scan(&ver)
 		args = []string{"core", "download", "--force", "--skip-content", "--version=" + ver}
 	case "plugin", "theme":
-		if slug == "" || strings.ContainsAny(slug, " /\\;&|$`") {
+		if !reSlug.MatchString(slug) {
 			return "", errors.New("invalid slug")
 		}
 		args = []string{what, "update", slug}
@@ -563,6 +564,27 @@ func (m *Manager) Update(ctx context.Context, path, what, slug string) (string, 
 	return m.WPCLI(ctx, path, args...)
 }
 
+// reSlug is a plugin or theme slug (a directory name on wordpress.org).
+var reSlug = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`)
+
+// reWPRelease is a WordPress version ("6.5.2", "6.6-RC1").
+var reWPRelease = regexp.MustCompile(`^[0-9][0-9A-Za-z.-]{0,30}$`)
+
+// wpArgAllowed refuses options other than the few xPGuard passes: a slug
+// such as "--exec=..." or "--require=file" (from the portal, or a plugin
+// directory a customer named so) would make wp-cli run PHP.
+func wpArgAllowed(a string) bool {
+	if !strings.HasPrefix(a, "-") {
+		return true
+	}
+	switch a {
+	case "--force", "--skip-content":
+		return true
+	}
+	v, ok := strings.CutPrefix(a, "--version=")
+	return ok && reWPRelease.MatchString(v)
+}
+
 // WPCLI runs a wp-cli command as the site owner.
 func (m *Manager) WPCLI(ctx context.Context, path string, args ...string) (string, error) {
 	var owner string
@@ -570,8 +592,8 @@ func (m *Manager) WPCLI(ctx context.Context, path string, args ...string) (strin
 		return "", errors.New("WordPress site not found (run a CMS scan first)")
 	}
 	for _, a := range args {
-		if strings.ContainsAny(a, "\n;&|$`") {
-			return "", errors.New("invalid argument")
+		if strings.ContainsAny(a, "\n;&|$`") || !wpArgAllowed(a) {
+			return "", fmt.Errorf("invalid argument %q", a)
 		}
 	}
 	wp, err := wpCLI()
