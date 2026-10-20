@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -297,6 +298,14 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			// assistants) matched theme files such as content_elements.crush.css;
 			// xPGuard's sensitive files rule covers those folders.
 			inc.WriteString("SecRuleRemoveById 920420 930140\n")
+		}
+		if ids := m.configRemovals(); len(ids) > 0 {
+			// Exclusions for every request, which LiteSpeed would not honour as ctl.
+			var l []string
+			for _, id := range ids {
+				l = append(l, strconv.Itoa(id))
+			}
+			fmt.Fprintf(&inc, "SecRuleRemoveById %s\n", strings.Join(l, " "))
 		}
 		if post != "" {
 			p := filepath.Join(m.RulesDir, "crs-after.conf")
