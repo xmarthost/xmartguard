@@ -83,6 +83,13 @@ func Send(mc MailConfig, to string, e Email) error {
 	if mc.smtp() && mc.User != "" && mc.From == "" && strings.Contains(mc.User, "@") {
 		from = mc.User // most SMTP services only accept their own address
 	}
+	// The recipient goes into the To header that sendmail -t reads: only a
+	// parsed single address, never a value with a line break or a list.
+	rcpt, err := mail.ParseAddress(to)
+	if err != nil || strings.ContainsAny(to, "\r\n") {
+		return fmt.Errorf("invalid recipient address %q", to)
+	}
+	to = rcpt.Address
 	msg, err := buildMessage(from, to, e)
 	if err != nil {
 		return err

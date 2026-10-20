@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -777,8 +778,10 @@ func normalize(s *Settings) {
 	}
 	s.Notifications.ExcludeUsers = clean(s.Notifications.ExcludeUsers, false)
 	s.Notifications.Brand = strings.TrimSpace(s.Notifications.Brand)
-	if len(s.Notifications.Brand) > 60 {
-		s.Notifications.Brand = s.Notifications.Brand[:60]
+	// 60 characters, not bytes: an Urdu or Arabic name is not cut inside a letter.
+	s.Notifications.Brand = strings.ToValidUTF8(s.Notifications.Brand, "")
+	if r := []rune(s.Notifications.Brand); len(r) > 60 {
+		s.Notifications.Brand = string(r[:60])
 	}
 	if s.Notifications.UserOutdated == "" {
 		s.Notifications.UserOutdated = "never"
@@ -982,6 +985,15 @@ func validate(s Settings) error {
 	case "never", "weekly", "monthly":
 	default:
 		return fmt.Errorf("invalid outdated CMS notification interval %q", s.Notifications.UserOutdated)
+	}
+	// One address each: they go into mail headers (sendmail -t reads them).
+	for _, a := range [][2]string{{"email", s.Notifications.Email}, {"extra email", s.Notifications.ExtraEmail}, {"from", s.Notifications.From}} {
+		if a[1] == "" {
+			continue
+		}
+		if _, err := mail.ParseAddress(a[1]); err != nil || strings.ContainsAny(a[1], "\r\n,") {
+			return fmt.Errorf("invalid %s address %q", a[0], a[1])
+		}
 	}
 	if w := s.Notifications.SlackWebhook; w != "" && !strings.HasPrefix(w, "https://hooks.slack.com/") {
 		return errors.New("the Slack webhook must start with https://hooks.slack.com/")
