@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+// MaxLine is the longest line passed on: a longer one (a binary blob, an
+// audit part written with no newline) is dropped instead of being kept in
+// memory until its newline arrives.
+const MaxLine = 1 << 20
+
+// pollEvery is how often the file is checked.
+var pollEvery = 2 * time.Second
+
 // Follow follows a file from its end, surviving rotation and truncation.
 func Follow(ctx context.Context, path string, lines chan<- string) {
 	var f *os.File
@@ -38,9 +46,10 @@ func Follow(ctx context.Context, path string, lines chan<- string) {
 			f.Close()
 		}
 	}()
-	t := time.NewTicker(2 * time.Second)
+	t := time.NewTicker(pollEvery)
 	defer t.Stop()
 	var partial string
+	skip := false // dropping the rest of an overlong line
 	for {
 		select {
 		case <-ctx.Done():
@@ -69,8 +78,17 @@ func Follow(ctx context.Context, path string, lines chan<- string) {
 			chunk, err := r.ReadString('\n')
 			off += int64(len(chunk))
 			if err != nil {
-				partial += chunk
+				if !skip {
+					partial += chunk
+				}
+				if len(partial) > MaxLine {
+					partial, skip = "", true
+				}
 				break
+			}
+			if skip || len(partial)+len(chunk) > MaxLine {
+				partial, skip = "", false
+				continue
 			}
 			select {
 			case lines <- partial + chunk:
