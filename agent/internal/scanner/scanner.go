@@ -520,6 +520,16 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	return nil, nil
 }
 
+// knownBadHash reports a finding whose exact content is in the known-bad
+// hash DB.
+func (s *Scanner) knownBadHash(path string, f *Finding) bool {
+	hdb := activeHashDB()
+	if f.SHA256 == "" || !hdb.SizeKnown(f.Size) {
+		return false
+	}
+	return hdb.LookupSums(f.Size, func() (string, string) { return f.SHA256, md5File(path) }) != ""
+}
+
 // clearedFile reports whether the AI scanner or an administrator cleared
 // this exact file content. Files whose content is not read for scanning
 // (archives, binaries, large files) are hashed only once something matched,
@@ -820,7 +830,7 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 	case CatSymlink:
 		action = settings.ActionNotify
 		if cfg.DeleteSymlinks {
-			if err := os.Remove(path); err == nil {
+			if err := removeFile(path); err == nil {
 				f.Status = "deleted"
 				_ = s.setStatus(f.ID, "deleted", "")
 			}
@@ -831,7 +841,12 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 		action = settings.ActionNotify
 	}
 	if action == settings.ActionQuarantine || action == settings.ActionDisable {
-		if ok, paused := s.spikeAllows(d.Signature); !ok {
+		// Known-bad content (exact hash) is never a wrong rule: not paused.
+		ok, paused := true, false
+		if !s.knownBadHash(path, f) {
+			ok, paused = s.spikeAllows(d.Signature, f.Owner)
+		}
+		if !ok {
 			action = settings.ActionNotify
 			f.Note = NotePaused
 			_, _ = s.DB.Exec(`UPDATE findings SET note = ? WHERE id = ?`, NotePaused, f.ID)

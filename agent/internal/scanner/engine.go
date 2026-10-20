@@ -45,11 +45,11 @@ type EngineReq struct {
 
 // engineMsg is one line the engine writes on stdout.
 type engineMsg struct {
-	T       string `json:"t"` // total | progress | hit | done
-	N       int64  `json:"n,omitempty"`
-	Done    int    `json:"done,omitempty"` // progress: units finished
-	Unit    string `json:"unit,omitempty"` // progress: the account or folder now
-	Path    string `json:"path,omitempty"`
+	T    string `json:"t"` // total | progress | hit | done
+	N    int64  `json:"n,omitempty"`
+	Done int    `json:"done,omitempty"` // progress: units finished
+	Unit string `json:"unit,omitempty"` // progress: the account or folder now
+	Path string `json:"path,omitempty"`
 	// RawPath is a hit's path as bytes (base64 in JSON): a file name that
 	// is not valid UTF-8 would be changed by a JSON string and not found.
 	RawPath []byte `json:"raw_path,omitempty"`
