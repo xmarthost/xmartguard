@@ -79,7 +79,7 @@ func (a *Agent) syncWAF(ctx context.Context, force bool) (WAFSyncResult, error) 
 	// xPGuard's own rules follow the portal switch when it is set.
 	if next.OwnRules != nil && a.Settings.Get().WAF.Enabled != next.OwnRules.Enabled {
 		patch, _ := json.Marshal(map[string]any{"waf": map[string]any{"enabled": next.OwnRules.Enabled}})
-		if _, err := a.Settings.Patch(patch); err != nil {
+		if _, err := a.patchSettings(patch, "waf.enabled (portal switch for xPGuard's own rules)"); err != nil {
 			a.Log.Warn("could not switch xPGuard WAF rules", "err", err)
 		}
 	}

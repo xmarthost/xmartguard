@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -761,10 +762,9 @@ func (a *Agent) Handlers() map[string]client.Handler {
 			case "ignore":
 				var path string
 				path, err = a.Scanner.Ignore(id)
-				if err == nil {
-					cur := a.Settings.Get().Scanner.WhitelistPaths
-					patch, _ := json.Marshal(map[string]any{"scanner": map[string]any{"whitelist_paths": append(cur, path)}})
-					_, err = a.Settings.Patch(patch)
+				if cur := a.Settings.Get().Scanner.WhitelistPaths; err == nil && !slices.Contains(cur, path) {
+					patch, _ := json.Marshal(map[string]any{"scanner": map[string]any{"whitelist_paths": append(slices.Clip(cur), path)}})
+					_, err = a.patchSettings(patch, "scanner.whitelist_paths: ignore "+path)
 				}
 			default:
 				return nil, fmt.Errorf("unknown action %q", in.Action)
@@ -820,7 +820,6 @@ func (a *Agent) setSettings(ctx context.Context, p json.RawMessage, summary stri
 // outcome is in settings.apply_status and, when it failed, among the
 // server's problems.
 func (a *Agent) saveSettings(ctx context.Context, p json.RawMessage, summary string, background bool) (any, error) {
-	a.recordSettings(p, summary)
 	cur := a.Settings.Get()
 	job := settingsJob{fw: cur.Firewall, ipdb: cur.IPDB, waf: cur.WAF, captcha: cur.Captcha, scan: cur.Scanner}
 	p = keepSecrets(p, cur)
@@ -828,6 +827,7 @@ func (a *Agent) saveSettings(ctx context.Context, p json.RawMessage, summary str
 	if err != nil {
 		return nil, err
 	}
+	a.recordSettings(cur, p, summary)
 	a.Trusted.SetCustom(next.Firewall.TrustedCustom)
 	if background && !a.syncSettings {
 		return map[string]any{"settings": masked(next), "apply": a.settingsApply.queue(a, job)}, nil
@@ -1536,7 +1536,7 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 			return nil, err
 		}
 		raw, _ := json.Marshal(map[string]any{"waf": patch})
-		if _, err := a.Settings.Patch(raw); err != nil {
+		if _, err := a.patchSettings(raw, ""); err != nil {
 			return nil, err
 		}
 		res := map[string]any{"rules": a.WAF.RuleCatalog()}
