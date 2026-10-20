@@ -234,7 +234,11 @@ export function CMSThreats() {
 
       <div className="card overflow-x-auto p-0">
         {!list.data ? (
-          <SectionLoader />
+          list.error ? (
+            <ErrorBox message={list.error} />
+          ) : (
+            <SectionLoader />
+          )
         ) : list.data.sites.length === 0 ? (
           <Empty
             text={

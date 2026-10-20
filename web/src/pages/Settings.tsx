@@ -573,7 +573,10 @@ const AI_PROVIDERS = [
 
 function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: boolean; onSave: (p: Partial<AIS>) => void }) {
   const dis = !admin || busy;
-  const portalAI = useApi<{ providers: { enabled: number; ready: number } }>('/api/ai/status');
+  // The portal's AI keys are the platform's: a customer cannot read their
+  // status (403) or open the AI Scanner page.
+  const platform = useAuth().user?.platform !== false;
+  const portalAI = useApi<{ providers: { enabled: number; ready: number } }>(platform ? '/api/ai/status' : null);
   const pa = portalAI.data?.providers;
   const [f, setF] = useState(s);
   useEffect(() => setF(s), [s]);
@@ -595,9 +598,11 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
       </div>
       {f.provider === 'portal' && (
         <>
-          <div className={`mb-3 rounded-lg p-3 text-sm ${pa && pa.ready > 0 ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
-            {!pa ? (
-              'Checking the portal AI keys…'
+          <div className={`mb-3 rounded-lg p-3 text-sm ${!platform || (pa && pa.ready > 0) ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
+            {!platform ? (
+              'Files go to the AI keys of the portal; while none is free the built-in model answers.'
+            ) : !pa ? (
+              portalAI.error ? `Could not check the portal AI keys: ${portalAI.error}` : 'Checking the portal AI keys…'
             ) : pa.enabled === 0 ? (
               <>
                 No AI API keys yet. Add free keys under{' '}

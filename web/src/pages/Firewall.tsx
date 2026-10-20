@@ -916,7 +916,7 @@ export function FirewallPage() {
 
       <Section title="Server firewalls" desc="Other firewalls found on this server. The portal's address is allowed in each of them so the agent's connection is never cut; xPGuard only removes the entries it added.">
         {!meta.data ? (
-          <SectionLoader />
+          meta.error ? <ErrorBox message={meta.error} /> : <SectionLoader />
         ) : (
           <div className="space-y-3">
             {meta.data.csf?.enabled && (
