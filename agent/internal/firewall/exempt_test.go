@@ -126,3 +126,24 @@ func TestCountryBlockIPv6(t *testing.T) {
 		t.Errorf("empty v6 list rendered: %s", v6)
 	}
 }
+
+// The DoS limit counts new TCP connections only, like the iptables rule:
+// a busy DNS resolver's UDP queries must not get it banned.
+func TestDoSCountsTCPOnly(t *testing.T) {
+	nft := Ruleset{DoS: true, DoSPerMinute: 150}.Render()
+	n := 0
+	for _, l := range strings.Split(nft, "\n") {
+		if strings.Contains(l, `comment "xg-dos"`) {
+			n++
+			if !strings.Contains(l, "meta l4proto tcp update @dos") {
+				t.Errorf("DoS rule not limited to TCP: %s", l)
+			}
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d DoS rules", n)
+	}
+	if !strings.Contains(renderRules(Ruleset{DoS: true, DoSPerMinute: 150}, false), "-p tcp -m conntrack --ctstate NEW -m hashlimit") {
+		t.Error("iptables DoS rule not limited to TCP")
+	}
+}

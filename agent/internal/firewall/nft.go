@@ -289,8 +289,8 @@ func (r Ruleset) Render() string {
 		if ban <= 0 {
 			ban = 600
 		}
-		fmt.Fprintf(&b, "\t\tct state new update @dos4 { ip saddr limit rate over %d/minute burst %d packets } add @tempban4 { ip saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
-		fmt.Fprintf(&b, "\t\tct state new update @dos6 { ip6 saddr limit rate over %d/minute burst %d packets } add @tempban6 { ip6 saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
+		fmt.Fprintf(&b, "\t\tct state new meta l4proto tcp update @dos4 { ip saddr limit rate over %d/minute burst %d packets } add @tempban4 { ip saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
+		fmt.Fprintf(&b, "\t\tct state new meta l4proto tcp update @dos6 { ip6 saddr limit rate over %d/minute burst %d packets } add @tempban6 { ip6 saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
 	}
 	if pf := r.Ports; pf != nil {
 		b.WriteString("\t\tct state established,related accept\n")
