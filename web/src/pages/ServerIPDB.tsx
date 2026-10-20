@@ -8,6 +8,7 @@ import { Card, Modal, agentCall, useAction } from '../components/controls';
 import { WorldMap, countryName, flag } from '../components/WorldMap';
 import { useServerName } from './Scanner';
 import { zoned } from '../timezone';
+import { useAuth } from '../auth';
 
 interface ConnEvent {
   id: number;
@@ -65,6 +66,7 @@ function evenTicks(max: number): number[] {
 export default function ServerIPDB() {
   const { id } = useParams();
   const host = useServerName(id);
+  const platform = useAuth().user?.platform !== false;
   const [live, setLive] = useState<Live | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [events, setEvents] = useState<ConnEvent[]>([]);
@@ -166,9 +168,13 @@ export default function ServerIPDB() {
             {status.enabled ? (
               <>
                 Protecting with {status.entries.toLocaleString()} addresses from the shared{' '}
-                <Link className="text-blue-600 hover:underline" to="/ipdb">
-                  IPDB
-                </Link>{' '}
+                {platform ? (
+                  <Link className="text-blue-600 hover:underline" to="/ipdb">
+                    IPDB
+                  </Link>
+                ) : (
+                  'IPDB'
+                )}{' '}
                 · {status.hits_today.toLocaleString()} packets dropped today
               </>
             ) : (

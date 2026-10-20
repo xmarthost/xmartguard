@@ -1441,6 +1441,7 @@ function SuspendSection({ serverId, s, admin, busy, onSave }: { serverId: string
 }
 
 function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: boolean; busy: boolean; onSave: (p: Partial<DomainRepS>) => void }) {
+  const platform = useAuth().user?.platform !== false;
   const dis = !admin || busy;
   return (
     <div className="mt-6 border-t border-slate-200 pt-6">
@@ -1451,9 +1452,13 @@ function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: bo
       </SettingRow>
       <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
         The Google Safe Browsing key is set once for all servers in{' '}
-        <Link to="/domain-reputation" className="text-blue-700 hover:underline">
-          Overview » Domain Reputation
-        </Link>
+        {platform ? (
+          <Link to="/domain-reputation" className="text-blue-700 hover:underline">
+            Overview » Domain Reputation
+          </Link>
+        ) : (
+          'the portal settings of your provider'
+        )}
         .
         {s.safe_browsing_key && (
           <>

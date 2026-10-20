@@ -670,6 +670,8 @@ export function FirewallPage() {
   const { run, busy } = useAction();
   const watch = useApplyWatch();
   const isAdmin = can(user, 'admin');
+  // The fleet pages (trusted services, CAPTCHA page) are the provider's.
+  const platform = user?.platform !== false;
   useEffect(() => {
     fwFor.current = s.data ? id : undefined;
     if (s.data) {
@@ -910,7 +912,7 @@ export function FirewallPage() {
               </>
             )}
           </span>
-          <Link to="/trusted-services" className="btn-outline">Manage trusted services</Link>
+          {platform && <Link to="/trusted-services" className="btn-outline">Manage trusted services</Link>}
         </div>
       </Section>
 
@@ -1026,9 +1028,13 @@ export function FirewallPage() {
             <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
               The CAPTCHA is the portal's page{cap.central_url ? ` (${cap.central_url})` : ''}, the same for all servers: its check, keys and how long a solved
               check lets a visitor in ({cap.central_minutes ?? 60} minutes) are set in{' '}
-              <Link to="/captcha-page" className="font-medium underline">
-                Overview » CAPTCHA Page
-              </Link>
+              {platform ? (
+                <Link to="/captcha-page" className="font-medium underline">
+                  Overview » CAPTCHA Page
+                </Link>
+              ) : (
+                'the portal settings of your provider'
+              )}
               .
             </p>
           ) : (

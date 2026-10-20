@@ -3,9 +3,7 @@ import { useMatch } from 'react-router-dom';
 import {
   BookOpen, BadgeCheck, ShieldOff, Award, ShieldQuestion, GraduationCap, Activity, BrainCircuit, Cable, Palette, ShieldHalf, Cpu, HeartPulse, ScanSearch as ScanSearchIcon, MailWarning, DatabaseZap, LayoutTemplate, Globe2, ShieldAlert, Bug, FileWarning, ListX, Radar, Flame, LayoutDashboard, Layers, LifeBuoy, CreditCard, Mail, Server as ServerIcon, Settings, ShieldCheck, ShieldBan, Users, ClipboardCheck,
 } from 'lucide-react';
-import { useAuth } from '../auth';
-import { useApi } from '../hooks';
-import type { Server } from '../api';
+import { can, useAuth } from '../auth';
 import ModernLayout from './ModernLayout';
 
 interface NavItem {
@@ -26,8 +24,8 @@ interface RailEntry {
 export default function Layout({ children }: { children: ReactNode }) {
   const serverMatch = useMatch('/servers/:id/*');
   const serverId = serverMatch?.params.id && serverMatch.params.id !== 'add' ? serverMatch.params.id : null;
-  const { data } = useApi<{ server: Server }>(serverId ? `/api/servers/${serverId}` : null);
-  const platform = useAuth().user?.platform !== false;
+  const { user } = useAuth();
+  const platform = user?.platform !== false;
 
   const base = `/servers/${serverId}`;
   const entries: RailEntry[] = serverId
@@ -109,7 +107,8 @@ export default function Layout({ children }: { children: ReactNode }) {
         { label: 'Subscription', icon: <CreditCard />, to: '/subscription' },
       ];
   const bottom: RailEntry[] = [
-    { label: 'Security Log', icon: <ShieldCheck />, to: '/security' },
+    // The Security Log page is for admins only.
+    ...(can(user, 'admin') ? [{ label: 'Security Log', icon: <ShieldCheck />, to: '/security' }] : []),
     { label: 'Knowledge Base', icon: <BookOpen />, to: '/kb' },
     { label: 'Support', icon: <LifeBuoy />, to: '/support' },
   ];
