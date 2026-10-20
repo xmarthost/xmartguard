@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { serverRows } from '../src/routes/learning-export.js';
+import { csvCell, serverRows } from '../src/routes/learning-export.js';
 
 const srv = { id: 'x', hostname: 'server1.example.net', agent_version: '0.21.34', control_panel: 'cpanel' };
 
@@ -25,5 +25,19 @@ describe('xPGuard Learning export', () => {
 
   it('marks servers that could not be asked', () => {
     expect(serverRows('detections', srv, 24, null, 'offline: not included', 1000)).toContain('offline: not included');
+  });
+});
+
+describe('CSV cells', () => {
+  it('never start a formula a spreadsheet would run', () => {
+    expect(csvCell('=1+1.php')).toBe("'=1+1.php");
+    expect(csvCell('+1')).toBe("'+1");
+    expect(csvCell('-2')).toBe("'-2");
+    expect(csvCell('@x')).toBe("'@x");
+    expect(csvCell('\t=1+1')).toBe("'\t=1+1");
+    expect(csvCell('/=1+1')).toBe('/=1+1');
+    expect(csvCell('=1,2')).toBe(`"'=1,2"`);
+    expect(csvCell(-5)).toBe('-5');
+    expect(csvCell(null)).toBe('');
   });
 });

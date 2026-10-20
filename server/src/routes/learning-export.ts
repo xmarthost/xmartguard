@@ -28,11 +28,19 @@ const DET_COLUMNS = ['row_type', 'server', 'server_version', 'control_panel', 'v
   'size', 'sha256', 'source', 'repeats', 'clean_note', 'ai_verdict', 'ai_confidence', 'ai_model', 'ai_reason', 'match_line', 'matched_code',
   'note'];
 
-function cell(v: unknown): string {
+/**
+ * One CSV cell. Text that a spreadsheet would run as a formula (starting
+ * with = + - @, tab or CR) gets a leading ' (OWASP CSV injection rule): file
+ * names, matched code and request URIs come from attackers, and the master
+ * opens these files in a spreadsheet. Numbers and dates stay as they are.
+ */
+export function csvCell(v: unknown): string {
   if (v === undefined || v === null) return '';
-  const s = String(v);
+  let s = v instanceof Date ? v.toISOString() : String(v);
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
+const cell = csvCell;
 
 function line(cols: string[], r: Record<string, unknown>): string {
   return cols.map((c) => cell(r[c])).join(',') + '\n';

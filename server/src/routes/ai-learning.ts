@@ -5,6 +5,7 @@ import type { AgentHub } from '../agents/hub.js';
 import { audit, requirePlatform } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
 import { AUTO_REVIEW_FILES, FP_MIN_CONFIDENCE, overridable, overridesBundle, pushOverrides } from '../ai/learning.js';
+import { csvCell } from './learning-export.js';
 
 const Filter = z.object({
   q: z.string().trim().max(200).default(''),
@@ -39,10 +40,6 @@ const SIG_SQL = (cond: string) => `
    WHERE ${cond}
    GROUP BY f.signature, o.action, o.auto, o.note, o.updated_at`;
 
-function csvCell(v: unknown): string {
-  const s = v === null || v === undefined ? '' : v instanceof Date ? v.toISOString() : String(v);
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
 
 /**
  * AI Learning (master): the scanner's false positives the AI restored,
