@@ -25,17 +25,27 @@ export default function AddServer() {
   const [joined, setJoined] = useState<Server | null>(null);
   const known = useRef<Set<string> | null>(null);
 
+  // The servers there before the token is shown (issue() and loadPending()
+  // take it), so the one that enrolls with it is noticed.
+  const baseline = async () => {
+    const { servers } = await api<{ servers: Server[] }>('GET', '/api/servers');
+    known.current = new Set(servers.map((s) => s.id));
+  };
   // After a token is issued, poll for the new server to appear.
   useEffect(() => {
     if (!tok || joined) return;
     const t = setInterval(async () => {
-      const { servers } = await api<{ servers: Server[] }>('GET', '/api/servers');
-      if (!known.current) {
-        known.current = new Set(servers.map((s) => s.id));
-        return;
+      try {
+        const { servers } = await api<{ servers: Server[] }>('GET', '/api/servers');
+        if (!known.current) {
+          known.current = new Set(servers.map((s) => s.id));
+          return;
+        }
+        const fresh = servers.find((s) => !known.current!.has(s.id));
+        if (fresh) setJoined(fresh);
+      } catch {
+        /* portal unreachable for now: try again on the next tick */
       }
-      const fresh = servers.find((s) => !known.current!.has(s.id));
-      if (fresh) setJoined(fresh);
     }, 4000);
     return () => clearInterval(t);
   }, [tok, joined]);
@@ -47,7 +57,10 @@ export default function AddServer() {
     try {
       const r = await api<{ tokens: TokenResponse[] }>('GET', '/api/enrollment-tokens/pending');
       setPending(r.tokens);
-      if (pick && r.tokens[0]) setTok((t) => t ?? r.tokens[0]);
+      if (pick && r.tokens[0]) {
+        if (!known.current) await baseline().catch(() => {});
+        setTok((t) => t ?? r.tokens[0]);
+      }
     } catch {
       /* viewers cannot list tokens */
     }
@@ -63,8 +76,7 @@ export default function AddServer() {
     setBusy(true);
     setError('');
     try {
-      const { servers } = await api<{ servers: Server[] }>('GET', '/api/servers');
-      known.current = new Set(servers.map((s) => s.id));
+      await baseline();
       setTok(await api<TokenResponse>('POST', '/api/enrollment-tokens', { label }));
       setJoined(null);
       loadPending(false);

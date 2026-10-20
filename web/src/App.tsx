@@ -10,7 +10,7 @@ import Login from './pages/Login';
 // Pages load on first use (smaller first download).
 const AIScanner = lazy(() => import('./pages/AIScanner'));
 const Overview = lazy(() => import('./pages/Overview'));
-const ServerList = lazy(() => import('./pages/ServerList'));
+const ServerList = lazy(() => import('./pages/ServerListModern'));
 const AddServer = lazy(() => import('./pages/AddServer'));
 const ServerDashboard = lazy(() => import('./pages/ServerDashboard'));
 const Monitoring = lazy(() => import('./pages/Monitoring'));

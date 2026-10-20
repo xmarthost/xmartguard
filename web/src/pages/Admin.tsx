@@ -6,6 +6,7 @@ import { useApi } from '../hooks';
 import { ago } from '../format';
 import { Empty, ErrorBox, PageLoader } from '../components/ui';
 import { Avatar } from '../components/Avatar';
+import { useAction } from '../components/controls';
 
 interface UserRow {
   id: string;
@@ -19,6 +20,7 @@ interface UserRow {
 export function UsersPage() {
   const { user } = useAuth();
   const { data, error, loading, reload } = useApi<{ users: UserRow[] }>('/api/users');
+  const { run } = useAction();
   const [form, setForm] = useState({ email: '', name: '', password: '', role: 'operator' });
   const [msg, setMsg] = useState('');
   if (loading && !data) return <PageLoader />;
@@ -51,8 +53,7 @@ export function UsersPage() {
                       title="Delete user"
                       onClick={async () => {
                         if (!confirm(`Delete ${u.email}?`)) return;
-                        await api('DELETE', `/api/users/${u.id}`);
-                        reload();
+                        if ((await run(() => api('DELETE', `/api/users/${u.id}`), `${u.email} deleted`)) !== undefined) reload();
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
