@@ -85,7 +85,10 @@ type Manager struct {
 	// than ListReloadGap allows (see install).
 	reloadMu   sync.Mutex
 	lastReload time.Time
-	deferred   *time.Timer
+	// reloadPending: the last reload failed, so the rules on disk are not
+	// the ones running; the next apply reloads even without a change.
+	reloadPending bool
+	deferred      *time.Timer
 }
 
 // Status is shown in the portal.

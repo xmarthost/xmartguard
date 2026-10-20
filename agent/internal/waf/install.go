@@ -204,6 +204,13 @@ func Detect() Target {
 			t.LiteSpeed = true
 			t.ErrorLogs = append([]string{"/usr/local/lsws/logs/error.log"}, t.ErrorLogs...)
 		}
+		// restartsrv_httpd --check reports whether the service runs, not
+		// whether the new rules parse: on Apache the syntax test is httpd -t
+		// (LiteSpeed's httpd wrapper does not take it; there restartsrv's own
+		// check stays).
+		if !t.LiteSpeed && httpd != "" {
+			t.configTest = []string{httpd, "-t"}
+		}
 		if t.configTest[0] == "" {
 			t.configTest = []string{firstBin("/usr/local/apache/bin/httpd", "httpd"), "-t"}
 			t.reload = []string{firstBin("/usr/local/apache/bin/apachectl", "apachectl"), "graceful"}
@@ -383,8 +390,10 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	}
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
-	changed := len(stale) > 0
-	listsOnly, urgent := true, false
+	// A reload that failed last time is tried again even when nothing
+	// changed since: the files on disk are newer than what runs.
+	changed := len(stale) > 0 || m.reloadPending
+	listsOnly, urgent := !m.reloadPending, false
 	for path, body := range files {
 		old, err := os.ReadFile(path)
 		if err == nil {
@@ -481,8 +490,10 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 		reload = liteSpeedRestart
 	}
 	if out, err := m.runTimeout(reload, 120*time.Second); err != nil {
-		return fmt.Errorf("WAF rules written but reload failed: %s", strings.TrimSpace(out))
+		m.reloadPending = true
+		return fmt.Errorf("WAF rules written but reload failed (retried on the next apply): %s", strings.TrimSpace(out))
 	}
+	m.reloadPending = false
 	// A visitor who solved the CAPTCHA is sent back when this returns:
 	// give LiteSpeed's new server processes a moment to take over.
 	if urgent && t.LiteSpeed {
