@@ -1,3 +1,5 @@
+import { fromZonedInput, toZonedInput } from './zonedInput';
+
 /**
  * The portal shows every date and time in one time zone: Pakistan Standard
  * Time by default (VITE_TIME_ZONE at build time overrides it), whatever the
@@ -59,3 +61,9 @@ export function zoned(d: Date | number): { year: number; month: number; day: num
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
   return { year: get('year'), month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute'), second: get('second') };
 }
+
+/** Unix seconds of a "datetime-local" value read in the portal's time zone (0 if empty). */
+export const fromPortalInput = (v: string): number => fromZonedInput(v, TIME_ZONE);
+
+/** "datetime-local" value of unix seconds in the portal's time zone. */
+export const toPortalInput = (unix: number): string => toZonedInput(unix, TIME_ZONE);

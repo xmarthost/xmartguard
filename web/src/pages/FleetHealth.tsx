@@ -7,6 +7,7 @@ import { Breadcrumb, ErrorBox, PageLoader } from '../components/ui';
 import { Card, useAction } from '../components/controls';
 import { useApi } from '../hooks';
 import { ago } from '../format';
+import { TIME_ZONE_LABEL, fromPortalInput } from '../timezone';
 
 interface Problem {
   level: 'danger' | 'warning';
@@ -165,14 +166,17 @@ export default function FleetHealth() {
       {admin && (
         <Card title="Roll back settings on every server" desc="Puts back each server's settings as they were at a time: every change made after it is undone (each server keeps its last 100 changes).">
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input type="datetime-local" className="input w-60" value={when} onChange={(e) => setWhen(e.target.value)} />
+            <input type="datetime-local" className="input w-60" value={when} onChange={(e) => setWhen(e.target.value)} title={`Time in ${TIME_ZONE_LABEL}`} />
+            <span className="text-sm text-slate-500">{TIME_ZONE_LABEL}</span>
             <button
               className="btn-danger"
               disabled={busy || !when}
               onClick={async () => {
-                if (!confirm(`Undo every settings change made after ${new Date(when).toLocaleString()} on all servers?`)) return;
+                const before = fromPortalInput(when);
+                if (!before) return;
+                if (!confirm(`Undo every settings change made after ${new Date(before * 1000).toLocaleString()} ${TIME_ZONE_LABEL} on all servers?`)) return;
                 const r = await run(() =>
-                  api<{ results: { server: string; ok: boolean; message: string }[] }>('POST', '/api/fleet/rollback', { before: Math.floor(new Date(when).getTime() / 1000) }),
+                  api<{ results: { server: string; ok: boolean; message: string }[] }>('POST', '/api/fleet/rollback', { before }),
                 );
                 if (r) alert(r.results.map((x) => `${x.ok ? '✓' : '✗'} ${x.server}: ${x.message}`).join('\n') || 'No servers');
               }}
