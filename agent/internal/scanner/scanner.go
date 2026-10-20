@@ -422,7 +422,7 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	}
 	if ScriptExts[ext] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
 		var err error
-		if content, err = os.ReadFile(path); err != nil {
+		if content, err = readScanned(path, info, int64(cfg.MaxFileSizeMB)<<20); err != nil {
 			return nil, err
 		}
 		sum := md5.Sum(content)
@@ -502,7 +502,7 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 		return d, nil
 	}
-	f, err := os.Open(path)
+	f, err := openScanned(path, info)
 	if err != nil {
 		return nil, err
 	}
@@ -647,7 +647,7 @@ func homeDepth(parts []string) int {
 }
 
 func md5File(path string) string {
-	f, err := os.Open(path)
+	f, err := openScanned(path, nil)
 	if err != nil {
 		return ""
 	}
@@ -660,7 +660,7 @@ func md5File(path string) string {
 }
 
 func sha256File(path string) string {
-	f, err := os.Open(path)
+	f, err := openScanned(path, nil)
 	if err != nil {
 		return ""
 	}
@@ -721,7 +721,7 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		var qid int64
 		var repeats int64
 		if err := s.DB.QueryRow(`SELECT id, repeats FROM findings WHERE path = ? AND sha256 = ? AND status = 'quarantined' ORDER BY id DESC LIMIT 1`, path, f.SHA256).Scan(&qid, &repeats); err == nil && s.actionFor(d.Category, f.Owner) == settings.ActionQuarantine {
-			if sha256File(path) == f.SHA256 && os.Remove(path) == nil {
+			if sha256File(path) == f.SHA256 && removeFile(path) == nil {
 				repeats++
 				_, _ = s.DB.Exec(`UPDATE findings SET repeats = ?, updated_at = ?, scan_id = CASE WHEN ? > 0 THEN ? ELSE scan_id END WHERE id = ?`, repeats, now, scanID, scanID, qid)
 				f.ID, f.Status, f.Repeats = qid, "quarantined", repeats
