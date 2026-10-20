@@ -37,7 +37,9 @@ func TestSEOCrawlersJoinBotList(t *testing.T) {
 // Real search engines and too-short parts of a User-Agent leave saved lists.
 func TestRetiredBotsLeaveSavedLists(t *testing.T) {
 	s := Defaults()
-	s.WAF.BotList = []string{"AhrefsBot", "Yandex", "XX", "user-agent", "Baidu", "Sogou", "MyScraper"}
+	// Audit A3 F16: very short entries and parts of browser User-Agents
+	// would block every visitor.
+	s.WAF.BotList = []string{"AhrefsBot", "Yandex", "XX", "user-agent", "Baidu", "Sogou", "MyScraper", "a", "bot", "Mozilla", "Chrome", "safari", "AppleWebKit", "Gecko", "Windows", "Android", "iPhone", "like"}
 	normalize(&s)
 	if !slices.Equal(s.WAF.BotList, []string{"AhrefsBot", "MyScraper"}) {
 		t.Fatalf("got %v", s.WAF.BotList)

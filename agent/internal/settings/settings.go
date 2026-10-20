@@ -364,6 +364,24 @@ var DefaultBotList = []string{"AhrefsBot", "Anonymizer", "Attributor", "Bandit",
 // User-Agent so short that ordinary browsers matched ("XX", "User-Agent").
 var retiredBots = map[string]bool{"yandex": true, "baidu": true, "sogou": true, "xx": true, "user-agent": true}
 
+// browserUAs are ordinary browsers' User-Agents. The Bad Bot blocker
+// matches its entries anywhere in the User-Agent, so an entry found in
+// one of these (or shorter than 4 letters) would block real visitors.
+var browserUAs = strings.ToLower(strings.Join([]string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
+	"Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+	"Mozilla/5.0 (iPad; CPU OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/129.0.6668.69 Mobile/15E148 Safari/604.1",
+	"Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/122.0.0.0 Mobile Safari/537.36",
+	"Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OPR/114.0.0.0",
+}, "\n"))
+
+func usableBotName(b string) bool {
+	b = strings.ToLower(strings.TrimSpace(b))
+	return len(b) >= 4 && !strings.Contains(browserUAs, b)
+}
+
 // SEOCrawlers are the aggressive SEO crawlers of the older "Block SEO
 // crawlers" switch; they now live in the Bad Bot blocker list.
 var SEOCrawlers = []string{"ahrefsbot", "semrushbot", "mj12bot", "dotbot", "blexbot", "petalbot", "dataforseobot",
@@ -752,7 +770,7 @@ func normalize(s *Settings) {
 	s.WAF.CustomBots = []string{}
 	kept := s.WAF.BotList[:0]
 	for _, b := range s.WAF.BotList {
-		if !retiredBots[strings.ToLower(b)] {
+		if !retiredBots[strings.ToLower(b)] && usableBotName(b) {
 			kept = append(kept, b)
 		}
 	}
