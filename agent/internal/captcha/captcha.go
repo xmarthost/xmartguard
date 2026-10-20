@@ -441,10 +441,7 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 		}
 	}
 	s.Log.Info("captcha solved; address allowed", "ip", ip)
-	back := r.PostForm.Get("back")
-	if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") {
-		back = "/"
-	}
+	back := safeBack(r.PostForm.Get("back")) // "/\evil.com" would leave the site
 	// Close the redirected connection so the next request goes to the site.
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -577,9 +574,7 @@ func (s *Server) page(w http.ResponseWriter, r *http.Request, ip, msg string) {
 	if r.Method == http.MethodPost {
 		back = r.PostForm.Get("back")
 	}
-	if len(back) > 500 || strings.HasPrefix(back, pathPrefix) || strings.HasPrefix(back, legacyPrefix) {
-		back = "/"
-	}
+	back = safeBack(back) // one check for every way back
 	data := map[string]any{"IP": ip, "Msg": msg, "Back": back, "Provider": cfg.Provider, "SiteKey": cfg.SiteKey, "Host": r.Host}
 	s.challenge(data, cfg, ip)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
