@@ -30,7 +30,14 @@ type Geo struct {
 
 	mu    sync.Mutex
 	cache map[string][]string
+	// tried is when a country's list was last asked for without a list
+	// from the portal coming back (back-off between tries).
+	tried map[string]time.Time
 }
+
+// geoRetry is how long a country whose download failed waits before the
+// next try (forced refreshes do not wait).
+const geoRetry = time.Hour
 
 func (g *Geo) file(cc string) string { return filepath.Join(g.Dir, strings.ToLower(cc)+".zone") }
 
@@ -54,10 +61,15 @@ func (g *Geo) store(cc string, body []byte, src string) {
 }
 
 // Refresh downloads lists that are missing, older than a week or not from
-// the portal yet (or all, when force).
-func (g *Geo) Refresh(codes []string, force bool) {
+// the portal yet (or all, when force), and reports whether any list was
+// stored. A country that got no list from the portal is tried again only
+// after geoRetry unless forced. It does network I/O (up to minutes when
+// the portal is down): it runs in the firewall's maintenance loop, never
+// while a ruleset is built.
+func (g *Geo) Refresh(codes []string, force bool) bool {
 	_ = os.MkdirAll(g.Dir, 0o700)
 	client := &http.Client{Timeout: 60 * time.Second}
+	changed := false
 	for _, cc := range codes {
 		cc = strings.ToLower(cc)
 		st, err := os.Stat(g.file(cc))
@@ -65,9 +77,24 @@ func (g *Geo) Refresh(codes []string, force bool) {
 		if fresh && !force && (g.Portal == nil || g.Source(cc) == "portal") {
 			continue
 		}
+		g.mu.Lock()
+		if g.tried == nil {
+			g.tried = map[string]time.Time{}
+		}
+		last, waited := g.tried[cc]
+		if !force && waited && time.Since(last) < geoRetry {
+			g.mu.Unlock()
+			continue
+		}
+		g.tried[cc] = time.Now()
+		g.mu.Unlock()
 		if g.Portal != nil {
 			if cidrs, err := g.Portal(cc); err == nil && len(cidrs) > 0 {
 				g.store(cc, []byte(strings.Join(cidrs, "\n")+"\n"), "portal")
+				g.mu.Lock()
+				delete(g.tried, cc)
+				g.mu.Unlock()
+				changed = true
 				continue
 			} else if err != nil {
 				g.Log.Warn("country list from the portal failed; trying ipdeny.com", "country", cc, "err", err)
@@ -88,7 +115,9 @@ func (g *Geo) Refresh(codes []string, force bool) {
 			continue
 		}
 		g.store(cc, body, "ipdeny")
+		changed = true
 	}
+	return changed
 }
 
 // Loaded is the number of networks cached for a country (0 = none).
@@ -121,12 +150,12 @@ func (g *Geo) load(cc string) []string {
 	return out
 }
 
-// CIDRs returns the union of the given countries' networks (downloading as needed).
+// CIDRs returns the union of the given countries' cached networks (no
+// download: Refresh fills the cache).
 func (g *Geo) CIDRs(codes []string) []string {
 	if len(codes) == 0 {
 		return nil
 	}
-	g.Refresh(codes, false)
 	var out []string
 	for _, cc := range codes {
 		out = append(out, g.load(cc)...)

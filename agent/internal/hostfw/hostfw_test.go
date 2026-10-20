@@ -167,3 +167,40 @@ func TestCPHulkWhitelistFlushes(t *testing.T) {
 		t.Fatalf("calls:\n%s", got)
 	}
 }
+
+// The other firewalls are never told to trust a mapped range that is the
+// whole IPv4 Internet.
+func TestNormAddrMappedCIDR(t *testing.T) {
+	for in, want := range map[string]string{"::ffff:0:0/96": "", "::ffff:64.0.0.0/98": "", "0.0.0.0/1": "",
+		"::ffff:198.51.100.0/120": "198.51.100.0/24", "198.51.100.7": "198.51.100.7", "127.0.0.0/8": ""} {
+		if got := normAddr(in); got != want {
+			t.Errorf("normAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A firewall that is stopped during a sync keeps the entries we added,
+// so they are removed once it is back and the address is no longer
+// whitelisted (firewalld keeps --permanent sources while stopped).
+func TestAbsentToolKeepsEntries(t *testing.T) {
+	root := t.TempDir()
+	present := true
+	var removed []string
+	h := &Host{Root: root, State: filepath.Join(root, "state.json"), Tools: []Tool{{
+		Name:    "fake",
+		Present: func(*Host) bool { return present },
+		Allow:   func(*Host, string, string) error { return nil },
+		Remove:  func(_ *Host, ip string) error { removed = append(removed, ip); return nil },
+	}}}
+	h.SyncWith(nil, []string{"198.51.100.20"})
+	present = false
+	h.SyncWith(nil, nil)
+	if len(removed) != 0 || len(h.load()) != 1 {
+		t.Fatalf("stopped firewall: removed %v, state %v", removed, h.load())
+	}
+	present = true
+	h.SyncWith(nil, nil)
+	if strings.Join(removed, ",") != "198.51.100.20" || len(h.load()) != 0 {
+		t.Fatalf("back again: removed %v, state %v", removed, h.load())
+	}
+}

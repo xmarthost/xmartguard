@@ -6,10 +6,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -124,11 +126,18 @@ func safeBrowsing(ctx context.Context, key string, domains []string) (map[string
 				"threatEntries":    entries,
 			},
 		})
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, SafeBrowsingURL+"?key="+key, bytes.NewReader(body))
+		// The key goes in a header: a transport error quotes the URL, and the
+		// error reaches the portal (the key may be the master's global one).
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, SafeBrowsingURL, bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Goog-Api-Key", key)
 		res, err := client.Do(req)
 		if err != nil {
-			return out, err
+			var ue *url.Error
+			if errors.As(err, &ue) {
+				err = ue.Err
+			}
+			return out, fmt.Errorf("safe browsing: %v", err)
 		}
 		b, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
 		res.Body.Close()

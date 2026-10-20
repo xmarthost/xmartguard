@@ -88,10 +88,12 @@ type ipset struct {
 func ipsets() []ipset {
 	return []ipset{
 		{"xg_allow4", "hash:net", "inet", false, false}, {"xg_allow6", "hash:net", "inet6", false, false},
+		{"xg_exempt4", "hash:net", "inet", false, false}, {"xg_exempt6", "hash:net", "inet6", false, false},
 		{"xg_deny4", "hash:net", "inet", false, false}, {"xg_deny6", "hash:net", "inet6", false, false},
 		{"xg_tallow4", "hash:ip", "inet", true, false}, {"xg_tallow6", "hash:ip", "inet6", true, false},
 		{"xg_tban4", "hash:ip", "inet", true, false}, {"xg_tban6", "hash:ip", "inet6", true, false},
 		{"xg_cblock4", "hash:net", "inet", false, false}, {"xg_callow4", "hash:net", "inet", false, false},
+		{"xg_cblock6", "hash:net", "inet6", false, false}, {"xg_callow6", "hash:net", "inet6", false, false},
 		{"xg_ipdb4", "hash:net", "inet", false, true}, {"xg_ipdb6", "hash:net", "inet6", false, true},
 	}
 }
@@ -182,10 +184,11 @@ func restoreIPSet(ctx context.Context, bin, script string) error {
 
 // renderIPSet builds an `ipset restore` script that swaps fresh contents in.
 func renderIPSet(r Ruleset) string {
-	a4, a6 := split(append(append([]string{}, r.Allow...), r.Ignore...))
+	a4, a6 := split(r.Allow)
+	i4, i6 := split(r.Ignore)
 	d4, d6 := split(r.Deny)
-	cb4, _ := split(r.CountryBlock)
-	ca4, _ := split(r.CountryAllow)
+	cb4, cb6 := split(r.CountryBlock)
+	ca4, ca6 := split(r.CountryAllow)
 	p4, p6 := split(r.IPDB)
 	timed := func(m map[string]time.Duration, v6 bool) []string {
 		var out []string
@@ -199,10 +202,10 @@ func renderIPSet(r Ruleset) string {
 		return out
 	}
 	content := map[string][]string{
-		"xg_allow4": a4, "xg_allow6": a6, "xg_deny4": d4, "xg_deny6": d6,
+		"xg_allow4": a4, "xg_allow6": a6, "xg_exempt4": i4, "xg_exempt6": i6, "xg_deny4": d4, "xg_deny6": d6,
 		"xg_tallow4": timed(r.TempAllow, false), "xg_tallow6": timed(r.TempAllow, true),
 		"xg_tban4": timed(r.TempBan, false), "xg_tban6": timed(r.TempBan, true),
-		"xg_cblock4": cb4, "xg_callow4": ca4, "xg_ipdb4": p4, "xg_ipdb6": p6,
+		"xg_cblock4": cb4, "xg_callow4": ca4, "xg_cblock6": cb6, "xg_callow6": ca6, "xg_ipdb4": p4, "xg_ipdb6": p6,
 	}
 	var b strings.Builder
 	for _, s := range ipsets() {
@@ -232,13 +235,14 @@ const (
 	ChainDeny    = "XPGUARD_DENY"
 	ChainTempBan = "XPGUARD_TBAN"
 	ChainCountry = "XPGUARD_CTRY"
-	ChainIPDBCap = "XPGUARD_ICAP" // IPDB web visitors sent to the CAPTCHA: sample and accept
+	ChainIPDBCap = "XPGUARD_ICAP"   // IPDB web visitors sent to the CAPTCHA: sample and accept
+	ChainExempt  = "XPGUARD_EXEMPT" // exempt addresses: the port filter only
 	ChainOut     = "XPGUARD_OUT"
 	ChainCaptcha = "XPGUARD_CAPTCHA" // nat table
 )
 
 func allChains() []string {
-	return []string{ChainMain, ChainDoS, ChainIPDB, ChainIPDBCap, ChainDeny, ChainTempBan, ChainCountry, ChainOut}
+	return []string{ChainMain, ChainDoS, ChainIPDB, ChainIPDBCap, ChainDeny, ChainTempBan, ChainCountry, ChainExempt, ChainOut}
 }
 
 // Chains of versions before the xPGuard name (XMARTGUARD*): removed once
@@ -330,6 +334,20 @@ func renderRules(r Ruleset, v6 bool) string {
 			}
 		}
 	}
+	// Exempt addresses skip the blocks below but still meet the port
+	// filter (in their own chain; what passes it returns).
+	if pf := r.Ports; pf != nil {
+		ex := func(rule string) { fmt.Fprintf(&b, "-A %s %s\n", ChainExempt, rule) }
+		ex("-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN")
+		for _, c := range multiport(pf.TCPIn) {
+			ex("-p tcp -m multiport --dports " + c + " -j RETURN")
+		}
+		for _, c := range multiport(pf.UDPIn) {
+			ex("-p udp -m multiport --dports " + c + " -j RETURN")
+		}
+		ex(`-p tcp -m comment --comment "xg-port" -j DROP`)
+		ex(`-p udp -m comment --comment "xg-port" -j DROP`)
+	}
 	if r.LogIPDB {
 		fmt.Fprintf(&b, "-A %s -m limit --limit %d/sec --limit-burst %d -j LOG --log-prefix \"%s\" --log-level 7\n", ChainIPDBCap, LogRate, LogRate*2, LogPrefixIPDBCaptcha)
 	}
@@ -349,16 +367,28 @@ func renderRules(r Ruleset, v6 bool) string {
 		// Only redirected connections from banned addresses reach these ports.
 		add(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -m conntrack --ctstate DNAT -j ACCEPT", cp.HTTPPort, cp.HTTPSPort))
 	}
+	add("-m set --match-set xg_exempt" + sfx + " src -j " + ChainExempt)
+	add("-m set --match-set xg_exempt" + sfx + " src -j RETURN")
 	if len(r.IPDB) > 0 {
 		jump("-m set --match-set xg_ipdb"+sfx+" src", "xg-ipdb", ChainIPDB)
 	}
 	jump("-m set --match-set xg_deny"+sfx+" src", "xg-deny", ChainDeny)
 	jump("-m set --match-set xg_tban"+sfx+" src", "xg-tempban", ChainTempBan)
-	if !v6 && len(r.CountryBlock) > 0 {
-		if len(r.CountryAllow) > 0 {
-			add("-m set --match-set xg_callow4 src -j RETURN")
+	// Country lists hold both families (the portal's GeoIP lists have
+	// IPv6 networks; ipdeny's are IPv4 only).
+	family := func(list []string) bool {
+		for _, c := range list {
+			if strings.Contains(c, ":") == v6 {
+				return true
+			}
 		}
-		jump("-m set --match-set xg_cblock4 src", "xg-country", ChainCountry)
+		return false
+	}
+	if family(r.CountryBlock) {
+		if family(r.CountryAllow) {
+			add("-m set --match-set xg_callow" + sfx + " src -j RETURN")
+		}
+		jump("-m set --match-set xg_cblock"+sfx+" src", "xg-country", ChainCountry)
 	}
 	if r.DoS {
 		ban := r.DoSBanSeconds
@@ -453,6 +483,7 @@ func renderNAT(r Ruleset, v6 bool) string {
 		for _, st := range sets {
 			// Allowed addresses never reach the CAPTCHA.
 			fmt.Fprintf(&b, "-A %s -m set --match-set xg_allow%s src -j RETURN\n", ChainCaptcha, sfx)
+			fmt.Fprintf(&b, "-A %s -m set --match-set xg_exempt%s src -j RETURN\n", ChainCaptcha, sfx)
 			fmt.Fprintf(&b, "-A %s -m set --match-set xg_tallow%s src -j RETURN\n", ChainCaptcha, sfx)
 			fmt.Fprintf(&b, "-A %s -p tcp --dport 80 -m set --match-set %s src -j REDIRECT --to-ports %d\n", ChainCaptcha, st, cp.HTTPPort)
 			fmt.Fprintf(&b, "-A %s -p tcp --dport 443 -m set --match-set %s src -j REDIRECT --to-ports %d\n", ChainCaptcha, st, cp.HTTPSPort)
@@ -489,13 +520,14 @@ func (t IPTables) Apply(r Ruleset) error {
 		return err
 	}
 	for _, f := range t.families() {
-		if _, err := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err != nil {
-			if !r.LogDrops && !r.LogIPDB {
+		if err := restoreRules(ctx, f.restore, renderRules(r, f.v6)); err != nil {
+			// Another program held the xtables lock: report it, keeping LOG.
+			if (!r.LogDrops && !r.LogIPDB) || xtablesLocked(err) {
 				return err
 			}
 			// The LOG target is unavailable (some containers): load without it.
 			r.LogDrops, r.LogIPDB = false, false
-			if _, err2 := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err2 != nil {
+			if err2 := restoreRules(ctx, f.restore, renderRules(r, f.v6)); err2 != nil {
 				return err
 			}
 		}
@@ -503,13 +535,32 @@ func (t IPTables) Apply(r Ruleset) error {
 		ensureJump(ctx, f.ipt, "OUTPUT", ChainOut, r.Ports != nil)
 		// CAPTCHA redirect (nat table). Failure only disables the redirect:
 		// banned addresses are then dropped like before.
-		if _, err := run(ctx, renderNAT(r, f.v6), f.restore, "--noflush"); err == nil {
+		if err := restoreRules(ctx, f.restore, renderNAT(r, f.v6)); err == nil {
 			natIPT := []string{f.ipt, "-t", "nat"}
 			ensureJumpArgs(ctx, natIPT, "PREROUTING", ChainCaptcha, r.Captcha != nil)
 		}
 		dropLegacyChains(ctx, f.ipt)
 	}
 	return nil
+}
+
+// restoreRules loads a script with `iptables-restore --noflush`, waiting
+// for the xtables lock (-w) so it does not fail while CSF or another
+// restore holds it. iptables before 1.6.2 (CentOS 7) has no -w for
+// restore: it is loaded again without it.
+func restoreRules(ctx context.Context, bin, script string) error {
+	if _, err := run(ctx, script, bin, "--noflush", "-w"); err == nil {
+		return nil
+	}
+	_, err := run(ctx, script, bin, "--noflush")
+	return err
+}
+
+// xtablesLocked reports a failure because another program held the
+// xtables lock.
+func xtablesLocked(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "xtables lock") || strings.Contains(s, "Another app is currently holding")
 }
 
 // dropLegacyChains removes the chains of versions before the xPGuard name,
@@ -649,7 +700,7 @@ func (t IPTables) Counters() map[string]uint64 {
 	ctx, cancel := ctx60()
 	defer cancel()
 	for _, f := range t.families() {
-		for _, chain := range []string{ChainMain, ChainDoS} {
+		for _, chain := range []string{ChainMain, ChainDoS, ChainExempt} {
 			raw, err := run(ctx, "", f.ipt, "-w", "-L", chain, "-v", "-n", "-x")
 			if err != nil {
 				continue

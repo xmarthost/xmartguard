@@ -46,7 +46,7 @@ func TestDomainReputation(t *testing.T) {
 	}
 	sb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		b, _ := io.ReadAll(req.Body)
-		if req.URL.Query().Get("key") != "k123" || !strings.Contains(string(b), "sb.example") {
+		if req.Header.Get("X-Goog-Api-Key") != "k123" || req.URL.RawQuery != "" || !strings.Contains(string(b), "sb.example") {
 			w.WriteHeader(400)
 			return
 		}
@@ -76,5 +76,17 @@ func TestDomainReputation(t *testing.T) {
 	sum, rows, total, err := LoadDomains(db, "", 25, 0)
 	if err != nil || sum.Total != 4 || sum.Flagged != 3 || total != 4 || rows[0].Status != "listed" || len(sum.Listed) != 3 {
 		t.Fatalf("summary %+v rows %+v %v", sum, rows, err)
+	}
+}
+
+// A transport error never carries the Safe Browsing key (it reaches the
+// portal as a warning, and the key can be the master's global one).
+func TestSafeBrowsingErrorHidesKey(t *testing.T) {
+	old := SafeBrowsingURL
+	defer func() { SafeBrowsingURL = old }()
+	SafeBrowsingURL = "http://127.0.0.1:1/v4/threatMatches:find"
+	_, err := safeBrowsing(context.Background(), "inert-test-key", []string{"example.com"})
+	if err == nil || strings.Contains(err.Error(), "inert-test-key") || strings.Contains(err.Error(), "127.0.0.1:1/v4") {
+		t.Fatalf("error %v", err)
 	}
 }

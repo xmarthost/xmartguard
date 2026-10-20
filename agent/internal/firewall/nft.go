@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os/exec"
 	"sort"
 	"strings"
@@ -27,12 +28,16 @@ var dropLegacy = fmt.Sprintf("add table inet %s\ndelete table inet %s\n", legacy
 
 // Ruleset is the desired state rendered into nft syntax.
 type Ruleset struct {
-	Allow, Deny, Ignore []string // IPs/CIDRs (both families)
+	// IPs/CIDRs (both families). Allow (the whitelist, this server and
+	// the portal) passes every rule; Ignore (ignore entries, trusted
+	// services, whitelisted countries) is exempt from xPGuard's blocks
+	// (IPDB, blacklist, bans, countries, DoS) but not from the port filter.
+	Allow, Deny, Ignore []string
 	// AllowRules are whitelist entries limited to a protocol, ports or
 	// one direction (rendered one rule each).
 	AllowRules                 []Rule
 	TempAllow, TempBan         map[string]time.Duration
-	CountryBlock, CountryAllow []string // IPv4 CIDRs
+	CountryBlock, CountryAllow []string // IPs/CIDRs (both families)
 	DoS                        bool
 	DoSPerMinute               int
 	DoSBanSeconds              int
@@ -144,11 +149,13 @@ func (r Ruleset) Render() string {
 	i4, i6 := split(r.Ignore)
 	ta4, ta6 := splitTimed(r.TempAllow)
 	tb4, tb6 := splitTimed(r.TempBan)
-	cb4, _ := split(r.CountryBlock)
-	ca4, _ := split(r.CountryAllow)
+	cb4, cb6 := split(r.CountryBlock)
+	ca4, ca6 := split(r.CountryAllow)
 	// Ignored countries can overlap user entries; interval sets reject overlaps.
-	set(&b, "allow4", "ipv4_addr", "interval", Collapse(append(a4, i4...)))
-	set(&b, "allow6", "ipv6_addr", "interval", Collapse(append(a6, i6...)))
+	set(&b, "allow4", "ipv4_addr", "interval", Collapse(a4))
+	set(&b, "allow6", "ipv6_addr", "interval", Collapse(a6))
+	set(&b, "exempt4", "ipv4_addr", "interval", Collapse(i4))
+	set(&b, "exempt6", "ipv6_addr", "interval", Collapse(i6))
 	set(&b, "deny4", "ipv4_addr", "interval", d4)
 	set(&b, "deny6", "ipv6_addr", "interval", d6)
 	set(&b, "tempallow4", "ipv4_addr", "timeout", ta4)
@@ -157,6 +164,8 @@ func (r Ruleset) Render() string {
 	set(&b, "tempban6", "ipv6_addr", "timeout", tb6)
 	set(&b, "country_allow4", "ipv4_addr", "interval", ca4)
 	set(&b, "country_block4", "ipv4_addr", "interval", cb4)
+	set(&b, "country_allow6", "ipv6_addr", "interval", ca6)
+	set(&b, "country_block6", "ipv6_addr", "interval", cb6)
 	p4, p6 := split(Collapse(r.IPDB))
 	counterSet(&b, "ipdb4", "ipv4_addr", !r.NoSetCounters, p4)
 	counterSet(&b, "ipdb6", "ipv6_addr", !r.NoSetCounters, p6)
@@ -180,6 +189,15 @@ func (r Ruleset) Render() string {
 		}
 		b.WriteString("\t\tdrop\n\t}\n")
 	}
+	// Exempt addresses skip the blocks but still meet the port filter.
+	b.WriteString("\tchain exempt {\n")
+	if pf := r.Ports; pf != nil {
+		b.WriteString("\t\tct state established,related accept\n")
+		nftPorts(&b, "tcp", pf.TCPIn)
+		nftPorts(&b, "udp", pf.UDPIn)
+		b.WriteString("\t\tmeta l4proto { tcp, udp } counter drop comment \"xg-port\"\n")
+	}
+	b.WriteString("\t\taccept\n\t}\n")
 	if cp := r.Captcha; cp != nil && cp.IPDB {
 		b.WriteString("\tchain captcha_ipdb {\n")
 		if r.LogIPDB {
@@ -191,6 +209,7 @@ func (r Ruleset) Render() string {
 		b.WriteString("\tchain captcha {\n\t\ttype nat hook prerouting priority dstnat - 5; policy accept;\n")
 		// Allowed addresses (e.g. after solving the CAPTCHA) reach the site.
 		b.WriteString("\t\tip saddr @allow4 return\n\t\tip6 saddr @allow6 return\n")
+		b.WriteString("\t\tip saddr @exempt4 return\n\t\tip6 saddr @exempt6 return\n")
 		b.WriteString("\t\tip saddr @tempallow4 return\n\t\tip6 saddr @tempallow6 return\n")
 		for _, fam := range [][2]string{{"ip", "4"}, {"ip6", "6"}} {
 			var sets []string
@@ -243,6 +262,7 @@ func (r Ruleset) Render() string {
 		}
 		fmt.Fprintf(&b, "\t\tct status dnat tcp dport { %d, %d } accept\n", cp.HTTPPort, cp.HTTPSPort)
 	}
+	b.WriteString("\t\tip saddr @exempt4 jump exempt\n\t\tip6 saddr @exempt6 jump exempt\n")
 	jump := func(match, chain, comment string) {
 		fmt.Fprintf(&b, "\t\t%s counter jump %s comment \"%s\"\n", match, chain, comment)
 	}
@@ -258,13 +278,19 @@ func (r Ruleset) Render() string {
 		}
 		jump("ip saddr @country_block4", "drop_country", "xg-country")
 	}
+	if len(cb6) > 0 {
+		if len(ca6) > 0 {
+			b.WriteString("\t\tip6 saddr @country_allow6 accept\n")
+		}
+		jump("ip6 saddr @country_block6", "drop_country", "xg-country")
+	}
 	if r.DoS {
 		ban := r.DoSBanSeconds
 		if ban <= 0 {
 			ban = 600
 		}
-		fmt.Fprintf(&b, "\t\tct state new update @dos4 { ip saddr limit rate over %d/minute burst %d packets } add @tempban4 { ip saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
-		fmt.Fprintf(&b, "\t\tct state new update @dos6 { ip6 saddr limit rate over %d/minute burst %d packets } add @tempban6 { ip6 saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
+		fmt.Fprintf(&b, "\t\tct state new meta l4proto tcp update @dos4 { ip saddr limit rate over %d/minute burst %d packets } add @tempban4 { ip saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
+		fmt.Fprintf(&b, "\t\tct state new meta l4proto tcp update @dos6 { ip6 saddr limit rate over %d/minute burst %d packets } add @tempban6 { ip6 saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
 	}
 	if pf := r.Ports; pf != nil {
 		b.WriteString("\t\tct state established,related accept\n")
@@ -520,15 +546,19 @@ func (n NFT) Counters() map[string]uint64 {
 	out := map[string]uint64{}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	raw, err := n.run(ctx, "", "-j", "list", "chain", "inet", Table, "input")
-	if err != nil {
-		return out
-	}
 	var doc struct {
 		Nftables []map[string]json.RawMessage `json:"nftables"`
 	}
-	if json.Unmarshal(raw, &doc) != nil {
-		return out
+	for _, chain := range []string{"input", "exempt"} {
+		raw, err := n.run(ctx, "", "-j", "list", "chain", "inet", Table, chain)
+		if err == nil {
+			var d struct {
+				Nftables []map[string]json.RawMessage `json:"nftables"`
+			}
+			if json.Unmarshal(raw, &d) == nil {
+				doc.Nftables = append(doc.Nftables, d.Nftables...)
+			}
+		}
 	}
 	for _, item := range doc.Nftables {
 		r, ok := item["rule"]
@@ -564,18 +594,43 @@ func ParseAddr(s string) (string, error) {
 		}
 		return ip.String(), nil
 	}
-	ip, n, err := net.ParseCIDR(s)
+	p, err := ParseCIDR(s)
 	if err != nil {
-		return "", fmt.Errorf("invalid IP address or CIDR: %q", s)
+		return "", err
 	}
-	ones, bits := n.Mask.Size()
-	if (bits == 32 && ones < 8) || (bits == 128 && ones < 16) {
+	if TooLarge(p) {
 		return "", fmt.Errorf("CIDR %s is too large", s)
 	}
-	if ip.To4() != nil && ones == 32 || ip.To4() == nil && ones == 128 {
-		return ip.String(), nil
+	if p.IsSingleIP() {
+		return p.Addr().String(), nil
 	}
-	return n.String(), nil
+	return p.String(), nil
+}
+
+// ParseCIDR parses a network in canonical (masked) form. An IPv4-mapped
+// IPv6 range ("::ffff:a.b.c.d/n") is its IPv4 range (n-96 bits): read as
+// IPv6 its size was checked against the IPv6 limit while its text became
+// IPv4, so "::ffff:0:0/96" turned into 0.0.0.0/0.
+func ParseCIDR(s string) (netip.Prefix, error) {
+	p, err := netip.ParsePrefix(strings.TrimSpace(s))
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("invalid IP address or CIDR: %q", s)
+	}
+	if a := p.Addr(); a.Is4In6() {
+		if p.Bits() < 96 {
+			return netip.Prefix{}, fmt.Errorf("CIDR %s is too large", s)
+		}
+		p = netip.PrefixFrom(a.Unmap(), p.Bits()-96)
+	}
+	return p.Masked(), nil
+}
+
+// TooLarge reports networks wider than /8 (IPv4) or /16 (IPv6).
+func TooLarge(p netip.Prefix) bool {
+	if p.Addr().Is4() {
+		return p.Bits() < 8
+	}
+	return p.Bits() < 16
 }
 
 // Contains reports whether ip falls inside addr (IP or CIDR).

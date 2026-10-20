@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -181,6 +180,10 @@ type Manager struct {
 	ddnsMu sync.Mutex
 	ddns   map[string][]string // hostname -> resolved addresses
 
+	// applyMu serialises Apply (build and load): an older snapshot built
+	// during a slow apply must never be loaded after a newer one.
+	applyMu sync.Mutex
+
 	mu        sync.Mutex
 	lastError string
 	stats     dropStats
@@ -285,9 +288,11 @@ func (m *Manager) Build() (Ruleset, error) {
 			rs.TempBan[r.CIDR] = time.Duration(r.ExpiresAt-now) * time.Second
 		}
 	}
-	// Protected addresses are always exempt.
+	// Protected addresses (this server, the portal) pass every rule. The
+	// rest below is only exempt from blocks: whitelisting a country or a
+	// CDN does not open the ports the port filter closes.
 	if m.Protected != nil {
-		rs.Ignore = append(rs.Ignore, m.Protected()...)
+		rs.Allow = append(rs.Allow, m.Protected()...)
 	}
 	if m.Trusted != nil {
 		rs.Ignore = append(rs.Ignore, m.Trusted()...)
@@ -336,6 +341,8 @@ func gatePorts(st settings.Settings) []int {
 
 // Apply rebuilds the kernel ruleset (or removes it when disabled).
 func (m *Manager) Apply() error {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	var err error
 	// Only one provider may hold rules at a time.
 	if o := m.other(); o.Available() == nil {
@@ -819,7 +826,7 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 				res.CountryLists = append(res.CountryLists, CountryList{CC: cc, Kind: l.kind, Networks: m.Geo.Loaded(cc), Source: m.Geo.Source(cc)})
 			}
 		}
-		// A whitelisted country is in the kernel's allow set: it wins over
+		// A whitelisted country is in the kernel's exempt set: it wins over
 		// blocks, like a whitelisted address.
 		if cc := m.Geo.Lookup(res.IP, cfg.IgnoredCountries); cc != "" {
 			res.Country = cc
@@ -914,13 +921,32 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 // DeleteEvent removes a log entry and, when it is still an active ban,
 // lifts that ban (the delete button on Firewall Logs).
 func (m *Manager) DeleteEvent(id int64) error {
-	var ip, status string
-	if err := m.DB.QueryRow(`SELECT ip, status FROM fw_events WHERE id = ?`, id).Scan(&ip, &status); err != nil {
+	var ip, status, source string
+	var expires int64
+	if err := m.DB.QueryRow(`SELECT ip, status, source, expires_at FROM fw_events WHERE id = ?`, id).Scan(&ip, &status, &source, &expires); err != nil {
 		return fmt.Errorf("log entry %d not found", id)
 	}
 	if status == "blocked" {
-		if err := m.Unblock(ip); err != nil {
+		// Lift only the block this entry stands for: a permanent blacklist
+		// entry for the same address stays when an old automatic ban's
+		// entry is deleted.
+		kind := KindTempBan
+		if source == "manual" && expires == 0 {
+			kind = KindDeny
+		}
+		c, err := ParseAddr(ip)
+		if err != nil {
 			return err
+		}
+		m.lift(c)
+		_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = ? AND cidr = ?`, kind, c)
+		_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status = 'blocked' AND (source = 'manual' AND expires_at = 0) = ?`, c, kind == KindDeny)
+		if m.Settings.Get().Firewall.Enabled {
+			err := m.Apply()
+			forgetRedirects(c)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	_, err := m.DB.Exec(`DELETE FROM fw_events WHERE id = ?`, id)
@@ -940,6 +966,11 @@ func (m *Manager) expire() {
 
 // AutoBan is used by brute-force and DoS detection.
 func (m *Manager) AutoBan(ip, reason, source string) {
+	// With the firewall off nothing would be blocked: no ban is recorded,
+	// notified or reported to the IPDB.
+	if !m.Settings.Get().Firewall.Enabled {
+		return
+	}
 	c, err := ParseAddr(ip)
 	if err != nil || m.isProtected(c) {
 		return
@@ -1028,6 +1059,18 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 		m.expire()
 		cfg := m.Settings.Get().Firewall
+		// Country lists are downloaded here, never while a ruleset is
+		// built: new countries within a minute, all of them daily (the
+		// WAF uses the whitelisted ones with the firewall off too).
+		if codes := append(append(append([]string{}, cfg.BlockedCountries...), cfg.AllowedCountries...), cfg.IgnoredCountries...); m.Geo != nil && len(codes) > 0 {
+			daily := time.Since(lastGeo) > 24*time.Hour
+			if daily {
+				lastGeo = time.Now()
+			}
+			if m.Geo.Refresh(codes, daily) && cfg.Enabled {
+				_ = m.Apply()
+			}
+		}
 		if !cfg.Enabled {
 			continue
 		}
@@ -1048,11 +1091,6 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 		if m.Settings.Get().IPDB.Enabled {
 			m.pollIPDBHits()
-		}
-		if m.Geo != nil && time.Since(lastGeo) > 24*time.Hour && len(cfg.BlockedCountries)+len(cfg.AllowedCountries)+len(cfg.IgnoredCountries) > 0 {
-			lastGeo = time.Now()
-			m.Geo.Refresh(append(append(cfg.BlockedCountries, cfg.AllowedCountries...), cfg.IgnoredCountries...), true)
-			_ = m.Apply()
 		}
 	}
 }
@@ -1113,28 +1151,6 @@ func (m *Manager) portFilter(cfg settings.Firewall) *PortFilter {
 		pf.TCPIn = append(pf.TCPIn, strconv.Itoa(c.HTTPPort), strconv.Itoa(c.HTTPSPort))
 	}
 	return pf
-}
-
-// SSHConfig is the sshd configuration read for the port filter.
-var SSHConfig = "/etc/ssh/sshd_config"
-
-// SSHPorts returns the ports sshd listens on (22 when not configured).
-func SSHPorts() []int {
-	var out []int
-	if raw, err := os.ReadFile(SSHConfig); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
-			f := strings.Fields(line)
-			if len(f) == 2 && strings.EqualFold(f[0], "Port") {
-				if p, err := strconv.Atoi(f[1]); err == nil && p > 0 && p < 65536 {
-					out = append(out, p)
-				}
-			}
-		}
-	}
-	if len(out) == 0 {
-		out = []int{22}
-	}
-	return out
 }
 
 func (m *Manager) ddnsAddrs() []string {

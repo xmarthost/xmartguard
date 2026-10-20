@@ -26,6 +26,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 )
 
 // Service is one trusted service.
@@ -356,14 +358,13 @@ func clean(in []string) []string {
 		}
 		if ip := net.ParseIP(a); ip != nil {
 			a = ip.String()
-		} else if _, n, err := net.ParseCIDR(a); err == nil {
-			ones, bits := n.Mask.Size()
+		} else if p, err := firewall.ParseCIDR(a); err == nil {
 			// A trusted range wider than /8 (v4) or /16 (v6) is refused: no
 			// real crawler list needs it and it would exempt half the Internet.
-			if (bits == 32 && ones < 8) || (bits == 128 && ones < 16) {
+			if firewall.TooLarge(p) {
 				continue
 			}
-			a = n.String()
+			a = p.String()
 		} else {
 			continue
 		}
