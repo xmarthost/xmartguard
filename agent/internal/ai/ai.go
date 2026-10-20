@@ -332,8 +332,14 @@ func analyzeBuiltin(j Job) (Verdict, error) {
 	return v, nil
 }
 
+// maxJobBytes is the largest file sent to the portal AI (it must be read
+// whole to check its hash).
+const maxJobBytes = 64 << 20
+
+// readHead and fileSHA read through scanner.OpenFile: no link an account
+// planted is followed, and a FIFO or device is refused.
 func readHead(p string) ([]byte, error) {
-	f, err := os.Open(p)
+	f, err := scanner.OpenFile(p)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +348,7 @@ func readHead(p string) ([]byte, error) {
 }
 
 func fileSHA(p string) string {
-	f, err := os.Open(p)
+	f, err := scanner.OpenFile(p)
 	if err != nil {
 		return ""
 	}

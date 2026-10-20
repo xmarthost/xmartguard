@@ -140,7 +140,8 @@ func TestPortalBatchAndTrimInstructions(t *testing.T) {
 	a.Portal = portalFor(srv.URL, priv)
 	g := filepath.Join(filepath.Dir(f), "y.php")
 	os.WriteFile(g, []byte("<?php echo 2;\n"), 0o644)
-	vs, err := a.AnalyzeBatch(context.Background(), []Job{{FindingID: 1, Path: f, SHA256: "s1", Signature: "PHP.X"}, {Path: g, SHA256: "s2"}})
+	s1, s2 := shaOf(t, f), shaOf(t, g)
+	vs, err := a.AnalyzeBatch(context.Background(), []Job{{FindingID: 1, Path: f, SHA256: s1, Signature: "PHP.X"}, {Path: g, SHA256: s2}})
 	if err != nil || vs[0].Verdict != Malicious || !vs[0].Injected || len(vs[0].Cut) != 1 || vs[1].Source != "fleet" {
 		t.Fatalf("verdicts: %+v %v", vs, err)
 	}
@@ -153,8 +154,49 @@ func TestPortalBatchAndTrimInstructions(t *testing.T) {
 	if base, _ := ml.Base(); f0["base"] != base.Version || len(f0["features"].([]any)) == 0 {
 		t.Fatalf("no features: %v", f0["base"])
 	}
-	if c, ok := Cached(a.DB, "s1"); !ok || !c.Injected || c.Cut[0].From != 2 || c.Size == 0 {
+	if c, ok := Cached(a.DB, s1); !ok || !c.Injected || c.Cut[0].From != 2 || c.Size == 0 {
 		t.Fatalf("cached: %+v", c)
+	}
+}
+
+func shaOf(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// A2 F5: a file changed between detection and the AI read is not sent, so
+// no verdict on other content is saved under the flagged hash.
+func TestPortalSkipsFileChangedSinceDetection(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	sent := 0
+	srv := fakePortal(t, pub, func(path string, p map[string]any) any {
+		if path != "/api/agent/ai/judge" {
+			return map[string]any{}
+		}
+		files := p["files"].([]any)
+		sent += len(files)
+		res := []map[string]any{}
+		for _, f := range files {
+			res = append(res, map[string]any{"id": f.(map[string]any)["id"], "verdict": "clean", "confidence": 99, "reason": "ok", "model": "m", "source": "ai"})
+		}
+		return map[string]any{"results": res}
+	})
+	defer srv.Close()
+	a, f := setup(t, `{"ai":{"provider":"portal"}}`)
+	a.Portal = portalFor(srv.URL, priv)
+	flagged := shaOf(t, f)
+	os.WriteFile(f, []byte("<?php\necho 'other content';\n"), 0o644)
+	vs, _ := a.analyzePortal(context.Background(), []Job{{FindingID: 1, Path: f, SHA256: flagged, Signature: "PHP.X"}}, a.Settings.Get().AI)
+	if sent != 0 || vs[0].Verdict != "" {
+		t.Fatalf("changed file judged under the flagged hash: sent %d %+v", sent, vs)
+	}
+	if _, ok := Cached(a.DB, flagged); ok {
+		t.Fatal("verdict saved under the flagged hash")
 	}
 }
 
