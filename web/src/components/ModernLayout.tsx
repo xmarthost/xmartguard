@@ -6,6 +6,7 @@ import { useApi } from '../hooks';
 import type { Server } from '../api';
 import { getModeOverride, setModeOverride } from '../theme';
 import { Logo } from './ui';
+import { serverPageLink } from '../safeLink';
 import { Avatar } from './Avatar';
 
 export interface ModernEntry {
@@ -210,7 +211,7 @@ function Alerts() {
               items.map((n, i) => (
                 <Link
                   key={i}
-                  to={`/servers/${n.server_id}${n.link ? `/${n.link.replace(/^\//, '')}` : ''}`}
+                  to={`/servers/${n.server_id}${serverPageLink(n.link) ? `/${serverPageLink(n.link)}` : ''}`}
                   className="flex gap-3 border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50"
                 >
                   {n.level === 'danger' ? (

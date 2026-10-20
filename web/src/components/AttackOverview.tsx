@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { serverPageLink } from '../safeLink';
 
 interface Period {
   current: number;
@@ -45,7 +46,7 @@ export function ServiceStrip({ services }: { services: Service[] }) {
         const dot = sv.off ? 'bg-slate-400' : sv.ok ? 'bg-green-500' : 'bg-red-500 animate-pulse';
         const label = sv.off ? 'Off' : sv.ok ? 'Running' : 'Not working';
         return (
-          <Link key={sv.name} to={sv.off ? 'settings' : sv.link} title={sv.problem || label} className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm hover:opacity-80 ${tone}`}>
+          <Link key={sv.name} to={sv.off ? 'settings' : serverPageLink(sv.link) || 'settings'} title={sv.problem || label} className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm hover:opacity-80 ${tone}`}>
             <span className={`h-2 w-2 rounded-full ${dot}`} />
             {sv.name}
             <span className="text-xs opacity-75">· {label}</span>
