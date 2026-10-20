@@ -1861,6 +1861,7 @@ var secretFields = [][2]string{
 	{"notifications", "slack_webhook"},
 	{"notifications", "smtp_password"},
 	{"scanner", "clamav_urls"},
+	{"reputation", "spamhaus_dqs_key"},
 }
 
 func maskValue(k string) string {
@@ -1881,6 +1882,7 @@ func masked(s settings.Settings) settings.Settings {
 	s.Notifications.SlackWebhook = maskValue(s.Notifications.SlackWebhook)
 	s.Notifications.SMTPPassword = maskValue(s.Notifications.SMTPPassword)
 	s.Scanner.ClamAVURLs = maskValue(s.Scanner.ClamAVURLs)
+	s.Reputation.SpamhausDQSKey = maskValue(s.Reputation.SpamhausDQSKey)
 	return s
 }
 
