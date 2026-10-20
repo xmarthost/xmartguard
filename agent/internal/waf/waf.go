@@ -1078,7 +1078,7 @@ func (m *Manager) record(e Event) {
 
 func (m *Manager) maybeBan(e Event, c *counter) {
 	cfg := m.Settings.Get().WAF
-	if !cfg.BruteForce || m.Firewall == nil {
+	if !cfg.BruteForce || m.Firewall == nil || isProxyAddr(e.IP) {
 		return
 	}
 	n := c.hit(e.IP, time.Duration(cfg.BFWindowMin)*time.Minute)
@@ -1096,7 +1096,46 @@ var noBanRules = map[int]bool{IDShopScrape: true, IDShopScrape + 1000: true, IDC
 	IDNoUAPost: true, IDNoUAPost + 1000: true,
 	// The address is only refused POSTs: a ban would cut a shared or API
 	// address off the whole website.
-	IDIPDBPost: true, IDIPDBPost + 1000: true}
+	IDIPDBPost: true, IDIPDBPost + 1000: true, IDIPDBPost + 3000: true,
+	// Rules that only match proxied requests: the event's address is the
+	// proxy's (a Cloudflare edge serves many websites).
+	IDProxyBlocked: true, IDProxyBlocked + 1000: true,
+	IDTorPost + 1000: true, IDTorPost + 2000: true, IDTorPost + 3000: true,
+	IDTorBlock + 1000: true, IDTorBlock + 2000: true, IDTorBlock + 3000: true}
+
+// proxyNets are ProxyRanges parsed.
+var proxyNets = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, r := range ProxyRanges {
+		if !strings.Contains(r, "/") {
+			if strings.Contains(r, ":") {
+				r += "/128"
+			} else {
+				r += "/32"
+			}
+		}
+		if _, n, err := net.ParseCIDR(r); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}()
+
+// isProxyAddr: a Cloudflare edge or a local proxy. It is never banned: the
+// visitor is behind it, and every website it serves would be cut off (on
+// servers without mod_remoteip every event carries the proxy's address).
+func isProxyAddr(ip string) bool {
+	a := net.ParseIP(ip)
+	if a == nil {
+		return false
+	}
+	for _, n := range proxyNets {
+		if n.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
 
 // policyOnly: an OWASP CRS block from protocol and policy rules only
 // (920xxx: content type, file extension, header limits). Browsers and APIs
@@ -1126,7 +1165,7 @@ func policyOnly(e Event) bool {
 // firewall instead of costing a web server request each time.
 func (m *Manager) maybeBanBlocked(e Event, c *counter) {
 	fw := m.Settings.Get().Firewall
-	if !fw.WAFBan || m.Firewall == nil {
+	if !fw.WAFBan || m.Firewall == nil || isProxyAddr(e.IP) {
 		return
 	}
 	n := c.hit(e.IP, time.Duration(m.Settings.Get().WAF.BFWindowMin)*time.Minute)
