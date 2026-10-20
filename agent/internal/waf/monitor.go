@@ -25,6 +25,9 @@ var NewRules = map[int]string{
 	IDCommentScript:    "0.22.20",
 	IDCommentLinks:     "0.22.20",
 	IDCommentManyLinks: "0.22.20",
+	// Attacks in requests relaxed for editors and admin areas (crs-after.conf):
+	// watched until approved like any new blocking rule.
+	IDEditorCap: "0.22.27",
 }
 
 // FirstReviewedPatch: portal virtual patches from this id on are new and

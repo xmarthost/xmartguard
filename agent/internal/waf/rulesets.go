@@ -281,7 +281,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		}
 		if lv := m.level(); lv != "strict" {
 			setupText += sessionSetup() + editorSetup() + autodiscoverSetup()
-			post += sessionPost()
+			post += sessionPost(in)
 			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing; requests from a site's own pages with a session have threshold " + fmt.Sprint(sessionThreshold)
 		}
 		crs4 := !strings.HasPrefix(rs.CRS.Version, "3.")
@@ -299,6 +299,12 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			inc.WriteString("SecRuleRemoveById 920420 930140\n")
 		}
 		if post != "" {
+			// New blocking rules here watch until approved, like in rules.conf.
+			var intel *Intel
+			if m.Intel != nil {
+				intel = m.Intel().Clean()
+			}
+			post = applyMonitor(post, Monitored(intel))
 			p := filepath.Join(m.RulesDir, "crs-after.conf")
 			files[p] = post
 			fmt.Fprintf(&inc, "Include %s\n", p)

@@ -144,7 +144,7 @@ type RuleInfo struct {
 // Catalog lists every rule xPGuard can load.
 var Catalog = []RuleInfo{
 	{IDWPAdminExcl, "exclusions", "Allow code and HTML in WordPress admin screens of logged-in users (WPCode, theme options, page builders): injection rules skip them", "allow"},
-	{IDWPAjaxExcl, "exclusions", "Allow code and HTML in admin-ajax.php / admin-post.php requests of logged-in users sent from the admin screens (editor saves)", "allow"},
+	{IDWPAjaxExcl, "exclusions", "Allow HTML and scripts in admin-ajax.php / admin-post.php requests of logged-in users sent from the admin screens (editor saves): XSS rules skip them", "allow"},
 	{IDWPRestExcl, "exclusions", "Allow code and HTML in writes to WordPress core REST routes (posts, pages, blocks, templates, media…; WordPress checks the user's rights)", "allow"},
 	{IDWPRestMethods, "exclusions", "Allow the HTTP methods (PUT, PATCH, DELETE) and method override headers of the WordPress REST API (Elementor, WooCommerce block checkout)", "allow"},
 	{IDWCStoreExcl, "exclusions", "WooCommerce cart and checkout (Store API and ?wc-ajax=): PHP-injection rules skip it (addresses and order notes are stored, never run)", "allow"},
@@ -156,11 +156,11 @@ var Catalog = []RuleInfo{
 	{IDStaticCookies, "exclusions", "Images, styles and scripts: the cookies sent with them are not checked for injections", "allow"},
 	{IDWPCommentText, "exclusions", "WordPress comments and WooCommerce reviews: the text, name and website are not checked for SQL injection (WordPress stores them safely; XSS is still checked)", "allow"},
 	{IDPasswordArgs, "exclusions", "Password fields of login and sign-up forms are not checked for PHP injection (passwords are hashed, never run; SQL and XSS rules still check them)", "allow"},
-	{IDWPCustomizer, "exclusions", "WordPress customizer preview of a logged-in user (unsaved CSS and HTML widgets): injection rules skip it", "allow"},
+	{IDWPCustomizer, "exclusions", "WordPress customizer preview of a logged-in user (unsaved CSS and HTML widgets): XSS rules skip it", "allow"},
 	{IDThemeColorCSS, "exclusions", "Theme colour stylesheets built by PHP (css/color.php?primary_color=F7931A) are allowed in css folders", "allow"},
 	{IDSiteBeacons, "exclusions", "Meta Conversions API bridge (?ob=open-bridge/events) and Optimization Detective page measurements", "allow"},
-	{IDWHMCSAdmin, "exclusions", "WHMCS admin area (any admin folder name): saves from the same site with the WHMCS session skip injection rules", "allow"},
-	{IDAdminPanel, "exclusions", "Admin areas of other web apps (SMM panels, Laravel, CodeIgniter): saves from the same admin area with a session skip injection rules", "allow"},
+	{IDWHMCSAdmin, "exclusions", "WHMCS admin area (any admin folder name): saves from the same site with the WHMCS session skip XSS rules", "allow"},
+	{IDAdminPanel, "exclusions", "Admin areas of other web apps (SMM panels, Laravel, CodeIgniter): saves from the same admin area with a session skip XSS rules", "allow"},
 	{IDUploadMalware, "upload_scan", "Scan uploaded files with the xPGuard malware engine", "block"},
 	{IDUploadPHP, "block_php_upload", "Block uploads of PHP files through web forms", "block"},
 	{IDSensitive, "sensitive_files", "Block access to .env, .git, config backups, logs and SQL dumps", "block"},
@@ -176,6 +176,7 @@ var Catalog = []RuleInfo{
 	{IDWPAdminFake, "wordpress", "Block PHP files in wp-admin/network and wp-admin/user that are not part of WordPress", "block"},
 	{IDWPLookalike, "wordpress", "Block wp-*.php files that imitate WordPress core names (wp-l0gin.php, wp-configs.php, wp-2019.php)", "block"},
 	{IDWPUploadsList, "wordpress", "Block folder listings of wp-content/uploads and its year/month folders", "block"},
+	{IDEditorCap, "wordpress", "Block SQL, command, PHP and file inclusion attacks in requests relaxed for editors and admin areas outside the wp-admin screens (the login cookie and browser headers can be sent by anyone; HTML and scripts stay allowed)", "block"},
 	{IDWPCachePHP, "wordpress", "Block running PHP files inside wp-content/cache", "block"},
 	{IDLoginWP, "bruteforce", "Count failed WordPress logins", "count"},
 	{IDLoginXMLRPC, "bruteforce", "Count WordPress XML-RPC login calls", "count"},
@@ -923,9 +924,11 @@ func Render(c settings.WAF, o Options) string {
 			if post {
 				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, id, msg, what)
 				// A logged-in WordPress user is the site's own editor on a
-				// shared or mobile address (WordPress checks the login;
-				// logins themselves are still refused from listed addresses).
-				w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none,chain"`)
+				// shared or mobile address: only in wp-admin and the REST API
+				// (WordPress checks the login; anyone can send the cookie, so
+				// logins, forms and other pages are still refused from listed
+				// addresses, and the CRS still checks what is let through).
+				w(`  SecRule &TX:xg_wp_editing "@eq 0" "t:none,chain"`)
 				if list == FileIPDBIPs {
 					// API calls and webhooks (marked by IDIPDBPostAPI: LiteSpeed
 					// ignores its ctl:ruleRemoveById, so the marker decides).

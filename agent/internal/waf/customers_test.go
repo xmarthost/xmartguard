@@ -134,7 +134,9 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 	if src == "" {
 		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
 	}
-	m := crsManager(t, src, `{"waf":{"enabled":true,"level":"normal","generic":true,"disabled_rules":[7700018]}}`, "off", nil)
+	m := crsManager(t, src, `{"waf":{"enabled":true,"level":"normal","generic":true,"disabled_rules":[7700018]}}`, "off", func(m *Manager) {
+		m.Intel = func() *Intel { return &Intel{Enforce: []int{IDEditorCap}} }
+	})
 	if st := m.Status(); st.Error != "" {
 		t.Fatalf("WAF error: %s", st.Error)
 	}
@@ -149,7 +151,9 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 		want                  int
 	}{
 		{"Joomla e-mail template", "joomla.example.ir", "/administrator/index.php?option=com_rsmembership&view=configuration", template, own, 200},
-		{"Joomla File Explorer save", "joomla.example.ir", "/administrator/index.php?option=com_ffexplorer&task=save", file, own, 200},
+		// Sec-Fetch-Site, the Referer and the session cookie are the
+		// client's: PHP that runs commands is refused even from an admin area.
+		{"Joomla File Explorer save with system()", "joomla.example.ir", "/administrator/index.php?option=com_ffexplorer&task=save", file, own, 403},
 		{"OpenCart product description", "shop.example.pk", "/admin/index.php?route=catalog/product.save", template,
 			[]string{"Cookie: OCSESSID=abc123", "Sec-Fetch-Site: same-origin", "Referer: https://shop.example.pk/admin/index.php?route=catalog/product.form"}, 200},
 		{"Without the browser's same-site headers", "joomla.example.ir", "/administrator/index.php?option=com_rsmembership&view=configuration", template, []string{joomla}, 403},

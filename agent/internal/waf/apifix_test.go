@@ -1,6 +1,7 @@
 package waf
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -64,7 +65,6 @@ func TestCRSAllowsBeaconsAndCom(t *testing.T) {
 
 // A ctl action on the first rule of a chain runs as soon as that rule
 // matches (every POST), not when the whole chain does: never render one.
-// WHMCS admin saves are let through with allow (honoured by LiteSpeed too).
 func TestNoCtlOnChainStarters(t *testing.T) {
 	c := settings.Defaults().WAF
 	c.Enabled, c.IPDBPost = true, true
@@ -80,9 +80,11 @@ func TestNoCtlOnChainStarters(t *testing.T) {
 			inChain = strings.Contains(l, ",chain\"")
 		}
 	}
+	// WHMCS admin saves are relaxed by the threshold (whmcsSetup), never
+	// let through whole: the cookie and headers are the client's.
 	for _, id := range []int{IDWHMCSAdmin, IDWHMCSAdminFetch} {
-		if l := ruleLine(out, id); !strings.Contains(l, ",allow,") {
-			t.Errorf("WHMCS rule %d does not allow: %s", id, l)
+		if i := strings.Index(out, fmt.Sprintf("id:%d,", id)); i < 0 || strings.Contains(out[i:i+900], ",allow") || strings.Contains(out[i:i+900], "ruleEngine=Off") {
+			t.Errorf("WHMCS rule %d lets the request through whole", id)
 		}
 	}
 }
