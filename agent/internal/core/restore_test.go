@@ -5,12 +5,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/ai"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 )
+
+// Audit A1 F13: an administrator's "clear" stands even for a signature whose
+// AI "clean" verdicts are not trusted (before, only "restore" did).
+func TestAdminClearStandsForUntrustedSignature(t *testing.T) {
+	a := newTestAgent(t, `{"ai":{"enabled":false}}`)
+	file := filepath.Join(t.TempDir(), "x.php")
+	os.WriteFile(file, []byte("<?php echo 'inert fixture';"), 0o644)
+	sha := "ab" + strings.Repeat("0", 62)
+	now := time.Now().Unix()
+	a.DB.Exec(`INSERT INTO findings (source, path, owner, category, signature, status, sha256, created_at, updated_at) VALUES ('manual',?,'u','virus','PHP.Obfuscated.CompressedPayload','detected',?,?,?)`, file, sha, now, now)
+	if ai.IsCleared(a.DB, sha) {
+		t.Fatal("cleared before")
+	}
+	if _, err := a.Handlers()["finding.action"](context.Background(), []byte(`{"ids":[1],"action":"clear"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !ai.IsCleared(a.DB, sha) || !ai.AdminCleared(a.DB, sha) {
+		t.Fatal("administrator's clear not honoured")
+	}
+	if v, ok := ai.Cached(a.DB, sha); !ok || v.Source != ai.SourceAdmin {
+		t.Fatalf("verdict %+v", v)
+	}
+}
 
 // A file an administrator restores is not flagged again while unchanged;
 // if its content changes it is scanned (and flagged) again.

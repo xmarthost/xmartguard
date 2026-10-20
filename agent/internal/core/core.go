@@ -2100,8 +2100,12 @@ func (a *Agent) clearFinding(id int64) error {
 		return err
 	}
 	if f.SHA256 != "" {
+		// An administrator's decision: it stands here even for the
+		// signatures whose AI "clean" verdicts are not trusted. This row is
+		// only read on this server; the portal records the fleet-wide
+		// correction itself.
 		ai.Save(a.DB, ai.Verdict{SHA256: f.SHA256, Verdict: ai.Clean, Confidence: 100, Reason: "Marked as a false positive by an administrator.",
-			Model: "admin", Source: "ai", At: store.Now(), Size: f.Size})
+			Model: "admin", Source: ai.SourceAdmin, At: store.Now(), Size: f.Size})
 	}
 	return nil
 }
