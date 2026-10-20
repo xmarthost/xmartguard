@@ -64,6 +64,8 @@ type Agent struct {
 	// (tests) applies them before settings.set answers.
 	settingsApply settingsApply
 	syncSettings  bool
+	// summary caches the database-heavy part of the metrics summary.
+	summary summaryCache
 	// applyFn replaces applySettings in tests.
 	applyFn     func(context.Context, settingsJob) (string, error)
 	mailGuard   atomic.Pointer[mail.EximGuardStatus]
@@ -504,17 +506,60 @@ func (a *Agent) onBan(e firewall.Event) {
 
 // SecuritySummary is attached to every metrics sample for dashboards.
 func (a *Agent) SecuritySummary() any {
-	sc := a.Scanner.Stats()
+	h := a.summary.get(a.heavySummary)
+	sc := h.scanner
 	sc.RealtimeWatch = a.Realtime.Watches()
 	fw := a.Firewall.Stats()
+	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": h.listed, "card": h.card,
+		"problems": a.serviceProblems()}
+}
+
+// summaryEvery is how often the counts over whole tables (and the cPanel
+// userdata files) behind the metrics summary are taken again. Metrics go
+// out every minute, or every 5 s while a portal page is open; the counts
+// run on the only database connection, in front of every writer.
+const summaryEvery = 5 * time.Minute
+
+type heavySummary struct {
+	scanner scanner.Stats
+	listed  int
+	card    map[string]any
+}
+
+type summaryCache struct {
+	mu   sync.Mutex
+	at   time.Time
+	busy bool
+	v    heavySummary
+}
+
+// get returns the cached value, computing it the first time and
+// refreshing it in the background once it is older than summaryEvery.
+func (c *summaryCache) get(compute func() heavySummary) heavySummary {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.at.IsZero() {
+		c.v, c.at = compute(), time.Now()
+	} else if time.Since(c.at) > summaryEvery && !c.busy {
+		c.busy = true
+		go func() {
+			v := compute()
+			c.mu.Lock()
+			c.v, c.at, c.busy = v, time.Now(), false
+			c.mu.Unlock()
+		}()
+	}
+	return c.v
+}
+
+func (a *Agent) heavySummary() heavySummary {
 	listed := 0
 	for _, ip := range a.repIPs() {
 		if r := reputation.Load(a.DB, ip); r != nil && r.ListedOn > 0 {
 			listed++
 		}
 	}
-	return map[string]any{"scanner": sc, "firewall": fw, "waf": a.WAF.Stats(), "blacklisted_ips": listed, "card": a.serverCard(),
-		"problems": a.serviceProblems()}
+	return heavySummary{scanner: a.Scanner.Stats(), listed: listed, card: a.serverCard()}
 }
 
 // serverCard holds the numbers of the portal's server list card: all-time
