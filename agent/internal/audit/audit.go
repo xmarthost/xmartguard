@@ -679,6 +679,29 @@ var (
 	reEveryMinute = regexp.MustCompile(`^\*(?:/1)?\s+\*\s+\*\s+\*\s+\*\s`)
 )
 
+// Secrets in cron lines, masked before a line goes into the report.
+var cronSecrets = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`(://)[^/\s:@]+:[^/\s@]+@`), "${1}***:***@"},                                                               // https://user:pass@host
+	{regexp.MustCompile(`([?&][^=\s&?#'"]+)=[^&\s#'"]+`), "${1}=***"},                                                              // ?key=SECRET&token=…
+	{regexp.MustCompile(`(?i)(authorization:\s*\w+\s+)[^\s'"]+`), "${1}***"},                                                       // -H "Authorization: Bearer …"
+	{regexp.MustCompile(`(?i)(\s--?[\w-]*(?:user|pass|passwd|password|token|secret|key)(?:\s+|=))(['"]?)[^\s'"]+`), "${1}${2}***"}, // --password x, --api-key=x
+	{regexp.MustCompile(`(\s-u\s*)(['"]?)[^\s'"]+`), "${1}${2}***"},                                                                // curl -u user:pass
+	{regexp.MustCompile(`(\s-p)[^\s'"-][^\s'"]*`), "${1}***"},                                                                      // mysql -pSECRET
+	{regexp.MustCompile(`(?i)\b(\w*(?:pass|pwd|token|secret|key)\w*=)(['"]?)[^\s'"]+`), "${1}${2}***"},                             // DB_PASS=…
+}
+
+// maskCron keeps a cron line readable without the passwords, tokens and
+// keys it often carries: the report goes to the portal's database and UI.
+func maskCron(s string) string {
+	for _, c := range cronSecrets {
+		s = c.re.ReplaceAllString(s, c.repl)
+	}
+	return s
+}
+
 func (a *Auditor) cronJobs() []Item {
 	dir := a.CronDir
 	if dir == "" {
@@ -720,7 +743,7 @@ func (a *Auditor) cronJobs() []Item {
 						sev = "medium"
 					}
 					out = append(out, Item{Check: "cron", Severity: sev, Title: m[1] + " cron job without a time limit", Owner: user, Path: filepath.Join(dir, user),
-						Detail: t + "\nWhen the site is slow, runs pile up and fill the account's process limit. Add " +
+						Detail: maskCron(t) + "\nWhen the site is slow, runs pile up and fill the account's process limit. Add " +
 							map[string]string{"wget": "-T 60 -t 1", "curl": "-m 60"}[m[1]] + "."})
 				}
 			}
@@ -729,10 +752,10 @@ func (a *Auditor) cronJobs() []Item {
 			key := reHomeDir.ReplaceAllString(cmd, "/home/")
 			if prev, ok := seen[key]; ok && prev != cmd {
 				out = append(out, Item{Check: "cron", Severity: "medium", Title: "Cron job runs for two home folders", Owner: user, Path: filepath.Join(dir, user),
-					Detail: prev + "\n" + cmd + "\nOne of them points to an old copy of the site. Remove it."})
+					Detail: maskCron(prev) + "\n" + maskCron(cmd) + "\nOne of them points to an old copy of the site. Remove it."})
 			} else if lines[t] {
 				out = append(out, Item{Check: "cron", Severity: "low", Title: "Cron job listed twice", Owner: user, Path: filepath.Join(dir, user),
-					Detail: t + "\nIt runs twice each time. Remove one line."})
+					Detail: maskCron(t) + "\nIt runs twice each time. Remove one line."})
 			}
 			lines[t] = true
 			seen[key] = cmd
