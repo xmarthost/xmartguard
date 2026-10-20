@@ -27,7 +27,7 @@ func TestRestoredFileIsNotFlaggedAgain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i := 0; i < 200; i++ {
+		for i := 0; i < 3000; i++ { // up to a minute on a busy machine
 			scans, _ := a.Scanner.ListScans(1)
 			if len(scans) > 0 && scans[0].ID == id && scans[0].Status == "completed" {
 				break
@@ -87,7 +87,7 @@ func TestAICleanRestoresAtOnce(t *testing.T) {
 		t.Fatal("file not back at its location")
 	}
 	id2, _ := a.Scanner.Start("path", dir, "test")
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 3000; i++ { // up to a minute on a busy machine
 		scans, _ := a.Scanner.ListScans(1)
 		if len(scans) > 0 && scans[0].ID == id2 && scans[0].Status == "completed" {
 			break

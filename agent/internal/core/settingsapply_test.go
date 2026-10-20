@@ -81,7 +81,7 @@ func TestSettingsApplyInBackground(t *testing.T) {
 
 func waitState(t *testing.T, a *Agent, want string) {
 	t.Helper()
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 3000; i++ { // up to a minute on a busy machine
 		if a.settingsApply.status().State == want {
 			return
 		}

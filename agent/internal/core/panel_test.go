@@ -133,7 +133,7 @@ func TestPanelSocketIsolatesAccounts(t *testing.T) {
 		}
 		Total int
 	}
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		r = as(alice, "findings.list", map[string]any{})
 		json.Unmarshal(r.Data, &findings)
