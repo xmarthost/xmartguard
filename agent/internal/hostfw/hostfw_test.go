@@ -178,3 +178,29 @@ func TestNormAddrMappedCIDR(t *testing.T) {
 		}
 	}
 }
+
+// A firewall that is stopped during a sync keeps the entries we added,
+// so they are removed once it is back and the address is no longer
+// whitelisted (firewalld keeps --permanent sources while stopped).
+func TestAbsentToolKeepsEntries(t *testing.T) {
+	root := t.TempDir()
+	present := true
+	var removed []string
+	h := &Host{Root: root, State: filepath.Join(root, "state.json"), Tools: []Tool{{
+		Name:    "fake",
+		Present: func(*Host) bool { return present },
+		Allow:   func(*Host, string, string) error { return nil },
+		Remove:  func(_ *Host, ip string) error { removed = append(removed, ip); return nil },
+	}}}
+	h.SyncWith(nil, []string{"198.51.100.20"})
+	present = false
+	h.SyncWith(nil, nil)
+	if len(removed) != 0 || len(h.load()) != 1 {
+		t.Fatalf("stopped firewall: removed %v, state %v", removed, h.load())
+	}
+	present = true
+	h.SyncWith(nil, nil)
+	if strings.Join(removed, ",") != "198.51.100.20" || len(h.load()) != 0 {
+		t.Fatalf("back again: removed %v, state %v", removed, h.load())
+	}
+}

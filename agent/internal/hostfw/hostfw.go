@@ -410,14 +410,19 @@ func (h *Host) SyncWith(portal, whitelist []string) []Result {
 			if e.Tool != t.Name {
 				continue
 			}
-			if want[e.IP] != "" && r.Present {
+			// A firewall that is stopped for now keeps what we added
+			// (firewalld's --permanent sources, CSF's files): remember it,
+			// so it is removed when that firewall is back.
+			if !r.Present {
+				keep = append(keep, e)
+				continue
+			}
+			if want[e.IP] != "" {
 				keep = append(keep, e)
 				r.Allowed = append(r.Allowed, e.IP)
 				continue
 			}
-			if r.Present {
-				_ = t.Remove(h, e.IP)
-			}
+			_ = t.Remove(h, e.IP)
 		}
 		if !r.Present {
 			res = append(res, r)
