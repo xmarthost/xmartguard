@@ -314,6 +314,14 @@ var ProxyRanges = []string{"127.0.0.1", "::1",
 	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
 	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32"}
 
+// localProxies are the local reverse proxies of ProxyRanges.
+const localProxies = "127.0.0.1,::1"
+
+// reLastHop captures the last X-Forwarded-For entry: the address the proxy
+// in front of the web server saw (it appends it; entries before it are
+// whatever the client sent).
+const reLastHop = `@rx (?:^|[\s,])([0-9A-Fa-f:.]{3,45})\s*$`
+
 // cloudflareRanges are ProxyRanges without the local proxies.
 func cloudflareRanges() []string {
 	var out []string
@@ -915,12 +923,13 @@ func Render(c settings.WAF, o Options) string {
 		w(`  SecRule &REQUEST_HEADERS:X-Forwarded-For "@eq 0" "t:none,chain"`)
 		w(`  SecRule &REQUEST_HEADERS:CF-Connecting-IP "@eq 0" "t:none"`)
 	}
-	// rblRule blocks addresses on a list, directly and behind a proxy (real
-	// address from the forwarded-for headers; id+1000), except exempt
+	// rblRule blocks addresses on a list, directly, behind Cloudflare
+	// (CF-Connecting-IP; id+1000) and behind a local proxy (the last
+	// X-Forwarded-For hop, which that proxy adds; id+3000), except exempt
 	// addresses. viaCF also blocks visitors Cloudflare marks with that
 	// country code (id+2000; T1 is Tor).
 	rblRule := func(id int, post bool, list, msg string, viaCF string) {
-		head := func(id int, what, first string) {
+		head := func(id int, what, addr string) {
 			if post {
 				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, id, msg, what)
 				// A logged-in WordPress user is the site's own editor on a
@@ -934,25 +943,30 @@ func Render(c settings.WAF, o Options) string {
 					// ignores its ctl:ruleRemoveById, so the marker decides).
 					w(`  SecRule &TX:xg_api "@eq 0" "t:none,chain"`)
 				}
-				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, first)
+				w(`  SecRule REMOTE_ADDR "%s" "t:none,chain"`, addr)
 			} else {
-				w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, o.Dir, first, id, msg, what)
+				w(`SecRule REMOTE_ADDR "%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, addr, id, msg, what)
 			}
 		}
-		head(id, "", list)
+		head(id, "", fmt.Sprintf("@ipMatchFromFile %s/%s", o.Dir, list))
 		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
-		head(id+1000, " (behind a proxy)", FileProxyRanges)
-		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
+		// Only the header each proxy sets itself: X-Real-IP and the first
+		// X-Forwarded-For entry are the client's own words.
+		head(id+1000, " (behind a proxy)", "@ipMatch "+strings.Join(cloudflareRanges(), ","))
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, list)
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
+		head(id+3000, " (behind a proxy)", "@ipMatch "+localProxies)
+		w(`  SecRule REQUEST_HEADERS:X-Forwarded-For "%s" "capture,chain"`, reLastHop)
 		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, list)
 		w(`    SecRule TX:1 "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
 		if viaCF != "" {
-			head(id+2000, " (Cloudflare)", FileProxyRanges)
+			head(id+2000, " (Cloudflare)", fmt.Sprintf("@ipMatchFromFile %s/%s", o.Dir, FileProxyRanges))
 			w(`  SecRule REQUEST_HEADERS:CF-IPCountry "@streq %s" "t:none"`, viaCF)
 		}
 	}
 	if c.IPDBPost && !off[IDIPDBPost] {
-		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_api=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
-			reAPIHeader.String(), IDIPDBPostAPI, IDIPDBPost, IDIPDBPost+1000)
+		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_api=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
+			reAPIHeader.String(), IDIPDBPostAPI, IDIPDBPost, IDIPDBPost+1000, IDIPDBPost+3000)
 		rblRule(IDIPDBPost, true, FileIPDBIPs, "POST from an IPDB-listed address blocked", "")
 	}
 	switch TorMode(c.TorAction, o.Central != nil && o.Gate == nil) {
@@ -967,9 +981,13 @@ func Render(c settings.WAF, o Options) string {
 	}
 	if c.ProxyIPCheck && !off[IDProxyBlocked] {
 		// Disruptive action and metadata sit on the chain's first rule
-		// (ModSecurity 2); the client address is the first one in the header.
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Blacklisted IP behind proxy',tag:'xpguard/proxy',chain"`, o.Dir, FileProxyRanges, IDProxyBlocked)
-		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
+		// (ModSecurity 2). The client address is the one the proxy sets:
+		// CF-Connecting-IP behind Cloudflare, the last X-Forwarded-For hop
+		// behind a local proxy (+1000).
+		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Blacklisted IP behind proxy',tag:'xpguard/proxy',chain"`, strings.Join(cloudflareRanges(), ","), IDProxyBlocked)
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
+		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Blacklisted IP behind proxy',tag:'xpguard/proxy',chain"`, localProxies, IDProxyBlocked+1000)
+		w(`  SecRule REQUEST_HEADERS:X-Forwarded-For "%s" "capture,chain"`, reLastHop)
 		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
 	}
 	out := b.String()

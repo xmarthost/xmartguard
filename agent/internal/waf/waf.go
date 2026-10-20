@@ -641,7 +641,8 @@ type PackageState struct {
 // pairRules are second rules (id+1000) that count for the first.
 var pairRules = map[int]int{IDEmptyUAWP + 1000: IDEmptyUAWP, IDRootProbe + 1000: IDRootProbe,
 	IDIPDBPost + 1000: IDIPDBPost, IDTorPost + 1000: IDTorPost, IDTorBlock + 1000: IDTorBlock,
-	IDTorPost + 2000: IDTorPost, IDTorBlock + 2000: IDTorBlock}
+	IDTorPost + 2000: IDTorPost, IDTorBlock + 2000: IDTorBlock,
+	IDIPDBPost + 3000: IDIPDBPost, IDTorPost + 3000: IDTorPost, IDTorBlock + 3000: IDTorBlock, IDProxyBlocked + 1000: IDProxyBlocked}
 
 // countCache keeps the WAF log counts (rule hits and totals): counting a
 // week of a busy server's log takes seconds, and the WAF settings page and
