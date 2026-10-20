@@ -122,6 +122,16 @@ for n in 0 "" 1; do
 done
 check "not on the run that made .env" 'grep -qF "[ \"\$NEW_ENV\" = 1 ] || forget_first_password" "$SETUP"'
 
+echo "== .gitignore keeps secret and runtime files out of the repository =="
+if command -v git >/dev/null 2>&1 && git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  for f in .env.backup deploy/.env.local logs/agent.log server/tls.pem server/tls.key etc/identity.key etc/agent.json data.db agent/x.sqlite bench/sample.php quarantine/sample.php; do
+    check "ignored: $f" 'git -C "$ROOT" check-ignore -q --no-index "$f"'
+  done
+  for f in deploy/.env.example agent/internal/quarantine/store.go server/src/routes/logs.ts; do
+    check "not ignored: $f" '! git -C "$ROOT" check-ignore -q --no-index "$f"'
+  done
+fi
+
 echo ""
 echo "deploy script tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

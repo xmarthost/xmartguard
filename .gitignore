@@ -4,3 +4,16 @@ dist/
 .env
 deploy/.env
 /data/
+# Secrets and runtime files that must never be committed.
+.env.*
+!deploy/.env.example
+logs/
+*.pem
+*.key
+identity.key
+agent.json
+*.db
+*.sqlite
+# Local malware sample and quarantine folders.
+/bench/
+/quarantine/
