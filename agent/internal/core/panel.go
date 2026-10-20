@@ -55,10 +55,20 @@ func account(u *user.User) (name, home, web string, ok bool) {
 }
 
 // within reports whether p (after resolving symlinks) is home or below it.
+// A missing file (quarantined) is judged by its nearest existing folder, so
+// a linked folder above it is resolved too.
 func within(home, p string) (string, bool) {
 	p = filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		p = r
+	for q, rest := p, ""; ; {
+		if r, err := filepath.EvalSymlinks(q); err == nil {
+			p = filepath.Join(r, rest)
+			break
+		}
+		d := filepath.Dir(q)
+		if d == q {
+			break
+		}
+		rest, q = filepath.Join(filepath.Base(q), rest), d
 	}
 	h := filepath.Clean(home)
 	if r, err := filepath.EvalSymlinks(h); err == nil {
@@ -223,7 +233,10 @@ func (a *Agent) userHandlers(u *user.User) map[string]local.Handler {
 				case "quarantine":
 					err = a.Scanner.Quarantine(id)
 				case "restore":
-					err = a.restoreFinding(id)
+					// The file only: an account (or malware running as
+					// it) must not clear content for the whole server,
+					// as an administrator's restore does.
+					err = a.Scanner.Restore(id)
 				case "delete":
 					err = a.Scanner.Delete(id)
 				default:
