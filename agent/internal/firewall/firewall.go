@@ -180,6 +180,10 @@ type Manager struct {
 	ddnsMu sync.Mutex
 	ddns   map[string][]string // hostname -> resolved addresses
 
+	// applyMu serialises Apply (build and load): an older snapshot built
+	// during a slow apply must never be loaded after a newer one.
+	applyMu sync.Mutex
+
 	mu        sync.Mutex
 	lastError string
 	stats     dropStats
@@ -337,6 +341,8 @@ func gatePorts(st settings.Settings) []int {
 
 // Apply rebuilds the kernel ruleset (or removes it when disabled).
 func (m *Manager) Apply() error {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	var err error
 	// Only one provider may hold rules at a time.
 	if o := m.other(); o.Available() == nil {

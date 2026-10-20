@@ -520,13 +520,14 @@ func (t IPTables) Apply(r Ruleset) error {
 		return err
 	}
 	for _, f := range t.families() {
-		if _, err := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err != nil {
-			if !r.LogDrops && !r.LogIPDB {
+		if err := restoreRules(ctx, f.restore, renderRules(r, f.v6)); err != nil {
+			// Another program held the xtables lock: report it, keeping LOG.
+			if (!r.LogDrops && !r.LogIPDB) || xtablesLocked(err) {
 				return err
 			}
 			// The LOG target is unavailable (some containers): load without it.
 			r.LogDrops, r.LogIPDB = false, false
-			if _, err2 := run(ctx, renderRules(r, f.v6), f.restore, "--noflush"); err2 != nil {
+			if err2 := restoreRules(ctx, f.restore, renderRules(r, f.v6)); err2 != nil {
 				return err
 			}
 		}
@@ -534,13 +535,32 @@ func (t IPTables) Apply(r Ruleset) error {
 		ensureJump(ctx, f.ipt, "OUTPUT", ChainOut, r.Ports != nil)
 		// CAPTCHA redirect (nat table). Failure only disables the redirect:
 		// banned addresses are then dropped like before.
-		if _, err := run(ctx, renderNAT(r, f.v6), f.restore, "--noflush"); err == nil {
+		if err := restoreRules(ctx, f.restore, renderNAT(r, f.v6)); err == nil {
 			natIPT := []string{f.ipt, "-t", "nat"}
 			ensureJumpArgs(ctx, natIPT, "PREROUTING", ChainCaptcha, r.Captcha != nil)
 		}
 		dropLegacyChains(ctx, f.ipt)
 	}
 	return nil
+}
+
+// restoreRules loads a script with `iptables-restore --noflush`, waiting
+// for the xtables lock (-w) so it does not fail while CSF or another
+// restore holds it. iptables before 1.6.2 (CentOS 7) has no -w for
+// restore: it is loaded again without it.
+func restoreRules(ctx context.Context, bin, script string) error {
+	if _, err := run(ctx, script, bin, "--noflush", "-w"); err == nil {
+		return nil
+	}
+	_, err := run(ctx, script, bin, "--noflush")
+	return err
+}
+
+// xtablesLocked reports a failure because another program held the
+// xtables lock.
+func xtablesLocked(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "xtables lock") || strings.Contains(s, "Another app is currently holding")
 }
 
 // dropLegacyChains removes the chains of versions before the xPGuard name,
