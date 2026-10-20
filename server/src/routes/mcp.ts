@@ -416,7 +416,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     const { rows } = await pool.query(
       `UPDATE mcp_tokens t SET last_used_at = now(), calls = calls + 1
          FROM users u
-        WHERE t.token_hash = $1 AND (t.revoked_at IS NULL OR t.revoked_at > now()) AND u.id = t.created_by AND u.role IN ('owner','admin')
+        WHERE t.token_hash = $1 AND (t.revoked_at IS NULL OR t.revoked_at > now()) AND (t.expires_at IS NULL OR t.expires_at > now()) AND u.id = t.created_by AND u.role IN ('owner','admin')
           AND (t.grant_id IS NULL OR EXISTS (SELECT 1 FROM oauth_grants g WHERE g.id = t.grant_id AND g.revoked_at IS NULL))
         RETURNING t.id, t.account_id, t.created_by, t.scope`,
       [sha256(token)],
@@ -519,7 +519,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     const { rows } = await pool.query(
       `SELECT t.id, t.label, t.prefix, t.scope, t.last_used_at, t.calls::int AS calls, t.created_at, u.email AS created_by, t.grant_id IS NOT NULL AS oauth
          FROM mcp_tokens t LEFT JOIN users u ON u.id = t.created_by
-        WHERE t.account_id = $1 AND t.revoked_at IS NULL ORDER BY t.created_at DESC`,
+        WHERE t.account_id = $1 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now()) ORDER BY t.created_at DESC`,
       [req.user!.accountId],
     );
     return { tokens: rows, endpoint: `${cfg.publicUrl}/mcp` };

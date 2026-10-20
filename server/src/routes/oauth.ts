@@ -28,6 +28,8 @@ import { randomToken, sha256 } from '../security.js';
 const CODE_TTL_MINUTES = 10;
 /** A replaced access token keeps working this long (another session may hold it). */
 const OLD_TOKEN_GRACE = '1 day';
+/** Hours an OAuth access token works; the client refreshes it. */
+export const ACCESS_TOKEN_HOURS = 24;
 
 const RegisterBody = z.object({
   redirect_uris: z.array(z.string().max(2000)).min(1).max(10),
@@ -219,8 +221,9 @@ export function oauthRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void
     async function issue(grantId: string, accountId: string, userId: string, scope: string, label: string): Promise<string> {
       const token = 'xgm_' + randomToken(32);
       await pool.query(
-        `INSERT INTO mcp_tokens (account_id, created_by, label, token_hash, prefix, scope, grant_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [accountId, userId, label, sha256(token), token.slice(0, 10), scope, grantId],
+        `INSERT INTO mcp_tokens (account_id, created_by, label, token_hash, prefix, scope, grant_id, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(hours => $8))`,
+        [accountId, userId, label, sha256(token), token.slice(0, 10), scope, grantId, ACCESS_TOKEN_HOURS],
       );
       return token;
     }
@@ -246,7 +249,7 @@ export function oauthRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void
           [clientId, code.account_id, code.user_id, code.scope, sha256(refresh)],
         );
         const access = await issue(g.rows[0].id, code.account_id, code.user_id, code.scope, `${c?.client_name ?? 'MCP client'} (sign-in)`);
-        return reply.header('Cache-Control', 'no-store').send({ access_token: access, token_type: 'Bearer', refresh_token: refresh, scope: code.scope });
+        return reply.header('Cache-Control', 'no-store').send({ access_token: access, token_type: 'Bearer', expires_in: ACCESS_TOKEN_HOURS * 3600, refresh_token: refresh, scope: code.scope });
       }
       if (b.grant_type === 'refresh_token') {
         if (!b.refresh_token) return err(reply, 'invalid_request', 'refresh_token is required');
@@ -263,7 +266,7 @@ export function oauthRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void
           [g.id],
         );
         const access = await issue(g.id, g.account_id, g.user_id, g.scope, `${g.client_name} (sign-in)`);
-        return reply.header('Cache-Control', 'no-store').send({ access_token: access, token_type: 'Bearer', refresh_token: b.refresh_token, scope: g.scope });
+        return reply.header('Cache-Control', 'no-store').send({ access_token: access, token_type: 'Bearer', expires_in: ACCESS_TOKEN_HOURS * 3600, refresh_token: b.refresh_token, scope: g.scope });
       }
       return err(reply, 'unsupported_grant_type', 'use authorization_code or refresh_token');
     });

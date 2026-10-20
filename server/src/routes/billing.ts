@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
-import { SESSION_COOKIE, audit, createSession, requireRole } from '../auth.js';
+import { SESSION_COOKIE, audit, createSession, endUserAccess, requireRole } from '../auth.js';
 import { hashPassword, randomToken, sha256 } from '../security.js';
 import { isPlatform } from '../tenancy.js';
 
@@ -313,7 +313,8 @@ export function billingRoutes(app: FastifyInstance, pool: Pool, cfg: Config): vo
     const u = await consume(b.data.token, 'set_password');
     if (!u) return reply.code(404).send({ error: 'This link has expired or was already used. Ask for a new one on the website.' });
     await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [u.user_id, await hashPassword(b.data.password)]);
-    await pool.query('DELETE FROM sessions WHERE user_id = $1', [u.user_id]);
+    // Other set-password links (each login-link made one) stop working too.
+    await endUserAccess(pool, u.user_id);
     reply.setCookie(SESSION_COOKIE, await createSession(pool, cfg, u.user_id, req), cookieOpts);
     await audit(pool, { accountId: u.account_id, userId: u.user_id, action: 'auth.password_set', ip: req.ip });
     return { ok: true };

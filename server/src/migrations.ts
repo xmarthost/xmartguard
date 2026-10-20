@@ -736,4 +736,12 @@ CREATE TABLE ai_kb_account (
 );
 `,
   },
+  {
+    version: '027_mcp_token_expiry',
+    sql: `
+-- OAuth access tokens expire (clients refresh them); tokens made on the AI
+-- Connector page keep no expiry.
+ALTER TABLE mcp_tokens ADD COLUMN expires_at timestamptz;
+`,
+  },
 ];

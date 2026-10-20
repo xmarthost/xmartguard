@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
-import { SESSION_COOKIE, audit, createSession, destroySession, requireRole } from '../auth.js';
+import { SESSION_COOKIE, audit, createSession, destroySession, endUserAccess, requireRole } from '../auth.js';
 import { hashPassword, verifyPassword } from '../security.js';
 import { isPlatform } from '../tenancy.js';
 
@@ -103,8 +103,8 @@ export function authRoutes(app: FastifyInstance, pool: Pool, cfg: Config): void 
       return reply.code(403).send({ error: 'current password is incorrect' });
     }
     await pool.query('UPDATE users SET password_hash = $2 WHERE id = $1', [user.id, await hashPassword(parsed.data.new_password)]);
-    // Invalidate all other sessions.
-    await pool.query('DELETE FROM sessions WHERE user_id = $1', [user.id]);
+    // Invalidate all other sessions, mailed links and connector tokens.
+    await endUserAccess(pool, user.id);
     const token = await createSession(pool, cfg, user.id, req);
     reply.setCookie(SESSION_COOKIE, token, cookieOpts);
     await audit(pool, { accountId: user.accountId, userId: user.id, action: 'auth.password_changed', ip: req.ip });

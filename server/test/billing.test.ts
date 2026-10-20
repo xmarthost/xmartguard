@@ -231,4 +231,18 @@ describe('billing API (website -> portal)', () => {
     expect(again.body).toMatchObject({ created: false });
     expect((await a.req('GET', '/api/license')).body.license.max_servers).toBe(2);
   });
+
+  it('ends every earlier set-password link once a password is set', async () => {
+    await call('/api/billing/provision', { email: 'links@example.com', plan: 'pro', max_servers: 1, period_end: inAYear() });
+    const t = async () => new URL((await call('/api/billing/login-link', { email: 'links@example.com' })).body.set_password_url).searchParams.get('token')!;
+    const first = await t();
+    const second = await t();
+    const c = new Client(h.url);
+    expect((await c.req('POST', '/api/auth/set-password', { token: first, password: 'links-long-password' })).status).toBe(200);
+    expect((await new Client(h.url).req('GET', `/api/auth/set-password?token=${second}`)).status).toBe(404);
+    // A link made later (forgotten password) also ends with a change in the portal.
+    const later = new URL((await call('/api/billing/password-link', { email: 'links@example.com' })).body.url).searchParams.get('token')!;
+    expect((await c.req('POST', '/api/auth/password', { current_password: 'links-long-password', new_password: 'links-newer-password' })).status).toBe(200);
+    expect((await new Client(h.url).req('GET', `/api/auth/set-password?token=${later}`)).status).toBe(404);
+  });
 });

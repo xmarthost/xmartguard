@@ -39,6 +39,20 @@ export async function createSession(pool: Pool, cfg: Config, userId: string, req
   return token;
 }
 
+/**
+ * A user's password was set or changed: everything that signed in with the
+ * old one ends. Sessions, links mailed earlier (set-password links stay
+ * valid for days), and the AI connector tokens and OAuth connections the
+ * user made (they never expire on their own and may be what an intruder
+ * left behind). The caller makes the new session afterwards.
+ */
+export async function endUserAccess(pool: Pool, userId: string): Promise<void> {
+  await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+  await pool.query('DELETE FROM user_tokens WHERE user_id = $1', [userId]);
+  await pool.query('UPDATE oauth_grants SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [userId]);
+  await pool.query('UPDATE mcp_tokens SET revoked_at = now() WHERE created_by = $1 AND (revoked_at IS NULL OR revoked_at > now())', [userId]);
+}
+
 export async function destroySession(pool: Pool, token: string | undefined): Promise<void> {
   if (token) await pool.query('DELETE FROM sessions WHERE id = $1', [sha256(token)]);
 }

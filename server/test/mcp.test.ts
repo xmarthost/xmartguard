@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toText } from '../src/routes/mcp.js';
-import { Client, startHarness, type Harness } from './helpers.js';
+import { Client, OWNER, startHarness, type Harness } from './helpers.js';
 import { createOwner } from '../src/routes/users.js';
 
 let h: Harness;
@@ -225,7 +225,7 @@ describe('mcp oauth sign-in', () => {
     expect(tok).toMatchObject({ token_type: 'Bearer', scope: 'write' });
     expect(tok.access_token).toMatch(/^xgm_/);
     expect(tok.refresh_token).toMatch(/^xgr_/);
-    expect(tok.expires_in).toBeUndefined();
+    expect(tok.expires_in).toBe(24 * 3600);
     const tools = (await rpc(`${h.url}/mcp`, 'tools/list', undefined, { authorization: `Bearer ${tok.access_token}` })).body.result.tools.map((x: any) => x.name);
     expect(tools).toContain('finding_action');
     expect(tools).toContain('update_settings');
@@ -259,6 +259,25 @@ describe('mcp oauth sign-in', () => {
     expect(tok.scope).toBe('read');
     const tools = (await rpc(`${h.url}/mcp`, 'tools/list', undefined, { authorization: `Bearer ${tok.access_token}` })).body.result.tools.map((x: any) => x.name);
     expect(tools).not.toContain('finding_action');
+  });
+
+  it('ends access tokens after a day, and every token of a user who changes the password', async () => {
+    const ping = async (a: string) => (await rpc(`${h.url}/mcp`, 'ping', undefined, { authorization: `Bearer ${a}` })).status;
+    const tok = await (await form({ grant_type: 'authorization_code', code: await approve(), redirect_uri: redirect, client_id: clientId, code_verifier: verifier })).json();
+    expect(await ping(tok.access_token)).toBe(200);
+    await h.pool.query("UPDATE mcp_tokens SET expires_at = now() - interval '1 minute' WHERE token_hash = $1", [createHash('sha256').update(tok.access_token).digest('hex')]);
+    expect(await ping(tok.access_token)).toBe(401);
+    const fresh = await (await form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: clientId })).json();
+    expect(await ping(fresh.access_token)).toBe(200);
+    // A token made on the AI Connector page and the OAuth connection both end
+    // when the user changes the password (an intruder's tokens with it).
+    const page = (await c.req('POST', '/api/mcp/tokens', { label: 'page token', scope: 'write' })).body.token;
+    expect(await ping(page)).toBe(200);
+    expect((await c.req('POST', '/api/auth/password', { current_password: OWNER.password, new_password: 'a-new-long-password' })).status).toBe(200);
+    expect(await ping(page)).toBe(401);
+    expect(await ping(fresh.access_token)).toBe(401);
+    expect((await (await form({ grant_type: 'refresh_token', refresh_token: tok.refresh_token, client_id: clientId })).json()).error).toBe('invalid_grant');
+    expect((await c.req('POST', '/api/auth/password', { current_password: 'a-new-long-password', new_password: OWNER.password })).status).toBe(200);
   });
 });
 
