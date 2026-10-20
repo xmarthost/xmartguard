@@ -563,6 +563,33 @@ func TestRealtimeRenameKeepsWatchCount(t *testing.T) {
 	}
 }
 
+// A2 F12: the files waiting for realtime scanning are bounded; past the
+// cap a catch-up walk is asked for instead.
+func TestRealtimePendingBounded(t *testing.T) {
+	s := newScanner(t)
+	home := t.TempDir()
+	rt := &Realtime{S: s, Roots: func() []string { return []string{home} }}
+	if err := rt.init([]string{home}); err != nil {
+		t.Skip("inotify unavailable:", err)
+	}
+	old := MaxPending
+	MaxPending = 3
+	defer func() { MaxPending = old }()
+	for i := 0; i < 10; i++ {
+		rt.queue(filepath.Join(home, fmt.Sprint(i, ".php")))
+	}
+	rt.queue(filepath.Join(home, "0.php")) // already waiting: refreshed
+	rt.mu.Lock()
+	n := len(rt.pending)
+	rt.mu.Unlock()
+	rt.catchMu.Lock()
+	asked := rt.catchTimer != nil || !rt.catchFrom.IsZero() || !rt.catchLast.IsZero()
+	rt.catchMu.Unlock()
+	if n != 3 || !asked {
+		t.Fatalf("pending %d, catch-up asked %v", n, asked)
+	}
+}
+
 // On a server with millions of folders, setting up the watches takes
 // minutes; the scanner is active (and catches new files in the folders
 // watched so far) from the start, not only when every watch is set.
