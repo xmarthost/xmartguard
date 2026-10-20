@@ -815,6 +815,11 @@ func (m *Monitor) RunRootkit(ctx context.Context) (int, error) {
 			m.record(Event{Kind: "rootkit", User: "root", Subject: strings.TrimSpace(strings.TrimPrefix(l, "Warning:")), Reason: "rkhunter warning", Action: "alerted"})
 		}
 	}
+	if err := cctx.Err(); err != nil {
+		// Killed before it finished: the warnings seen so far are kept, but
+		// the run is no "0 warnings" result.
+		return n, fmt.Errorf("rkhunter did not finish (%d warnings so far): %w", n, err)
+	}
 	_ = store.SetKV(m.DB, "rkhunter_result", fmt.Sprintf("%d|%d", store.Now(), n))
 	return n, nil
 }

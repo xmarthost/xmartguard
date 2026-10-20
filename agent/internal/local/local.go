@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -167,7 +168,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
-	data, err := h(ctx, req.Params)
+	data, err := func() (data any, err error) {
+		// A panic in a handler is an answer, not a dropped connection.
+		defer func() {
+			if p := recover(); p != nil {
+				if s.Log != nil {
+					s.Log.Error("local command panicked", "action", req.Action, "panic", p, "stack", string(debug.Stack()))
+				}
+				data, err = nil, errors.New("internal error in "+req.Action)
+			}
+		}()
+		return h(ctx, req.Params)
+	}()
 	if err != nil {
 		reply(200, Response{Error: err.Error()})
 		return

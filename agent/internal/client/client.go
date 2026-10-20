@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -118,6 +119,8 @@ type Session struct {
 
 	mu        sync.Mutex
 	liveUntil time.Time
+	active    int            // commands running
+	running   map[string]int // commands running, by action
 }
 
 func wsURL(base, serverID string) (string, error) {
@@ -335,26 +338,85 @@ func (s *Session) sample() any {
 	}{m, s.Security()}
 }
 
+// MaxHandlers is how many portal commands run at once; more are refused
+// as busy (the portal's own limit ends with its timeout, not the handler).
+const MaxHandlers = 16
+
+// MaxResult keeps a result frame under the portal's 4 MB WebSocket limit:
+// a larger frame would close the connection and fail every pending command.
+const MaxResult = 3_500_000
+
+// defaultTimeout bounds a command; actionTimeouts are the commands the
+// portal waits longer for (server/src/routes/agent-cmd.ts ACTIONS).
+const defaultTimeout = 10 * time.Minute
+
+var actionTimeouts = map[string]time.Duration{
+	"monitor.rootkit": time.Hour,
+	"clamav.reload":   25 * time.Minute,
+	"cms.update":      11 * time.Minute,
+}
+
+// singleFlight actions are heavy: a second one while one runs is refused.
+var singleFlight = map[string]bool{
+	"learning.sample": true, "findings.recheck": true, "domainrep.check": true, "db.clean": true,
+	"monitor.rootkit": true, "clamav.reload": true,
+}
+
 func (s *Session) handle(ctx context.Context, e protocol.Envelope, send func(protocol.Envelope) error) {
 	res := protocol.Envelope{Type: protocol.TypeResult, ID: e.ID}
 	ok := false
-	h, found := s.Handlers[e.Action]
-	if !found {
-		res.Error = "unsupported action: " + e.Action
+	if data, err := s.run(ctx, e); err != nil {
+		res.Error = err.Error()
+	} else if b, err := json.Marshal(data); err != nil {
+		res.Error = "cannot encode result: " + err.Error()
+	} else if len(b) > MaxResult {
+		res.Error = fmt.Sprintf("result too large (%d MB); use filters or a smaller page", len(b)>>20)
 	} else {
-		hctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-		data, err := h(hctx, e.Params)
-		cancel()
-		if err != nil {
-			res.Error = err.Error()
-		} else {
-			ok, res.Data = true, data
-		}
+		ok, res.Data = true, json.RawMessage(b)
 	}
 	res.OK = &ok
 	if err := send(res); err != nil {
 		s.Log.Warn("failed to send result", "id", e.ID, "err", err)
 	}
+}
+
+// run calls the handler with its deadline, within the concurrency limits;
+// a panic in it becomes an error instead of stopping the agent.
+func (s *Session) run(ctx context.Context, e protocol.Envelope) (data any, err error) {
+	h, found := s.Handlers[e.Action]
+	if !found {
+		return nil, errors.New("unsupported action: " + e.Action)
+	}
+	s.mu.Lock()
+	if s.running == nil {
+		s.running = map[string]int{}
+	}
+	busy := s.active >= MaxHandlers || (singleFlight[e.Action] && s.running[e.Action] > 0)
+	if !busy {
+		s.active++
+		s.running[e.Action]++
+	}
+	s.mu.Unlock()
+	if busy {
+		return nil, fmt.Errorf("the agent is busy (%s or too many commands running); try again shortly", e.Action)
+	}
+	defer func() {
+		s.mu.Lock()
+		s.active--
+		s.running[e.Action]--
+		s.mu.Unlock()
+		if r := recover(); r != nil {
+			s.Log.Error("command handler panicked", "action", e.Action, "panic", r, "stack", string(debug.Stack()))
+			data, err = nil, errors.New("internal error in "+e.Action)
+		}
+	}()
+	d := defaultTimeout
+	if t, ok := actionTimeouts[e.Action]; ok {
+		d = t
+	}
+	hctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	return h(hctx, e.Params)
 }
 
 func readTimeout(ctx context.Context, c *websocket.Conn, v any, d time.Duration) error {
