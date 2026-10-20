@@ -21,38 +21,61 @@ type LogRule struct {
 
 const ipRe = `((?:\d{1,3}\.){3}\d{1,3}|[0-9a-fA-F:]{3,39})`
 
+// The log lines carry text the client chose (a user name, a HELO name, an
+// SMTP command, a URL). Each pattern is anchored to the fixed text the
+// daemon writes around the address (the line start, the end of the line or
+// the host field), so that text can never put another address where the
+// client's is read: it would get that address banned and reported to the
+// fleet IPDB.
+const (
+	// syslogHead is the syslog header before the program name.
+	syslogHead = `^(?:\S+\s+){1,5}?`
+	// sshTail is what sshd writes after the client address.
+	sshTail = `(?: port \d+)?(?: ssh2)?(?:: \S+ \S+)?(?: \[preauth\])?\s*$`
+	// eximHead is the start of an Exim log line (date, time, zone and pid).
+	eximHead = `^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\S* (?:[+-]\d{4} )?(?:\[\d+\] )?`
+	// eximHost is Exim's host field: "[ip]", "(helo) [ip]" or "name (helo)
+	// [ip]". Neither the name nor the HELO holds a space, so the address
+	// is the first token in brackets.
+	eximHost = `(?:\S+ )?(?:\(\S*\) )?\[` + ipRe + `\]`
+)
+
 // LogRules cover the services a hosting server exposes.
 var LogRules = []LogRule{
 	{"SSH", []string{"/var/log/secure", "/var/log/auth.log"},
-		regexp.MustCompile(`sshd\[\d+\]: (?:Failed (?:password|publickey) for (?:invalid user )?\S+|Invalid user \S* ?) from ` + ipRe)},
+		regexp.MustCompile(syslogHead + `sshd\[\d+\]: (?:Failed (?:password|publickey) for (?:invalid user )?.*|Invalid user .*) from ` + ipRe + sshTail)},
 	{"SSH", []string{"/var/log/secure", "/var/log/auth.log"},
-		regexp.MustCompile(`sshd\[\d+\]: (?:Did not receive identification string|Unable to negotiate|Connection closed by authenticating user \S+|Disconnected from invalid user \S+) (?:from )?` + ipRe)},
+		regexp.MustCompile(syslogHead + `sshd\[\d+\]: (?:Did not receive identification string|Unable to negotiate) (?:from )?` + ipRe)},
+	{"SSH", []string{"/var/log/secure", "/var/log/auth.log"},
+		regexp.MustCompile(syslogHead + `sshd\[\d+\]: (?:Connection closed by authenticating user|Disconnected from invalid user) .* ` + ipRe + ` port \d+(?: \[preauth\])?\s*$`)},
 	{"cPanel/WHM/Webmail", []string{"/usr/local/cpanel/logs/login_log"},
-		regexp.MustCompile(`\[(?:cpaneld|whostmgrd|webmaild|cpdavd)\] ` + ipRe + ` - .*FAILED LOGIN`)},
+		regexp.MustCompile(`^(?:\[[^\]]*\] )?(?:\w+ )?\[(?:cpaneld|whostmgrd|webmaild|cpdavd)\] ` + ipRe + ` - .*FAILED LOGIN`)},
 	{"cPanel/WHM/Webmail", []string{"/usr/local/cpanel/logs/login_log"},
-		regexp.MustCompile(`FAILED LOGIN (?:cpaneld|whostmgrd|webmaild): .* ip=` + ipRe)},
+		regexp.MustCompile(`^(?:\[[^\]]*\] )?(?:\w+ )?FAILED LOGIN (?:cpaneld|whostmgrd|webmaild): .*? ip=` + ipRe)},
 	{"Mail (Dovecot)", []string{"/var/log/maillog", "/var/log/mail.log"},
-		regexp.MustCompile(`dovecot.*(?:auth failed|Authentication failure|[Pp]assword mismatch).*rip=` + ipRe)},
+		regexp.MustCompile(syslogHead + `dovecot(?:\[\d+\])?: .*(?:auth failed|Authentication failure|[Pp]assword mismatch).*rip=` + ipRe)},
 	{"Mail (Dovecot)", []string{"/var/log/maillog", "/var/log/mail.log"},
-		regexp.MustCompile(`dovecot.*auth(?:-worker)?\([^,]*,` + ipRe + `[,)].*(?:pam_authenticate\(\) failed|Password mismatch|unknown user)`)},
+		regexp.MustCompile(syslogHead + `dovecot(?:\[\d+\])?: .*?auth(?:-worker)?\([^,]*,` + ipRe + `[,)].*(?:pam_authenticate\(\) failed|Password mismatch|unknown user)`)},
 	{"Mail (Postfix SASL)", []string{"/var/log/maillog", "/var/log/mail.log"},
-		regexp.MustCompile(`warning: \S*\[` + ipRe + `\]: SASL \S+ authentication failed`)},
+		regexp.MustCompile(syslogHead + `postfix(?:/[^\[\s]+)?\[\d+\]: warning: \S*\[` + ipRe + `\]: SASL \S+ authentication failed`)},
 	{"Mail (Exim SMTP auth)", []string{"/var/log/exim_mainlog"},
-		regexp.MustCompile(`authenticator failed for .*\[` + ipRe + `\]`)},
+		regexp.MustCompile(eximHead + `\S+ authenticator failed for ` + eximHost)},
 	{"Mail (Exim abuse)", []string{"/var/log/exim_mainlog", "/var/log/exim_rejectlog"},
-		regexp.MustCompile(`H=.*\[` + ipRe + `\].* rejected RCPT <[^>]*>: (?:Relay not permitted|relay not permitted)`)},
+		regexp.MustCompile(eximHead + `H=` + eximHost + `.* rejected RCPT <[^>]*>: (?:Relay not permitted|relay not permitted)`)},
 	{"Mail (Exim abuse)", []string{"/var/log/exim_mainlog"},
-		regexp.MustCompile(`SMTP (?:call|connection) from .*\[` + ipRe + `\](?::\d+)? (?:dropped: too many (?:nonmail|unrecognized) commands|dropped: too many syntax or protocol errors|closed by DROP in ACL)`)},
+		regexp.MustCompile(eximHead + `SMTP (?:call|connection) from ` + eximHost + `(?::\d+)?(?: I=\S+)? (?:dropped: too many (?:nonmail|unrecognized) commands|dropped: too many syntax or protocol errors|closed by DROP in ACL)`)},
+	// Only the form whose host field comes before any client text: the
+	// pipelining form writes the client's own command first.
 	{"Mail (Exim abuse)", []string{"/var/log/exim_mainlog"},
-		regexp.MustCompile(`SMTP protocol synchronization error .* H=.*\[` + ipRe + `\]`)},
+		regexp.MustCompile(eximHead + `SMTP protocol synchronization error \([^)]*\): rejected connection from H=` + eximHost)},
 	{"FTP", []string{"/var/log/messages", "/var/log/syslog"},
-		regexp.MustCompile(`pure-ftpd: \([^@]*@` + ipRe + `\) \[WARNING\] Authentication failed`)},
+		regexp.MustCompile(syslogHead + `pure-ftpd(?:\[\d+\])?: \([^@]*@` + ipRe + `\) \[WARNING\] Authentication failed`)},
 	{"FTP", []string{"/var/log/messages", "/var/log/syslog", "/var/log/proftpd/proftpd.log"},
-		regexp.MustCompile(`proftpd.*\[` + ipRe + `\].*(?:no such user|Incorrect password|Login failed)`)},
+		regexp.MustCompile(syslogHead + `proftpd\[\d+\]:? \S+ \(\S*\[(?:::ffff:)?` + ipRe + `\]\).*(?:no such user|Incorrect password|Login failed)`)},
 	{"FTP", []string{"/var/log/vsftpd.log"},
-		regexp.MustCompile(`FAIL LOGIN: Client "(?:::ffff:)?` + ipRe + `"`)},
+		regexp.MustCompile(`FAIL LOGIN: Client "(?:::ffff:)?` + ipRe + `"\s*$`)},
 	{"Web (denied)", []string{"/usr/local/apache/logs/error_log", "/etc/apache2/logs/error_log", "/var/log/httpd/error_log", "/var/log/apache2/error.log"},
-		regexp.MustCompile(`\[client ` + ipRe + `(?::\d+)?\] (?:AH01630|AH01797|AH01618|AH01617)`)},
+		regexp.MustCompile(`^(?:\[[^\]]*\] )+\[client ` + ipRe + `(?::\d+)?\] (?:AH01630|AH01797|AH01618|AH01617)`)},
 }
 
 // Jails lists the Intrusion Defense rule names (services) that can be excluded.
