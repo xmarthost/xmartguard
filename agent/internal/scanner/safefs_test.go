@@ -190,6 +190,34 @@ func TestReplaceLiveIgnoresPlantedLinks(t *testing.T) {
 	}
 }
 
+// A2 F16: the original kept for a cleaned file is pruned with the finding
+// once past retention; the cleaned live file stays.
+func TestPruneKeptOriginals(t *testing.T) {
+	s := newScanner(t)
+	p := filepath.Join(t.TempDir(), "index.php")
+	os.WriteFile(p, []byte("<?php echo 'old';"), 0o644)
+	id := recordInert(t, s, p)
+	if err := s.ReplaceWithOfficial(id, []byte("<?php echo 'official';")); err != nil {
+		t.Fatal(err)
+	}
+	q, _, _ := s.ContentPath(id)
+	if n := s.PruneKept(1); n != 0 {
+		t.Fatal("pruned before retention")
+	}
+	if n := s.PruneKept(1 << 40); n != 1 {
+		t.Fatalf("pruned %d", n)
+	}
+	if _, err := os.Stat(q); !os.IsNotExist(err) {
+		t.Fatalf("kept original not removed: %s", q)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "<?php echo 'official';" {
+		t.Fatal("live file touched")
+	}
+	if _, err := s.Get(id); err == nil {
+		t.Fatal("finding row left")
+	}
+}
+
 // A2 F10: a finding's path that became a FIFO is refused at once instead of
 // blocking a worker; the scan read does not follow a link put at the name.
 func TestReadsRefuseSpecialFiles(t *testing.T) {

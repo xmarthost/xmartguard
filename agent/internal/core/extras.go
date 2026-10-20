@@ -547,6 +547,8 @@ func (a *Agent) pruneOld() {
 			}
 		}
 	}
+	// Originals kept for trimmed and cleaned files too (the live file stays).
+	a.Scanner.PruneKept(cut)
 	for _, q := range []string{
 		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored','ai_restored') AND updated_at < ?`,
 		`DELETE FROM fw_events WHERE status != 'blocked' AND created_at < ?`,

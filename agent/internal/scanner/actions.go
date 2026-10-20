@@ -177,6 +177,41 @@ func (s *Scanner) Delete(id int64) error {
 	return s.setStatus(id, "deleted", "")
 }
 
+// PruneKept removes the originals kept for trimmed and cleaned files whose
+// finding is older than cut (the cleaned file stays live), then the
+// findings themselves: retention for them as for quarantined files.
+func (s *Scanner) PruneKept(cut int64) int {
+	rows, err := s.DB.Query(`SELECT id, qpath FROM findings WHERE status IN ('trimmed','cleaned') AND updated_at < ?`, cut)
+	if err != nil {
+		return 0
+	}
+	type kept struct {
+		id    int64
+		qpath string
+	}
+	var list []kept
+	for rows.Next() {
+		var k kept
+		if rows.Scan(&k.id, &k.qpath) == nil {
+			list = append(list, k)
+		}
+	}
+	rows.Close()
+	n := 0
+	for _, k := range list {
+		if k.qpath != "" {
+			if err := os.Remove(k.qpath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				s.Log.Warn("retention: remove a kept original", "path", k.qpath, "err", err)
+				continue
+			}
+		}
+		if _, err := s.DB.Exec(`DELETE FROM findings WHERE id = ?`, k.id); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // Ignore marks a finding as a false positive and whitelists the file path.
 func (s *Scanner) Ignore(id int64) (string, error) {
 	r, err := s.load(id)
