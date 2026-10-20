@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.22.26** (see `VERSION`).
+- Current release: **0.23.0** (see `VERSION`).
 
 ## Working rules
 
@@ -206,6 +206,18 @@ project. It holds the rules, the current state and what is still open.
   still in progress (same link, visitor and solution) the first request's
   answer. Proxy setting: External App `xpguard_portal` Initial Request
   Timeout 120 (more than the portal's 90 s).
+- **Full audit, first fix release** (0.23.0): ten module reviews
+  (`docs/audit/A1..A10`, 156 findings) and fixes by area; status and what
+  is still open in `docs/AUDIT.md` and GitHub issues #2-#11. Notable
+  behaviour changes: the portal trusts proxy headers only from this host,
+  private networks, Cloudflare and the master's own servers
+  (`server/src/proxy.ts`, `TRUST_PROXY_IPS` for more); agents refuse
+  downgrades and non-https updates (rollback to an older portal no longer
+  downgrades agents) and fall back to `xpguard-agent.prev` after 3 failed
+  starts; customers never read the master's IPDB, keys, knowledge base or
+  WAF feed keys; file actions never follow an account's links; the WAF
+  fixes of A3 were reverted (they weakened blocking in the Apache tests)
+  and are still open.
 - **CAPTCHA bypass review** (0.22.26):
   - Login paths through PATH_INFO: PHP runs `/wp-login.php` for
     `/wp-login.php/x`, and every login-page rule (CAPTCHA gate, central

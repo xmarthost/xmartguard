@@ -47,6 +47,26 @@ severity, and is listed here with its fix commit.
 
 | # | Severity | Area | Finding | Issue | Fix |
 |---|----------|------|---------|-------|-----|
-| 1 | MEDIUM | CI | `server/test/fleet.test.ts` "lists what needs fixing" fails (expects level danger/fix waf, gets warning): CI is red | - | - |
+| 1 | MEDIUM | CI | `server/test/fleet.test.ts` failed: CI was red | #2 | a450d7d |
 | 2 | HIGH | WAF | Login rules matched only the path end: `/wp-login.php/x` (PATH_INFO) skipped CAPTCHA and brute-force rules | - | 0.22.26 |
 | 3 | HIGH | CAPTCHA | One daily pass-cookie value could be shared with a botnet | - | 0.22.26 |
+
+## Status after release 0.23.0 (2026-10-20)
+
+Fix commits are listed per finding in `git log --grep "Audit A"`. Fix
+records: `docs/audit/FIXED-A1.md`, `FIXED-A5.md`, `FIXED-A8.md`,
+`FIXED-A9.md` (the scanner, firewall and portal fixers were stopped before
+writing theirs; their commits name the findings).
+
+| Area | Fixed in 0.23.0 | Still open |
+|------|-----------------|------------|
+| A1 agent runtime | F3 (part: no downgrade, https only, no redirects; loopback http allowed), F4-F20 | F3 release signing (owner key) |
+| A2 scanner (+A1 F1/F2) | F1, F2, F3, F4, F5, F6, F8, F9, F10, F11, F12, F13, F14, F15, F16; A1 F1, F2 | F7, F17 |
+| A3 WAF | login PATH_INFO and CAPTCHA pass cookie (0.22.26) | all of F1-F16: the fixes were reverted before release because they weakened blocking in the Apache+CRS tests (editor without same-site proof, IPDB-listed behind Cloudflare); redo one by one with the Apache tests |
+| A4 firewall | F1-F8, F10, F12-F14 | F9, F11 |
+| A5 CAPTCHA, CMS, mail | F1, F2, F5-F18, F20, F21; F3/F4 via A10 F1 | F19 (part) |
+| A6 portal security | F1-F15 | - |
+| A7 portal services | F1, F2, F3, F5, F7, F8, F9, F10, F11, F13-F16 | F4, F6, F12, F17, F18 |
+| A8 web | F2-F13; F1 server side via A10 F2 | - |
+| A9 install/deploy | F2, F5-F11, F12 (actions), F13 | F1 signing, F3 old secrets (owner), F4 (agent side done in A1 F4), F12 images |
+| A10 contracts | F1, F2, F3, F4 (part), F5 (part), F6 (part) | F7, F8, F9 |

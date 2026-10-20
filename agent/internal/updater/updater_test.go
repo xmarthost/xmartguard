@@ -58,7 +58,7 @@ func TestUpdateRefusesDowngradeAndCleartext(t *testing.T) {
 	if b, _ := os.ReadFile(self); string(b) != string(fakeAgent("old")) {
 		t.Fatal("binary replaced by an older build")
 	}
-	for _, u := range []string{"http://portal.example", "ftp://portal.example"} {
+	for _, u := range []string{"http://portal.example", "ftp://portal.example", "http://localhost.example", "http://127.0.0.1.example"} {
 		if _, err := update(ctx, http.DefaultClient, u, "", self); err == nil || !strings.Contains(err.Error(), "https") {
 			t.Fatalf("%s: %v", u, err)
 		}

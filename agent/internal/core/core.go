@@ -505,8 +505,13 @@ func (a *Agent) onBan(e firewall.Event) {
 }
 
 // SecuritySummary is attached to every metrics sample for dashboards.
-func (a *Agent) SecuritySummary() any {
-	h := a.summary.get(a.heavySummary)
+func (a *Agent) SecuritySummary() any { return a.securitySummary(a.summary.get(a.heavySummary)) }
+
+// FreshSecuritySummary counts again: for a page that asks (the dashboard,
+// the cPanel plugin), right after a scan, not the metrics' cached counts.
+func (a *Agent) FreshSecuritySummary() any { return a.securitySummary(a.summary.fresh(a.heavySummary)) }
+
+func (a *Agent) securitySummary(h heavySummary) any {
 	sc := h.scanner
 	sc.RealtimeWatch = a.Realtime.Watches()
 	fw := a.Firewall.Stats()
@@ -550,6 +555,15 @@ func (c *summaryCache) get(compute func() heavySummary) heavySummary {
 		}()
 	}
 	return c.v
+}
+
+// fresh computes the value now and keeps it for the metrics.
+func (c *summaryCache) fresh(compute func() heavySummary) heavySummary {
+	v := compute()
+	c.mu.Lock()
+	c.v, c.at = v, time.Now()
+	c.mu.Unlock()
+	return v
 }
 
 func (a *Agent) heavySummary() heavySummary {
@@ -697,7 +711,7 @@ func (a *Agent) Handlers() map[string]client.Handler {
 
 	h["stats.get"] = func(context.Context, json.RawMessage) (any, error) {
 		return map[string]any{
-			"summary":  a.SecuritySummary(),
+			"summary":  a.FreshSecuritySummary(),
 			"daily":    a.Scanner.DailyCounts(30),
 			"firewall": a.Firewall.Status(),
 			"version":  version.Version,

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,9 +55,10 @@ func Update(ctx context.Context, hc *http.Client, portal, expectSHA string) (str
 
 func update(ctx context.Context, hc *http.Client, portal, expectSHA, self string) (string, error) {
 	// The binary runs as root on the server: never fetched in clear text
-	// or from a portal whose certificate is not checked.
+	// or from a portal whose certificate is not checked (a portal on this
+	// machine itself is reached without a network, as install.sh allows).
 	u, err := url.Parse(portal)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
+	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
 		return "", errors.New("updates are only taken from an https portal address")
 	}
 	if tr, ok := hc.Transport.(*http.Transport); ok && tr.TLSClientConfig != nil && tr.TLSClientConfig.InsecureSkipVerify {
@@ -279,4 +281,13 @@ func Confirm() {
 		self, _ = filepath.EvalSymlinks(self)
 		os.Remove(markerPath(self))
 	}
+}
+
+// loopback reports a portal on this machine (localhost, 127.0.0.0/8, ::1).
+func loopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

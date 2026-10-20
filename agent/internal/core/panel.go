@@ -34,7 +34,7 @@ func (a *Agent) LocalServer() *local.Server {
 		return map[string]any{
 			"version":  version.Version,
 			"portal":   a.Cfg.ServerURL,
-			"summary":  a.SecuritySummary(),
+			"summary":  a.FreshSecuritySummary(),
 			"firewall": a.Firewall.Status(),
 			"ipdb":     a.Firewall.IPDBStatus(),
 			"scanner":  a.Settings.Get().Scanner.Enabled,
