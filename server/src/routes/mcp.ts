@@ -63,6 +63,8 @@ interface Tool {
   description: string;
   inputSchema: Record<string, unknown>;
   write?: boolean;
+  /** Fleet-wide data of the service provider: platform tokens only. */
+  platform?: boolean;
   run: (ctx: TokenCtx, args: Record<string, any>) => Promise<unknown>;
 }
 
@@ -78,9 +80,10 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     const s = String(ref ?? '').trim();
     if (!s) throw new ToolError('server is required (id or hostname, see list_servers)');
     const isId = z.string().uuid().safeParse(s).success;
+    // Same reach as the portal: the master's tokens open customers' servers too.
     const { rows } = await pool.query(
-      `SELECT id, hostname FROM servers WHERE account_id = $1 AND status = 'active' AND ${isId ? 'id = $2::uuid' : 'lower(hostname) = lower($2)'} LIMIT 2`,
-      [ctx.accountId, s],
+      `SELECT id, hostname FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active' AND ${isId ? 'id = $2::uuid' : 'lower(hostname) = lower($2)'} LIMIT 2`,
+      [await scopeAccounts(pool, ctx.accountId), s],
     );
     if (rows.length !== 1) throw new ToolError(`server not found: ${s}`);
     return rows[0];
@@ -119,10 +122,10 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         const { rows } = await pool.query(
           `SELECT id, hostname, primary_ip, os_name, control_panel, web_server, agent_version, tags, last_seen_at,
                   last_metrics->'security' AS security
-             FROM servers WHERE account_id = $1 AND status = 'active'
+             FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active'
               AND ($2 = '' OR hostname ILIKE '%' || $2 || '%' OR primary_ip ILIKE '%' || $2 || '%' OR $2 = ANY(tags))
             ORDER BY hostname`,
-          [ctx.accountId, q],
+          [await scopeAccounts(pool, ctx.accountId), q],
         );
         return {
           latest_agent_version: currentRelease(cfg.downloadsDir)?.version ?? null,
@@ -135,7 +138,9 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
       description: 'Totals over all servers: threats, quarantined files, open findings, firewall blocks, blacklisted IPs, online/offline servers, and the AI knowledge base size.',
       inputSchema: obj({}),
       run: async (ctx) => {
-        const { rows } = await pool.query(`SELECT id, last_metrics->'security' AS s FROM servers WHERE account_id = $1 AND status = 'active'`, [ctx.accountId]);
+        const { rows } = await pool.query(`SELECT id, last_metrics->'security' AS s FROM servers WHERE account_id = ANY($1::uuid[]) AND status = 'active'`, [
+          await scopeAccounts(pool, ctx.accountId),
+        ]);
         const t = { servers: rows.length, online: 0, threats_30d: 0, quarantined: 0, open_findings: 0, blocks_30d: 0, active_blocks: 0, blacklisted_ips: 0, servers_with_alerts: 0 };
         for (const r of rows) {
           const s = r.s || {};
@@ -148,6 +153,8 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
           t.blacklisted_ips += s.blacklisted_ips ?? 0;
           if ((s.scanner?.open_findings ?? 0) > 0 || (s.blacklisted_ips ?? 0) > 0) t.servers_with_alerts++;
         }
+        // The fleet knowledge base is the service provider's (as in the portal).
+        if (!(await isPlatform(pool, ctx.accountId))) return { totals: t };
         const kb = await pool.query(`SELECT verdict, count(*)::int AS n FROM ai_kb GROUP BY verdict`);
         return { totals: t, ai_knowledge_base: Object.fromEntries(kb.rows.map((r) => [r.verdict, r.n])) };
       },
@@ -303,6 +310,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     },
     {
       name: 'ai_knowledge',
+      platform: true,
       description: 'The fleet-wide AI knowledge base: one verdict per file hash (malicious / suspicious / clean) with confidence, reason and model.',
       inputSchema: obj({
         verdict: { type: 'string', enum: ['malicious', 'suspicious', 'clean'] },
@@ -375,6 +383,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     {
       name: 'mark_file',
       write: true,
+      platform: true,
       description: 'Corrects the AI knowledge base for a file hash (false positive -> "clean", missed malware -> "malicious"). Every server applies the correction and the fleet model retrains on it.',
       inputSchema: obj({ sha256: { type: 'string' }, verdict: { type: 'string', enum: ['malicious', 'clean'] }, reason: { type: 'string' } }, ['sha256', 'verdict']),
       run: async (ctx, a) => {
@@ -441,17 +450,21 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         return null;
       case 'ping':
         return ok({});
-      case 'tools/list':
+      case 'tools/list': {
+        const platform = await isPlatform(pool, ctx.accountId);
         return ok({
           tools: tools
-            .filter((t) => !t.write || ctx.scope === 'write')
+            .filter((t) => (!t.write || ctx.scope === 'write') && (!t.platform || platform))
             .map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema, annotations: { readOnlyHint: !t.write, destructiveHint: !!t.write } })),
         });
+      }
       case 'tools/call': {
         const name = String(msg.params?.name ?? '');
         const tool = byName.get(name);
         if (!tool) return fail(-32602, `unknown tool: ${name}`);
         if (tool.write && ctx.scope !== 'write') return fail(-32602, `${name} needs a read & write token`);
+        // Fleet-wide data (every account's files) is the service provider's.
+        if (tool.platform && !(await isPlatform(pool, ctx.accountId))) return fail(-32602, `unknown tool: ${name}`);
         const args = msg.params?.arguments && typeof msg.params.arguments === 'object' ? msg.params.arguments : {};
         try {
           const data = await tool.run(ctx, args);

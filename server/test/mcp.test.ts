@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { toText } from '../src/routes/mcp.js';
 import { Client, startHarness, type Harness } from './helpers.js';
+import { createOwner } from '../src/routes/users.js';
 
 let h: Harness;
 let c: Client;
@@ -115,6 +116,31 @@ describe('mcp endpoint', () => {
     expect(rows[0]).toEqual({ verdict: 'clean', overridden: true });
     const a = await h.pool.query("SELECT 1 FROM audit_events WHERE action = 'mcp.ai.kb_override'");
     expect(a.rowCount).toBe(1);
+  });
+
+  it("keeps the fleet knowledge base from customers; the master's tokens reach customers' servers", async () => {
+    await createOwner(h.pool, 'mcp-cust@example.com', 'customer-long-password', 'MCP Customer');
+    const cust = new Client(h.url);
+    await cust.login('mcp-cust@example.com', 'customer-long-password');
+    const { rows: acc } = await h.pool.query("SELECT account_id FROM users WHERE email = 'mcp-cust@example.com'");
+    await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'cust.example.com', 'k-cust')", [acc[0].account_id]);
+    const t = await cust.req('POST', '/api/mcp/tokens', { label: 'mine', scope: 'write' });
+    const names = (await rpc(t.body.url, 'tools/list')).body.result.tools.map((x: any) => x.name);
+    expect(names).not.toContain('ai_knowledge');
+    expect(names).not.toContain('mark_file');
+    const kb = await rpc(t.body.url, 'tools/call', { name: 'ai_knowledge', arguments: { q: '%' } });
+    expect(kb.body.error).toBeTruthy();
+    expect(JSON.stringify(kb.body)).not.toContain('a'.repeat(64));
+    const o = text(await rpc(t.body.url, 'tools/call', { name: 'fleet_overview', arguments: {} }));
+    expect(o.ai_knowledge_base).toBeUndefined();
+    expect(o.totals.servers).toBe(1);
+    // The customer sees only their server; the master reaches it too.
+    expect(text(await rpc(t.body.url, 'tools/call', { name: 'list_servers', arguments: {} })).servers.map((s: any) => s.hostname)).toEqual(['cust.example.com']);
+    expect(text(await rpc(readUrl, 'tools/call', { name: 'list_servers', arguments: {} })).servers.map((s: any) => s.hostname)).toContain('cust.example.com');
+    const d = await rpc(readUrl, 'tools/call', { name: 'server_dashboard', arguments: { server: 'cust.example.com' } });
+    expect(d.body.result.content[0].text).toContain('offline');
+    const other = await rpc(t.body.url, 'tools/call', { name: 'server_dashboard', arguments: { server: 'web1.example.com' } });
+    expect(other.body.result.content[0].text).toContain('server not found');
   });
 
   it('stops working once revoked', async () => {

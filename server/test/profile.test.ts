@@ -47,5 +47,10 @@ describe('notifications (header bell)', () => {
     const one = await c.req('GET', `/api/notifications?server=${ids[1]}`);
     expect(one.body.items).toHaveLength(1);
     expect(one.body.items[0]).toMatchObject({ server_id: ids[1], hostname: 'bell-b' });
+    // The master opens a customer's server: its bell shows that server's alerts.
+    const { rows: cust } = await h.pool.query("INSERT INTO accounts (name) VALUES ('Bell Customer') RETURNING id");
+    const { rows: cs } = await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'bell-cust', 'key-bell-cust') RETURNING id", [cust[0].id]);
+    const theirs = await c.req('GET', `/api/notifications?server=${cs[0].id}`);
+    expect(theirs.body.items).toEqual([expect.objectContaining({ server_id: String(cs[0].id), text: expect.stringContaining('offline') })]);
   });
 });

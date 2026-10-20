@@ -4,6 +4,7 @@ import type { AgentHub } from '../agents/hub.js';
 import { requireRole } from '../auth.js';
 import { versionLess } from '../agents/release.js';
 import { eachLimit } from '../agents/limit.js';
+import { scopeAccounts } from '../tenancy.js';
 
 /** Agents with the light alerts.get command; older ones answer from dashboard.get. */
 export const ALERTS_MIN_AGENT = '0.21.3';
@@ -49,8 +50,9 @@ export function notificationRoutes(app: FastifyInstance, pool: Pool, hub: AgentH
   const viewer = { preHandler: requireRole('viewer') };
   app.get('/api/notifications', viewer, async (req) => {
     const q = req.query as { server?: string };
-    const params: unknown[] = [req.user!.accountId];
-    let where = "account_id = $1 AND status = 'active'";
+    // The master sees its customers' servers (as on their dashboards).
+    const params: unknown[] = [await scopeAccounts(pool, req.user!.accountId)];
+    let where = "account_id = ANY($1::uuid[]) AND status = 'active'";
     if (q.server) {
       params.push(q.server);
       where += ' AND id::text = $2';
