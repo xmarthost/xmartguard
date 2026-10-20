@@ -80,9 +80,13 @@ func TestNoCtlOnChainStarters(t *testing.T) {
 			inChain = strings.Contains(l, ",chain\"")
 		}
 	}
+	// The WHMCS admin cookie and headers are the client's: its saves lift
+	// the CRS threshold, never allow the request or switch the rule engine
+	// off (xPGuard's own rules and the upload scan keep running).
 	for _, id := range []int{IDWHMCSAdmin, IDWHMCSAdminFetch} {
-		if l := ruleLine(out, id); !strings.Contains(l, ",allow,") {
-			t.Errorf("WHMCS rule %d does not allow: %s", id, l)
+		ch := strings.Join(chainOf(out, id), "\n")
+		if strings.Contains(ch, ",allow,") || strings.Contains(ch, "ruleEngine=Off") || !strings.Contains(ch, "inbound_anomaly_score_threshold=") {
+			t.Errorf("WHMCS rule %d: %s", id, ch)
 		}
 	}
 }

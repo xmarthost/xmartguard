@@ -935,7 +935,9 @@ func Render(c settings.WAF, o Options) string {
 				// A logged-in WordPress user is the site's own editor on a
 				// shared or mobile address (WordPress checks the login;
 				// logins themselves are still refused from listed addresses).
-				w(`  SecRule &TX:xg_wp_user "@eq 0" "t:none,chain"`)
+				// Only in the admin and REST API: anyone can send the cookie,
+				// so forms and other pages stay refused (audit A3 F1).
+				w(`  SecRule &TX:xg_wp_editing "@eq 0" "t:none,chain"`)
 				if list == FileIPDBIPs {
 					// API calls and webhooks (marked by IDIPDBPostAPI: LiteSpeed
 					// ignores its ctl:ruleRemoveById, so the marker decides).

@@ -567,3 +567,30 @@ func TestCRSSelfTestEveryLevel(t *testing.T) {
 		}
 	}
 }
+
+// Audit A3 F1: the WordPress login cookie, Sec-Fetch-Site and a same-site
+// Referer are sent by the client. With "&rest_route=" appended to any
+// script they lifted the CRS threshold for every address; the WordPress
+// admin and REST API are now known by the path (or rest_route on the
+// front controller), so an attack on another script is still refused.
+func TestForgedEditorRestRouteWithCRS(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled, c.WordPress = true, true
+	out := Render(c, Options{Dir: "/r"})
+	setup := editorSetup()
+	if strings.Contains(setup, "rest_route=") || !strings.Contains(out, "setvar:tx.xg_wp_editing=1") {
+		t.Fatal("editor relaxation still keyed on rest_route= anywhere in the address")
+	}
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	crsManager(t, src, `{"waf":{"enabled":true,"wordpress":true,"level":"normal"}}`, "", nil)
+	forged := []string{"Cookie: wordpress_logged_in_00000000000000000000000000000000=x", "Sec-Fetch-Site: same-origin", "Referer: https://shop.example.com/wp-admin/post.php"}
+	attack := "id=1%27%20UNION%20SELECT%20user_pass%20FROM%20wp_users--%20-"
+	for _, uri := range []string{"/shop.php?" + attack + "&rest_route=/wp/v2/posts", "/shop.php?rest_route=/x&" + attack} {
+		if got := sendBody(t, "shop.example.com", "GET", uri, "", "", forged...); got != 403 {
+			t.Errorf("%s with forged editor markers: got %d, want 403", uri, got)
+		}
+	}
+}
