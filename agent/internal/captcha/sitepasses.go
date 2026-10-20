@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,6 +44,25 @@ type SitePasses struct {
 	loaded bool
 	st     sitePassState
 	quiet  map[int]time.Time
+	// pending is set while a WAF apply for withdrawn values waits to run.
+	pending atomic.Bool
+}
+
+// applyDelay gathers the withdrawals that arrive together into one apply.
+var applyDelay = 2 * time.Second
+
+// ApplyWithdrawn runs apply (the WAF without the withdrawn values) once for
+// the withdrawals that arrive while one is already waiting: each apply is a
+// web server restart, and one shared cookie can withdraw several values.
+func (p *SitePasses) ApplyWithdrawn(apply func()) {
+	if !p.pending.CompareAndSwap(false, true) {
+		return // the waiting apply covers this withdrawal too
+	}
+	go func() {
+		time.Sleep(applyDelay)
+		p.pending.Store(false) // a withdrawal from now on needs a new apply
+		apply()
+	}()
 }
 
 type sitePassState struct {

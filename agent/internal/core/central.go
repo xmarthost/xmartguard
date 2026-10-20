@@ -222,11 +222,11 @@ func (a *Agent) onPassCookie(ip string, slot int) {
 		return
 	}
 	a.Log.Warn("CAPTCHA pass cookie sent from an address it was not given to: value withdrawn", "ip", ip, "slot", slot)
-	go func() {
+	a.sitePasses.ApplyWithdrawn(func() { // one apply for withdrawals close together
 		if err := a.WAF.Apply(); err != nil {
 			a.Log.Warn("WAF re-apply after withdrawing a CAPTCHA pass failed", "err", err)
 		}
-	}()
+	})
 }
 
 // centralLiftBan lets a visitor that solved the portal's page through the
