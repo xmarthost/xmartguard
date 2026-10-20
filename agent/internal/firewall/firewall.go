@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -1113,28 +1112,6 @@ func (m *Manager) portFilter(cfg settings.Firewall) *PortFilter {
 		pf.TCPIn = append(pf.TCPIn, strconv.Itoa(c.HTTPPort), strconv.Itoa(c.HTTPSPort))
 	}
 	return pf
-}
-
-// SSHConfig is the sshd configuration read for the port filter.
-var SSHConfig = "/etc/ssh/sshd_config"
-
-// SSHPorts returns the ports sshd listens on (22 when not configured).
-func SSHPorts() []int {
-	var out []int
-	if raw, err := os.ReadFile(SSHConfig); err == nil {
-		for _, line := range strings.Split(string(raw), "\n") {
-			f := strings.Fields(line)
-			if len(f) == 2 && strings.EqualFold(f[0], "Port") {
-				if p, err := strconv.Atoi(f[1]); err == nil && p > 0 && p < 65536 {
-					out = append(out, p)
-				}
-			}
-		}
-	}
-	if len(out) == 0 {
-		out = []int{22}
-	}
-	return out
 }
 
 func (m *Manager) ddnsAddrs() []string {
