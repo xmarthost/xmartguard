@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Bell, Bug, CheckCircle2, ChevronDown, History, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserCheck, UserX, Wrench } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
-import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
+import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, freshSettingsPatch, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { LearnedExclusions, RuleExclusionsEditor, type LearnedExclusion, type RuleExclusion } from '../components/RuleExclusions';
 import { SettingsHistory } from '../components/SettingsHistory';
 import { AccountExceptions } from '../components/AccountExceptions';
@@ -283,17 +283,24 @@ export default function SettingsPage() {
   const { user } = useAuth();
   const res = useAgent<{ settings: AllSettings; meta: Meta }>(id, 'settings.get');
   const [st, setSt] = useState<AllSettings | null>(null);
+  // The server `st` was loaded from: a save never writes one server's
+  // settings (lists above all) onto another one shown in the same page.
+  const stFor = useRef<string | undefined>(undefined);
   const { run, busy } = useAction();
   const watch = useApplyWatch();
   const admin = can(user, 'admin');
   useEffect(() => {
-    if (res.data) setSt(res.data.settings);
-  }, [res.data]);
+    setSt(res.data ? res.data.settings : null);
+    stFor.current = res.data ? id : undefined;
+  }, [res.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async (patch: Partial<Record<keyof AllSettings, any>>, msg = 'Settings saved') => {
-    const r = await run(() => agentCall<{ settings: AllSettings }>(id!, 'settings.set', patch), msg);
-    if (r) setSt((cur) => ({ ...(cur as AllSettings), ...r.settings }));
-    if (r) watch(id!, r);
+    const target = id!;
+    const loaded = st;
+    if (!loaded || stFor.current !== target) return run(() => Promise.reject(new Error('These settings were loaded for another server: reload the page')));
+    const r = await run(async () => agentCall<{ settings: AllSettings }>(target, 'settings.set', await freshSettingsPatch(target, loaded, patch)), msg);
+    if (r && stFor.current === target) setSt((cur) => ({ ...(cur as AllSettings), ...r.settings }));
+    if (r) watch(target, r);
     return r;
   };
   const setScanner = (p: Partial<ScannerS>) => save({ scanner: p });
@@ -566,7 +573,10 @@ const AI_PROVIDERS = [
 
 function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: boolean; onSave: (p: Partial<AIS>) => void }) {
   const dis = !admin || busy;
-  const portalAI = useApi<{ providers: { enabled: number; ready: number } }>('/api/ai/status');
+  // The portal's AI keys are the platform's: a customer cannot read their
+  // status (403) or open the AI Scanner page.
+  const platform = useAuth().user?.platform !== false;
+  const portalAI = useApi<{ providers: { enabled: number; ready: number } }>(platform ? '/api/ai/status' : null);
   const pa = portalAI.data?.providers;
   const [f, setF] = useState(s);
   useEffect(() => setF(s), [s]);
@@ -588,9 +598,11 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
       </div>
       {f.provider === 'portal' && (
         <>
-          <div className={`mb-3 rounded-lg p-3 text-sm ${pa && pa.ready > 0 ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
-            {!pa ? (
-              'Checking the portal AI keys…'
+          <div className={`mb-3 rounded-lg p-3 text-sm ${!platform || (pa && pa.ready > 0) ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
+            {!platform ? (
+              'Files go to the AI keys of the portal; while none is free the built-in model answers.'
+            ) : !pa ? (
+              portalAI.error ? `Could not check the portal AI keys: ${portalAI.error}` : 'Checking the portal AI keys…'
             ) : pa.enabled === 0 ? (
               <>
                 No AI API keys yet. Add free keys under{' '}
@@ -1429,6 +1441,7 @@ function SuspendSection({ serverId, s, admin, busy, onSave }: { serverId: string
 }
 
 function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: boolean; busy: boolean; onSave: (p: Partial<DomainRepS>) => void }) {
+  const platform = useAuth().user?.platform !== false;
   const dis = !admin || busy;
   return (
     <div className="mt-6 border-t border-slate-200 pt-6">
@@ -1439,9 +1452,13 @@ function DomainRepSection({ s, admin, busy, onSave }: { s: DomainRepS; admin: bo
       </SettingRow>
       <div className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
         The Google Safe Browsing key is set once for all servers in{' '}
-        <Link to="/domain-reputation" className="text-blue-700 hover:underline">
-          Overview » Domain Reputation
-        </Link>
+        {platform ? (
+          <Link to="/domain-reputation" className="text-blue-700 hover:underline">
+            Overview » Domain Reputation
+          </Link>
+        ) : (
+          'the portal settings of your provider'
+        )}
         .
         {s.safe_browsing_key && (
           <>

@@ -96,7 +96,8 @@ export default function AIScanner() {
   const [edit, setEdit] = useState<Provider | 'new' | null>(null);
   const { run, busy } = useAction();
 
-  if (status.error) return <ErrorBox message={status.error} />;
+  const failed = status.error || providers.error || presets.error;
+  if (failed && (!status.data || !providers.data || !presets.data)) return <ErrorBox message={failed} />;
   if (!status.data || !providers.data || !presets.data) return <PageLoader />;
   const st = status.data;
   const list = providers.data.providers;
@@ -667,7 +668,7 @@ function SignaturesCard({ admin }: { admin: boolean }) {
       }
     >
       {!sig.data ? (
-        <SectionLoader />
+        sig.error ? <ErrorBox message={sig.error} /> : <SectionLoader />
       ) : (
         <ul className="space-y-2 text-sm">
           {sig.data.feeds.map((f) => (

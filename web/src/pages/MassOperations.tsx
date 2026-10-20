@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, Layers, Play, XCircle } from 'lucide-react';
 import { api, type Server } from '../api';
 import { useApi } from '../hooks';
@@ -29,13 +29,40 @@ interface RunResult {
   results: { server_id: string; hostname: string; ok: boolean; error?: string; data?: { done?: number; total?: number; failed?: AddrFail[] } }[];
 }
 
+/** Every page of the fleet-wide server list (500 per page), not only the first. */
+function useAllServers(on: boolean) {
+  const [data, setData] = useState<{ servers: Row[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(on);
+  useEffect(() => {
+    if (!on) return;
+    let live = true;
+    setLoading(true);
+    (async () => {
+      const out: Row[] = [];
+      for (let page = 1; ; page++) {
+        const r = await api<{ servers: Row[]; pages: number }>('GET', `/api/admin/servers?per=500&page=${page}`);
+        out.push(...r.servers);
+        if (page >= (r.pages ?? 1)) return out;
+      }
+    })().then(
+      (servers) => live && (setData({ servers }), setError(null)),
+      (e: Error) => live && setError(e.message),
+    ).finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [on]);
+  return { data, error, loading };
+}
+
 export default function MassOperations() {
   const { user } = useAuth();
   const master = user?.platform !== false;
   const [customers, setCustomers] = useState(false);
   const own = useApi<{ servers: Server[] }>(customers ? null : '/api/servers');
   // The master can run operations on customers' servers too.
-  const all = useApi<{ servers: Row[] }>(customers ? '/api/admin/servers?per=500' : null);
+  const all = useAllServers(customers);
   const servers = customers ? all : own;
   const ops = useApi<{ operations: Op[] }>('/api/mass/operations');
   const [sel, setSel] = useState<string[]>([]);
@@ -67,7 +94,8 @@ export default function MassOperations() {
 
   const start = async () => {
     if (!chosen) return;
-    const names = list.filter((s) => sel.includes(s.id)).map((s) => s.hostname);
+    // Every selected server, also those the filter hides now.
+    const names = (servers.data?.servers ?? []).filter((s) => sel.includes(s.id)).map((s) => s.hostname);
     const what = chosen.needs_addr ? ` — ${curMode === 'add' ? 'add' : 'delete'} ${lines.length} IP${lines.length === 1 ? '' : 's'}` : '';
     if (!confirm(`${chosen.label}${what} on ${sel.length} server(s)?\n\n${names.slice(0, 15).join('\n')}${names.length > 15 ? '\n…' : ''}`)) return;
     const params = chosen.needs_addr ? { addrs, mode: curMode, reason } : {};

@@ -40,9 +40,9 @@ export default function LearningCenter() {
       </div>
       <Suspense fallback={<SectionLoader />}>
         {tab === 'approvals' && <RuleApprovals />}
-        {tab === 'names' && <WafIntel embedded />}
-        {tab === 'ai' && <AILearning embedded />}
-        {tab === 'exports' && <LearningExport embedded />}
+        {tab === 'names' && <WafIntel />}
+        {tab === 'ai' && <AILearning />}
+        {tab === 'exports' && <LearningExport />}
       </Suspense>
     </div>
   );

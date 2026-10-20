@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   Archive,
@@ -117,6 +117,12 @@ export function CMSThreats() {
   });
   const { run, busy } = useAction();
   const running = status.data?.status.running;
+  // A scan that just finished found new sites: show them.
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) list.reload();
+    wasRunning.current = running;
+  }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (status.loading && !status.data) return <PageLoader />;
   if (status.error && !status.data) return <ErrorBox message={status.error} />;
@@ -234,7 +240,11 @@ export function CMSThreats() {
 
       <div className="card overflow-x-auto p-0">
         {!list.data ? (
-          <SectionLoader />
+          list.error ? (
+            <ErrorBox message={list.error} />
+          ) : (
+            <SectionLoader />
+          )
         ) : list.data.sites.length === 0 ? (
           <Empty
             text={

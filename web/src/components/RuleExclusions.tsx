@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { isDomain } from '../validate';
 
 export interface RuleExclusion {
   rule: number;
@@ -8,13 +9,12 @@ export interface RuleExclusion {
   note?: string;
 }
 
-const reDomain = /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
 const rePath = /^\/[A-Za-z0-9._~/-]*$/;
 
 /** Checks one exclusion the way the agent does (it drops invalid ones). */
 export function exclusionError(e: RuleExclusion): string | null {
   if (!Number.isInteger(e.rule) || e.rule <= 0 || e.rule > 99999999) return 'Enter a numeric rule id';
-  if (e.domain && (!reDomain.test(e.domain) || /^(?:\*\.)?[\d.]+$/.test(e.domain))) return 'Enter a domain like example.com or *.example.com';
+  if (e.domain && !isDomain(e.domain)) return 'Enter a domain like example.com or *.example.com';
   if (e.path && !rePath.test(e.path)) return 'Enter a path starting with / (letters, digits, . _ ~ - / only)';
   return null;
 }

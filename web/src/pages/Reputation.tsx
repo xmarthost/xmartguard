@@ -4,7 +4,7 @@ import { SectionLoader } from '../components/ui';
 import { Tabs } from '../components/controls';
 
 const IPReputation = lazy(() => import('./Firewall').then((m) => ({ default: m.IPReputation })));
-const DomainReputation = lazy(() => import('./Mail').then((m) => ({ default: m.DomainReputation })));
+const ServerDomainReputation = lazy(() => import('./Mail').then((m) => ({ default: m.ServerDomainReputation })));
 
 type Tab = 'ip' | 'domains';
 
@@ -22,7 +22,7 @@ export default function Reputation({ initial }: { initial?: Tab }) {
         value={tab}
         onChange={(v) => setSp({ tab: v }, { replace: true })}
       />
-      <Suspense fallback={<SectionLoader />}>{tab === 'ip' ? <IPReputation /> : <DomainReputation />}</Suspense>
+      <Suspense fallback={<SectionLoader />}>{tab === 'ip' ? <IPReputation /> : <ServerDomainReputation />}</Suspense>
     </div>
   );
 }

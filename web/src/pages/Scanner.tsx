@@ -158,7 +158,11 @@ export function ManualScans() {
   const { user } = useAuth();
   const [offset, setOffset] = useState(0);
   const pageSize = 25;
-  const scans = useAgent<{ scans: Scan[]; total?: number; last_full?: Scan }>(id, 'scan.list', { limit: pageSize, offset }, 3000);
+  // Every 3 s while a scan runs or waits, every 30 s otherwise.
+  const [active, setActive] = useState(true);
+  const scans = useAgent<{ scans: Scan[]; total?: number; last_full?: Scan }>(id, 'scan.list', { limit: pageSize, offset }, active ? 3000 : 30_000);
+  const anyActive = !scans.data || scans.data.scans.some((s) => s.status === 'running' || s.status === 'queued');
+  useEffect(() => setActive(anyActive), [anyActive]);
   const paths = useAgent<{ users: HostingUser[] }>(id, 'scanner.paths');
   const { run, busy } = useAction();
   const [quick, setQuick] = useState('');
@@ -351,7 +355,11 @@ function ReportCard({ icon, children }: { icon: React.ReactNode; children: React
 
 /** cPGuard-style report header for one scan. */
 function ScanReport({ serverId, scanId }: { serverId: string; scanId: number }) {
-  const r = useAgent<ScanReportData>(serverId, 'scan.report', { id: scanId }, 5000);
+  // Polled only while the scan runs: a finished report does not change.
+  const [done, setDone] = useState(false);
+  const r = useAgent<ScanReportData>(serverId, 'scan.report', { id: scanId }, done ? undefined : 5000);
+  const finished = !!r.data && r.data.scan.status !== 'running' && r.data.scan.status !== 'queued';
+  useEffect(() => setDone(finished), [finished]);
   if (!r.data) return r.error ? <ErrorBox message={r.error} /> : <SectionLoader />;
   const d = r.data;
   const sc = d.scan;
@@ -416,7 +424,13 @@ export function ScannerLogs() {
   const list = useAgent<{ findings: Finding[]; total: number }>(id, 'findings.list', params, 15_000);
   const { run, busy } = useAction();
   const canAct = can(user, 'operator');
-  useEffect(() => setSel([]), [list.data]);
+  // The 15 s refresh keeps the ticks of rows still shown; another filter,
+  // page or scan starts a new selection.
+  useEffect(() => setSel([]), [category, status, query, scanId, offset, id]);
+  useEffect(() => {
+    const shown = new Set((list.data?.findings ?? []).map((f) => f.id));
+    setSel((cur) => (cur.every((x) => shown.has(x)) ? cur : cur.filter((x) => shown.has(x))));
+  }, [list.data]);
   useEffect(() => setOffset(0), [category, status, query, scanId]);
 
   const act = async (action: string) => {
@@ -430,6 +444,7 @@ export function ScannerLogs() {
       back[action] ? () => agentCall(id!, 'finding.action', { ids, action: back[action] }).then(() => list.reload()) : undefined,
     );
     if (r && Object.keys(r.failed).length) alert(Object.entries(r.failed).map(([k, v]) => `#${k}: ${v}`).join('\n'));
+    if (r) setSel([]);
     list.reload();
   };
 
@@ -706,7 +721,6 @@ export function ScannerLogs() {
                   className={a.v === 'delete' ? 'btn-danger' : 'btn-outline'}
                   disabled={busy}
                   onClick={async () => {
-                    setSel([detail.id]);
                     if (a.confirm && !confirm(a.confirm)) return;
                     await run(() => agentCall(id!, 'finding.action', { ids: [detail.id], action: a.v }), `${a.l} done`);
                     setDetail(null);

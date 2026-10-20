@@ -1,30 +1,42 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
+import { requestGate } from './requestGate';
 
 /** Fetches a GET endpoint, optionally polling every `intervalMs`. */
 export function useApi<T>(path: string | null, intervalMs?: number) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const alive = useRef(true);
+  const [loading, setLoading] = useState(!!path);
+  // Another path (another server): drop what was shown, and any answer
+  // still on the way for the old path.
+  const gate = useRef(requestGate(path ?? '')).current;
+  if (gate.use(path ?? '')) {
+    setData(null);
+    setError(null);
+    setLoading(!!path);
+  }
 
   const load = useCallback(async () => {
     if (!path) return;
+    const ok = gate.begin(path);
     try {
       const d = await api<T>('GET', path);
-      if (alive.current) {
+      if (ok()) {
         setData(d);
         setError(null);
       }
     } catch (e: any) {
-      if (alive.current) setError(e.message);
+      if (ok()) setError(e.message);
     } finally {
-      if (alive.current) setLoading(false);
+      if (ok()) setLoading(false);
     }
-  }, [path]);
+  }, [path, gate]);
 
   useEffect(() => {
-    alive.current = true;
+    if (!path) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     load();
     let t: ReturnType<typeof setInterval> | undefined;
@@ -40,10 +52,9 @@ export function useApi<T>(path: string | null, intervalMs?: number) {
         }
       }, intervalMs);
     return () => {
-      alive.current = false;
       if (t) clearInterval(t);
     };
-  }, [load, intervalMs]);
+  }, [load, intervalMs, path]);
 
   return { data, error, loading, reload: load };
 }

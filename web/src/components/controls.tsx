@@ -1,12 +1,32 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Plus, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api';
+import { requestGate } from '../requestGate';
+import { applyListEdit, mergeListPatch, patchHasLists, type ListEdit } from '../listEdit';
 
 // ------------------------------------------------------------------ agent calls
 
 /** Calls an agent action through the portal proxy. */
 export function agentCall<T = any>(serverId: string, action: string, params: unknown = {}): Promise<T> {
   return api<T>('POST', `/api/servers/${serverId}/agent/${action}`, params);
+}
+
+/**
+ * A settings patch with its lists rewritten against the settings the server
+ * has now (read again just before the write), so entries added or removed
+ * elsewhere since `loaded` was read are kept. See listEdit.ts.
+ */
+export async function freshSettingsPatch(serverId: string, loaded: unknown, patch: unknown): Promise<unknown> {
+  if (!patchHasLists(loaded, patch)) return patch;
+  const cur = await agentCall<{ settings: unknown }>(serverId, 'settings.get');
+  return mergeListPatch(loaded, cur.settings, patch);
+}
+
+/** Adds to or removes from one list setting, on the list the server has now. */
+export async function editListSetting<T>(serverId: string, section: string, field: string, edit: ListEdit<T>) {
+  const cur = await agentCall<{ settings: Record<string, Record<string, unknown> | undefined> }>(serverId, 'settings.get');
+  const list = (cur.settings?.[section]?.[field] as T[] | undefined) ?? [];
+  return agentCall(serverId, 'settings.set', { [section]: { [field]: applyListEdit(list, edit) } });
 }
 
 /** Loads an agent action, optionally polling. */
@@ -31,20 +51,28 @@ export function clearAgentCache() {
 
 export function useAgent<T>(serverId: string | undefined, action: string, params: unknown = {}, intervalMs?: number, opts: { cache?: boolean } = {}) {
   const key = JSON.stringify(params);
-  const ck = opts.cache && serverId ? `${serverId}:${action}:${key}` : '';
+  // The data belongs to this server, action and params; with no server
+  // there is nothing to load.
+  const full = serverId ? `${serverId}:${action}:${key}` : '';
+  const ck = opts.cache ? full : '';
   const [data, setData] = useState<T | null>(() => (ck ? cached<T>(ck) : null));
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  // Another server or period: its kept answer (or nothing) until it loads.
-  const shown = useRef(ck);
-  if (shown.current !== ck) {
-    shown.current = ck;
+  const [loading, setLoading] = useState(!!full);
+  // Another server or period: its kept answer (or nothing) until it loads,
+  // and an answer still on the way for the old one is dropped. Without this
+  // a page switched from server A to B showed (and saved) A's settings.
+  const gate = useRef(requestGate(full)).current;
+  if (gate.use(full)) {
     setData(ck ? cached<T>(ck) : null);
+    setError(null);
+    setLoading(!!full);
   }
   const load = useCallback(async () => {
     if (!serverId) return;
+    const ok = gate.begin(full);
     try {
       const v = await agentCall<T>(serverId, action, JSON.parse(key));
+      if (!ok()) return;
       setData(v);
       if (ck) {
         try {
@@ -55,13 +83,17 @@ export function useAgent<T>(serverId: string | undefined, action: string, params
       }
       setError(null);
     } catch (e: any) {
-      setError(e.message);
+      if (ok()) setError(e.message);
     } finally {
-      setLoading(false);
+      if (ok()) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, action, key, ck]);
+  }, [serverId, action, key, ck, full]);
   useEffect(() => {
+    if (!serverId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     load();
     if (!intervalMs) return;
@@ -78,7 +110,7 @@ export function useAgent<T>(serverId: string | undefined, action: string, params
       }
     }, intervalMs);
     return () => clearInterval(t);
-  }, [load, intervalMs]);
+  }, [load, intervalMs, serverId]);
   return { data, error, loading, reload: load, setData };
 }
 
@@ -410,8 +442,4 @@ export function Card({ title, desc, children, right }: { title?: string; desc?: 
   );
 }
 
-export function isIPorCIDR(v: string): string | null {
-  const ip4 = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
-  const ip6 = /^[0-9a-fA-F:]+(\/\d{1,3})?$/;
-  return ip4.test(v) || (v.includes(':') && ip6.test(v)) ? null : `${v} is not a valid IP address or CIDR`;
-}
+export { isIPorCIDR } from '../validate';

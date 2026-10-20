@@ -4,7 +4,7 @@ import { Ban, CheckCircle2, EyeOff, Search, ShieldAlert, Trash2, X } from 'lucid
 import { exclusionError, uriPath, type RuleExclusion } from '../components/RuleExclusions';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
-import { Pager, agentCall, fmtTime, useAction, useAgent, useApplyWatch } from '../components/controls';
+import { Pager, agentCall, editListSetting, fmtTime, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { useServerName } from './Scanner';
 import { DownloadRange, fetchAll, saveFile } from '../components/DownloadRange';
 
@@ -91,9 +91,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
     run(() => agentCall(id!, 'fw.add', { kind: 'deny', addr: ip, comment: `WAF: blocked from ${title}` }), `${ip} blocked`);
   const disableRule = async (ruleId: number) => {
     if (!confirm(`Disable ModSecurity rule ${ruleId} on this server?`)) return;
-    const cur = await agentCall<{ settings: { waf: { disabled_rules: number[] } } }>(id!, 'settings.get');
-    const ids = Array.from(new Set([...(cur.settings.waf?.disabled_rules ?? []), ruleId]));
-    const r = await run(() => agentCall(id!, 'settings.set', { waf: { disabled_rules: ids } }), `Rule ${ruleId} disabled`);
+    const r = await run(() => editListSetting(id!, 'waf', 'disabled_rules', { add: [ruleId] }), `Rule ${ruleId} disabled`);
     if (r) watch(id!, r);
   };
 
@@ -303,9 +301,7 @@ export function AllowDialog({ serverId, ev, onClose }: { serverId: string; ev: W
     const bad = add.map(exclusionError).find(Boolean);
     if (bad) return setErr(bad);
     const ok = await run(async () => {
-      const cur = await agentCall<{ settings: { waf: { rule_exclusions?: RuleExclusion[] } } }>(serverId, 'settings.get');
-      const list = [...(cur.settings.waf?.rule_exclusions ?? []), ...add];
-      watch(serverId, await agentCall(serverId, 'settings.set', { waf: { rule_exclusions: list } }));
+      watch(serverId, await editListSetting(serverId, 'waf', 'rule_exclusions', { add }));
       return true;
     }, `Allowed on ${domain}`);
     if (ok) onClose();

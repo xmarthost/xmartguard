@@ -11,7 +11,7 @@ import { Empty, ErrorBox, SectionLoader } from '../components/ui';
 import { compact } from '../components/AttackOverview';
 import { ThreatDotMap, threatTier } from '../components/WorldMap';
 import { IconTile, MiniBars, PanelMark, Sparkline, StatusPill, type Tone } from '../components/ModernBits';
-import { TagEditor } from './ServerList';
+import { useAction } from '../components/controls';
 
 interface Card {
   virus_attacks?: number;
@@ -28,6 +28,37 @@ interface Info_ {
   card: Card;
   blacklisted: number;
   problems: { name: string; problem: string }[];
+}
+
+function TagEditor({ server, onSaved }: { server: Server; onSaved: () => void }) {
+  const [value, setValue] = useState(server.tags.join(', '));
+  const [open, setOpen] = useState(false);
+  const { run, busy } = useAction();
+  if (!open) {
+    return (
+      <button
+        className="btn-outline px-3 py-1.5 text-sm"
+        onClick={() => setOpen(true)}
+      >
+        <Tag className="h-4 w-4" /> {server.tags.length ? 'Edit Tags' : 'Assign Tag'}
+      </button>
+    );
+  }
+  return (
+    <form
+      className="flex gap-1"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const tags = value.split(',').map((t) => t.trim()).filter(Boolean);
+        if ((await run(() => api('PATCH', `/api/servers/${server.id}`, { tags }))) === undefined) return;
+        setOpen(false);
+        onSaved();
+      }}
+    >
+      <input className="input py-1 text-xs" value={value} onChange={(e) => setValue(e.target.value)} placeholder="tag1, tag2" autoFocus />
+      <button className="btn-primary px-2 py-1 text-xs" disabled={busy}>Save</button>
+    </form>
+  );
 }
 
 function info(s: Server): Info_ {
@@ -76,6 +107,7 @@ function StatBox({ tone, icon, value, label, spark }: { tone: Tone; icon: React.
 function CardMenu({ s, onChange, onInfo }: { s: Server; onChange: () => void; onInfo: () => void }) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
+  const { run } = useAction();
   const item = 'flex w-full items-center gap-2 px-3.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50';
   return (
     <div className="relative">
@@ -107,8 +139,7 @@ function CardMenu({ s, onChange, onInfo }: { s: Server; onChange: () => void; on
                 onClick={async () => {
                   setOpen(false);
                   if (!confirm(`Remove ${s.hostname} from xPGuard? The agent on the server will stop.`)) return;
-                  await api('DELETE', `/api/servers/${s.id}`);
-                  onChange();
+                  if ((await run(() => api('DELETE', `/api/servers/${s.id}`), `${s.hostname} removed`)) !== undefined) onChange();
                 }}
               >
                 <Trash2 className="h-4 w-4" /> Remove server

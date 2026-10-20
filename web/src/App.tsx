@@ -10,7 +10,7 @@ import Login from './pages/Login';
 // Pages load on first use (smaller first download).
 const AIScanner = lazy(() => import('./pages/AIScanner'));
 const Overview = lazy(() => import('./pages/Overview'));
-const ServerList = lazy(() => import('./pages/ServerList'));
+const ServerList = lazy(() => import('./pages/ServerListModern'));
 const AddServer = lazy(() => import('./pages/AddServer'));
 const ServerDashboard = lazy(() => import('./pages/ServerDashboard'));
 const Monitoring = lazy(() => import('./pages/Monitoring'));
@@ -47,12 +47,13 @@ const WafRuleSets = lazy(() => import('./pages/WafRuleSets'));
 const AppearancePage = lazy(() => import('./pages/AppearancePage'));
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 
-function Protected({ children, role }: { children: ReactNode; role?: 'owner' | 'admin' }) {
+/** platform: the provider's own fleet pages (master settings), not for customers' accounts. */
+function Protected({ children, role, platform }: { children: ReactNode; role?: 'owner' | 'admin'; platform?: boolean }) {
   const { user, loading } = useAuth();
   const loc = useLocation();
   if (loading) return <PageLoader />;
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
-  if (role && !can(user, role)) return <Layout><ComingSoon title="Not allowed" milestone="your administrator's permission" /></Layout>;
+  if ((role && !can(user, role)) || (platform && user.platform === false)) return <Layout><ComingSoon title="Not allowed" milestone="your administrator's permission" /></Layout>;
   // Pages load on first use; the menu stays while one loads.
   return (
     <Layout>
@@ -96,20 +97,20 @@ export default function App() {
         <Route path="/servers/:id/security-monitor" element={<Protected><SecurityMonitor /></Protected>} />
         <Route path="/servers/:id/server-audit" element={<Protected><ServerAudit /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
-        <Route path="/ipdb" element={<Protected><IPDBPage /></Protected>} />
-        <Route path="/ai" element={<Protected><AIScanner /></Protected>} />
-        <Route path="/waf-rulesets" element={<Protected><WafRuleSets /></Protected>} />
-        <Route path="/trusted-services" element={<Protected><TrustedServices /></Protected>} />
-        <Route path="/mail-protection" element={<Protected><MailProtection /></Protected>} />
-        <Route path="/domain-reputation" element={<Protected><FleetDomainReputation /></Protected>} />
-        <Route path="/captcha-page" element={<Protected><CaptchaPage /></Protected>} />
+        <Route path="/ipdb" element={<Protected platform><IPDBPage /></Protected>} />
+        <Route path="/ai" element={<Protected platform><AIScanner /></Protected>} />
+        <Route path="/waf-rulesets" element={<Protected platform><WafRuleSets /></Protected>} />
+        <Route path="/trusted-services" element={<Protected platform><TrustedServices /></Protected>} />
+        <Route path="/mail-protection" element={<Protected platform><MailProtection /></Protected>} />
+        <Route path="/domain-reputation" element={<Protected platform><FleetDomainReputation /></Protected>} />
+        <Route path="/captcha-page" element={<Protected platform><CaptchaPage /></Protected>} />
         <Route path="/waf-intel" element={<Navigate to="/learning?tab=names" replace />} />
-        <Route path="/appearance" element={<Protected><AppearancePage /></Protected>} />
+        <Route path="/appearance" element={<Protected platform><AppearancePage /></Protected>} />
         <Route path="/ai-connector" element={<Protected role="admin"><AIConnector /></Protected>} />
         <Route path="/mass-operations" element={<Protected><MassOperations /></Protected>} />
-        <Route path="/all-servers" element={<Protected><CustomerServers /></Protected>} />
+        <Route path="/all-servers" element={<Protected platform><CustomerServers /></Protected>} />
         <Route path="/ai-learning" element={<Navigate to="/learning?tab=ai" replace />} />
-        <Route path="/learning" element={<Protected><LearningCenter /></Protected>} />
+        <Route path="/learning" element={<Protected platform><LearningCenter /></Protected>} />
         <Route path="/xpguard-learning" element={<Navigate to="/learning?tab=exports" replace />} />
         <Route path="/users" element={<Protected role="owner"><UsersPage /></Protected>} />
         <Route path="/account" element={<Protected><AccountPage /></Protected>} />

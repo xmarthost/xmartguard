@@ -1,25 +1,17 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CheckCircle2, ChevronDown, Download, Globe, RefreshCw, Search, Settings as Gear, ShieldAlert, Trash2, X, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { downloadCSV, useCountries } from '../components/geo';
-import { flag } from '../components/WorldMap';
+import { countryName, flag } from '../components/WorldMap';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
-import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
+import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, freshSettingsPatch, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { useServerName } from './Scanner';
 
 // ISO 3166-1 alpha-2 codes; names come from the browser (Intl.DisplayNames).
 const CODES =
   'AF AX AL DZ AS AD AO AI AQ AG AR AM AW AU AT AZ BS BH BD BB BY BE BZ BJ BM BT BO BQ BA BW BR IO BN BG BF BI CV KH CM CA KY CF TD CL CN CO KM CG CD CK CR CI HR CU CW CY CZ DK DJ DM DO EC EG SV GQ ER EE SZ ET FK FO FJ FI FR GF PF GA GM GE DE GH GI GR GL GD GP GU GT GG GN GW GY HT VA HN HK HU IS IN ID IR IQ IE IM IL IT JM JP JE JO KZ KE KI KP KR KW KG LA LV LB LS LR LY LI LT LU MO MG MW MY MV ML MT MH MQ MR MU YT MX FM MD MC MN ME MS MA MZ MM NA NR NP NL NC NZ NI NE NG NU NF MK MP NO OM PK PW PS PA PG PY PE PH PN PL PT PR QA RE RO RU RW BL SH KN LC MF PM VC WS SM ST SA SN RS SC SL SG SX SK SI SB SO ZA GS SS ES LK SD SR SJ SE CH SY TW TJ TZ TH TL TG TK TO TT TN TR TM TC TV UG UA AE GB US UM UY UZ VU VE VN VG VI WF EH YE ZM ZW'.split(' ');
-const regionNames = (() => {
-  try {
-    return new Intl.DisplayNames(['en'], { type: 'region' });
-  } catch {
-    return null;
-  }
-})();
-export const countryName = (cc: string) => regionNames?.of(cc) ?? cc;
 const COUNTRIES = CODES.map((c) => ({ code: c, name: countryName(c) })).sort((a, b) => a.name.localeCompare(b.name));
 
 interface Rule {
@@ -658,6 +650,9 @@ export function FirewallPage() {
   const [ddnsHost, setDdnsHost] = useState('');
   const [jail, setJail] = useState('');
   const [fw, setFw] = useState<FwSettings | null>(null);
+  // The server `fw` was loaded from: a save never writes one server's lists
+  // onto another one shown in the same page.
+  const fwFor = useRef<string | undefined>(undefined);
   const [check, setCheck] = useState('');
   const [checkOpen, setCheckOpen] = useState(false);
   const [advanced, setAdvanced] = useState(false);
@@ -667,26 +662,36 @@ export function FirewallPage() {
   const { run, busy } = useAction();
   const watch = useApplyWatch();
   const isAdmin = can(user, 'admin');
+  // The fleet pages (trusted services, CAPTCHA page) are the provider's.
+  const platform = user?.platform !== false;
   useEffect(() => {
+    fwFor.current = s.data ? id : undefined;
     if (s.data) {
       setFw(s.data.settings.firewall);
       setCap(s.data.settings.captcha);
       setProvider(s.data.settings.firewall.provider);
+    } else {
+      setFw(null);
+      setCap(null);
     }
-  }, [s.data]);
+  }, [s.data]); // eslint-disable-line react-hooks/exhaustive-deps
   if (s.loading && !s.data) return <PageLoader />;
   if (s.error && !s.data) return <ErrorBox message={s.error} />;
   if (!fw || !s.data) return null;
   const status = s.data.meta.firewall;
 
   const save = (patch: Partial<FwSettings>, msg = 'Firewall settings saved') => saveAny({ firewall: patch }, msg);
-  const saveAny = (patch: Record<string, unknown>, msg = 'Settings saved') =>
-    run(async () => {
-      const r = await agentCall(id!, 'settings.set', patch);
-      watch(id!, r);
+  const saveAny = (patch: Record<string, unknown>, msg = 'Settings saved') => {
+    const target = id!;
+    const loaded = s.data?.settings;
+    return run(async () => {
+      if (!loaded || fwFor.current !== target) throw new Error('These settings were loaded for another server: reload the page');
+      const r = await agentCall(target, 'settings.set', await freshSettingsPatch(target, loaded, patch));
+      watch(target, r);
       await Promise.all([s.reload(), meta.reload()]);
       return r;
     }, msg);
+  };
   const all = s.data.settings;
 
   return (
@@ -899,13 +904,13 @@ export function FirewallPage() {
               </>
             )}
           </span>
-          <Link to="/trusted-services" className="btn-outline">Manage trusted services</Link>
+          {platform && <Link to="/trusted-services" className="btn-outline">Manage trusted services</Link>}
         </div>
       </Section>
 
       <Section title="Server firewalls" desc="Other firewalls found on this server. The portal's address is allowed in each of them so the agent's connection is never cut; xPGuard only removes the entries it added.">
         {!meta.data ? (
-          <SectionLoader />
+          meta.error ? <ErrorBox message={meta.error} /> : <SectionLoader />
         ) : (
           <div className="space-y-3">
             {meta.data.csf?.enabled && (
@@ -1015,9 +1020,13 @@ export function FirewallPage() {
             <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
               The CAPTCHA is the portal's page{cap.central_url ? ` (${cap.central_url})` : ''}, the same for all servers: its check, keys and how long a solved
               check lets a visitor in ({cap.central_minutes ?? 60} minutes) are set in{' '}
-              <Link to="/captcha-page" className="font-medium underline">
-                Overview » CAPTCHA Page
-              </Link>
+              {platform ? (
+                <Link to="/captcha-page" className="font-medium underline">
+                  Overview » CAPTCHA Page
+                </Link>
+              ) : (
+                'the portal settings of your provider'
+              )}
               .
             </p>
           ) : (

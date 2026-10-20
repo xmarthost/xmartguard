@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AlertTriangle, Layers, PlayCircle } from 'lucide-react';
 import { Modal, agentCall, fmtTime, useAction, useAgent } from './controls';
+import { TIME_ZONE_LABEL, fromPortalInput, toPortalInput } from '../timezone';
 
 interface Sample {
   id: number;
@@ -10,13 +11,10 @@ interface Sample {
   updated_at: number;
 }
 
-/** "datetime-local" value for a unix time. */
-const local = (t: number) => {
-  const d = new Date(t * 1000);
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
-};
-const unix = (v: string) => (v ? Math.floor(new Date(v).getTime() / 1000) : 0);
+// The window is typed in the portal's time zone (every time it shows is
+// in it), not the browser's.
+const local = toPortalInput;
+const unix = fromPortalInput;
 
 /** Restore (or quarantine) every file of one signature in a time window,
  *  after a preview. */
@@ -61,11 +59,11 @@ export function BulkFindings({ serverId, signature: sig0 = '', action: act0 = 'r
           <input className="input" value={owner} onChange={(e) => (setOwner(e.target.value), changed())} placeholder="all accounts" />
         </label>
         <label className="text-sm">
-          <span className="label">From</span>
+          <span className="label">From ({TIME_ZONE_LABEL})</span>
           <input type="datetime-local" className="input" value={from} onChange={(e) => (setFrom(e.target.value), changed())} />
         </label>
         <label className="text-sm">
-          <span className="label">To (empty = now)</span>
+          <span className="label">To ({TIME_ZONE_LABEL}, empty = now)</span>
           <input type="datetime-local" className="input" value={to} onChange={(e) => (setTo(e.target.value), changed())} />
         </label>
       </div>

@@ -3,7 +3,7 @@ import { Brain, Download, FileCheck2, Fingerprint, Search, Server as ServerIcon,
 import { api } from '../api';
 import { useApi } from '../hooks';
 import { useAuth, can } from '../auth';
-import { Breadcrumb, Empty, ErrorBox, PageLoader, StatCard } from '../components/ui';
+import { Empty, ErrorBox, PageLoader, StatCard } from '../components/ui';
 import { Modal, Pager, useAction } from '../components/controls';
 
 type Decision = 'review' | 'off' | 'keep' | null;
@@ -116,7 +116,8 @@ function Files({ sig, onClose }: { sig: string; onClose: () => void }) {
 }
 
 /** Master: the scanner's false positives the AI restored, by signature, with decisions and an export. */
-export default function AILearning({ embedded = false }: { embedded?: boolean }) {
+/** A tab of LearningCenter (its old route redirects there). */
+export default function AILearning() {
   const { user } = useAuth();
   const admin = !!user && can(user, 'admin');
   const [q, setQ] = useState('');
@@ -149,7 +150,6 @@ export default function AILearning({ embedded = false }: { embedded?: boolean })
   const t = d?.totals;
   return (
     <div className="space-y-5">
-      {!embedded && <Breadcrumb items={['AI', 'AI Learning']} />}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="h-title flex items-center gap-2">

@@ -5,6 +5,7 @@ import {
   AlertTriangle, BarChart3, BookOpen, CalendarDays, ChevronDown, ChevronRight, Database, Globe, Info, LineChart, ShieldAlert, ShieldCheck, TrendingDown, TrendingUp, Waypoints,
 } from 'lucide-react';
 import { useAgent } from './controls';
+import { serverPageLink } from '../safeLink';
 import { PageLoader } from './ui';
 import { ServiceStrip, change, compact, type Alert, type Dash } from './AttackOverview';
 import { IconTile, Sparkline, TONES, type Tone } from './ModernBits';
@@ -84,9 +85,11 @@ function AlertRow({ a }: { a: Alert }) {
               {d}
             </div>
           ))}
-          <Link to={a.link} className="inline-block pt-1 font-medium text-[var(--xg-primary)] hover:underline">
-            Open →
-          </Link>
+          {serverPageLink(a.link) && (
+            <Link to={serverPageLink(a.link)} className="inline-block pt-1 font-medium text-[var(--xg-primary)] hover:underline">
+              Open →
+            </Link>
+          )}
         </div>
       )}
     </div>

@@ -6,6 +6,7 @@ import { useApi } from '../hooks';
 import type { Server } from '../api';
 import { getModeOverride, setModeOverride } from '../theme';
 import { Logo } from './ui';
+import { serverPageLink } from '../safeLink';
 import { Avatar } from './Avatar';
 
 export interface ModernEntry {
@@ -163,7 +164,7 @@ interface Note {
  */
 function Alerts() {
   const m = useMatch('/servers/:id/*');
-  const serverId = m?.params.id && m.params.id !== 'new' ? m.params.id : '';
+  const serverId = m?.params.id && m.params.id !== 'add' ? m.params.id : '';
   const { data, loading } = useApi<{ items: Note[] }>(`/api/notifications${serverId ? `?server=${encodeURIComponent(serverId)}` : ''}`, 60_000);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -210,7 +211,7 @@ function Alerts() {
               items.map((n, i) => (
                 <Link
                   key={i}
-                  to={`/servers/${n.server_id}${n.link ? `/${n.link.replace(/^\//, '')}` : ''}`}
+                  to={`/servers/${n.server_id}${serverPageLink(n.link) ? `/${serverPageLink(n.link)}` : ''}`}
                   className="flex gap-3 border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50"
                 >
                   {n.level === 'danger' ? (
