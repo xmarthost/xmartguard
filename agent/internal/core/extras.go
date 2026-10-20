@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/ai"
@@ -27,6 +28,24 @@ import (
 
 // UserDomainsPath lists cPanel domains and their owners.
 var UserDomainsPath = "/etc/userdomains"
+
+// siteOwners caches /etc/userdomains for the WAF events (read again every
+// 5 minutes: new accounts and domains show up without a restart).
+var siteOwners struct {
+	sync.Mutex
+	at time.Time
+	m  map[string]string
+}
+
+// siteOwner is the cPanel account that hosts the website dom.
+func siteOwner(dom string) string {
+	siteOwners.Lock()
+	defer siteOwners.Unlock()
+	if siteOwners.m == nil || time.Since(siteOwners.at) > 5*time.Minute {
+		siteOwners.m, siteOwners.at = reputation.HostedDomains(UserDomainsPath), time.Now()
+	}
+	return siteOwners.m[dom]
+}
 
 // mailOwner maps a sender address (or login) to its cPanel account.
 func (a *Agent) mailOwner(sender string) string {

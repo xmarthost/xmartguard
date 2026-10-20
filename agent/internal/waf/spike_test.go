@@ -48,3 +48,19 @@ func TestSpikes(t *testing.T) {
 		t.Fatalf("spikes %+v", got)
 	}
 }
+
+// Audit A3 F12: every event carries the account that hosts its website, so
+// the account's own panel lists its sites' events (and no one else's).
+func TestRecordNamesSiteOwner(t *testing.T) {
+	m := learnManager(t)
+	m.Owner = func(h string) string { return map[string]string{"shop.example": "alice", "blog.example": "bob"}[h] }
+	now := store.Now()
+	for _, h := range []string{"shop.example", "WWW.Shop.Example:8080", "blog.example", "other.example"} {
+		m.record(Event{At: now, IP: "198.51.100.1", Host: h, Msg: "x"})
+	}
+	for user, want := range map[string]int{"alice": 2, "bob": 1} {
+		if _, n, err := m.Events(EventFilter{User: user}); err != nil || n != want {
+			t.Errorf("%s sees %d events (%v), want %d", user, n, err, want)
+		}
+	}
+}

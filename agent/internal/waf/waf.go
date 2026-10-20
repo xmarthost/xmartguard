@@ -67,6 +67,9 @@ type Manager struct {
 	// (IDCentralPassUsed): the agent withdraws a value used by an address
 	// it was not given to.
 	OnPassCookie func(ip string, slot int)
+	// Owner names the cPanel account of a website (Host without port), so
+	// the account's own panel lists its sites' events (nil = none).
+	Owner func(host string) string
 
 	mu       sync.Mutex
 	counts   countCache
@@ -1070,6 +1073,9 @@ func (m *Manager) noteSource(path string) {
 }
 
 func (m *Manager) record(e Event) {
+	if e.User == "" && m.Owner != nil {
+		e.User = m.Owner(hostOnly(e.Host))
+	}
 	res, err := m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`, e.At, e.IP, e.Method, e.Host, e.URI, e.RuleID, e.Msg, e.Category, e.Action, e.User, e.Detail)
 	if err != nil {
@@ -1081,6 +1087,16 @@ func (m *Manager) record(e Event) {
 	if id, err := res.LastInsertId(); err == nil && id%512 == 0 {
 		_, _ = m.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, store.Now()-RetainDays*86400)
 	}
+}
+
+// hostOnly is the website name of a Host header: lowercase, without the
+// port and a leading "www.".
+func hostOnly(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	if i := strings.LastIndexByte(h, ':'); i >= 0 && !strings.HasSuffix(h, "]") {
+		h = h[:i]
+	}
+	return strings.TrimPrefix(h, "www.")
 }
 
 // RetainDays is how long WAF events are kept at least.

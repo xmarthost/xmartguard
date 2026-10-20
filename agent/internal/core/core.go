@@ -252,6 +252,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Captcha.Passes = a.sitePasses
 	a.WAF.OnPassCookie = a.onPassCookie
 	a.WAF.OnBotBlocked = a.onBotBlocked
+	a.WAF.Owner = siteOwner
 	a.CMS = &cms.Manager{Zone: func() *time.Location { return scanner.ScheduleZone(st.Get().Scanner.ScheduleTZ) }, DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
 		Accounts: func() []cms.Account {
 			var out []cms.Account
