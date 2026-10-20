@@ -41,6 +41,8 @@ jobs:
         run: npm ci && npm run build
       - name: Shell lint
         run: shellcheck -S warning installer/*.sh scripts/*.sh deploy/*.sh
+      - name: Installer and deploy script checks
+        run: scripts/test-deploy.sh
       - name: Installer end-to-end
         run: |
           cd server && npm run build

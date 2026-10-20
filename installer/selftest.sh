@@ -70,8 +70,11 @@ echo "--- IPDB"; /usr/local/bin/xpguard-agent call ipdb.status 2>&1 | head -12
 
 section "firewall"
 command -v ipset >/dev/null && echo "ipset:     $(ipset version 2>/dev/null | head -1)" || warn "ipset is not installed"
-echo "--- XMARTGUARD chain"; iptables -w -S XMARTGUARD 2>&1 | head -20
-echo "--- INPUT jump"; iptables -w -S INPUT 2>/dev/null | grep XMARTGUARD || echo "(no jump)"
+# Agents since the xPGuard name use the XPGUARD chain; older ones XMARTGUARD.
+FW_CHAIN=XPGUARD
+iptables -w -S XPGUARD >/dev/null 2>&1 || ! iptables -w -S XMARTGUARD >/dev/null 2>&1 || FW_CHAIN=XMARTGUARD
+echo "--- $FW_CHAIN chain"; iptables -w -S "$FW_CHAIN" 2>&1 | head -20
+echo "--- INPUT jump"; iptables -w -S INPUT 2>/dev/null | grep -w -- "-j $FW_CHAIN" || echo "(no jump)"
 echo "--- ipsets"; ipset list -n 2>/dev/null | grep '^xg_' || echo "(none)"
 nft list tables 2>/dev/null | grep -q "inet xpguard" && echo "nftables table inet xpguard present"
 command -v csf >/dev/null && echo "CSF present: $(csf -v 2>/dev/null | head -1)"
