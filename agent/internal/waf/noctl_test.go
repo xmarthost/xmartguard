@@ -45,10 +45,10 @@ func TestExemptionsWithoutCtl(t *testing.T) {
 		t.Error("trusted guard without trusted services")
 	}
 	// API calls and webhooks: the marker, then the IPDB POST rule tests it.
-	if l := ruleLine(out, IDIPDBPostAPI); !strings.Contains(l, "setvar:tx.xg_api=1") {
-		t.Errorf("API calls not marked: %s", l)
+	if c := chainOf(out, IDIPDBPostAPI); len(c) == 0 || !strings.Contains(c[len(c)-1], "setvar:tx.xg_api=1") {
+		t.Errorf("API calls not marked: %q", c)
 	}
-	for _, id := range []int{IDIPDBPost, IDIPDBPost + 1000} {
+	for _, id := range []int{IDIPDBPost, IDIPDBPost + 1000, IDIPDBPost + 3000} {
 		i := strings.Index(out, fmt.Sprintf("id:%d,", id))
 		if i < 0 || !strings.Contains(out[i:i+400], `SecRule &TX:xg_api "@eq 0"`) {
 			t.Errorf("IPDB POST rule %d does not skip API calls", id)
@@ -105,9 +105,13 @@ func TestExemptionsOnApacheWithoutCtl(t *testing.T) {
 		}
 	}
 	check("POST from a listed address", true, send("POST", "/xg-ok.html"))
-	check("API call from a listed address", false, send("POST", "/xg-ok.html", "Authorization: Bearer abc.def"))
-	check("signed webhook from a listed address", false, send("POST", "/xg-ok.html", "Stripe-Signature: t=1,v1=abc"))
-	check("API call behind a proxy", false, send("POST", "/xg-ok.html", "X-Forwarded-For: 127.0.0.1", "X-Api-Key: k1"))
+	check("API call from a listed address", false, send("POST", "/api/xg-ok.html", "Authorization: Bearer abc.def"))
+	check("signed webhook from a listed address", false, send("POST", "/webhooks/xg-ok.html", "Stripe-Signature: t=1,v1=abc"))
+	check("API call behind a proxy", false, send("POST", "/api/xg-ok.html", "X-Forwarded-For: 127.0.0.1", "X-Api-Key: k1"))
+	// An API header alone is not an API call (audit A3 F5).
+	check("login with an Authorization header from a listed address", true, send("POST", "/wp-login.php", "Authorization: x"))
+	check("form post with an API header from a listed address", true, send("POST", "/xg-ok.html", "X-Foo-Token: 1"))
+	check("API path with cookies from a listed address", true, send("POST", "/api/xg-ok.html", "Authorization: Bearer abc.def", "Cookie: PHPSESSID=abc"))
 	check("GET to xmlrpc.php", true, send("GET", "/xmlrpc.php"))
 	check("shop filter scraping", true, send("GET", "/xg-ok.html?filter_color=a,b,c"))
 	check("shopper moving within the site", false, send("GET", "/xg-ok.html?filter_color=a,b,c", "Sec-Fetch-Site: same-origin"))

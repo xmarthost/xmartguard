@@ -136,9 +136,10 @@ func TestRBLOnApache(t *testing.T) {
 	ipdb = []string{"127.0.0.1"}
 	apply()
 	check("POST from a listed address", true, send("POST"))
-	check("API call with a bearer token from a listed address", false, send("POST", "Authorization: Bearer abc.def"))
-	check("Signed webhook from a listed address", false, send("POST", "Stripe-Signature: t=1,v1=abc"))
-	check("API call behind the proxy", false, send("POST", "X-Forwarded-For: 203.0.113.9", "X-Api-Key: k1"))
+	// An API header on a page that is not an API path is still refused
+	// (audit A3 F5; API paths are checked in TestExemptionsOnApacheWithoutCtl).
+	check("bearer token on a page from a listed address", true, send("POST", "Authorization: Bearer abc.def"))
+	check("signature header on a page from a listed address", true, send("POST", "Stripe-Signature: t=1,v1=abc"))
 	exempt = []string{"127.0.0.1"}
 	apply()
 	check("POST from a listed but exempt address", false, send("POST"))

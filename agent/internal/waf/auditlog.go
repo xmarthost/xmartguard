@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/logtail"
@@ -393,6 +394,7 @@ func followAudit(ctx context.Context, path string, out chan<- auditHit) {
 	go logtail.Follow(ctx, path, lines)
 	var p auditParser
 	storage := ""
+	entry := entryWorker(ctx, out, auditEntryQueue, time.Second)
 	for {
 		select {
 		case <-ctx.Done():
@@ -420,12 +422,58 @@ func followAudit(ctx context.Context, path string, out chan<- auditHit) {
 				continue
 			}
 			// The entry file may be completed a moment after the index line.
-			go func() {
-				time.Sleep(time.Second)
-				if e, uid, ok := parseAuditFile(file); ok {
-					out <- auditHit{e, uid}
+			entry(file)
+		}
+	}
+}
+
+// auditEntryQueue is how many concurrent-log entry files may wait to be
+// read; under a flood the rest are dropped (AuditEntriesDropped).
+const auditEntryQueue = 4096
+
+// AuditEntriesDropped counts entry files not read because the queue was full.
+var AuditEntriesDropped atomic.Int64
+
+// entryWorker reads concurrent-log entry files one at a time, each delay
+// after its index line, from a queue of size n. It returns the function
+// that queues a file (false when it was dropped): one goroutine and one
+// open file at most, however many index lines a flood writes.
+func entryWorker(ctx context.Context, out chan<- auditHit, n int, delay time.Duration) func(string) bool {
+	type pending struct {
+		file string
+		at   time.Time
+	}
+	queue := make(chan pending, n)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case pe := <-queue:
+				if w := time.Until(pe.at.Add(delay)); w > 0 {
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(w):
+					}
 				}
-			}()
+				if e, uid, ok := parseAuditFile(pe.file); ok {
+					select {
+					case out <- auditHit{e, uid}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}
+	}()
+	return func(file string) bool {
+		select {
+		case queue <- pending{file, time.Now()}:
+			return true
+		default:
+			AuditEntriesDropped.Add(1)
+			return false
 		}
 	}
 }

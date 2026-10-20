@@ -71,7 +71,7 @@ func TestRenderRespectsSettings(t *testing.T) {
 	}
 	c.ProxyIPCheck = true
 	r = Render(c, Options{Dir: "/d"})
-	if !strings.Contains(r, `"@ipMatchFromFile /d/proxy-ranges.txt" "id:7700701,phase:1,t:none,deny`) || !strings.Contains(r, `SecRule TX:1 "@ipMatchFromFile /d/blocked-ips.txt"`) {
+	if !strings.Contains(r, `/32" "id:7700701,phase:1,t:none,deny`) || !strings.Contains(r, `SecRule REQUEST_HEADERS:CF-Connecting-IP "@ipMatchFromFile /d/blocked-ips.txt"`) || !strings.Contains(r, `SecRule TX:1 "@ipMatchFromFile /d/blocked-ips.txt"`) {
 		t.Errorf("proxy rule missing:\n%s", r)
 	}
 	pf := ProxyFiles([]string{"203.0.113.9/32", "not-an-ip", "198.51.100.0/24", "203.0.113.9"})

@@ -17,10 +17,10 @@ import (
 // CAPTCHA only need to stay below twice the threshold.
 
 const (
-	IDSoftVerified = 7700030 // +1 behind a proxy
-	IDSoftStrict   = 7700032 // +1 behind a proxy
+	IDSoftVerified = 7700030 // +1 behind Cloudflare
+	IDSoftStrict   = 7700032 // +1 behind Cloudflare, +2000 behind a local proxy
 	IDSoftFlag     = 7700034
-	// IDSoftCountry: visitors from a whitelisted country (+1 behind a proxy).
+	// IDSoftCountry: visitors from a whitelisted country (+1 behind Cloudflare).
 	IDSoftCountry = 7700054
 	IDSoftDeny    = 7700036
 	// IDSoftTrusted: search engine crawlers and other trusted services
@@ -69,29 +69,38 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 	}
 	var b strings.Builder
 	w := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
-	// byAddr runs setvars for an address list, directly and behind a proxy.
-	byAddr := func(id int, file, setvars string) {
+	// byAddr runs setvars for an address list, directly and behind
+	// Cloudflare (+1, CF-Connecting-IP, which Cloudflare sets itself). A
+	// mark that only makes things stricter (relax false) also reads the
+	// last X-Forwarded-For hop behind a local proxy (+2000); one that
+	// relaxes or clears a flag never reads X-Forwarded-For or X-Real-IP,
+	// which the client can write.
+	byAddr := func(id int, file, setvars string, relax bool) {
 		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,%s"`, file, id, setvars)
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,chain"`, proxies, id+1)
-		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
-		w(`    SecRule TX:1 "@ipMatchFromFile %s" "t:none,%s"`, file, setvars)
+		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,pass,t:none,nolog,chain"`, strings.Join(cloudflareRanges(), ","), id+1)
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP "@ipMatchFromFile %s" "t:none,%s"`, file, setvars)
+		if !relax {
+			w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,pass,t:none,nolog,chain"`, localProxies, id+2000)
+			w(`  SecRule REQUEST_HEADERS:X-Forwarded-For "%s" "capture,chain"`, reLastHop)
+			w(`    SecRule TX:1 "@ipMatchFromFile %s" "t:none,%s"`, file, setvars)
+		}
 	}
 	w("# Soft blocking: weak signals from clean visitors get the CAPTCHA page (xPGuard).")
-	byAddr(IDSoftVerified, pass, fmt.Sprintf("setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d", relaxed))
+	byAddr(IDSoftVerified, pass, fmt.Sprintf("setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d", relaxed), true)
 	if len(trusted) > 0 {
 		// Same list (and file) as the bot rules use.
 		tf := filepath.Join(m.RulesDir, FileTrustedIPs)
 		files[tf] = strings.Join(trusted, "\n") + "\n"
 		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, tf, IDSoftTrusted, relaxed)
 	}
-	byAddr(IDSoftStrict, strict, fmt.Sprintf("setvar:tx.xg_strict=1,setvar:tx.inbound_anomaly_score_threshold=%d", in))
+	byAddr(IDSoftStrict, strict, fmt.Sprintf("setvar:tx.xg_strict=1,setvar:tx.inbound_anomaly_score_threshold=%d", in), false)
 	if m.TrustedCountryIPs != nil {
 		// Whitelisted countries (after the bad-reputation list, so it wins:
 		// mobile and office addresses there are shared by many people).
 		if cidrs := m.TrustedCountryIPs(); len(cidrs) > 0 {
 			cf := filepath.Join(m.RulesDir, FileCountryIPs)
 			files[cf] = AddrFile(cidrs)
-			byAddr(IDSoftCountry, cf, fmt.Sprintf("setvar:!tx.xg_strict,setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d", relaxed))
+			byAddr(IDSoftCountry, cf, fmt.Sprintf("setvar:!tx.xg_strict,setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d", relaxed), true)
 		}
 	}
 	w(`SecRule &TX:xg_strict "@eq 0" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDSoftFlag)

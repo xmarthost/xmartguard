@@ -148,6 +148,15 @@ func removeTags() string {
 	return strings.Join(ctl, ",")
 }
 
+// removeXSS takes out the XSS rules only. It is what a marker the client
+// sends (a login or session cookie, Sec-Fetch-Site, a Referer) may switch
+// off outside the wp-admin screens: editors save HTML and scripts, while
+// the SQL, command, PHP and file inclusion rules keep checking the request
+// (anyone can send those markers).
+func removeXSS() string {
+	return "ctl:ruleRemoveByTag=attack-xss,ctl:ruleRemoveById=941000-941999"
+}
+
 // removeTagTargets keeps the injection rules away from one collection.
 func removeTagTargets(target string) string {
 	var ctl []string
@@ -176,7 +185,7 @@ const staticExts = `(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|css|js|mjs|map|woff2?
 // renderExclusions writes the WordPress exclusions (unless switched off)
 // and the portal's per-site rule exclusions.
 func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, dyn Dynamic) {
-	tags := removeTags()
+	tags, xss := removeTags(), removeXSS()
 	w("%s", strings.TrimSuffix(wpUserSetup(), "\n"))
 	w("# Ordinary hosting traffic the OWASP CRS misreads (xPGuard hosting defaults).")
 	if !off[IDHostingBase] {
@@ -213,7 +222,8 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	if !off[IDThemeColorCSS] {
 		w(`SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDThemeColorCSS)
 		w(`  SecRule REQUEST_FILENAME "@rx /css/+[a-z0-9_-]*colou?rs?[a-z0-9_-]*\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
-		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDStaticPHP, IDPHPInAssets)
+		// LiteSpeed ignores the removal: the two rules also test the marker.
+		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,setvar:tx.xg_color_css=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDStaticPHP, IDPHPInAssets)
 	}
 	if !off[IDSiteBeacons] {
 		w(`SecRule ARGS_GET:ob "@streq open-bridge/events" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=%d"`, IDSiteBeacons, IDContentType)
@@ -224,36 +234,38 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule REQUEST_FILENAME "@rx (?:^|/)%s/" "t:none,t:urlDecodeUni,t:lowercase,chain"`, adminSegments)
 		w(`  SecRule &REQUEST_COOKIES "@gt 0" "t:none,chain"`)
 		w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?%s/" "t:none,t:lowercase,capture,chain"`, adminSegments)
-		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, tags)
+		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, xss)
 	}
 	if !off[IDWHMCSAdmin] {
-		// A logged-in admin's save from its own page is let through whole
-		// (allow): LiteSpeed's ModSecurity does not reliably honour taking
-		// single rules out, and General Settings saves HTML, IP lists and
-		// tracking code in many fields at once. WHMCS checks the admin
-		// login and its own CSRF token.
-		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,allow,nolog,chain"`, IDWHMCSAdmin)
+		// General Settings saves HTML, IP lists and tracking code in many
+		// fields at once; WHMCS checks the admin login and its own CSRF
+		// token. The cookie and headers are the client's, so only the XSS
+		// rules are taken out (never allow or the rule engine: that also
+		// skipped the upload scan). LiteSpeed, which ignores the removal,
+		// gets the threshold instead (whmcsSetup).
+		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDWHMCSAdmin)
 		w(`  SecRule REQUEST_FILENAME "@rx /[^/]+/+(?:%s)\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`, whmcsAdminFiles)
 		w(`  SecRule REQUEST_COOKIES_NAMES "@rx ^whmcs[a-z0-9]{6,}$" "t:none,t:lowercase,chain"`)
 		w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/" "t:none,t:lowercase,capture,chain"`)
-		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,ctl:ruleEngine=Off,%s"`, tags)
+		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, xss)
 		// Browsers sending no Referer (a strict Referrer-Policy, privacy
 		// add-ons) still say the form came from the same site.
-		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,allow,nolog,chain"`, IDWHMCSAdminFetch)
+		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDWHMCSAdminFetch)
 		w(`  SecRule REQUEST_FILENAME "@rx /[^/]+/+(?:%s)\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`, whmcsAdminFiles)
 		w(`  SecRule REQUEST_COOKIES_NAMES "@rx ^whmcs[a-z0-9]{6,}$" "t:none,t:lowercase,chain"`)
-		w(`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,ctl:ruleEngine=Off,%s"`, tags)
+		w(`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,%s"`, xss)
 	}
 	w("# Content that is code by design: kept away from injection rules.")
 	if !off[IDWPAdminExcl] {
-		w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:[^/]+\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,chain"`, IDWPAdminExcl)
-		w(`  SecRule REQUEST_FILENAME "!@rx /(?:admin-ajax|admin-post|async-upload)\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
+		// Only the screens WordPress checks the login of first (xg_wp_core).
+		w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:[^/]+\.php)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,pass,nolog,chain"`, IDWPAdminExcl)
+		w(`  SecRule REQUEST_FILENAME "!@rx /(?:admin-ajax|admin-post|async-upload)\.php$" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"`)
 		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, tags)
 	}
 	if !off[IDWPAjaxExcl] {
 		w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:admin-ajax|admin-post)\.php$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,chain"`, IDWPAjaxExcl)
 		w(`  SecRule REQUEST_HEADERS:Referer "@contains /wp-admin/" "t:none,t:lowercase,chain"`)
-		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, tags)
+		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, xss)
 	}
 	if !off[IDWPRestExcl] {
 		// 921130 reads the <meta http-equiv> of saved page HTML as response splitting.
@@ -262,7 +274,7 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	}
 	if !off[IDWPCustomizer] {
 		w(`SecRule ARGS_GET:customize_changeset_uuid "@rx ^[0-9a-f-]{36}$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, IDWPCustomizer)
-		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, tags)
+		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, xss)
 	}
 	if !off[IDWPRestMethods] {
 		w(`SecRule REQUEST_URI "@rx (?:/wp-json/|[?&]rest_route=)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveById=911100,%s"`, IDWPRestMethods, overrideTargets())
@@ -308,6 +320,64 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		}
 	}
 	w("")
+}
+
+// configRemovals are the rules taken out for every request: the hosting
+// defaults and the portal's and learned exclusions without a domain or
+// path. They are also written as SecRuleRemoveById after the OWASP CRS is
+// loaded, a configuration directive every engine applies (LiteSpeed
+// ignores ctl:ruleRemoveById).
+func configRemovals(c settings.WAF, dyn Dynamic) []int {
+	off := map[int]bool{}
+	for _, id := range c.DisabledRules {
+		off[id] = true
+	}
+	var ids []int
+	seen := map[int]bool{}
+	add := func(l ...int) {
+		for _, id := range l {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if !off[IDHostingBase] {
+		add(941310, 920600, 942550)
+	}
+	excl := func(e settings.RuleExclusion) {
+		if e.Domain != "" || e.Path != "" || allowRule(e.Rule) {
+			return
+		}
+		add(e.Rule)
+		if e.Rule == 920420 {
+			add(IDContentType)
+		}
+	}
+	for _, e := range settings.CleanExclusions(c.RuleExclusions) {
+		excl(e)
+	}
+	if !off[IDAutoExcl] {
+		for i, e := range settings.CleanExclusions(dyn.Auto) {
+			if i >= maxAutoExcl {
+				break
+			}
+			excl(e)
+		}
+	}
+	return ids
+}
+
+// configRemovals of this server's settings (none without them).
+func (m *Manager) configRemovals() []int {
+	if m.Settings == nil {
+		return nil
+	}
+	var dyn Dynamic
+	if m.DB != nil {
+		dyn = m.dynamic()
+	}
+	return configRemovals(m.Settings.Get().WAF, dyn)
 }
 
 // renderCPanelOff switches the rule engine off for the websites whose

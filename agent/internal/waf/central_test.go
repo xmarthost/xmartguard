@@ -154,7 +154,7 @@ func TestCentralSiteMode(t *testing.T) {
 		"redirect:https://%{REQUEST_HEADERS.Host}:7743/.xpguard/gate?back=%{REQUEST_URI}",
 		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none,chain"`, `SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:` + tok + `|fedcba9876543210fedcba9876543210)\s*(?:;|$)" "t:none,chain"`,
 		// Which value a suspect sends, one rule per slot (shared passes).
-		"id:7700910,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,log,msg:'xPGuard - CAPTCHA pass cookie used'", "id:7700911,",
+		"id:7700910,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,pass,log,msg:'xPGuard - CAPTCHA pass cookie used'", "id:7700911,",
 		`SecRule REQUEST_HEADERS:Cookie "@rx (?:^|;)\s*xg_gate=(?:fedcba9876543210fedcba9876543210)\s*(?:;|$)" "t:none"`,
 	} {
 		if !strings.Contains(out, want) {
@@ -268,7 +268,7 @@ func TestCentralSiteMode(t *testing.T) {
 func TestLoginRulesPathInfo(t *testing.T) {
 	c := settings.Defaults().WAF
 	out := Render(c, Options{Dir: "/etc/xpguard/waf"})
-	for _, want := range []string{`"@rx /wp-login\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase`, `"@rx /xmlrpc\.php(?:/|$)" "t:none,t:urlDecodeUni,t:lowercase`} {
+	for _, want := range []string{`"@rx /wp-login\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase`, `"@rx /xmlrpc\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q", want)
 		}
