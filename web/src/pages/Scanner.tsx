@@ -424,7 +424,13 @@ export function ScannerLogs() {
   const list = useAgent<{ findings: Finding[]; total: number }>(id, 'findings.list', params, 15_000);
   const { run, busy } = useAction();
   const canAct = can(user, 'operator');
-  useEffect(() => setSel([]), [list.data]);
+  // The 15 s refresh keeps the ticks of rows still shown; another filter,
+  // page or scan starts a new selection.
+  useEffect(() => setSel([]), [category, status, query, scanId, offset, id]);
+  useEffect(() => {
+    const shown = new Set((list.data?.findings ?? []).map((f) => f.id));
+    setSel((cur) => (cur.every((x) => shown.has(x)) ? cur : cur.filter((x) => shown.has(x))));
+  }, [list.data]);
   useEffect(() => setOffset(0), [category, status, query, scanId]);
 
   const act = async (action: string) => {
@@ -438,6 +444,7 @@ export function ScannerLogs() {
       back[action] ? () => agentCall(id!, 'finding.action', { ids, action: back[action] }).then(() => list.reload()) : undefined,
     );
     if (r && Object.keys(r.failed).length) alert(Object.entries(r.failed).map(([k, v]) => `#${k}: ${v}`).join('\n'));
+    if (r) setSel([]);
     list.reload();
   };
 
@@ -714,7 +721,6 @@ export function ScannerLogs() {
                   className={a.v === 'delete' ? 'btn-danger' : 'btn-outline'}
                   disabled={busy}
                   onClick={async () => {
-                    setSel([detail.id]);
                     if (a.confirm && !confirm(a.confirm)) return;
                     await run(() => agentCall(id!, 'finding.action', { ids: [detail.id], action: a.v }), `${a.l} done`);
                     setDetail(null);
