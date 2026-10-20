@@ -164,7 +164,7 @@ interface Note {
  */
 function Alerts() {
   const m = useMatch('/servers/:id/*');
-  const serverId = m?.params.id && m.params.id !== 'new' ? m.params.id : '';
+  const serverId = m?.params.id && m.params.id !== 'add' ? m.params.id : '';
   const { data, loading } = useApi<{ items: Note[] }>(`/api/notifications${serverId ? `?server=${encodeURIComponent(serverId)}` : ''}`, 60_000);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

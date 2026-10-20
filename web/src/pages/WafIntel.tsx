@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Brain, Check, EyeOff, Plus, RotateCcw, Save, Search } from 'lucide-react';
 import { api } from '../api';
 import { can, useAuth } from '../auth';
-import { Breadcrumb, ErrorBox, PageLoader } from '../components/ui';
+import { ErrorBox, PageLoader } from '../components/ui';
 import { Card, Pager, SettingRow, Toggle, useAction } from '../components/controls';
 import { useApi } from '../hooks';
 
@@ -56,7 +56,8 @@ function savedPageSize(): number {
 
 /** Overview » WAF Intelligence: web shell names learned from the scanners of
  *  all servers, and the portal's virtual patches. */
-export default function WafIntel({ embedded = false }: { embedded?: boolean }) {
+/** A tab of LearningCenter (its old route redirects there). */
+export default function WafIntel() {
   const { user } = useAuth();
   const admin = can(user, 'admin');
   const res = useApi<Resp>('/api/waf/intel');
@@ -92,7 +93,6 @@ export default function WafIntel({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <div className="space-y-5">
-      {!embedded && <Breadcrumb items={['Overview', 'WAF Intelligence']} />}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="h-title flex items-center gap-2">

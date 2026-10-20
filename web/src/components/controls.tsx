@@ -442,8 +442,4 @@ export function Card({ title, desc, children, right }: { title?: string; desc?: 
   );
 }
 
-export function isIPorCIDR(v: string): string | null {
-  const ip4 = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
-  const ip6 = /^[0-9a-fA-F:]+(\/\d{1,3})?$/;
-  return ip4.test(v) || (v.includes(':') && ip6.test(v)) ? null : `${v} is not a valid IP address or CIDR`;
-}
+export { isIPorCIDR } from '../validate';

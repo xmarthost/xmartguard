@@ -257,7 +257,7 @@ interface DomainRow {
   checked_at: number;
 }
 
-export function DomainReputation() {
+export function ServerDomainReputation() {
   const { id } = useParams();
   const host = useServerName(id);
   const { user } = useAuth();

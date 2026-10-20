@@ -6,6 +6,7 @@ import { Breadcrumb, Empty, ErrorBox, SectionLoader } from '../components/ui';
 import { Card, agentCall, editListSetting, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { exclusionError, type RuleExclusion } from '../components/RuleExclusions';
 import { useServerName } from './Scanner';
+import { isDomain } from '../validate';
 
 /** What can be allowed, and where the system puts it. */
 const KINDS = [
@@ -32,7 +33,6 @@ interface Entry {
   remove: () => Promise<unknown>;
 }
 
-const reDomain = /^(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+$/;
 
 /** Allow list: every "allow" of this server in one place. */
 export default function AllowList() {
@@ -102,11 +102,11 @@ export default function AllowList() {
       }
       case 'site':
       case 'rep_domain':
-        if (!reDomain.test(v)) return setErr('Enter a website like example.com');
+        if (!isDomain(v)) return setErr('Enter a website like example.com');
         job = kind === 'site' ? () => addTo('waf', 'whitelist_domains', v) : () => addTo('auto_suspend', 'whitelist_domains', v);
         break;
       case 'sender':
-        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) && !reDomain.test(v)) return setErr('Enter an email address or a domain');
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v) && !isDomain(v)) return setErr('Enter an email address or a domain');
         job = () => addTo('osm', 'whitelist_senders', v);
         break;
       case 'rule': {
