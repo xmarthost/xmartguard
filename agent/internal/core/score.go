@@ -77,8 +77,12 @@ func (a *Agent) siteScores(user string) []SiteScore {
 		}
 		var open, removed int
 		prefix := strings.TrimSuffix(s.path, "/") + "/"
-		_ = a.DB.QueryRow(`SELECT count(*) FROM findings WHERE status = 'detected' AND category != 'symlink' AND substr(path, 1, ?) = ?`, len(prefix), prefix).Scan(&open)
-		_ = a.DB.QueryRow(`SELECT count(*) FROM findings WHERE status IN ('quarantined','cleaned','trimmed','disabled') AND updated_at >= ? AND substr(path, 1, ?) = ?`, since, len(prefix), prefix).Scan(&removed)
+		// A range on path (the index findings_path) instead of substr(),
+		// which read the whole table twice per website: every path under
+		// "dir/" sorts below "dir0" ("0" follows "/").
+		end := strings.TrimSuffix(prefix, "/") + "0"
+		_ = a.DB.QueryRow(`SELECT count(*) FROM findings WHERE path >= ? AND path < ? AND status = 'detected' AND category != 'symlink'`, prefix, end).Scan(&open)
+		_ = a.DB.QueryRow(`SELECT count(*) FROM findings WHERE path >= ? AND path < ? AND status IN ('quarantined','cleaned','trimmed','disabled') AND updated_at >= ?`, prefix, end, since).Scan(&removed)
 		if open > 0 {
 			take(30, fmt.Sprintf("Deal with %d infected file(s) found on the website", open))
 		} else if removed > 0 {
