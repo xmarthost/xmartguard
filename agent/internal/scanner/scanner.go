@@ -420,6 +420,7 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 		return d, nil
 	}
+	shapeOK := false
 	if ScriptExts[ext] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
 		var err error
 		if content, err = readScanned(path, info, int64(cfg.MaxFileSizeMB)<<20); err != nil {
@@ -432,13 +433,10 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		if s.KnownGoodPath != nil && s.KnownGoodPath(path, sum) {
 			return nil, ErrTrusted
 		}
-		// Softaculous and WP Toolkit login helpers (see hostingtools.go).
-		if trustedHostingTool(path, content) {
-			return nil, ErrTrusted
-		}
-		if translationFile(path, content) {
-			return nil, ErrTrusted
-		}
+		// Softaculous and WP Toolkit login helpers (see hostingtools.go)
+		// and translation files: trusted by shape, but only after the
+		// known-bad hash lookup below.
+		shapeOK = trustedHostingTool(path, content) || translationFile(path, content)
 		if s.Cleared != nil {
 			sum := sha256.Sum256(content)
 			hs := hex.EncodeToString(sum[:])
@@ -466,6 +464,9 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			}
 			return final(&Detection{CatVirus, label})
 		}
+	}
+	if shapeOK {
+		return nil, ErrTrusted
 	}
 	if content != nil {
 		// A program, whatever it is called (also disguised as an image).

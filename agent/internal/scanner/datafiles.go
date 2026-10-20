@@ -36,7 +36,7 @@ func dataFile(path, ext string) bool {
 var (
 	// WordPress 6.5+ translation files: "<?php return ['domain'=>…];".
 	reL10nStart = regexp.MustCompile(`^\s*<\?php\s*(?:(?://|#)[^\n]*\n\s*|/\*[\s\S]*?\*/\s*)*return\s*(?:\[|array\s*\()`)
-	reL10nCode  = regexp.MustCompile(`(?i)\b(?:eval|assert|base64_decode|gzinflate|gzuncompress|str_rot13|system|exec|shell_exec|passthru|popen|proc_open|create_function|include|require|file_put_contents|fopen|curl_exec)\s*\(|\$_(?:GET|POST|REQUEST|COOKIE|SERVER|FILES)|\$\w+\s*\(|` + "`")
+	reL10nCode  = regexp.MustCompile(`(?i)\b(?:eval|assert|base64_decode|gzinflate|gzuncompress|str_rot13|system|exec|shell_exec|passthru|popen|proc_open|create_function|include|require|file_put_contents|fopen|curl_exec)\s*\(|\b(?:call_user_func(?:_array)?|array_map|array_filter|array_walk|usort|uasort|uksort|preg_replace_callback|register_shutdown_function|iterator_apply|ob_start|unserialize|extract|parse_str|getenv|file_get_contents|pcntl_exec|fsockopen)\s*\(|\$_(?:GET|POST|REQUEST|COOKIE|SERVER|FILES|ENV)|\$GLOBALS|php://input|\$\{|\$\$|\$\w+\s*\(|[\])]\s*\(|` + "`")
 )
 
 // translationFile reports a WordPress PHP translation file (*.l10n.php in a

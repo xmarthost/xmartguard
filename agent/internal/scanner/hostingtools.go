@@ -26,7 +26,9 @@ import (
 var (
 	reSappName = regexp.MustCompile(`^sapp-[a-z0-9_]+-signon\.php$`)
 	// Never part of these tools.
-	reToolDanger = regexp.MustCompile(`(?i)\b(?:eval|assert|system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec|create_function|base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|hex2bin|convert_uudecode|move_uploaded_file|file_put_contents|fwrite|fputs|curl_exec|fsockopen|stream_socket_client|call_user_func(?:_array)?)\s*\(|\$_FILES|` + "`" + `|\binclude\s*\(?\s*\$_|\brequire(?:_once)?\s*\(?\s*\$_|preg_replace\s*\(\s*['"].*/[a-z]*e[a-z]*['"]`)
+	// Calls through a variable or an expression ($f(), $a['x'](), ('a'.'b')())
+	// and callback runners count too: they run whatever the request names.
+	reToolDanger = regexp.MustCompile(`(?i)\b(?:eval|assert|system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec|create_function|base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|hex2bin|convert_uudecode|move_uploaded_file|file_put_contents|fwrite|fputs|curl_exec|fsockopen|stream_socket_client|call_user_func(?:_array)?|array_map|array_filter|array_walk(?:_recursive)?|usort|uasort|uksort|preg_replace_callback(?:_array)?|register_shutdown_function|register_tick_function|iterator_apply|ob_start|unserialize|extract|parse_str|getenv|file_get_contents|include|require|include_once|require_once)\s*\(\s*\$|\b(?:eval|assert|system|exec|shell_exec|passthru|popen|proc_open|pcntl_exec|create_function|base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|hex2bin|convert_uudecode|move_uploaded_file|file_put_contents|fwrite|fputs|curl_exec|fsockopen|stream_socket_client|call_user_func(?:_array)?|array_map|preg_replace_callback(?:_array)?|register_shutdown_function|unserialize|extract|parse_str|getenv)\s*\(|\$_(?:FILES|ENV)|\$GLOBALS|\$\{|\$\$|\$\w+\s*\(|[\])'"]\s*\(|php://input|` + "`" + `|\binclude\s*\(?\s*\$_|\brequire(?:_once)?\s*\(?\s*\$|preg_replace\s*\(\s*['"].*/[a-z]*e[a-z]*['"]`)
 )
 
 // trustedHostingTool reports a panel's own login file (see above).

@@ -4,7 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/md5"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,5 +135,63 @@ func TestFleetPluginZipOfficialMembers(t *testing.T) {
 	fi, _ = os.Stat(z3)
 	if d := scanZipKnown(z3, fi.Size(), func(string, string, string, [16]byte) bool { return true }); d == nil {
 		t.Fatal("mixed zip trusted")
+	}
+}
+
+// A2 F6: files trusted by name, place and shape (Softaculous's login file,
+// WordPress translation files) stay trusted, but not when they call
+// something named at run time on request data, and never when their exact
+// content is known malware. Fixtures call harmless functions (strtoupper):
+// only the shape matters.
+func TestFleetShapeTrustNeedsNoDynamicCall(t *testing.T) {
+	s := newScanner(t)
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "wp-config.php"), []byte("<?php define('X', 1);"), 0o644)
+	sapp := filepath.Join(root, "sapp-wp-signon.php")
+	l10n := filepath.Join(root, "wp-content", "languages", "plugins", "demo-en_GB.l10n.php")
+	os.MkdirAll(filepath.Dir(l10n), 0o755)
+	l10nOK := "<?php\nreturn ['domain'=>'demo','messages'=>['Run (now)'=>'Run (now)','Save'=>'Save']];\n"
+	for _, c := range []struct {
+		path, content string
+		trusted       bool
+	}{
+		{sapp, sappSignon, true},
+		{sapp, sappSignon + "\n$cb = $_REQUEST['cb']; $cb('x');", false},
+		{sapp, sappSignon + "\n$a = array($_REQUEST['cb']); $a[0]('x');", false},
+		{sapp, sappSignon + "\n('str'.'toupper')(getenv('HTTP_X'));", false},
+		{sapp, sappSignon + "\narray_map($_REQUEST['cb'], array('x'));", false},
+	} {
+		if got := trustedHostingTool(c.path, []byte(c.content)); got != c.trusted {
+			t.Errorf("login file %q: trusted %v, want %v", c.content[len(c.content)-30:], got, c.trusted)
+		}
+	}
+	for _, c := range []struct {
+		content string
+		trusted bool
+	}{
+		{l10nOK, true},
+		{"<?php\nreturn ['domain'=>('str'.'toupper')(getenv('HTTP_X'))];\n", false},
+		{"<?php\nreturn ['domain'=>array_map('str'.'toupper', ['x'])];\n", false},
+		{"<?php\nreturn ['domain'=>$GLOBALS['cb']('x')];\n", false},
+		{"<?php\nreturn ['domain'=>file_get_contents('php://input')];\n", false},
+	} {
+		if got := translationFile(l10n, []byte(c.content)); got != c.trusted {
+			t.Errorf("translation %q: trusted %v, want %v", c.content, got, c.trusted)
+		}
+	}
+
+	// Known-bad content under a trusted shape is still caught by its hash.
+	os.WriteFile(sapp, []byte(sappSignon), 0o644)
+	info, _ := os.Lstat(sapp)
+	if d, err := s.CheckFile(sapp, info, s.Settings.Get().Scanner); d != nil || err == nil {
+		t.Fatalf("login file not trusted: %v %v", d, err)
+	}
+	sum := sha256.Sum256([]byte(sappSignon))
+	os.MkdirAll(filepath.Dir(HashDBPath()), 0o700)
+	os.WriteFile(HashDBPath(), []byte(fmt.Sprintf("%d %s XG-TEST.KnownBad\n", len(sappSignon), hex.EncodeToString(sum[:]))), 0o600)
+	ReloadHashDB()
+	t.Cleanup(func() { os.Remove(HashDBPath()); ReloadHashDB() })
+	if d, _ := s.CheckFile(sapp, info, s.Settings.Get().Scanner); d == nil || d.Signature != "XG-TEST.KnownBad" {
+		t.Fatalf("known-bad hash skipped for a trusted shape: %v", d)
 	}
 }
