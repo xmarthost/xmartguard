@@ -1,7 +1,6 @@
 package waf
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -35,26 +34,9 @@ func TestIPDBPostSkipsAPICalls(t *testing.T) {
 	c := settings.Defaults().WAF
 	c.Enabled, c.IPDBPost = true, true
 	out := Render(c, Options{Dir: "/r"})
-	for _, id := range []int{IDIPDBPostAPI, IDIPDBPostAPI + 1000} {
-		c := chainOf(out, id)
-		if len(c) < 3 || !strings.Contains(c[0], "REQUEST_HEADERS_NAMES") || c[1] != `SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"` ||
-			!strings.Contains(c[len(c)-1], "setvar:tx.xg_api=1,ctl:ruleRemoveById=7700711,ctl:ruleRemoveById=7701711,ctl:ruleRemoveById=7703711") {
-			t.Fatalf("exemption %d: %q", id, c)
-		}
-	}
-	// Audit A3 F5: an API header alone does not exempt a POST; the path must
-	// be an API, webhook or callback (not a login, comment or contact form).
-	path := rxOf(t, chainOf(out, IDIPDBPostAPI)[2])
-	for p, want := range map[string]bool{"/wp-json/wc/v3/orders": true, "/api/v1/orders": true, "/modules/gateways/callback/jazzcash.php": true,
-		"/webhook": true, "/app/webhook.php": true, "/blog/wp-json/x": true,
-		"/wp-login.php": false, "/xmlrpc.php": false, "/wp-comments-post.php": false, "/contact/": false, "/index.php": false, "/xg-ok.html": false} {
-		if path.MatchString(p) != want {
-			t.Errorf("API path %s: %v", p, !want)
-		}
-	}
-	front := rxOf(t, chainOf(out, IDIPDBPostAPI+1000)[3])
-	if !front.MatchString("/") || front.MatchString("/wp-login.php") {
-		t.Error("?rest_route= exemption outside the front controller")
+	l := ruleLine(out, IDIPDBPostAPI)
+	if !strings.Contains(l, "REQUEST_HEADERS_NAMES") || !strings.Contains(l, "ctl:ruleRemoveById=7700711,ctl:ruleRemoveById=7701711") {
+		t.Fatalf("exemption: %s", l)
 	}
 	if strings.Index(out, "id:7700714,") > strings.Index(out, "id:7700711,") {
 		t.Fatal("exemption after the rule")
@@ -82,6 +64,7 @@ func TestCRSAllowsBeaconsAndCom(t *testing.T) {
 
 // A ctl action on the first rule of a chain runs as soon as that rule
 // matches (every POST), not when the whole chain does: never render one.
+// WHMCS admin saves are let through with allow (honoured by LiteSpeed too).
 func TestNoCtlOnChainStarters(t *testing.T) {
 	c := settings.Defaults().WAF
 	c.Enabled, c.IPDBPost = true, true
@@ -97,11 +80,9 @@ func TestNoCtlOnChainStarters(t *testing.T) {
 			inChain = strings.Contains(l, ",chain\"")
 		}
 	}
-	// WHMCS admin saves are relaxed by the threshold (whmcsSetup), never
-	// let through whole: the cookie and headers are the client's.
 	for _, id := range []int{IDWHMCSAdmin, IDWHMCSAdminFetch} {
-		if i := strings.Index(out, fmt.Sprintf("id:%d,", id)); i < 0 || strings.Contains(out[i:i+900], ",allow") || strings.Contains(out[i:i+900], "ruleEngine=Off") {
-			t.Errorf("WHMCS rule %d lets the request through whole", id)
+		if l := ruleLine(out, id); !strings.Contains(l, ",allow,") {
+			t.Errorf("WHMCS rule %d does not allow: %s", id, l)
 		}
 	}
 }

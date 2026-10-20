@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -282,7 +281,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		}
 		if lv := m.level(); lv != "strict" {
 			setupText += sessionSetup() + editorSetup() + autodiscoverSetup()
-			post += sessionPost(in)
+			post += sessionPost()
 			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing; requests from a site's own pages with a session have threshold " + fmt.Sprint(sessionThreshold)
 		}
 		crs4 := !strings.HasPrefix(rs.CRS.Version, "3.")
@@ -299,21 +298,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			// xPGuard's sensitive files rule covers those folders.
 			inc.WriteString("SecRuleRemoveById 920420 930140\n")
 		}
-		if ids := m.configRemovals(); len(ids) > 0 {
-			// Exclusions for every request, which LiteSpeed would not honour as ctl.
-			var l []string
-			for _, id := range ids {
-				l = append(l, strconv.Itoa(id))
-			}
-			fmt.Fprintf(&inc, "SecRuleRemoveById %s\n", strings.Join(l, " "))
-		}
 		if post != "" {
-			// New blocking rules here watch until approved, like in rules.conf.
-			var intel *Intel
-			if m.Intel != nil {
-				intel = m.Intel().Clean()
-			}
-			post = applyMonitor(post, Monitored(intel))
 			p := filepath.Join(m.RulesDir, "crs-after.conf")
 			files[p] = post
 			fmt.Fprintf(&inc, "Include %s\n", p)

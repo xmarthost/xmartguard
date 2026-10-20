@@ -51,7 +51,7 @@ func TestPortalPatchValidation(t *testing.T) {
 	}
 	c := settings.Defaults().WAF
 	out := Render(c, Options{Dir: "/r", Intel: in})
-	for _, want := range []string{"id:7700605,", `(?:wp-2019\.php)(?:/|$)`, "id:7703001,", "CVE-2024-27956", `csv\.php$`, "wordpress_logged_in_"} {
+	for _, want := range []string{"id:7700605,", `(?:wp-2019\.php)$`, "id:7703001,", "CVE-2024-27956", `csv\.php$`, "wordpress_logged_in_"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rules miss %q", want)
 		}

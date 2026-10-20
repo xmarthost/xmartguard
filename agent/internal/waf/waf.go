@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/logtail"
-	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -86,10 +85,7 @@ type Manager struct {
 	// than ListReloadGap allows (see install).
 	reloadMu   sync.Mutex
 	lastReload time.Time
-	// reloadPending: the last reload failed, so the rules on disk are not
-	// the ones running; the next apply reloads even without a change.
-	reloadPending bool
-	deferred      *time.Timer
+	deferred   *time.Timer
 }
 
 // Status is shown in the portal.
@@ -645,8 +641,7 @@ type PackageState struct {
 // pairRules are second rules (id+1000) that count for the first.
 var pairRules = map[int]int{IDEmptyUAWP + 1000: IDEmptyUAWP, IDRootProbe + 1000: IDRootProbe,
 	IDIPDBPost + 1000: IDIPDBPost, IDTorPost + 1000: IDTorPost, IDTorBlock + 1000: IDTorBlock,
-	IDTorPost + 2000: IDTorPost, IDTorBlock + 2000: IDTorBlock,
-	IDIPDBPost + 3000: IDIPDBPost, IDTorPost + 3000: IDTorPost, IDTorBlock + 3000: IDTorBlock, IDProxyBlocked + 1000: IDProxyBlocked, IDFakeSearchBot + 1000: IDFakeSearchBot}
+	IDTorPost + 2000: IDTorPost, IDTorBlock + 2000: IDTorBlock}
 
 // countCache keeps the WAF log counts (rule hits and totals): counting a
 // week of a busy server's log takes seconds, and the WAF settings page and
@@ -1072,64 +1067,25 @@ func (m *Manager) noteSource(path string) {
 }
 
 func (m *Manager) record(e Event) {
-	if e.User == "" {
-		// The hosting account owning the website: its panel lists the event.
-		e.User = siteOwner(e.Host)
-	}
-	_, _ = m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail)
+	res, err := m.DB.Exec(`INSERT INTO waf_events (at, ip, method, host, uri, rule_id, msg, category, action, user, detail)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`, e.At, e.IP, e.Method, e.Host, e.URI, e.RuleID, e.Msg, e.Category, e.Action, e.User, e.Detail)
-	// Keep the table bounded: an old-row cleanup every 512 events (e.ID is
-	// not set here, so it can not count them).
-	if recorded.Add(1)%512 == 0 {
+	if err != nil {
+		return
+	}
+	// Keep the table bounded: every 512th row (e.ID was never set, so this
+	// ran on every insert). 32 days, so the monthly report on the 1st
+	// still sees the whole last month.
+	if id, err := res.LastInsertId(); err == nil && id%512 == 0 {
 		_, _ = m.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, store.Now()-RetainDays*86400)
 	}
 }
 
-// RetainDays is how long WAF events are kept at least (32 days, so the
-// monthly report on the 1st still sees the whole last month).
+// RetainDays is how long WAF events are kept at least.
 const RetainDays = 32
-
-// recorded counts the events record stored.
-var recorded atomic.Int64
-
-// UserDomainsPath is cPanel's list of websites and their accounts.
-var UserDomainsPath = "/etc/userdomains"
-
-// owners caches UserDomainsPath (read at most once a minute).
-var owners struct {
-	sync.Mutex
-	at     time.Time
-	byHost map[string]string
-}
-
-// siteOwner is the hosting account of a website (also its www. name and,
-// for a subdomain, the nearest listed parent), "" when not known.
-func siteOwner(host string) string {
-	h := NormHost(host)
-	if h == "" {
-		return ""
-	}
-	owners.Lock()
-	defer owners.Unlock()
-	if owners.byHost == nil || time.Since(owners.at) > time.Minute {
-		owners.byHost, owners.at = reputation.HostedDomains(UserDomainsPath), time.Now()
-	}
-	for d := h; d != ""; {
-		if u := owners.byHost[d]; u != "" {
-			return u
-		}
-		_, rest, ok := strings.Cut(d, ".")
-		if !ok || !strings.Contains(rest, ".") {
-			break
-		}
-		d = rest
-	}
-	return ""
-}
 
 func (m *Manager) maybeBan(e Event, c *counter) {
 	cfg := m.Settings.Get().WAF
-	if !cfg.BruteForce || m.Firewall == nil || isProxyAddr(e.IP) {
+	if !cfg.BruteForce || m.Firewall == nil {
 		return
 	}
 	n := c.hit(e.IP, time.Duration(cfg.BFWindowMin)*time.Minute)
@@ -1147,46 +1103,7 @@ var noBanRules = map[int]bool{IDShopScrape: true, IDShopScrape + 1000: true, IDC
 	IDNoUAPost: true, IDNoUAPost + 1000: true,
 	// The address is only refused POSTs: a ban would cut a shared or API
 	// address off the whole website.
-	IDIPDBPost: true, IDIPDBPost + 1000: true, IDIPDBPost + 3000: true,
-	// Rules that only match proxied requests: the event's address is the
-	// proxy's (a Cloudflare edge serves many websites).
-	IDProxyBlocked: true, IDProxyBlocked + 1000: true,
-	IDTorPost + 1000: true, IDTorPost + 2000: true, IDTorPost + 3000: true,
-	IDTorBlock + 1000: true, IDTorBlock + 2000: true, IDTorBlock + 3000: true}
-
-// proxyNets are ProxyRanges parsed.
-var proxyNets = func() []*net.IPNet {
-	var out []*net.IPNet
-	for _, r := range ProxyRanges {
-		if !strings.Contains(r, "/") {
-			if strings.Contains(r, ":") {
-				r += "/128"
-			} else {
-				r += "/32"
-			}
-		}
-		if _, n, err := net.ParseCIDR(r); err == nil {
-			out = append(out, n)
-		}
-	}
-	return out
-}()
-
-// isProxyAddr: a Cloudflare edge or a local proxy. It is never banned: the
-// visitor is behind it, and every website it serves would be cut off (on
-// servers without mod_remoteip every event carries the proxy's address).
-func isProxyAddr(ip string) bool {
-	a := net.ParseIP(ip)
-	if a == nil {
-		return false
-	}
-	for _, n := range proxyNets {
-		if n.Contains(a) {
-			return true
-		}
-	}
-	return false
-}
+	IDIPDBPost: true, IDIPDBPost + 1000: true}
 
 // policyOnly: an OWASP CRS block from protocol and policy rules only
 // (920xxx: content type, file extension, header limits). Browsers and APIs
@@ -1216,7 +1133,7 @@ func policyOnly(e Event) bool {
 // firewall instead of costing a web server request each time.
 func (m *Manager) maybeBanBlocked(e Event, c *counter) {
 	fw := m.Settings.Get().Firewall
-	if !fw.WAFBan || m.Firewall == nil || isProxyAddr(e.IP) {
+	if !fw.WAFBan || m.Firewall == nil {
 		return
 	}
 	n := c.hit(e.IP, time.Duration(m.Settings.Get().WAF.BFWindowMin)*time.Minute)
