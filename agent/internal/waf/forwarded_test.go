@@ -66,3 +66,28 @@ func TestForwardedAddressFromTheProxyOnly(t *testing.T) {
 		t.Error("soft blocking reads X-Real-IP")
 	}
 }
+
+// Audit A3 F4: a direct request with a Googlebot User-Agent from an address
+// not on Google's list is fake, also when it adds an X-Forwarded-For
+// header; behind Cloudflare CF-Connecting-IP is checked against the list.
+func TestFakeSearchBotIgnoresForwardedHeaders(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled, c.BotBlocker = true, true
+	out := Render(c, Options{Dir: "/r", Trusted: true, VerifiedBots: []string{"googlebot", "bingbot"}})
+	direct := strings.Join(chainOf(out, IDFakeSearchBot), "\n")
+	if strings.Contains(direct, "X-Forwarded-For") || strings.Contains(direct, "&REQUEST_HEADERS:CF-Connecting-IP") ||
+		!strings.Contains(direct, `SecRule REMOTE_ADDR "!@ipMatchFromFile /r/proxy-ranges.txt"`) {
+		t.Errorf("direct rule:\n%s", direct)
+	}
+	cf := chainOf(out, IDFakeSearchBot+1000)
+	if len(cf) < 3 || !strings.Contains(cf[len(cf)-1], `SecRule REQUEST_HEADERS:CF-Connecting-IP "!@ipMatchFromFile /r/trusted-ips.txt"`) ||
+		!strings.Contains(strings.Join(cf, "\n"), "@ipMatch "+strings.Join(cloudflareRanges(), ",")) {
+		t.Errorf("Cloudflare rule: %q", cf)
+	}
+	// Real crawlers (trusted services) skip both, also on LiteSpeed.
+	for _, id := range []int{IDFakeSearchBot, IDFakeSearchBot + 1000} {
+		if ch := chainOf(out, id); len(ch) < 2 || ch[1] != `SecRule &TX:xg_trusted "@eq 0" "t:none,chain"` {
+			t.Errorf("rule %d does not skip trusted services: %q", id, ch)
+		}
+	}
+}

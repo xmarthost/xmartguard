@@ -916,12 +916,17 @@ func Render(c settings.WAF, o Options) string {
 	bot(c.AIBots, FileAIBots, IDAIBots, "Fake AI crawler")
 	bot(c.BotBlocker && len(c.BotList) > 0, FileCustomBots, IDCustomBots, "Bad bot")
 	if len(o.VerifiedBots) > 0 && o.Trusted && c.BotBlocker && !off[IDFakeSearchBot] {
-		// Only direct visitors: behind a CDN or proxy the address is the
-		// proxy's, so a real crawler could look fake.
-		w(`SecRule REQUEST_HEADERS:User-Agent "@rx \b(?:%s)\b" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake search engine crawler blocked',tag:'xpguard/bot',chain"`, strings.Join(quoteAll(o.VerifiedBots), "|"), IDFakeSearchBot)
+		// Direct visitors by their address; behind Cloudflare by
+		// CF-Connecting-IP (+1000). Behind a local proxy the address is the
+		// proxy's, so those are not judged. Whether the request is proxied
+		// is told by REMOTE_ADDR, never by a header the client may add.
+		fake := fmt.Sprintf(`SecRule REQUEST_HEADERS:User-Agent "@rx \b(?:%s)\b" "id:%%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake search engine crawler blocked',tag:'xpguard/bot',chain"`, strings.Join(quoteAll(o.VerifiedBots), "|"))
+		w(fake, IDFakeSearchBot)
 		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileTrustedIPs)
-		w(`  SecRule &REQUEST_HEADERS:X-Forwarded-For "@eq 0" "t:none,chain"`)
-		w(`  SecRule &REQUEST_HEADERS:CF-Connecting-IP "@eq 0" "t:none"`)
+		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileProxyRanges)
+		w(fake, IDFakeSearchBot+1000)
+		w(`  SecRule REMOTE_ADDR "@ipMatch %s" "t:none,chain"`, strings.Join(cloudflareRanges(), ","))
+		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileTrustedIPs)
 	}
 	// rblRule blocks addresses on a list, directly, behind Cloudflare
 	// (CF-Connecting-IP; id+1000) and behind a local proxy (the last
@@ -995,7 +1000,7 @@ func Render(c settings.WAF, o Options) string {
 		// LiteSpeed ignores the trusted rule's ctl:ruleRemoveById: the
 		// rules it removes also test tx.xg_trusted.
 		out = guardChains(out, `SecRule &TX:xg_trusted "@eq 0" "t:none,chain"`, IDRootProbe, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000,
-			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot)
+			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot, IDFakeSearchBot+1000)
 	}
 	// Same for the shop filter rules' same-origin exemption (IDShopScrape+2000;
 	// a negated header test would not match a request without the header).
