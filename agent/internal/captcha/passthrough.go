@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -29,11 +30,30 @@ import (
 //     CAPTCHA page nobody will see.
 
 // machinePath matches the files served from the website (GET/HEAD only).
-var machinePath = regexp.MustCompile(`(?i)^/(?:robots\.txt|ads\.txt|app-ads\.txt|security\.txt|humans\.txt|favicon\.ico|[^/]*sitemap[^/]*\.(?:xml|xml\.gz|txt|php)|\.well-known/.*)$`)
+// Under /.well-known/ only the certificate checks (ACME, cPanel DCV, PKI
+// validation) and security.txt: any other path there is the site's own
+// 404 or CMS page, which a banned address must not get.
+var machinePath = regexp.MustCompile(`(?i)^/(?:robots\.txt|ads\.txt|app-ads\.txt|security\.txt|humans\.txt|favicon\.ico|[^/]*sitemap[^/]*\.(?:xml|xml\.gz|txt|php)|\.well-known/(?:security\.txt|(?:acme-challenge|pki-validation|cpanel-dcv)/[^/]+))$`)
 
-// MachinePath reports whether a path is served from the website.
+// MachinePath reports whether a path is served from the website. The path
+// must be canonical as sent: "/.well-known/../wp-login.php" or an encoded
+// dot, slash or backslash would match the pattern and then reach any page
+// of the site once the web server cleans it.
 func MachinePath(r *http.Request) bool {
-	return (r.Method == http.MethodGet || r.Method == http.MethodHead) && machinePath.MatchString(r.URL.Path)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	p := r.URL.Path
+	if p == "" || path.Clean(p) != p || strings.ContainsAny(p, "\\\x00") || !machinePath.MatchString(p) {
+		return false
+	}
+	raw := strings.ToLower(r.URL.EscapedPath())
+	for _, bad := range []string{"%2e", "%2f", "%5c", "%00", "..", "//", "\\"} {
+		if strings.Contains(raw, bad) {
+			return false
+		}
+	}
+	return true
 }
 
 // BrowserPage reports whether the request is a browser opening a page: a
@@ -104,7 +124,7 @@ func originalDst(c net.Conn) (netip.AddrPort, bool) {
 // from this server (local traffic is not redirected again).
 func serveFromSite(w http.ResponseWriter, r *http.Request) bool {
 	dst, ok := r.Context().Value(origDstKey{}).(netip.AddrPort)
-	if !ok || (dst.Port() != 80 && dst.Port() != 443) {
+	if !ok || (dst.Port() != 80 && dst.Port() != 443) || !MachinePath(r) {
 		return false
 	}
 	host := r.Host
@@ -116,12 +136,7 @@ func serveFromSite(w http.ResponseWriter, r *http.Request) bool {
 		scheme = "https"
 	}
 	proxy := &httputil.ReverseProxy{
-		Rewrite: func(p *httputil.ProxyRequest) {
-			p.Out.URL.Scheme = scheme
-			p.Out.URL.Host = dst.String()
-			p.Out.Host = r.Host
-			p.SetXForwarded()
-		},
+		Rewrite: siteRewrite(r, scheme, dst),
 		Transport: &http.Transport{
 			// The site's own certificate is for its name, not the address.
 			TLSClientConfig:       &tls.Config{ServerName: host, InsecureSkipVerify: true}, //nolint:gosec // this server's own website
@@ -134,6 +149,19 @@ func serveFromSite(w http.ResponseWriter, r *http.Request) bool {
 	}
 	proxy.ServeHTTP(w, r)
 	return true
+}
+
+// siteRewrite sends the request to the website: only the checked,
+// canonical path (MachinePath) and no query, since a query on robots.txt
+// or a sitemap can reach any handler of the CMS.
+func siteRewrite(r *http.Request, scheme string, dst netip.AddrPort) func(*httputil.ProxyRequest) {
+	return func(p *httputil.ProxyRequest) {
+		p.Out.URL.Scheme = scheme
+		p.Out.URL.Host = dst.String()
+		p.Out.URL.Path, p.Out.URL.RawPath, p.Out.URL.RawQuery, p.Out.URL.ForceQuery = r.URL.Path, "", "", false
+		p.Out.Host = r.Host
+		p.SetXForwarded()
+	}
 }
 
 // blockedText is the answer to requests that are not a browser page.
