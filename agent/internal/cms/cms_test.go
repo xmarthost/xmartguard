@@ -227,6 +227,38 @@ func TestCMSScanEndToEnd(t *testing.T) {
 	}
 }
 
+// Audit A1 F9: a slug or argument that is a wp-cli option ("--exec=",
+// "--require=") never reaches wp-cli, from the portal or from a plugin
+// directory named so.
+func TestWPCLIRefusesOptionArguments(t *testing.T) {
+	t.Setenv("XG_STATE_DIR", t.TempDir())
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.Exec(`INSERT INTO cms_sites (type, path, user, version) VALUES ('wordpress', '/home/u/public_html', 'u', '6.5 --exec=x')`)
+	m := &Manager{DB: db, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	ctx := context.Background()
+	for _, slug := range []string{"--exec=phpinfo()", "--require=/home/u/x.php", "-x", "a b", "../x", ""} {
+		if _, err := m.Update(ctx, "/home/u/public_html", "plugin", slug); err == nil || !strings.Contains(err.Error(), "invalid slug") {
+			t.Fatalf("slug %q: %v", slug, err)
+		}
+	}
+	if _, err := m.WPCLI(ctx, "/home/u/public_html", "plugin", "deactivate", "--exec=x"); err == nil || !strings.Contains(err.Error(), "invalid argument") {
+		t.Fatalf("option argument: %v", err)
+	}
+	// The repair's own version comes from the site's files: checked too.
+	if _, err := m.Update(ctx, "/home/u/public_html", "core-repair", ""); err == nil || !strings.Contains(err.Error(), "invalid argument") {
+		t.Fatalf("version argument: %v", err)
+	}
+	for _, a := range []string{"--force", "--skip-content", "--version=6.5.2", "akismet", "contact-form-7"} {
+		if !wpArgAllowed(a) {
+			t.Errorf("%q refused", a)
+		}
+	}
+}
+
 func TestReadWPConfigVariants(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "wp-config.php"), `<?php
