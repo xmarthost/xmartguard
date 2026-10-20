@@ -17,9 +17,17 @@ async function call(path: string, payload: unknown, opts?: { secret?: string; ts
   return new Client(h.url).req('POST', path, s.body, s.headers);
 }
 const inAYear = () => new Date(Date.now() + 365 * 86400_000).toISOString();
+/** Signs a customer in through the website's one-time link (no rate-limited password step). */
+async function signIn(email: string): Promise<Client> {
+  const u = new URL((await call('/api/billing/login-link', { email })).body.url);
+  const res = await fetch(h.url + u.pathname + u.search, { redirect: 'manual' });
+  const c = new Client(h.url);
+  c.cookie = res.headers.getSetCookie()[0].split(';')[0];
+  return c;
+}
 
 beforeAll(async () => {
-  h = await startHarness({ billingSecret: SECRET, billingSiteUrl: 'https://shop.example.com' });
+  h = await startHarness({ billingSecret: SECRET, billingSiteUrl: 'https://shop.example.com', trustProxy: true });
   owner = new Client(h.url);
   await owner.login();
 });
@@ -244,5 +252,33 @@ describe('billing API (website -> portal)', () => {
     const later = new URL((await call('/api/billing/password-link', { email: 'links@example.com' })).body.url).searchParams.get('token')!;
     expect((await c.req('POST', '/api/auth/password', { current_password: 'links-long-password', new_password: 'links-newer-password' })).status).toBe(200);
     expect((await new Client(h.url).req('GET', `/api/auth/set-password?token=${later}`)).status).toBe(404);
+  });
+
+  it('refuses a second trial from an address that had one, whatever the inventory says', async () => {
+    const key = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    await call('/api/billing/provision', { email: 'trial-c@example.com', plan: 'free-trial', max_servers: 1, period_end: inAYear(), trial: true });
+    const c = await signIn('trial-c@example.com');
+    await h.pool.query("INSERT INTO trial_hosts (ip, hostname, trial_until) VALUES ('203.0.113.90', 'earlier.example.com', now())");
+    const t = await c.req('POST', '/api/enrollment-tokens', { label: 'again' });
+    // No addresses in the inventory; the server connects from the recorded one.
+    const r = await new Client(h.url).req('POST', '/api/agent/enroll', { token: t.body.token, public_key: key(), agent_version: '0.22.0', inventory: { hostname: 'renamed.example.com', ips: [] } }, { 'x-forwarded-for': '203.0.113.90' });
+    expect(r.status).toBe(402);
+  });
+
+  it('lets two servers enrolling at once take the last licence only once', async () => {
+    const key = () => crypto.generateKeyPairSync('ed25519').publicKey.export({ format: 'der', type: 'spki' }).subarray(-32).toString('base64');
+    await call('/api/billing/provision', { email: 'race@example.com', plan: 'pro', max_servers: 1, period_end: inAYear() });
+    const c = await signIn('race@example.com');
+    const t1 = await c.req('POST', '/api/enrollment-tokens', { label: 'one' });
+    // A second unused token, as two token requests racing leave behind.
+    const t2 = 'race-second-token-0123456789';
+    await h.pool.query(
+      "INSERT INTO enrollment_tokens (account_id, token_hash, label, expires_at) SELECT account_id, encode(sha256($2::bytea), 'hex'), 'two', now() + interval '1 hour' FROM enrollment_tokens WHERE id = $1",
+      [t1.body.id, t2],
+    );
+    const enroll = (token: string) => new Client(h.url).req('POST', '/api/agent/enroll', { token, public_key: key(), agent_version: '0.22.0', inventory: { hostname: 'race.example.com' } });
+    const [a, b] = await Promise.all([enroll(t1.body.token), enroll(t2)]);
+    expect([a.status, b.status].sort()).toEqual([200, 402]);
+    expect((await c.req('GET', '/api/license')).body.servers_used).toBe(1);
   });
 });

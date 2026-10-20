@@ -24,7 +24,7 @@ export interface License {
   status: 'active' | 'expired' | 'suspended' | 'cancelled';
 }
 
-export async function loadLicense(pool: Pool, accountId: string): Promise<License | null> {
+export async function loadLicense(pool: { query: Pool['query'] }, accountId: string): Promise<License | null> {
   const { rows } = await pool.query(
     'SELECT plan, plan_name, max_servers, period_end, status, trial FROM account_licenses WHERE account_id = $1',
     [accountId],
@@ -35,7 +35,7 @@ export async function loadLicense(pool: Pool, accountId: string): Promise<Licens
 }
 
 /** Servers connected plus install tokens not used yet. */
-export async function serversInUse(pool: Pool, accountId: string, withTokens = true): Promise<number> {
+export async function serversInUse(pool: { query: Pool['query'] }, accountId: string, withTokens = true): Promise<number> {
   const { rows } = await pool.query(
     `SELECT (SELECT count(*) FROM servers WHERE account_id = $1 AND status = 'active')::int AS servers,
             (SELECT count(*) FROM enrollment_tokens WHERE account_id = $1 AND used_at IS NULL AND expires_at > now())::int AS tokens`,
@@ -48,7 +48,7 @@ export async function serversInUse(pool: Pool, accountId: string, withTokens = t
  * Why another server cannot be added to this account ('' when it can).
  * `withTokens`: count unused install tokens too (when making one).
  */
-export async function serverLimitError(pool: Pool, accountId: string, withTokens: boolean): Promise<string> {
+export async function serverLimitError(pool: { query: Pool['query'] }, accountId: string, withTokens: boolean): Promise<string> {
   const lic = await loadLicense(pool, accountId);
   if (!lic) return '';
   const expired = lic.status !== 'active' || (lic.period_end !== null && new Date(lic.period_end).getTime() < Date.now());
