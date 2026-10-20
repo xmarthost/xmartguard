@@ -2,7 +2,10 @@
 # One-shot xPGuard PORTAL setup for AlmaLinux / Rocky / RHEL / CloudLinux 9.
 #
 #   bash setup-almalinux.sh --domain app.xpguard.org --email you@example.com [--branch BRANCH] [--token GITHUB_TOKEN]
-#                           [--captcha-domain verify.example.net | none]
+#                           [--captcha-domain verify.example.net | none] [--show-secrets]
+#
+# The first admin password and the billing secret are printed only on the
+# run that creates them; --show-secrets prints them again.
 #
 # The CAPTCHA page for blocked and suspicious visitors of the websites is
 # served by the portal on its own domain. Use a SEPARATE domain bought only
@@ -41,6 +44,7 @@ while [ $# -gt 0 ]; do
     --captcha-domain) CAPTCHA_DOMAIN="$2"; shift 2 ;;
     --billing-site) BILLING_SITE="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
+    --show-secrets) SHOW_SECRETS=1; shift ;;
     --ai|--ai-url|--ai-model) echo "note: $1 is no longer used (AI keys are set in the portal)"; shift 2 ;;
     *) echo "unknown option: $1"; exit 2 ;;
   esac
@@ -51,6 +55,49 @@ ok()   { printf '    \033[32m✔\033[0m %s\n' "$*"; }
 warn() { printf '    \033[33m!\033[0m %s\n' "$*"; }
 die()  { printf '\n\033[31mERROR: %s\033[0m\n' "$*"; exit 1; }
 trap 'die "setup failed at line $LINENO"' ERR
+
+# The GitHub token reaches git in its environment, never in the remote URL
+# (saved in .git/config, and left there when a fetch fails) or on its
+# command line (visible to every user in ps).
+# Added after any GIT_CONFIG_* entries the environment already has.
+git_auth() {
+  if [ -n "$TOKEN" ]; then
+    (
+      n=${GIT_CONFIG_COUNT:-0}
+      export "GIT_CONFIG_KEY_$n=http.https://github.com/.extraHeader"
+      export "GIT_CONFIG_VALUE_$n=Authorization: Basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+      export GIT_CONFIG_COUNT=$((n + 1))
+      exec git "$@"
+    )
+  else
+    git "$@"
+  fi
+}
+
+# Secrets are printed only on the run that made them, or with
+# --show-secrets: this script runs again on every update, and its output
+# often ends up in a support chat or ticket.
+secret_line() { # <label> <value> <made on this run: 0|1>
+  if [ "$3" = 1 ] || [ "${SHOW_SECRETS:-0}" = 1 ]; then
+    echo "$1$2"
+  else
+    echo "$1(hidden: it is in $ENV, or run again with --show-secrets)"
+  fi
+}
+
+# ADMIN_PASSWORD only creates the owner account on the first start. Once
+# accounts exist it is dropped from .env, so the container (docker inspect)
+# and the file no longer carry it.
+forget_first_password() {
+  local n
+  grep -q '^ADMIN_PASSWORD=.' "$ENV" || return 0
+  n=$(docker compose exec -T db psql -U xmartguard -d xmartguard -tAc 'SELECT count(*) FROM users' 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ "$n" =~ ^[1-9][0-9]*$ ]]; then
+    sed -i 's/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=/' "$ENV"
+    ok "removed the first admin password from $ENV (the owner account exists)"
+  fi
+  return 0
+}
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [ -n "$DOMAIN" ] && [ -n "$EMAIL" ] || die "usage: bash setup-almalinux.sh --domain app.xpguard.org --email you@example.com"
@@ -158,21 +205,21 @@ fi
 
 step "Getting the code ($BRANCH)"
 URL="https://$REPO"
-[ -n "$TOKEN" ] && URL="https://x-access-token:${TOKEN}@$REPO"
 if [ -d "$DIR/.git" ]; then
+  # Also removes a token that older versions of this script put in the URL.
   git -C "$DIR" remote set-url origin "$URL"
-  git -C "$DIR" fetch -q origin "$BRANCH"
+  git_auth -C "$DIR" fetch -q origin "$BRANCH"
   git -C "$DIR" checkout -q -B "$BRANCH" "origin/$BRANCH"
 else
-  git clone -q --branch "$BRANCH" "$URL" "$DIR"
+  git_auth clone -q --branch "$BRANCH" "$URL" "$DIR"
 fi
-# Do not leave the token on disk.
-git -C "$DIR" remote set-url origin "https://$REPO"
 ok "$(git -C "$DIR" log --oneline -1)"
 
 step "Writing configuration"
 ENV="$DIR/deploy/.env"
+NEW_ENV=0
 if [ ! -f "$ENV" ]; then
+  NEW_ENV=1
   cat >"$ENV" <<EOF
 DOMAIN=$DOMAIN
 POSTGRES_PASSWORD=$(openssl rand -hex 24)
@@ -199,7 +246,8 @@ PORTAL_PORT=$(sed -n 's/^PORTAL_PORT=//p' "$ENV")
 
 # Billing: the website (xpguard.org) sells server licences and tells the
 # portal through a signed API. The shared secret is made once and kept.
-grep -q '^BILLING_SECRET=' "$ENV" || echo "BILLING_SECRET=$(openssl rand -hex 32)" >>"$ENV"
+NEW_BILLING=0
+grep -q '^BILLING_SECRET=' "$ENV" || { echo "BILLING_SECRET=$(openssl rand -hex 32)" >>"$ENV"; NEW_BILLING=1; }
 if [ -z "${BILLING_SITE:-}" ]; then
   BILLING_SITE=$(sed -n 's/^BILLING_SITE_URL=//p' "$ENV")
   [ -n "$BILLING_SITE" ] || BILLING_SITE="https://${DOMAIN#*.}"
@@ -249,6 +297,7 @@ if ! iptables -w -t nat -n -L DOCKER >/dev/null 2>&1 && iptables -w -n -L >/dev/
   warn "Docker's firewall rules are missing (flushed by a firewall restart such as csf -r); restarting Docker"
 fi
 bash "$DIR/deploy/docker-fw-check.sh" || die "Docker did not come back after a restart (systemctl status docker)"
+[ "$NEW_ENV" = 1 ] || forget_first_password
 # --force-recreate: a container left from a failed start (e.g. its network
 # could not be set up) would otherwise be started again with a broken network
 # ("getaddrinfo EAI_AGAIN db"). Data lives in named volumes and is kept.
@@ -463,14 +512,18 @@ echo ""
 echo "============================================================"
 echo " xPGuard portal:  https://$DOMAIN"
 echo " Login email:         $(sed -n 's/^ADMIN_EMAIL=//p' "$ENV")"
-echo " First password:      $ADMIN_PASSWORD"
-echo "   (change it under Account after logging in)"
+if [ -n "$ADMIN_PASSWORD" ]; then
+  secret_line " First password:      " "$ADMIN_PASSWORD" "$NEW_ENV"
+  echo "   (change it under Account after logging in)"
+else
+  echo " Password:            the owner's own (to reset: cd $DIR/deploy && docker compose exec portal node dist/cli.js set-password <email> <new password>)"
+fi
 echo " AI scanner:          add free AI API keys (Gemini, Groq, OpenRouter) under AI Scanner"
 [ "$CAPTCHA_DOMAIN" != none ] && echo " CAPTCHA page:        https://$CAPTCHA_DOMAIN  (add the Turnstile keys under Overview > CAPTCHA Page)"
 echo " Update later:        curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh"
 echo "                      bash /root/setup.sh --domain $DOMAIN --email $EMAIL"
 echo " Billing website:     $(sed -n 's/^BILLING_SITE_URL=//p' "$ENV")"
-echo " Billing secret:      $(sed -n 's/^BILLING_SECRET=//p' "$ENV")"
+secret_line " Billing secret:      " "$(sed -n 's/^BILLING_SECRET=//p' "$ENV")" "$NEW_BILLING"
 echo "   (paste it into the website admin: Settings > Control panel)"
 echo " Logs:                cd $DIR/deploy && docker compose logs -f portal"
 echo "============================================================"
