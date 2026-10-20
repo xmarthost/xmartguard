@@ -12,7 +12,10 @@ import (
 func TestRecordPrunesEvery512th(t *testing.T) {
 	m := learnManager(t)
 	now := store.Now()
-	count := func() (n int) { m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE at < ?`, now-86400).Scan(&n); return }
+	count := func() (n int) {
+		m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE at < ?`, now-86400).Scan(&n)
+		return
+	}
 	m.record(Event{At: now - 31*86400, IP: "198.51.100.1", Msg: "last month"})
 	m.record(Event{At: now - 40*86400, IP: "198.51.100.1", Msg: "too old"})
 	m.record(Event{At: now, IP: "198.51.100.1", Msg: "x"})
