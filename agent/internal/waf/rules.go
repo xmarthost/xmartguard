@@ -295,6 +295,11 @@ const (
 	// Proxy IP check: the proxies whose forwarded-for header is trusted,
 	// and the addresses to block (the firewall's deny list, bans and IPDB).
 	FileProxyRanges = "proxy-ranges.txt"
+	// Cloudflare's networks and the local reverse proxies apart: behind
+	// Cloudflare only CF-Connecting-IP names the visitor (Cloudflare sets
+	// it; X-Real-IP and X-Forwarded-For pass through from the client).
+	FileCFRanges    = "cloudflare-ranges.txt"
+	FileLocalProxys = "local-proxies.txt"
 	FileBlockedIPs  = "blocked-ips.txt"
 	FileTrustedIPs  = "trusted-ips.txt"
 	FileExemptIPs   = "exempt-ips.txt"
@@ -322,6 +327,23 @@ func cloudflareRanges() []string {
 		}
 	}
 	return out
+}
+
+// proxyRead is one way to learn the visitor behind a proxy: the proxies'
+// address file, the header they set, and the rule id.
+type proxyRead struct {
+	id            int
+	file, headers string
+}
+
+// viaProxies are the two proxy kinds: Cloudflare (CF-Connecting-IP only)
+// under id, local reverse proxies (nginx, Varnish, often behind Cloudflare
+// themselves: the header they or Cloudflare set) under id+5000.
+func viaProxies(id int) []proxyRead {
+	return []proxyRead{
+		{id, FileCFRanges, "REQUEST_HEADERS:CF-Connecting-IP"},
+		{id + 5000, FileLocalProxys, "REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP"},
+	}
 }
 
 // placeholderIP keeps an empty list loadable (@ipMatchFromFile refuses an
@@ -950,10 +972,12 @@ func Render(c settings.WAF, o Options) string {
 		}
 		head(id, "", list)
 		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
-		head(id+1000, " (behind a proxy)", FileProxyRanges)
-		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
-		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, list)
-		w(`    SecRule TX:1 "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
+		for _, v := range viaProxies(id + 1000) {
+			head(v.id, " (behind a proxy)", v.file)
+			w(`  SecRule %s "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`, v.headers)
+			w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, list)
+			w(`    SecRule TX:1 "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
+		}
 		if viaCF != "" {
 			head(id+2000, " (Cloudflare)", FileProxyRanges)
 			w(`  SecRule REQUEST_HEADERS:CF-IPCountry "@streq %s" "t:none"`, viaCF)
@@ -977,9 +1001,11 @@ func Render(c settings.WAF, o Options) string {
 	if c.ProxyIPCheck && !off[IDProxyBlocked] {
 		// Disruptive action and metadata sit on the chain's first rule
 		// (ModSecurity 2); the client address is the first one in the header.
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Blacklisted IP behind proxy',tag:'xpguard/proxy',chain"`, o.Dir, FileProxyRanges, IDProxyBlocked)
-		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
-		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
+		for _, v := range viaProxies(IDProxyBlocked) {
+			w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Blacklisted IP behind proxy',tag:'xpguard/proxy',chain"`, o.Dir, v.file, v.id)
+			w(`  SecRule %s "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`, v.headers)
+			w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileBlockedIPs)
+		}
 	}
 	out := b.String()
 	if o.Trusted {
@@ -1069,6 +1095,8 @@ func ProxyFiles(blocked []string) map[string]string {
 	sort.Strings(ok)
 	return map[string]string{
 		FileProxyRanges: strings.Join(ProxyRanges, "\n") + "\n", // no host masks
+		FileCFRanges:    strings.Join(cloudflareRanges(), "\n") + "\n",
+		FileLocalProxys: "127.0.0.1\n::1\n",
 		FileBlockedIPs:  strings.Join(ok, "\n") + "\n",
 	}
 }

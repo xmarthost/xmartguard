@@ -71,8 +71,15 @@ func TestRenderRespectsSettings(t *testing.T) {
 	}
 	c.ProxyIPCheck = true
 	r = Render(c, Options{Dir: "/d"})
-	if !strings.Contains(r, `"@ipMatchFromFile /d/proxy-ranges.txt" "id:7700701,phase:1,t:none,deny`) || !strings.Contains(r, `SecRule TX:1 "@ipMatchFromFile /d/blocked-ips.txt"`) {
-		t.Errorf("proxy rule missing:\n%s", r)
+	// Behind Cloudflare only CF-Connecting-IP names the visitor (audit A3
+	// F3: X-Real-IP and X-Forwarded-For come from the client there).
+	cf, local := strings.Join(chainOf(r, 7700701), "\n"), strings.Join(chainOf(r, 7705701), "\n")
+	if !strings.Contains(cf, `"@ipMatchFromFile /d/cloudflare-ranges.txt"`) || !strings.Contains(cf, `SecRule REQUEST_HEADERS:CF-Connecting-IP "@rx`) ||
+		strings.Contains(cf, "X-Real-IP") || strings.Contains(cf, "X-Forwarded-For") || !strings.Contains(cf, `SecRule TX:1 "@ipMatchFromFile /d/blocked-ips.txt"`) {
+		t.Errorf("Cloudflare proxy rule:\n%s", cf)
+	}
+	if !strings.Contains(local, `"@ipMatchFromFile /d/local-proxies.txt"`) || !strings.Contains(local, "X-Real-IP") {
+		t.Errorf("local proxy rule:\n%s", local)
 	}
 	pf := ProxyFiles([]string{"203.0.113.9/32", "not-an-ip", "198.51.100.0/24", "203.0.113.9"})
 	if pf[FileBlockedIPs] != "198.51.100.0/24\n203.0.113.9\n" || !strings.Contains(pf[FileProxyRanges], "173.245.48.0/20") {

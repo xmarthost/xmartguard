@@ -63,18 +63,22 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 	proxies := filepath.Join(m.RulesDir, FileProxyRanges)
 	trusted := m.trustedList()
 	files := map[string]string{
-		strict:  AddrFile(m.strictList()),
-		pass:    CentralFiles(c)[FileCaptchaPass],
-		proxies: strings.Join(ProxyRanges, "\n") + "\n",
+		strict:                                  AddrFile(m.strictList()),
+		pass:                                    CentralFiles(c)[FileCaptchaPass],
+		proxies:                                 strings.Join(ProxyRanges, "\n") + "\n",
+		filepath.Join(m.RulesDir, FileCFRanges): strings.Join(cloudflareRanges(), "\n") + "\n",
+		filepath.Join(m.RulesDir, FileLocalProxys): "127.0.0.1\n::1\n",
 	}
 	var b strings.Builder
 	w := func(f string, a ...any) { fmt.Fprintf(&b, f+"\n", a...) }
 	// byAddr runs setvars for an address list, directly and behind a proxy.
 	byAddr := func(id int, file, setvars string) {
 		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,%s"`, file, id, setvars)
-		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,chain"`, proxies, id+1)
-		w(`  SecRule REQUEST_HEADERS:CF-Connecting-IP|REQUEST_HEADERS:X-Forwarded-For|REQUEST_HEADERS:X-Real-IP "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`)
-		w(`    SecRule TX:1 "@ipMatchFromFile %s" "t:none,%s"`, file, setvars)
+		for _, v := range viaProxies(id + 1) {
+			w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,chain"`, filepath.Join(m.RulesDir, v.file), v.id)
+			w(`  SecRule %s "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`, v.headers)
+			w(`    SecRule TX:1 "@ipMatchFromFile %s" "t:none,%s"`, file, setvars)
+		}
 	}
 	w("# Soft blocking: weak signals from clean visitors get the CAPTCHA page (xPGuard).")
 	byAddr(IDSoftVerified, pass, fmt.Sprintf("setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d", relaxed))

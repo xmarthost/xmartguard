@@ -279,7 +279,7 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 	}
 	// The proxy networks are also used by the IPDB and Tor rules.
 	for k, v := range ProxyFiles(blocked) {
-		if k == FileProxyRanges || cfg.ProxyIPCheck {
+		if k == FileProxyRanges || k == FileCFRanges || k == FileLocalProxys || cfg.ProxyIPCheck {
 			files[k] = v
 		}
 	}
