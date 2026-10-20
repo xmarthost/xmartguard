@@ -144,7 +144,15 @@ func (s *Set) Update(data []byte, etag string) error {
 
 // ------------------------------------------------------------------ sites
 
-var reVersion = regexp.MustCompile(`\$wp_version\s*=\s*'([^']+)'`)
+// A version comes from the site's own version.php, which the account
+// controls: only a plain version may name a cache file or a URL.
+var (
+	reVersion      = regexp.MustCompile(`\$wp_version\s*=\s*'([^']+)'`)
+	reValidVersion = regexp.MustCompile(`^[0-9][0-9A-Za-z.\-]{0,31}$`)
+)
+
+// ValidVersion reports a plain WordPress version ("6.5.2", "6.6-RC1").
+func ValidVersion(v string) bool { return reValidVersion.MatchString(v) && !strings.Contains(v, "..") }
 
 // FindRoot returns the WordPress install containing path and the file's
 // path relative to it ("", "" when path is not inside WordPress).
@@ -173,7 +181,7 @@ func Version(root string) string {
 	}
 	defer f.Close()
 	head, _ := io.ReadAll(io.LimitReader(f, 32<<10))
-	if m := reVersion.FindSubmatch(head); m != nil {
+	if m := reVersion.FindSubmatch(head); m != nil && ValidVersion(string(m[1])) {
 		return string(m[1])
 	}
 	return ""
@@ -260,6 +268,9 @@ func (d *Direct) get(ctx context.Context, u string, limit int64) ([]byte, error)
 
 // Checksums implements Source (cached on disk).
 func (d *Direct) Checksums(ctx context.Context, version string) (map[string]string, error) {
+	if !ValidVersion(version) {
+		return nil, errors.New("invalid WordPress version")
+	}
 	cache := filepath.Join(d.CacheDir, "wp-checksums-"+version+"-en_US.json")
 	if b, err := os.ReadFile(cache); err == nil {
 		if m := parseChecksums(b); len(m) > 0 {
@@ -281,7 +292,7 @@ func (d *Direct) Checksums(ctx context.Context, version string) (map[string]stri
 
 // File implements Source.
 func (d *Direct) File(ctx context.Context, version, rel string) ([]byte, error) {
-	if !safeRel(rel) {
+	if !safeRel(rel) || !ValidVersion(version) {
 		return nil, errors.New("invalid path")
 	}
 	b, err := d.get(ctx, d.SVN+"/"+version+"/"+rel, 32<<20)
