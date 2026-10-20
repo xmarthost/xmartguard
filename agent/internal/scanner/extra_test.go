@@ -69,6 +69,26 @@ func TestYARAScan(t *testing.T) {
 	}
 }
 
+// A2 F9: YARA's scan list is one name per line; a name with a newline is
+// scanned on its own, not split into two other names.
+func TestYARAScanNameWithNewline(t *testing.T) {
+	if YARABin() == "" {
+		t.Skip("yara not installed")
+	}
+	dir := t.TempDir()
+	t.Setenv("XG_CONFIG_DIR", dir)
+	os.MkdirAll(YARADir(), 0o755)
+	os.WriteFile(filepath.Join(YARADir(), "test.yar"), []byte(`rule XG_Test_Marker { strings: $a = "XG-TEST-MARKER-7f3a" condition: $a }`), 0o644)
+	odd := filepath.Join(dir, "a\nb.php")
+	os.WriteFile(odd, []byte("<?php // XG-TEST-MARKER-7f3a"), 0o644)
+	plain := filepath.Join(dir, "c.php")
+	os.WriteFile(plain, []byte("<?php // XG-TEST-MARKER-7f3a"), 0o644)
+	got := yaraScan(t.Context(), []string{odd, plain}, 1)
+	if got[odd] != "admin:XG_Test_Marker" || got[plain] != "admin:XG_Test_Marker" || len(got) != 2 {
+		t.Fatalf("yara: %q", got)
+	}
+}
+
 func TestFeedPatterns(t *testing.T) {
 	m := newMatcher([][]byte{[]byte("abcdef"), []byte("bcd"), []byte("zzz_marker")}, []string{"one", "two", "three"})
 	for in, want := range map[string]string{"xxabcdefyy": "two", "zzz_marke": "", "..zzz_marker": "three", "": ""} {
