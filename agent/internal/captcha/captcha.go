@@ -62,6 +62,7 @@ type Server struct {
 	attempts map[string][]time.Time
 	running  [2]*http.Server
 	ports    [2]int
+	bindErr  string // last listen error (logged once)
 }
 
 // Run keeps the listeners in line with the settings until ctx ends: they run
@@ -126,22 +127,46 @@ func (s *Server) sync() {
 	if !want || s.running[0] != nil {
 		return
 	}
-	s.ports = ports
 	plain := HTTPServer(ports[0], s)
 	secure := HTTPServer(ports[1], s)
 	secure.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, GetCertificate: s.certs().Get}
+	// Bind both ports here: the firewall redirects banned visitors to them,
+	// so a port that failed to bind (taken, a transient error) is retried
+	// on the next sync instead of being marked running with nobody behind.
+	lp, err := net.Listen("tcp", plain.Addr)
+	if err != nil {
+		s.bindFailed(err)
+		return
+	}
+	ls, err := net.Listen("tcp", secure.Addr)
+	if err != nil {
+		lp.Close()
+		s.bindFailed(err)
+		return
+	}
+	s.bindErr = ""
+	s.ports = ports
 	s.running = [2]*http.Server{plain, secure}
 	go func() {
-		if err := plain.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := plain.Serve(lp); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.Log.Warn("captcha http server", "err", err)
 		}
 	}()
 	go func() {
-		if err := secure.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := secure.ServeTLS(ls, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.Log.Warn("captcha https server", "err", err)
 		}
 	}()
 	s.Log.Info("captcha server listening", "http", ports[0], "https", ports[1])
+}
+
+// bindFailed logs a listener that could not bind, once per distinct error
+// (sync retries every 15 seconds).
+func (s *Server) bindFailed(err error) {
+	if err.Error() != s.bindErr {
+		s.bindErr = err.Error()
+		s.Log.Warn("captcha server can not listen; retrying", "err", err)
+	}
 }
 
 // HTTPServer builds a CAPTCHA listener. Keep-alive is off:
