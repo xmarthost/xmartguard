@@ -25,6 +25,18 @@ export interface AgentAlert {
   details?: string[] | null;
 }
 
+/**
+ * A link an agent sends is a page of that server in the portal
+ * ("scanner-logs?paused=1"); the web opens it under /servers/<id>/. Anything
+ * else (another site, a protocol, a path out of the server's pages) is
+ * dropped: an agent is its owner's machine and may send anything.
+ */
+export function safePageLink(link: unknown): string {
+  if (typeof link !== 'string') return '';
+  const l = link;
+  return /^[a-z0-9][a-z0-9-]{0,40}(?:\/[a-z0-9][a-z0-9-]{0,40}){0,3}(?:\?[A-Za-z0-9_=&-]{0,200})?$/.test(l) ? l : '';
+}
+
 const CACHE_MS = 60_000;
 
 // Every open portal tab asks each minute; the agents are asked at most once a minute.
@@ -67,7 +79,7 @@ export function notificationRoutes(app: FastifyInstance, pool: Pool, hub: AgentH
           ...base,
           level: a.level === 'danger' || a.level === 'warning' ? a.level : 'info',
           text: String(a.text ?? ''),
-          link: String(a.link ?? ''),
+          link: safePageLink(a.link),
           details: Array.isArray(a.details) ? a.details.map(String) : [],
         }));
       } catch (err) {

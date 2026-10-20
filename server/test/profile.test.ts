@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, OWNER, startHarness, type Harness } from './helpers.js';
+import { safePageLink } from '../src/routes/notifications.js';
 
 let h: Harness;
 let c: Client;
@@ -52,5 +53,12 @@ describe('notifications (header bell)', () => {
     const { rows: cs } = await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'bell-cust', 'key-bell-cust') RETURNING id", [cust[0].id]);
     const theirs = await c.req('GET', `/api/notifications?server=${cs[0].id}`);
     expect(theirs.body.items).toEqual([expect.objectContaining({ server_id: String(cs[0].id), text: expect.stringContaining('offline') })]);
+  });
+});
+
+describe('notification links from agents', () => {
+  it('pass only pages of that server', () => {
+    for (const ok of ['scanner-logs', 'scanner-logs?paused=1', 'domain-reputation', 'settings', 'waf-logs']) expect(safePageLink(ok)).toBe(ok);
+    for (const bad of ['https://evil.example/x', '//evil.example', '/admin', '../../settings', 'javascript:alert(1)', 'a b', 'x?u=//evil.example', 7]) expect(safePageLink(bad)).toBe('');
   });
 });
