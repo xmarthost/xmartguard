@@ -915,13 +915,32 @@ func (m *Manager) Events(f EventFilter) ([]Event, int, error) {
 // DeleteEvent removes a log entry and, when it is still an active ban,
 // lifts that ban (the delete button on Firewall Logs).
 func (m *Manager) DeleteEvent(id int64) error {
-	var ip, status string
-	if err := m.DB.QueryRow(`SELECT ip, status FROM fw_events WHERE id = ?`, id).Scan(&ip, &status); err != nil {
+	var ip, status, source string
+	var expires int64
+	if err := m.DB.QueryRow(`SELECT ip, status, source, expires_at FROM fw_events WHERE id = ?`, id).Scan(&ip, &status, &source, &expires); err != nil {
 		return fmt.Errorf("log entry %d not found", id)
 	}
 	if status == "blocked" {
-		if err := m.Unblock(ip); err != nil {
+		// Lift only the block this entry stands for: a permanent blacklist
+		// entry for the same address stays when an old automatic ban's
+		// entry is deleted.
+		kind := KindTempBan
+		if source == "manual" && expires == 0 {
+			kind = KindDeny
+		}
+		c, err := ParseAddr(ip)
+		if err != nil {
 			return err
+		}
+		m.lift(c)
+		_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = ? AND cidr = ?`, kind, c)
+		_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status = 'blocked' AND (source = 'manual' AND expires_at = 0) = ?`, c, kind == KindDeny)
+		if m.Settings.Get().Firewall.Enabled {
+			err := m.Apply()
+			forgetRedirects(c)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	_, err := m.DB.Exec(`DELETE FROM fw_events WHERE id = ?`, id)

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
@@ -163,5 +164,44 @@ func TestAutoBanNeedsFirewall(t *testing.T) {
 	m.DB.QueryRow(`SELECT count(*) FROM fw_events`).Scan(&events)
 	if rules != 0 || events != 0 || calls != 0 {
 		t.Fatalf("firewall off: %d rules, %d events, %d notifications", rules, events, calls)
+	}
+}
+
+// Deleting a temp-ban log entry lifts that ban only: a blacklist entry
+// for the same address stays (and the other way round).
+func TestDeleteEventLiftsOnlyItsBlock(t *testing.T) {
+	m := unitManager(t)
+	if _, err := m.Settings.Patch([]byte(`{"firewall":{"enabled":false}}`)); err != nil {
+		t.Fatal(err)
+	}
+	const ip = "203.0.113.71"
+	if _, err := m.store(KindDeny, ip, "abuse", 0, AllowOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.store(KindTempBan, ip, "brute force", time.Hour, AllowOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	var banEvent, denyEvent int64
+	m.DB.QueryRow(`SELECT id FROM fw_events WHERE ip = ? AND expires_at > 0`, ip).Scan(&banEvent)
+	m.DB.QueryRow(`SELECT id FROM fw_events WHERE ip = ? AND expires_at = 0`, ip).Scan(&denyEvent)
+	if err := m.DeleteEvent(banEvent); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := m.rules(KindDeny); len(d) != 1 {
+		t.Fatalf("blacklist entry removed with the temp ban: %+v", d)
+	}
+	if b, _ := m.rules(KindTempBan); len(b) != 0 {
+		t.Fatalf("temp ban kept: %+v", b)
+	}
+	var st string
+	m.DB.QueryRow(`SELECT status FROM fw_events WHERE id = ?`, denyEvent).Scan(&st)
+	if st != "blocked" {
+		t.Fatalf("blacklist event %q", st)
+	}
+	if err := m.DeleteEvent(denyEvent); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := m.rules(KindDeny); len(d) != 0 {
+		t.Fatalf("blacklist entry kept: %+v", d)
 	}
 }
