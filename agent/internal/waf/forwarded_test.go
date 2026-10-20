@@ -91,3 +91,35 @@ func TestFakeSearchBotIgnoresForwardedHeaders(t *testing.T) {
 		}
 	}
 }
+
+// Audit A3 F6: settings strings go into the rules only when they are what
+// they claim to be: an invalid address would fail the config test (and
+// freeze the WAF), a quote would add actions to a rule.
+func TestSettingsStringsValidated(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled, c.BruteForce = true, true
+	c.WhitelistIPs = []string{"203.0.113.7/32", "example.com", "1.2.3.4/33", `1.2.3.4" "id:1,exec:/x`, "2001:db8::/32"}
+	c.WhitelistDomains = []string{"shop.example.com", "*.example.org", `x.com)$" "id:2,ctl:ruleEngine=Off`, "a b.com"}
+	c.LoginURLs = []string{"/my-login.php", `/x" "id:3,exec:/tmp/x`, "/with space", "/wp-login.php"}
+	out := Render(c, Options{Dir: "/r"})
+	for _, bad := range []string{"example.com,", "/33", "exec:", "x.com)", "a b", "with space", `x" "`} {
+		if strings.Contains(out, bad) {
+			t.Errorf("rules contain %q", bad)
+		}
+	}
+	if !strings.Contains(ruleLine(out, IDWhitelist), `"@ipMatch 203.0.113.7,2001:db8::/32"`) {
+		t.Errorf("whitelist: %s", ruleLine(out, IDWhitelist))
+	}
+	if l := ruleLine(out, IDWhiteDomains); !strings.Contains(l, `shop\.example\.com|[^.]+\.example\.org`) {
+		t.Errorf("domains: %s", l)
+	}
+	if !strings.Contains(out, `my-login\.php`) {
+		t.Error("valid login URL dropped")
+	}
+	// Every rule line still has balanced quotes.
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "SecRule ") && strings.Count(l, `"`)%2 != 0 {
+			t.Errorf("unbalanced quotes: %s", l)
+		}
+	}
+}

@@ -465,6 +465,7 @@ func Render(c settings.WAF, o Options) string {
 		// Low: no blocks by reputation alone.
 		c.IPDBPost, c.TorAction = false, "off"
 	}
+	c.WhitelistIPs, c.WhitelistDomains, c.LoginURLs = cleanWAFStrings(c)
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	w("# xPGuard WAF rules. Managed by the xPGuard agent: changes here are overwritten.")
@@ -478,10 +479,7 @@ func Render(c settings.WAF, o Options) string {
 	renderCPanelOff(w, o.Dynamic)
 	renderExclusions(w, c, off, o.Dynamic)
 	if len(c.WhitelistIPs) > 0 {
-		ips := make([]string, len(c.WhitelistIPs))
-		for i, a := range c.WhitelistIPs {
-			ips[i] = modsecAddr(a)
-		}
+		ips := c.WhitelistIPs
 		// Whitelisted: no rule at all (the OWASP CRS included) checks them.
 		w(`SecRule REMOTE_ADDR "@ipMatch %s" "id:%d,phase:1,pass,nolog,ctl:ruleEngine=Off"`, strings.Join(ips, ","), IDWhitelist)
 	}
@@ -1123,6 +1121,33 @@ func quoteAll(l []string) []string {
 // apiPath: paths of API calls, webhooks and payment callbacks (not
 // wp-login.php, xmlrpc.php, comment or contact form scripts).
 const apiPath = `/(?:wp-json|api|apis|webhooks?|hooks?|callbacks?|ipn|notify|notifications?|oauth|rest|graphql|v[0-9]+)(?:/|$)|/(?:api|webhook|callback|ipn|notify)[^/]*\.php(?:/|$)`
+
+// reLoginURL is a login path that can be written into a rule: no quote,
+// space or other character that would end the operator or add actions.
+var reLoginURL = regexp.MustCompile(`^/[A-Za-z0-9._~%/-]{1,200}$`)
+
+// cleanWAFStrings drops settings values that do not belong in a rule: an
+// address @ipMatch refuses (the config test would fail and every later
+// apply with it, freezing the WAF), a domain or login path with quotes or
+// spaces (they could add actions to the rule).
+func cleanWAFStrings(c settings.WAF) (ips, domains, logins []string) {
+	for _, a := range c.WhitelistIPs {
+		if a = modsecAddr(strings.TrimSpace(a)); validAddr(a) {
+			ips = append(ips, a)
+		}
+	}
+	for _, d := range c.WhitelistDomains {
+		if d = strings.ToLower(strings.TrimSpace(d)); settings.ValidDomain(d) {
+			domains = append(domains, d)
+		}
+	}
+	for _, u := range c.LoginURLs {
+		if u = strings.TrimSpace(u); reLoginURL.MatchString(u) {
+			logins = append(logins, u)
+		}
+	}
+	return ips, domains, logins
+}
 
 // reAPIHeader: header names (lowercase) of authenticated API calls and
 // signed webhooks; such calls skip the IPDB POST rule.
