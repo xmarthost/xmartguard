@@ -1,11 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Bell, Bug, CheckCircle2, ChevronDown, History, Info, LayoutTemplate, Lock, Mail, Settings as SettingsIcon, Shield, UserCheck, UserX, Wrench } from 'lucide-react';
 import { api, type Server } from '../api';
 import { can, useAuth } from '../auth';
 import { useApi } from '../hooks';
 import { ErrorBox, PageLoader } from '../components/ui';
-import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
+import { ListEditor, SettingRow, Tabs, Toggle, agentCall, fmtTime, freshSettingsPatch, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { LearnedExclusions, RuleExclusionsEditor, type LearnedExclusion, type RuleExclusion } from '../components/RuleExclusions';
 import { SettingsHistory } from '../components/SettingsHistory';
 import { AccountExceptions } from '../components/AccountExceptions';
@@ -283,17 +283,24 @@ export default function SettingsPage() {
   const { user } = useAuth();
   const res = useAgent<{ settings: AllSettings; meta: Meta }>(id, 'settings.get');
   const [st, setSt] = useState<AllSettings | null>(null);
+  // The server `st` was loaded from: a save never writes one server's
+  // settings (lists above all) onto another one shown in the same page.
+  const stFor = useRef<string | undefined>(undefined);
   const { run, busy } = useAction();
   const watch = useApplyWatch();
   const admin = can(user, 'admin');
   useEffect(() => {
-    if (res.data) setSt(res.data.settings);
-  }, [res.data]);
+    setSt(res.data ? res.data.settings : null);
+    stFor.current = res.data ? id : undefined;
+  }, [res.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async (patch: Partial<Record<keyof AllSettings, any>>, msg = 'Settings saved') => {
-    const r = await run(() => agentCall<{ settings: AllSettings }>(id!, 'settings.set', patch), msg);
-    if (r) setSt((cur) => ({ ...(cur as AllSettings), ...r.settings }));
-    if (r) watch(id!, r);
+    const target = id!;
+    const loaded = st;
+    if (!loaded || stFor.current !== target) return run(() => Promise.reject(new Error('These settings were loaded for another server: reload the page')));
+    const r = await run(async () => agentCall<{ settings: AllSettings }>(target, 'settings.set', await freshSettingsPatch(target, loaded, patch)), msg);
+    if (r && stFor.current === target) setSt((cur) => ({ ...(cur as AllSettings), ...r.settings }));
+    if (r) watch(target, r);
     return r;
   };
   const setScanner = (p: Partial<ScannerS>) => save({ scanner: p });

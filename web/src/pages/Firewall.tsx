@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { CheckCircle2, ChevronDown, Download, Globe, RefreshCw, Search, Settings as Gear, ShieldAlert, Trash2, X, XCircle } from 'lucide-react';
 import { api } from '../api';
@@ -6,7 +6,7 @@ import { downloadCSV, useCountries } from '../components/geo';
 import { flag } from '../components/WorldMap';
 import { can, useAuth } from '../auth';
 import { Breadcrumb, Empty, ErrorBox, PageLoader, SectionLoader } from '../components/ui';
-import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
+import { Modal, Pager, SettingRow, Toggle, agentCall, fmtTime, freshSettingsPatch, isIPorCIDR, useAction, useAgent, useApplyWatch } from '../components/controls';
 import { useServerName } from './Scanner';
 
 // ISO 3166-1 alpha-2 codes; names come from the browser (Intl.DisplayNames).
@@ -658,6 +658,9 @@ export function FirewallPage() {
   const [ddnsHost, setDdnsHost] = useState('');
   const [jail, setJail] = useState('');
   const [fw, setFw] = useState<FwSettings | null>(null);
+  // The server `fw` was loaded from: a save never writes one server's lists
+  // onto another one shown in the same page.
+  const fwFor = useRef<string | undefined>(undefined);
   const [check, setCheck] = useState('');
   const [checkOpen, setCheckOpen] = useState(false);
   const [advanced, setAdvanced] = useState(false);
@@ -668,25 +671,33 @@ export function FirewallPage() {
   const watch = useApplyWatch();
   const isAdmin = can(user, 'admin');
   useEffect(() => {
+    fwFor.current = s.data ? id : undefined;
     if (s.data) {
       setFw(s.data.settings.firewall);
       setCap(s.data.settings.captcha);
       setProvider(s.data.settings.firewall.provider);
+    } else {
+      setFw(null);
+      setCap(null);
     }
-  }, [s.data]);
+  }, [s.data]); // eslint-disable-line react-hooks/exhaustive-deps
   if (s.loading && !s.data) return <PageLoader />;
   if (s.error && !s.data) return <ErrorBox message={s.error} />;
   if (!fw || !s.data) return null;
   const status = s.data.meta.firewall;
 
   const save = (patch: Partial<FwSettings>, msg = 'Firewall settings saved') => saveAny({ firewall: patch }, msg);
-  const saveAny = (patch: Record<string, unknown>, msg = 'Settings saved') =>
-    run(async () => {
-      const r = await agentCall(id!, 'settings.set', patch);
-      watch(id!, r);
+  const saveAny = (patch: Record<string, unknown>, msg = 'Settings saved') => {
+    const target = id!;
+    const loaded = s.data?.settings;
+    return run(async () => {
+      if (!loaded || fwFor.current !== target) throw new Error('These settings were loaded for another server: reload the page');
+      const r = await agentCall(target, 'settings.set', await freshSettingsPatch(target, loaded, patch));
+      watch(target, r);
       await Promise.all([s.reload(), meta.reload()]);
       return r;
     }, msg);
+  };
   const all = s.data.settings;
 
   return (
