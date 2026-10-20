@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/cms"
 )
 
 // Item is one thing the audit found.
@@ -355,7 +357,7 @@ func archiveExt(name string) string {
 }
 
 func findSecret(path string) (string, string) {
-	b, err := os.ReadFile(path)
+	b, err := cms.ReadUserFile(path, textMax) // no symlink, FIFO or huge sparse file
 	if err != nil {
 		return "", ""
 	}
@@ -450,7 +452,9 @@ func wordpressChecks(dir string) []Item {
 		out = append(out, Item{Check: "wp_core", Severity: "medium", Title: "WordPress core files missing", Path: dir,
 			Detail: "Missing: " + strings.Join(missing, ", ") + ". Reinstall the core files (Dashboard » Updates » Re-install) after checking the site for malware."})
 	}
-	cfg, _ := os.ReadFile(filepath.Join(dir, "wp-config.php"))
+	// The account controls this file: a 1 TB sparse file or a FIFO must
+	// not stop the agent (cms.ReadUserFile).
+	cfg, _ := cms.ReadUserFile(filepath.Join(dir, "wp-config.php"), cms.MaxConfigSize)
 	if reWPDebugOn.Match(cfg) && !reWPDebugDisplay.Match(cfg) {
 		out = append(out, Item{Check: "wp_debug", Severity: "low", Title: "WordPress debug mode shows errors to visitors", Path: filepath.Join(dir, "wp-config.php"),
 			Detail: "WP_DEBUG is on: error messages reveal paths and plugin names. Turn it off on a live site."})

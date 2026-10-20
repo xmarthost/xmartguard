@@ -197,7 +197,7 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 		return false, fmt.Errorf("invalid owner")
 	}
 	cfgPath := filepath.Join(site, "wp-config.php")
-	raw, err := os.ReadFile(cfgPath)
+	raw, err := ReadAccountFile(cfgPath, MaxConfigSize) // the account's own file only
 	if err != nil {
 		return false, err
 	}
@@ -210,8 +210,7 @@ func EnsureRealCron(site, owner string, hours int) (bool, error) {
 		}
 		i += len("<?php")
 		text = text[:i] + cronDefineLine + text[i:]
-		st, _ := os.Stat(cfgPath)
-		if err := os.WriteFile(cfgPath, []byte(text), st.Mode().Perm()); err != nil {
+		if err := writeAccountFile(cfgPath, []byte(text)); err != nil {
 			return false, err
 		}
 		changed = true
@@ -343,7 +342,7 @@ func RemoveRealCron(site, owner string) (bool, error) {
 	}
 	changed := false
 	cfgPath := filepath.Join(site, "wp-config.php")
-	if raw, err := os.ReadFile(cfgPath); err == nil && strings.Contains(string(raw), cronDefine) {
+	if raw, err := ReadAccountFile(cfgPath, MaxConfigSize); err == nil && strings.Contains(string(raw), cronDefine) {
 		text := string(raw)
 		if strings.Contains(text, cronDefineLine) {
 			text = strings.Replace(text, cronDefineLine, "", 1) // exactly what was inserted
@@ -356,8 +355,7 @@ func RemoveRealCron(site, owner string) (bool, error) {
 			}
 			text = strings.Join(keep, "\n")
 		}
-		st, _ := os.Stat(cfgPath)
-		if err := os.WriteFile(cfgPath, []byte(text), st.Mode().Perm()); err != nil {
+		if err := writeAccountFile(cfgPath, []byte(text)); err != nil {
 			return false, err
 		}
 		changed = true

@@ -22,7 +22,7 @@ type Component struct {
 }
 
 func readHead(path string, n int64) string {
-	f, err := os.Open(path)
+	f, _, err := openUserFile(path, os.O_RDONLY, -1) // no symlink, no FIFO
 	if err != nil {
 		return ""
 	}

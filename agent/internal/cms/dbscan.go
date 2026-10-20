@@ -25,9 +25,11 @@ var (
 	rePrefix = regexp.MustCompile(`\$table_prefix\s*=\s*['"]([A-Za-z0-9_]+)['"]`)
 )
 
-// ReadWPConfig parses the database settings of a WordPress install.
+// ReadWPConfig parses the database settings of a WordPress install. The
+// file must be the account's own (userfile.go): a symlink to another
+// account's wp-config.php would scan and clean that account's database.
 func ReadWPConfig(root string) (DBConfig, error) {
-	b, err := os.ReadFile(filepath.Join(root, "wp-config.php"))
+	b, err := ReadAccountFile(filepath.Join(root, "wp-config.php"), MaxConfigSize)
 	if err != nil {
 		return DBConfig{}, err
 	}

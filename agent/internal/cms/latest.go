@@ -161,7 +161,7 @@ func (v *Versions) Checksums(ctx context.Context, cacheDir, version, locale stri
 }
 
 func md5File(p string) string {
-	f, err := os.Open(p)
+	f, _, err := openUserFile(p, os.O_RDONLY, -1) // no symlink, no FIFO
 	if err != nil {
 		return ""
 	}
