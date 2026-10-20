@@ -528,7 +528,8 @@ func Render(c settings.WAF, o Options) string {
 		}
 		w(`SecAction "id:%d,phase:1,pass,nolog,%s"`, IDDisable, strings.Join(ctl, ","))
 	}
-	if c.UploadScan && o.UploadScan && o.InspectPath != "" {
+	if c.UploadScan && o.UploadScan && o.InspectPath != "" && !off[IDUploadMalware] {
+		// Switched off means not rendered: LiteSpeed ignores IDDisable's ctl.
 		w(`SecTmpSaveUploadedFiles On`)
 		w(`SecRule FILES_TMPNAMES "@inspectFile %s" "id:%d,phase:2,t:none,deny,status:403,log,msg:'xPGuard - Malware upload blocked',tag:'xpguard/upload'"`, o.InspectPath, IDUploadMalware)
 	}
@@ -1013,6 +1014,8 @@ func Render(c settings.WAF, o Options) string {
 	// Same for the shop filter rules' same-origin exemption (IDShopScrape+2000;
 	// a negated header test would not match a request without the header).
 	out = guardChains(out, `SecRule &TX:xg_same_origin "@eq 0" "t:none,chain"`, IDShopScrape, IDShopScrape+1000)
+	// And for the theme colour stylesheets (IDThemeColorCSS).
+	out = guardChains(out, `SecRule &TX:xg_color_css "@eq 0" "t:none,chain"`, IDStaticPHP, IDPHPInAssets)
 	return applyMonitor(out, Monitored(o.Intel))
 }
 

@@ -222,7 +222,8 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	if !off[IDThemeColorCSS] {
 		w(`SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDThemeColorCSS)
 		w(`  SecRule REQUEST_FILENAME "@rx /css/+[a-z0-9_-]*colou?rs?[a-z0-9_-]*\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
-		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDStaticPHP, IDPHPInAssets)
+		// LiteSpeed ignores the removal: the two rules also test the marker.
+		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,setvar:tx.xg_color_css=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDStaticPHP, IDPHPInAssets)
 	}
 	if !off[IDSiteBeacons] {
 		w(`SecRule ARGS_GET:ob "@streq open-bridge/events" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=%d"`, IDSiteBeacons, IDContentType)
@@ -319,6 +320,64 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		}
 	}
 	w("")
+}
+
+// configRemovals are the rules taken out for every request: the hosting
+// defaults and the portal's and learned exclusions without a domain or
+// path. They are also written as SecRuleRemoveById after the OWASP CRS is
+// loaded, a configuration directive every engine applies (LiteSpeed
+// ignores ctl:ruleRemoveById).
+func configRemovals(c settings.WAF, dyn Dynamic) []int {
+	off := map[int]bool{}
+	for _, id := range c.DisabledRules {
+		off[id] = true
+	}
+	var ids []int
+	seen := map[int]bool{}
+	add := func(l ...int) {
+		for _, id := range l {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if !off[IDHostingBase] {
+		add(941310, 920600, 942550)
+	}
+	excl := func(e settings.RuleExclusion) {
+		if e.Domain != "" || e.Path != "" || allowRule(e.Rule) {
+			return
+		}
+		add(e.Rule)
+		if e.Rule == 920420 {
+			add(IDContentType)
+		}
+	}
+	for _, e := range settings.CleanExclusions(c.RuleExclusions) {
+		excl(e)
+	}
+	if !off[IDAutoExcl] {
+		for i, e := range settings.CleanExclusions(dyn.Auto) {
+			if i >= maxAutoExcl {
+				break
+			}
+			excl(e)
+		}
+	}
+	return ids
+}
+
+// configRemovals of this server's settings (none without them).
+func (m *Manager) configRemovals() []int {
+	if m.Settings == nil {
+		return nil
+	}
+	var dyn Dynamic
+	if m.DB != nil {
+		dyn = m.dynamic()
+	}
+	return configRemovals(m.Settings.Get().WAF, dyn)
 }
 
 // renderCPanelOff switches the rule engine off for the websites whose
