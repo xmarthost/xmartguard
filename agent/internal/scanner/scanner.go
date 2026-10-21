@@ -380,13 +380,19 @@ func (s *Scanner) CheckFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	return d, err
 }
 
+// bareNameCode are the file types a whitelist entry must name by full path.
+var bareNameCode = map[string]bool{".php": true, ".phtml": true, ".phar": true, ".inc": true, ".js": true, ".sh": true,
+	".pl": true, ".py": true, ".cgi": true, ".htaccess": true, ".so": true, "": true}
+
 func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner) (*Detection, error) {
 	if !info.Mode().IsRegular() || info.Size() == 0 {
 		return nil, nil
 	}
 	name := filepath.Base(path)
 	for _, w := range cfg.WhitelistPaths {
-		if w == name || w == path || (strings.HasPrefix(w, "/") && strings.HasPrefix(path, strings.TrimRight(w, "/")+"/")) {
+		// A bare name (no folder) would exempt that file name on every
+		// account: it is not enough for code (audit A2 F7).
+		if (w == name && !bareNameCode[extOf(name)]) || w == path || (strings.HasPrefix(w, "/") && strings.HasPrefix(path, strings.TrimRight(w, "/")+"/")) {
 			return nil, nil
 		}
 	}

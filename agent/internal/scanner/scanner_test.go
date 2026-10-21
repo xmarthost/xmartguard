@@ -255,10 +255,11 @@ func TestQuarantineRestoreDeleteLifecycle(t *testing.T) {
 
 func TestAutoQuarantineAndWhitelist(t *testing.T) {
 	s := newScanner(t)
-	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine","whitelist_paths":["eval.php"]}}`)); err != nil {
+	root := writeTree(t, map[string]string{"exec.php": malicious["exec.php"], "eval.php": malicious["eval.php"]})
+	// A code file is whitelisted by its full path (audit A2 F7).
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine","whitelist_paths":["` + filepath.Join(root, "eval.php") + `"]}}`)); err != nil {
 		t.Fatal(err)
 	}
-	root := writeTree(t, map[string]string{"exec.php": malicious["exec.php"], "eval.php": malicious["eval.php"]})
 	id, _ := s.Start("path", root, "test")
 	sc := waitScan(t, s, id)
 	if sc.Infected != 1 {
@@ -634,4 +635,30 @@ func TestRealtimeActiveWhileSettingUp(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("file not detected")
+}
+
+// Audit A2 F7: a whitelist entry without a folder does not exempt code
+// files of that name on every account; a full path still does.
+func TestWhitelistBareNameNotForCode(t *testing.T) {
+	s := newScanner(t)
+	root := writeTree(t, map[string]string{"shell.php": malicious["eicar.txt"], "eicar.txt": malicious["eicar.txt"]})
+	cfg := s.Settings.Get().Scanner
+	check := func(name string, wl []string, want bool) {
+		t.Helper()
+		p := filepath.Join(root, name)
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.WhitelistPaths = wl
+		d, _ := s.checkFile(p, info, cfg)
+		if (d != nil) != want {
+			t.Errorf("%s with whitelist %v: detected %v, want %v", name, wl, d != nil, want)
+		}
+	}
+	check("shell.php", nil, true)
+	check("shell.php", []string{"shell.php"}, true)
+	check("shell.php", []string{filepath.Join(root, "shell.php")}, false)
+	check("shell.php", []string{root}, false)
+	check("eicar.txt", []string{"eicar.txt"}, false)
 }

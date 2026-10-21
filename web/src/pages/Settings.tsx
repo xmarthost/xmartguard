@@ -495,7 +495,7 @@ function ScannerSection({ s, meta, admin, busy, onSave }: { s: ScannerS; meta: M
         <ExceptionsNote />
         <ListEditor
           title="Whitelist Files"
-          desc="File name, or absolute file/directory path, to exclude from the scanner"
+          desc="Absolute file or directory path to exclude from the scanner (a bare file name only works for non-code files, not PHP, JS or scripts)"
           items={s.whitelist_paths}
           disabled={dis}
           empty="No whitelisted files"
