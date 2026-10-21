@@ -72,8 +72,8 @@ export async function distrustClean(pool: Pool, f: { match?: string; path?: stri
   return '';
 }
 
-/** Keeps the false positives from one judge request; returns the signatures it moved to review. */
-export async function recordFalsePositives(pool: Pool, serverId: string, files: (FlaggedFile & { id: string })[], results: Result[]): Promise<string[]> {
+/** Keeps the false positives from one judge request (for the AI Learning report). */
+export async function recordFalsePositives(pool: Pool, serverId: string, files: (FlaggedFile & { id: string })[], results: Result[]): Promise<void> {
   const byId = new Map(results.map((r) => [r.id, r]));
   const sigs = new Set<string>();
   for (const f of files) {
@@ -106,32 +106,8 @@ export async function recordFalsePositives(pool: Pool, serverId: string, files: 
     sigs.add(sig);
   }
   // Recorded for the AI Learning report only: an administrator decides
-  // what changes (autoReview is no longer run on its own).
+  // what changes (nothing is moved to review on its own).
   void sigs;
-  return [];
-}
-
-/**
- * Moves a signature to review once it flagged enough different clean files
- * and never a file the AI found malicious. Never touches a signature an
- * administrator already decided on.
- */
-export async function autoReview(pool: Pool, sig: string): Promise<boolean> {
-  if (!overridable(sig)) return false;
-  const { rows } = await pool.query(
-    `SELECT (SELECT count(DISTINCT sha256)::int FROM ai_fp WHERE signature = $1 AND confidence >= $2) AS clean,
-            (SELECT count(*)::int FROM ai_kb WHERE match = $1 AND verdict = 'malicious') AS malicious,
-            (SELECT count(*)::int FROM sig_overrides WHERE signature = $1) AS decided`,
-    [sig, FP_MIN_CONFIDENCE],
-  );
-  const s = rows[0];
-  if (s.decided || s.malicious > 0 || s.clean < AUTO_REVIEW_FILES) return false;
-  const { rowCount } = await pool.query(
-    `INSERT INTO sig_overrides (signature, action, note, auto, created_by)
-     VALUES ($1, 'review', $2, true, 'AI Learning') ON CONFLICT DO NOTHING`,
-    [sig, `Flagged ${s.clean} different files the AI found clean and none it found malicious.`],
-  );
-  return !!rowCount;
 }
 
 /** What agents apply: signature -> 'review' | 'off' ('keep' changes nothing on a server). */

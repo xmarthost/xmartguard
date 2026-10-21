@@ -46,8 +46,6 @@ const BUCKETS = 1 << 17;
  */
 export class AIGateway {
   private queues = new Map<string, { items: Pending[]; chars: number; timer: NodeJS.Timeout | null }>();
-  private dirty = new Set<string>();
-  private trainTimer: NodeJS.Timeout | null = null;
   private training = false;
 
   constructor(
@@ -64,7 +62,6 @@ export class AIGateway {
   start(): void {}
 
   stop(): void {
-    if (this.trainTimer) clearInterval(this.trainTimer);
     for (const q of this.queues.values()) if (q.timer) clearTimeout(q.timer);
   }
 
@@ -276,28 +273,14 @@ export class AIGateway {
   private async saveSample(f: FileIn, verdict: string, confidence: number): Promise<void> {
     if (!f.base || !f.features?.length || typeof f.z !== 'number' || verdict === 'suspicious' || confidence < TRAIN_MIN_CONFIDENCE) return;
     const features = f.features.filter((x) => Number.isInteger(x) && x >= 0 && x < BUCKETS).slice(0, 20_000);
-    const { rowCount } = await this.pool.query(
+    await this.pool.query(
       `INSERT INTO ai_samples (sha256, base_version, z, features, label) VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (sha256, base_version) DO NOTHING`,
       [f.sha256.toLowerCase(), f.base.slice(0, 80), f.z, features, verdict === 'malicious' ? 1 : 0],
     );
-    if (rowCount) this.dirty.add(f.base);
   }
 
   // ------------------------------------------------------------------ fleet model
-
-  private async trainDirty(): Promise<void> {
-    if (this.training) return;
-    const bases = [...this.dirty];
-    this.dirty.clear();
-    for (const b of bases) {
-      try {
-        await this.train(b);
-      } catch (err) {
-        this.log.warn({ err: (err as Error).message }, 'AI fleet model training failed');
-      }
-    }
-  }
 
   /**
    * Trains the update every agent adds to its built-in model: logistic
@@ -387,9 +370,5 @@ export class AIGateway {
       more: rows.length === limit,
       delta,
     };
-  }
-
-  markDirty(base: string): void {
-    this.dirty.add(base);
   }
 }

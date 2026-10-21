@@ -5,7 +5,7 @@ import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
 import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, hasRole, type Role } from '../auth.js';
-import { currentRelease } from '../agents/release.js';
+import { currentRelease, updateParams } from '../agents/release.js';
 import { ACTIONS } from './agent-cmd.js';
 import { scopeAccounts } from '../tenancy.js';
 
@@ -213,7 +213,7 @@ export function massRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: A
     const worker = async () => {
       while (next < servers.length) {
         const s = servers[next++];
-        const params = action === 'agent.update' ? { sha256: rel!.sha256[s.arch ?? 'amd64'] ?? '' } : actionParams;
+        const params = action === 'agent.update' ? updateParams(rel!, s.arch) : actionParams;
         try {
           if (ip) {
             const addrs = await runIpOp(hub, s.id, ipOp!.kind, ip.mode, ip.addrs, ip.comment);

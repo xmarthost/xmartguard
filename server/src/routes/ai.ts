@@ -6,7 +6,7 @@ import { sha256 } from '../security.js';
 import { verifyAgent } from '../agent-sign.js';
 import { TRAIN_MIN_PER_CLASS, type AIGateway } from '../ai/gateway.js';
 import { PRESETS, complete, listModels, preset } from '../ai/providers.js';
-import { pushOverrides, recordFalsePositives } from '../ai/learning.js';
+import { recordFalsePositives } from '../ai/learning.js';
 import type { AgentHub } from '../agents/hub.js';
 
 /**
@@ -316,8 +316,6 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
       [sha, b.data.verdict, b.data.reason ? `Marked ${b.data.verdict} by an administrator: ${b.data.reason}` : `Marked ${b.data.verdict} by an administrator.`],
     );
     if (!rowCount) return reply.code(404).send({ error: 'not found' });
-    const { rows } = await pool.query('SELECT DISTINCT base_version FROM ai_samples WHERE sha256 = $1', [sha]);
-    for (const r of rows) gw.markDirty(r.base_version);
     await audit(pool, { accountId: req.user!.accountId, userId: req.user!.id, action: 'ai.kb_override', detail: { sha256: sha, verdict: b.data.verdict }, ip: req.ip });
     return { ok: true };
   });
@@ -346,8 +344,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
     if (overQuota(server_id, body.files.length)) return reply.code(429).send({ error: 'AI quota for this server reached; try again later' });
     const results = await gw.judge(account, server_id, body.files);
     try {
-      const moved = await recordFalsePositives(pool, server_id, body.files, results);
-      if (moved.length && hub) await pushOverrides(pool, hub);
+      await recordFalsePositives(pool, server_id, body.files, results);
     } catch (err) {
       req.log.warn({ err }, 'could not record AI false positives');
     }

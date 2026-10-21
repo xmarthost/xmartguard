@@ -4,7 +4,7 @@ import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
 import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, hasRole, type Role } from '../auth.js';
-import { currentRelease } from '../agents/release.js';
+import { currentRelease, updateParams } from '../agents/release.js';
 import { isMaster, serverInScope } from '../tenancy.js';
 
 /**
@@ -152,7 +152,7 @@ export function agentCommandRoutes(app: FastifyInstance, pool: Pool, cfg: Config
     const rel = currentRelease(cfg.downloadsDir);
     if (!rel) return reply.code(409).send({ error: 'no agent release is bundled with this portal' });
     try {
-      const data = await hub.command(id, 'agent.update', { sha256: rel.sha256[rows[0].inventory?.arch ?? 'amd64'] ?? '' }, 180_000);
+      const data = await hub.command(id, 'agent.update', updateParams(rel, rows[0].inventory?.arch), 180_000);
       await audit(pool, { accountId: user.accountId, userId: user.id, serverId: id, action: 'agent.update', detail: { to: rel.version }, ip: req.ip });
       return data;
     } catch (err) {

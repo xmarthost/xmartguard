@@ -33,6 +33,15 @@ export function currentRelease(downloadsDir: string): Release | null {
   return rel;
 }
 
+/**
+ * The agent.update parameters for a server of this architecture (one place
+ * for every caller: audit A10 F9). Servers that never said are amd64.
+ */
+export function updateParams(rel: Release, arch: unknown): { sha256: string } {
+  const a = typeof arch === 'string' && arch ? arch : 'amd64';
+  return { sha256: rel.sha256[a] ?? '' };
+}
+
 /** Compares dotted versions numerically; non-numeric parts sort lowest. */
 export function versionLess(a: string, b: string): boolean {
   const pa = a.split(/[.-]/).map((x) => Number.parseInt(x, 10));

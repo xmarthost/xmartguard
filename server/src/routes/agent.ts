@@ -8,7 +8,7 @@ import { loadLicense, publicIPs, serverLimitError, trialHostError } from './bill
 import type { AgentHub, MetricsSample } from '../agents/hub.js';
 import { audit } from '../auth.js';
 import { parseEd25519PublicKey, sha256, verifyEd25519 } from '../security.js';
-import { currentRelease, versionLess } from '../agents/release.js';
+import { currentRelease, updateParams, versionLess } from '../agents/release.js';
 import type { IPDBService } from '../ipdb/service.js';
 
 /** How often agents are pinged; one missed answer closes the connection. */
@@ -49,8 +49,7 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
     setTimeout(async () => {
       try {
         const { rows } = await pool.query('SELECT inventory FROM servers WHERE id = $1', [serverId]);
-        const arch = rows[0]?.inventory?.arch ?? 'amd64';
-        await hub.command(serverId, 'agent.update', { sha256: rel.sha256[arch] ?? '' }, 180_000);
+        await hub.command(serverId, 'agent.update', updateParams(rel, rows[0]?.inventory?.arch), 180_000);
         app.log.info({ serverId, from: agentVersion, to: rel.version }, 'agent auto-updated');
       } catch (err) {
         app.log.warn({ serverId, err: (err as Error).message }, 'agent auto-update failed');
