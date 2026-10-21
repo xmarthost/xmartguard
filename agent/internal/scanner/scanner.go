@@ -416,85 +416,22 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 	if dataFile(path, ext) {
 		return nil, ErrTrusted
 	}
-	var content []byte
-	// Content found clean whose verdict depends on what matches it (see
-	// Unconfirmed): checked again once a signature matched.
-	clearedSum := ""
-	final := func(d *Detection) (*Detection, error) {
-		if d != nil && clearedSum != "" && s.isCleared(clearedSum, path, d.Signature) {
-			return nil, ErrTrusted
-		}
-		return d, nil
-	}
-	shapeOK := false
 	if ScriptExts[ext] && info.Size() <= int64(cfg.MaxFileSizeMB)<<20 {
-		var err error
-		if content, err = readScanned(path, info, int64(cfg.MaxFileSizeMB)<<20); err != nil {
+		content, err := readScanned(path, info, int64(cfg.MaxFileSizeMB)<<20)
+		if err != nil {
 			return nil, err
 		}
-		sum := md5.Sum(content)
-		if s.KnownGood != nil && s.KnownGood(sum) {
-			return nil, ErrTrusted
-		}
-		if s.KnownGoodPath != nil && s.KnownGoodPath(path, sum) {
-			return nil, ErrTrusted
-		}
-		// Softaculous and WP Toolkit login helpers (see hostingtools.go)
-		// and translation files: trusted by shape, but only after the
-		// known-bad hash lookup below.
-		shapeOK = trustedHostingTool(path, content) || translationFile(path, content)
-		if s.Cleared != nil {
-			sum := sha256.Sum256(content)
-			hs := hex.EncodeToString(sum[:])
-			if s.isCleared(hs, path, "") {
-				return nil, ErrTrusted
-			}
-			if s.Cleared(hs) {
-				clearedSum = hs
-			}
-		}
+		return s.contentVerdict(path, ext, content)
 	}
 	// Known-bad hash lookup: only hash a file whose exact size matches an entry
 	// in our blocklist, so this stays cheap across a full scan.
 	if hdb := activeHashDB(); !s.NoHash && hdb.SizeKnown(info.Size()) {
-		label := hdb.LookupSums(info.Size(), func() (string, string) {
-			if content != nil {
-				h, m := sha256.Sum256(content), md5.Sum(content)
-				return hex.EncodeToString(h[:]), hex.EncodeToString(m[:])
-			}
-			return sha256File(path), md5File(path)
-		})
-		if label != "" {
-			if content == nil && s.clearedFile(path) {
+		if label := hdb.LookupSums(info.Size(), func() (string, string) { return sha256File(path), md5File(path) }); label != "" {
+			if s.clearedFile(path) {
 				return nil, ErrTrusted
 			}
-			return final(&Detection{CatVirus, label})
+			return &Detection{CatVirus, label}, nil
 		}
-	}
-	if shapeOK {
-		return nil, ErrTrusted
-	}
-	if content != nil {
-		// A program, whatever it is called (also disguised as an image).
-		if IsELF(content) {
-			return binaryCheck(path, content)
-		}
-		if d := analyze(ext, content); d != nil {
-			return final(capHeuristic(path, ext, d))
-		}
-		if r := Match(ext, content); r != nil {
-			return final(&Detection{r.Category, r.Name})
-		}
-		// ClamAV-format databases (installed ClamAV, subscriptions).
-		if d := clamCheck(content); d != nil {
-			return final(d)
-		}
-		// Byte patterns from public feeds (Linux Malware Detect): reported
-		// as suspicious so the AI scanner confirms them first.
-		if name := feedPatterns.Match(content); name != "" {
-			return final(&Detection{CatSuspicious, "LMD." + name})
-		}
-		return nil, nil
 	}
 	if ScriptExts[ext] {
 		return nil, nil // larger than the size limit
@@ -522,6 +459,74 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 			return nil, ErrTrusted
 		}
 		return d, err
+	}
+	return nil, nil
+}
+
+// contentVerdict judges a script's content (read up to the size limit):
+// checkFile and Recheck share it, so a quarantined copy is judged the way a
+// fresh scan judges the file (audit A2 F17). ErrTrusted: known good.
+func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, error) {
+	sum := md5.Sum(content)
+	if s.KnownGood != nil && s.KnownGood(sum) {
+		return nil, ErrTrusted
+	}
+	if s.KnownGoodPath != nil && s.KnownGoodPath(path, sum) {
+		return nil, ErrTrusted
+	}
+	// Softaculous and WP Toolkit login helpers (see hostingtools.go)
+	// and translation files: trusted by shape, but only after the
+	// known-bad hash lookup below.
+	shapeOK := trustedHostingTool(path, content) || translationFile(path, content)
+	// Content found clean whose verdict depends on what matches it (see
+	// Unconfirmed): checked again once a signature matched.
+	clearedSum := ""
+	if s.Cleared != nil {
+		sum := sha256.Sum256(content)
+		hs := hex.EncodeToString(sum[:])
+		if s.isCleared(hs, path, "") {
+			return nil, ErrTrusted
+		}
+		if s.Cleared(hs) {
+			clearedSum = hs
+		}
+	}
+	final := func(d *Detection) (*Detection, error) {
+		if d != nil && clearedSum != "" && s.isCleared(clearedSum, path, d.Signature) {
+			return nil, ErrTrusted
+		}
+		return d, nil
+	}
+	// Known-bad hash lookup: only for an exact size in the blocklist.
+	if hdb := activeHashDB(); !s.NoHash && hdb.SizeKnown(int64(len(content))) {
+		if label := hdb.LookupSums(int64(len(content)), func() (string, string) {
+			h, m := sha256.Sum256(content), md5.Sum(content)
+			return hex.EncodeToString(h[:]), hex.EncodeToString(m[:])
+		}); label != "" {
+			return final(&Detection{CatVirus, label})
+		}
+	}
+	if shapeOK {
+		return nil, ErrTrusted
+	}
+	// A program, whatever it is called (also disguised as an image).
+	if IsELF(content) {
+		return binaryCheck(path, content)
+	}
+	if d := analyze(ext, content); d != nil {
+		return final(capHeuristic(path, ext, d))
+	}
+	if r := Match(ext, content); r != nil {
+		return final(&Detection{r.Category, r.Name})
+	}
+	// ClamAV-format databases (installed ClamAV, subscriptions).
+	if d := clamCheck(content); d != nil {
+		return final(d)
+	}
+	// Byte patterns from public feeds (Linux Malware Detect): reported
+	// as suspicious so the AI scanner confirms them first.
+	if name := feedPatterns.Match(content); name != "" {
+		return final(&Detection{CatSuspicious, "LMD." + name})
 	}
 	return nil, nil
 }

@@ -1,7 +1,6 @@
 package scanner
 
 import (
-	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -109,41 +108,7 @@ func (s *Scanner) Recheck(f RecheckFilter, keep func(sha string) bool) (RecheckR
 // checkContent is the content part of checkFile for a script whose bytes
 // are at hand (a quarantined copy) and whose original path is known.
 func (s *Scanner) checkContent(path, ext string, content []byte) *Detection {
-	sum := md5.Sum(content)
-	if s.KnownGood != nil && s.KnownGood(sum) {
-		return nil
-	}
-	if s.KnownGoodPath != nil && s.KnownGoodPath(path, sum) {
-		return nil
-	}
-	if trustedHostingTool(path, content) || translationFile(path, content) {
-		return nil
-	}
-	if hdb := activeHashDB(); !s.NoHash && hdb.SizeKnown(int64(len(content))) {
-		if label := hdb.LookupSums(int64(len(content)), func() (string, string) {
-			h, m := sha256.Sum256(content), md5.Sum(content)
-			return hex.EncodeToString(h[:]), hex.EncodeToString(m[:])
-		}); label != "" {
-			return &Detection{CatVirus, label}
-		}
-	}
-	if IsELF(content) {
-		d, _ := binaryCheck(path, content)
-		return d
-	}
-	var d *Detection
-	if a := analyze(ext, content); a != nil {
-		d = capHeuristic(path, ext, a)
-		if d == nil {
-			return nil
-		}
-	} else if r := Match(ext, content); r != nil {
-		d = &Detection{r.Category, r.Name}
-	} else if c := clamCheck(content); c != nil {
-		d = c
-	} else if name := feedPatterns.Match(content); name != "" {
-		d = &Detection{CatSuspicious, "LMD." + name}
-	}
+	d, _ := s.contentVerdict(path, ext, content)
 	if d != nil {
 		d = applyOverride(d)
 	}

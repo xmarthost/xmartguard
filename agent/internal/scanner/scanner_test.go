@@ -662,3 +662,22 @@ func TestWhitelistBareNameNotForCode(t *testing.T) {
 	check("shell.php", []string{root}, false)
 	check("eicar.txt", []string{"eicar.txt"}, false)
 }
+
+// Audit A2 F17: Recheck judges a quarantined copy the way a fresh scan
+// judges the file: content the AI or an admin cleared is clean for both.
+func TestRecheckSharesScanVerdict(t *testing.T) {
+	s := newScanner(t)
+	content := malicious["eval.php"]
+	root := writeTree(t, map[string]string{"eval.php": content})
+	p := filepath.Join(root, "eval.php")
+	info, _ := os.Stat(p)
+	cfg := s.Settings.Get().Scanner
+	for _, cleared := range []bool{false, true} {
+		s.Cleared = func(string) bool { return cleared }
+		fresh, _ := s.checkFile(p, info, cfg)
+		re := s.checkContent(p, ".php", []byte(content))
+		if (fresh != nil) != (re != nil) || (re != nil) == cleared {
+			t.Errorf("cleared=%v: scan %v, recheck %v", cleared, fresh, re)
+		}
+	}
+}
