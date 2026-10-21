@@ -280,6 +280,9 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			}
 			crs.Detail += "; weak signals from clean visitors get the CAPTCHA page"
 		}
+		// Every level: the WHMCS admin exclusion was always on (audit of
+		// my.galaxyhoster.com's General Settings save on LiteSpeed).
+		setupText += appSaveSetup()
 		if lv := m.level(); lv != "strict" {
 			setupText += sessionSetup() + editorSetup() + autodiscoverSetup()
 			post += sessionPost()

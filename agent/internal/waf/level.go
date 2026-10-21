@@ -37,6 +37,10 @@ const (
 	// sent by that admin area's own page with a session; +1000 on an address
 	// with a bad reputation.
 	IDAdminArea = 7700058
+	// IDAppSave: a web application admin's save marked before the CRS
+	// setup (tx.xg_app_save, the WHMCS admin area); +1000 on an address
+	// with a bad reputation.
+	IDAppSave = 7700059
 	// IDEditorAdmin: a logged-in editor on an address with a bad reputation
 	// saving from their own site's wp-admin.
 	IDEditorAdmin = 7702040
@@ -193,6 +197,21 @@ const RestrictedExtensions = ".ani/ .asa/ .asax/ .ascx/ .backup/ .bak/ .bat/ .cd
 	".dat/ .db/ .dbf/ .dist/ .dll/ .dos/ .dpkg-dist/ .drv/ .gadget/ .hta/ .htr/ .htw/ .ida/ .idc/ .idq/ .inc/ .inf/ .ini/ .jse/ .key/ .licx/ .lnk/ .log/ " +
 	".mdb/ .msc/ .ocx/ .old/ .pass/ .pdb/ .pfx/ .pif/ .pem/ .pol/ .prf/ .printer/ .pwd/ .rdb/ .rdp/ .reg/ .resources/ .resx/ .scr/ .sct/ .shs/ .sql/ " +
 	".swp/ .sys/ .tlb/ .tmp/ .url/ .vb/ .vbe/ .vbs/ .vbproj/ .vsdisco/ .vxd/ .webinfo/ .ws/ .wsc/ .wsf/ .wsh/ .xsd/ .xsx/"
+
+// appSaveSetup lifts the threshold again for admin saves marked by the
+// exclusions (WHMCS General Settings and other admin pages that save HTML
+// and tracking code): the CRS setup, loaded after the exclusions, sets the
+// threshold back (900110), and on LiteSpeed the exclusions' rule removal
+// does nothing, so without this a save scoring above the session
+// threshold was refused there.
+func appSaveSetup() string {
+	return "# Admin saves of web applications marked by the exclusions (WHMCS).\n" +
+		fmt.Sprintf(`SecRule TX:xg_app_save "@eq 1" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDAppSave) + "\n" +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.xg_session=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n" +
+		fmt.Sprintf(`SecRule TX:xg_app_save "@eq 1" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDAppSave+1000) + "\n" +
+		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
+		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+}
 
 // autodiscoverSetup lets mail clients' Autodiscover requests through:
 // Outlook POSTs an XML document (<Autodiscover><Request><EMailAddress>…)

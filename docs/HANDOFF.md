@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.1** (see `VERSION`).
+- Current release: **0.23.2** (see `VERSION`).
 
 ## Working rules
 
@@ -218,6 +218,16 @@ project. It holds the rules, the current state and what is still open.
   WAF feed keys; file actions never follow an account's links; the WAF
   fixes of A3 were reverted (they weakened blocking in the Apache tests)
   and are still open.
+- **WHMCS admin saves on LiteSpeed** (0.23.2): my.galaxyhoster.com
+  (cloud2, admin folder `/proka/`) could not save General Settings: CRS
+  941100 scored 38. The WHMCS exclusion (7700027/28) raised the threshold
+  in rules.conf, but the CRS setup loaded after it set it back (900110) and
+  only the session threshold (30) applied; LiteSpeed ignores the ctl rule
+  removal that let it pass on Apache. The exclusion now sets
+  `tx.xg_app_save` and `appSaveSetup` (id 7700059, +1000 on a bad-reputation
+  address) raises the threshold after the CRS setup, on every WAF level.
+  Test `TestWHMCSAdminSaveWithoutCtlWithCRS` strips every ctl, as LiteSpeed
+  runs the rules.
 - **Audit fix release 2** (0.23.1): the A3 WAF fixes redone one by one
   with the Apache tests (forged WordPress cookies, Cloudflare and
   forwarded headers, API headers, PATH_INFO, settings values), plus the
