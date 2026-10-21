@@ -943,12 +943,24 @@ func Render(c settings.WAF, o Options) string {
 	bot(c.AIBots, FileAIBots, IDAIBots, "Fake AI crawler")
 	bot(c.BotBlocker && len(c.BotList) > 0, FileCustomBots, IDCustomBots, "Bad bot")
 	if len(o.VerifiedBots) > 0 && o.Trusted && c.BotBlocker && !off[IDFakeSearchBot] {
-		// Only direct visitors: behind a CDN or proxy the address is the
-		// proxy's, so a real crawler could look fake.
-		w(`SecRule REQUEST_HEADERS:User-Agent "@rx \b(?:%s)\b" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake search engine crawler blocked',tag:'xpguard/bot',chain"`, strings.Join(quoteAll(o.VerifiedBots), "|"), IDFakeSearchBot)
-		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileTrustedIPs)
+		// A forwarded-for header any client can add does not skip the test
+		// (audit A3 F4): direct visitors are tested by their address;
+		// behind Cloudflare by CF-Connecting-IP (IDTrustedCF sets
+		// tx.xg_trusted, which every one of these tests); behind a local
+		// proxy only when it names no visitor (it may be a real crawler).
+		head := func(id int) {
+			w(`SecRule REQUEST_HEADERS:User-Agent "@rx \b(?:%s)\b" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Fake search engine crawler blocked',tag:'xpguard/bot',chain"`, strings.Join(quoteAll(o.VerifiedBots), "|"), id)
+			w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileTrustedIPs)
+		}
+		head(IDFakeSearchBot)
+		w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileProxyRanges)
+		head(IDFakeSearchBot + 1000)
+		w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileLocalProxys)
 		w(`  SecRule &REQUEST_HEADERS:X-Forwarded-For "@eq 0" "t:none,chain"`)
+		w(`  SecRule &REQUEST_HEADERS:X-Real-IP "@eq 0" "t:none,chain"`)
 		w(`  SecRule &REQUEST_HEADERS:CF-Connecting-IP "@eq 0" "t:none"`)
+		head(IDFakeSearchBot + 2000)
+		w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileCFRanges)
 	}
 	// rblRule blocks addresses on a list, directly and behind a proxy (real
 	// address from the forwarded-for headers; id+1000), except exempt
@@ -1016,7 +1028,7 @@ func Render(c settings.WAF, o Options) string {
 		// LiteSpeed ignores the trusted rule's ctl:ruleRemoveById: the
 		// rules it removes also test tx.xg_trusted.
 		out = guardChains(out, `SecRule &TX:xg_trusted "@eq 0" "t:none,chain"`, IDRootProbe, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000,
-			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot)
+			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot, IDFakeSearchBot+1000, IDFakeSearchBot+2000)
 	}
 	// Same for the shop filter rules' same-origin exemption (IDShopScrape+2000;
 	// a negated header test would not match a request without the header).

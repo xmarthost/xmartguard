@@ -104,8 +104,13 @@ func TestPackagesOnApache(t *testing.T) {
 	time.Sleep(time.Second)
 
 	// send makes a raw request (paths are sent exactly as written).
+	from := "" // the address to connect from ("" = 127.0.0.1)
 	send := func(method, uri string, hdr map[string]string, body string) int {
-		c, err := net.DialTimeout("tcp", "127.0.0.1:80", 3*time.Second)
+		d := net.Dialer{Timeout: 3 * time.Second}
+		if from != "" {
+			d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(from)}
+		}
+		c, err := d.Dial("tcp", "127.0.0.1:80")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -194,6 +199,35 @@ func TestPackagesOnApache(t *testing.T) {
 	for _, n := range normal {
 		if code := send(n.method, n.uri, n.hdr, n.body); code == 403 || code == 0 {
 			t.Errorf("normal request blocked: %s %s (%d)", n.method, n.uri, code)
+		}
+	}
+
+	// Audit A3 F4: a forged X-Forwarded-For does not make a fake Googlebot
+	// pass; behind Cloudflare only CF-Connecting-IP names the crawler.
+	const direct, cfAddr = "192.0.2.77", "104.16.0.78"
+	for _, a := range []string{direct, cfAddr} {
+		if err := exec.Command("ip", "addr", "add", a+"/32", "dev", "lo").Run(); err != nil {
+			t.Skip("can not add test addresses to the loopback")
+		}
+		defer exec.Command("ip", "addr", "del", a+"/32", "dev", "lo").Run()
+	}
+	gbot := "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+	for _, c := range []struct {
+		name, from string
+		hdr        map[string]string
+		want       int // 0: served
+	}{
+		{"direct fake with a forged X-Forwarded-For", direct, map[string]string{"User-Agent": gbot, "X-Forwarded-For": "66.249.66.1"}, 403},
+		{"direct fake with a forged X-Real-IP", direct, map[string]string{"User-Agent": gbot, "X-Real-IP": "66.249.66.1"}, 403},
+		{"direct fake with a forged CF-Connecting-IP", direct, map[string]string{"User-Agent": gbot, "CF-Connecting-IP": "66.249.66.1"}, 403},
+		{"real crawler behind Cloudflare", cfAddr, map[string]string{"User-Agent": gbot, "CF-Connecting-IP": "66.249.66.1"}, 0},
+		{"fake behind Cloudflare", cfAddr, map[string]string{"User-Agent": gbot, "CF-Connecting-IP": "203.0.113.9"}, 403},
+		{"fake behind Cloudflare with a forged X-Forwarded-For", cfAddr, map[string]string{"User-Agent": gbot, "CF-Connecting-IP": "203.0.113.9", "X-Forwarded-For": "66.249.66.1"}, 403},
+		{"browser from the direct address", direct, browser, 0},
+	} {
+		from = c.from
+		if code := send("GET", "/", c.hdr, ""); (c.want == 0 && (code == 403 || code == 0)) || (c.want != 0 && code != c.want) {
+			t.Errorf("%s: %d, want %d", c.name, code, c.want)
 		}
 	}
 }

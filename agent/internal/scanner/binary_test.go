@@ -11,10 +11,10 @@ func TestBinaryPlaces(t *testing.T) {
 		"/home/acct1/addon.example.com/wp-content/plugins/woocommerce/assets/js/.mini-cart-title-items-counter-block/x": "Binary.ELF.HiddenInWebsite",
 		"/home/acct1/addon.example.com/wp-content/plugins/woocommerce/.cache/polkitd":                                   "Binary.ELF.HiddenInWebsite",
 		"/home/acct1/addon.example.com/bridgemgr":                                                                       "Binary.ELF.InWebOrTempDir",
-		"/home/u/example.com/gdm3":                                                                                    "Binary.ELF.FakeSystemService",
-		"/home/u/public_html/wp-content/uploads/kthreadd":                                                             "Binary.ELF.FakeSystemService",
-		"/home/u/public_html/wp-content/plugins/woocommerce/wpbooster":                                                "Binary.ELF.InWordPressContent",
-		"/home/u/public_html/ffmpeg":                                                                                  "Binary.ELF.InWebOrTempDir",
+		"/home/u/example.com/gdm3":                                     "Binary.ELF.FakeSystemService",
+		"/home/u/public_html/wp-content/uploads/kthreadd":              "Binary.ELF.FakeSystemService",
+		"/home/u/public_html/wp-content/plugins/woocommerce/wpbooster": "Binary.ELF.InWordPressContent",
+		"/home/u/public_html/ffmpeg":                                   "Binary.ELF.InWebOrTempDir",
 		// A program hidden in a plugin's Composer folder (2026-10-19).
 		"/home/u/tutorials.example.com/wp-content/plugins/wp-rocket/vendor/monolog/monolog/src/Monolog/Handler/SyslogUdp/16e2277f8b31_A": "Binary.ELF.InWordPressContent",
 	}
