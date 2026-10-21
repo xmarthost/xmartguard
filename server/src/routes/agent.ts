@@ -175,14 +175,25 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
     return q || (typeof h === 'string' ? h : undefined) || undefined;
   };
 
+  const unauthed = new Map<string, number>();
+  const MAX_UNAUTHED = 3;
+  const MAX_PENDING = 256;
+  const MAX_STORED = 64 * 1024;
+  const rawSize = (raw: unknown): number =>
+    Buffer.isBuffer(raw) ? raw.length : Array.isArray(raw) ? raw.reduce((n: number, b: Buffer) => n + b.length, 0) : raw instanceof ArrayBuffer ? raw.byteLength : 0;
+
   // Unknown/revoked servers get a plain HTTP 404 before the upgrade so the
   // agent can tell "removed" apart from a network error.
   app.get(
     '/api/agent/ws',
     {
       websocket: true,
+      // Server ids are public (CAPTCHA links): connections are limited per
+      // address, and per server before they authenticate (audit A7 F17).
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
       preValidation: async (req, reply) => {
         const id = agentServerId(req);
+        if (id && (unauthed.get(id) ?? 0) >= MAX_UNAUTHED) return reply.code(429).send({ error: 'too many connections' });
         // No id at all is a mangled request (a proxy dropped the query
         // string), not a removed server: 400, which agents do not take for "removed".
         if (!id) return reply.code(400).send({ error: 'server_id missing' });
@@ -199,6 +210,19 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
       let authed = false;
       // Messages that arrive while auth is being verified are processed in order.
       let chain: Promise<void> = Promise.resolve();
+
+      unauthed.set(serverId, (unauthed.get(serverId) ?? 0) + 1);
+      let counted = true;
+      const uncount = () => {
+        if (!counted) return;
+        counted = false;
+        const n = (unauthed.get(serverId) ?? 1) - 1;
+        if (n > 0) unauthed.set(serverId, n);
+        else unauthed.delete(serverId);
+      };
+      // Messages waiting to be handled: an agent that sends faster than they
+      // are stored is closed instead of filling memory (audit A7 F12).
+      let pending = 0;
 
       const authTimer = setTimeout(() => {
         if (!authed) socket.close(4002, 'auth timeout');
@@ -229,7 +253,13 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
 
       socket.on('message', (raw) => {
         alive = true;
+        const size = rawSize(raw);
+        if ((!authed && size > 16 * 1024) || ++pending > MAX_PENDING) {
+          socket.close(4008, 'too many or too large messages');
+          return;
+        }
         chain = chain.then(async () => {
+          pending--;
           let msg: Record<string, unknown>;
           try {
             msg = JSON.parse(raw.toString());
@@ -249,6 +279,7 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
               return;
             }
             authed = true;
+            uncount();
             clearTimeout(authTimer);
             conn = await hub.attach(serverId, socket, s(msg.version));
             socket.send(JSON.stringify({ type: 'welcome', config: { metrics_interval: cfg.metricsIntervalSeconds } }));
@@ -260,11 +291,14 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
           }
           if (!conn) return;
           switch (msg.type) {
+            // Stored in the servers row: the same 64 KB as at enrollment.
             case 'inventory':
-              if (msg.data && typeof msg.data === 'object') await hub.handleInventory(conn, msg.data as Record<string, unknown>);
+              if (size > MAX_STORED) log.warn({ size }, 'inventory too large; ignored');
+              else if (msg.data && typeof msg.data === 'object') await hub.handleInventory(conn, msg.data as Record<string, unknown>);
               break;
             case 'metrics':
-              await hub.handleMetrics(conn, msg.data as MetricsSample);
+              if (size > MAX_STORED) log.warn({ size }, 'metrics too large; ignored');
+              else await hub.handleMetrics(conn, msg.data as MetricsSample);
               break;
             case 'result':
               hub.handleResult(conn, msg as { id?: string; ok?: boolean; data?: unknown; error?: string });
@@ -274,6 +308,7 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
       });
 
       socket.on('close', () => {
+        uncount();
         clearTimeout(authTimer);
         clearInterval(heartbeat);
         chain = chain.then(async () => {

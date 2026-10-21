@@ -266,6 +266,28 @@ describe('agent end-to-end', () => {
     expect((await c.req('GET', `/api/servers/${serverId}`)).body.server.online).toBe(true);
   });
 
+  it('limits unauthenticated sockets per server and oversized messages (audit A7 F12, F17)', async () => {
+    const { default: WebSocket } = await import('ws');
+    const wsURL = `${h.url.replace(/^http/, 'ws')}/api/agent/ws?server_id=${serverId}`;
+    const open = () =>
+      new Promise<{ ws: InstanceType<typeof WebSocket> | null; status: number }>((resolve) => {
+        const ws = new WebSocket(wsURL);
+        ws.once('message', () => resolve({ ws, status: 101 }));
+        ws.once('unexpected-response', (_req, res) => resolve({ ws: null, status: res.statusCode ?? 0 }));
+        ws.once('error', () => resolve({ ws: null, status: 0 }));
+      });
+    const socks = [await open(), await open(), await open()];
+    expect(socks.map((x) => x.status)).toEqual([101, 101, 101]);
+    expect((await open()).status).toBe(429);
+    // A large message before auth closes the socket.
+    const closed = new Promise<number>((resolve) => socks[0].ws!.once('close', (code) => resolve(code)));
+    socks[0].ws!.send(JSON.stringify({ type: 'auth', pad: 'x'.repeat(20_000) }));
+    expect(await closed).toBe(4008);
+    for (const x of socks) x.ws?.close();
+    // The real agent stays connected.
+    expect((await c.req('GET', `/api/servers/${serverId}`)).body.server.online).toBe(true);
+  });
+
   it('shares automatic bans through the IPDB and distributes the list', async () => {
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(path.join(stateDir, 'agent.db'));
