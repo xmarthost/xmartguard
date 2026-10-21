@@ -45,7 +45,7 @@ func TestExemptionsWithoutCtl(t *testing.T) {
 		t.Error("trusted guard without trusted services")
 	}
 	// API calls and webhooks: the marker, then the IPDB POST rule tests it.
-	if l := ruleLine(out, IDIPDBPostAPI); !strings.Contains(l, "setvar:tx.xg_api=1") {
+	if l := strings.Join(chainOf(out, IDIPDBPostAPI), "\n"); !strings.Contains(l, "setvar:tx.xg_api=1") {
 		t.Errorf("API calls not marked: %s", l)
 	}
 	for _, id := range []int{IDIPDBPost, IDIPDBPost + 1000} {

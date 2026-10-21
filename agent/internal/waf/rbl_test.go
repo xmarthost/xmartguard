@@ -100,7 +100,11 @@ func TestRBLOnApache(t *testing.T) {
 		}
 		defer c.Close()
 		c.SetDeadline(time.Now().Add(5 * time.Second))
-		req := method + " /xg-ok.html HTTP/1.1\r\nHost: shop.example.com\r\nUser-Agent: " + browserUA + "\r\n"
+		path := "/xg-ok.html"
+		if m, p, ok := strings.Cut(method, " "); ok {
+			method, path = m, p
+		}
+		req := method + " " + path + " HTTP/1.1\r\nHost: shop.example.com\r\nUser-Agent: " + browserUA + "\r\n"
 		for _, h := range hdr {
 			req += h + "\r\n"
 		}
@@ -139,6 +143,10 @@ func TestRBLOnApache(t *testing.T) {
 	check("API call with a bearer token from a listed address", false, send("POST", "Authorization: Bearer abc.def"))
 	check("Signed webhook from a listed address", false, send("POST", "Stripe-Signature: t=1,v1=abc"))
 	check("API call behind the proxy", false, send("POST", "X-Forwarded-For: 203.0.113.9", "X-Api-Key: k1"))
+	// Audit A3 F5: an API header alone does not open logins and forms.
+	check("login with an API header from a listed address", true, send("POST /wp-login.php", "Authorization: x"))
+	check("browser form with an API header from a listed address", true, send("POST", "Authorization: x", "Accept: text/html,application/xhtml+xml"))
+	check("form with a cookie and an API header from a listed address", true, send("POST", "Authorization: x", "Cookie: a=b"))
 	exempt = []string{"127.0.0.1"}
 	apply()
 	check("POST from a listed but exempt address", false, send("POST"))

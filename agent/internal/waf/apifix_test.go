@@ -34,9 +34,13 @@ func TestIPDBPostSkipsAPICalls(t *testing.T) {
 	c := settings.Defaults().WAF
 	c.Enabled, c.IPDBPost = true, true
 	out := Render(c, Options{Dir: "/r"})
-	l := ruleLine(out, IDIPDBPostAPI)
-	if !strings.Contains(l, "REQUEST_HEADERS_NAMES") || !strings.Contains(l, "ctl:ruleRemoveById=7700711,ctl:ruleRemoveById=7701711") {
-		t.Fatalf("exemption: %s", l)
+	// Only for what looks like an API call (audit A3 F5): no cookie, no
+	// browser page request, not a login page.
+	l := strings.Join(chainOf(out, IDIPDBPostAPI), "\n")
+	for _, want := range []string{"REQUEST_HEADERS_NAMES", `&REQUEST_COOKIES "@eq 0"`, `&TX:xg_page "@eq 0"`, `/wp-login\.php`, "setvar:tx.xg_api=1"} {
+		if !strings.Contains(l, want) {
+			t.Fatalf("exemption misses %q:\n%s", want, l)
+		}
 	}
 	if strings.Index(out, "id:7700714,") > strings.Index(out, "id:7700711,") {
 		t.Fatal("exemption after the rule")

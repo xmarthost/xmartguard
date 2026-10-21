@@ -1000,8 +1000,19 @@ func Render(c settings.WAF, o Options) string {
 		}
 	}
 	if c.IPDBPost && !off[IDIPDBPost] {
-		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_api=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`,
-			reAPIHeader.String(), IDIPDBPostAPI, IDIPDBPost, IDIPDBPost+1000)
+		// Anyone can add an API header, so it only counts on what looks
+		// like an API call (audit A3 F5): no cookie, no browser asking for
+		// a page and not a login page. (A missing Accept header would not
+		// match a negated test: a marker for the browser's one.)
+		logins := []string{`/wp-login\.php`, `/xmlrpc\.php`}
+		for _, u := range c.LoginURLs {
+			logins = append(logins, regexp.QuoteMeta(strings.ToLower(u)))
+		}
+		w(`SecRule REQUEST_HEADERS:Accept "@contains text/html" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_page=1"`, IDIPDBPostAPI+1000)
+		w(`SecRule REQUEST_HEADERS_NAMES "@rx %s" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, reAPIHeader.String(), IDIPDBPostAPI)
+		w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
+		w(`  SecRule &TX:xg_page "@eq 0" "t:none,chain"`)
+		w(`  SecRule REQUEST_FILENAME "!@rx (?:%s)(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,setvar:tx.xg_api=1"`, strings.Join(logins, "|"))
 		rblRule(IDIPDBPost, true, FileIPDBIPs, "POST from an IPDB-listed address blocked", "")
 	}
 	switch TorMode(c.TorAction, o.Central != nil && o.Gate == nil) {
