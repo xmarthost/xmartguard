@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,9 @@ type Backend interface {
 	Apply(Ruleset) error
 	Remove() error
 	AddTempBan(ip string, seconds int) error
+	// AllowTemp lets ip in for seconds and lifts its temporary ban, without
+	// rebuilding the ruleset (a solved CAPTCHA).
+	AllowTemp(ip string, seconds int) error
 	TempBanned() ([]string, error)
 	Counters() map[string]uint64
 	// IPDBCounters returns packets dropped per IPDB list entry.
@@ -51,6 +55,24 @@ func (n NFT) AddTempBan(ip string, seconds int) error {
 		set = "tempban6"
 	}
 	return n.AddElement(set, fmt.Sprintf("%s timeout %ds", ip, seconds))
+}
+
+func (n NFT) AllowTemp(ip string, seconds int) error {
+	fam := "4"
+	if strings.Contains(ip, ":") {
+		fam = "6"
+	}
+	if err := n.AddElement("tempallow"+fam, fmt.Sprintf("%s timeout %ds", ip, seconds)); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	// Not banned: nothing to delete (nft reports that as an error).
+	if els, err := n.SetElements("tempban" + fam); err == nil && slices.Contains(els, ip) {
+		_, err = n.run(ctx, "", "delete", "element", "inet", Table, "tempban"+fam, "{ "+ip+" }")
+		return err
+	}
+	return nil
 }
 
 func (n NFT) TempBanned() ([]string, error) {
@@ -620,6 +642,20 @@ func (t IPTables) AddTempBan(ip string, seconds int) error {
 	ctx, cancel := ctx60()
 	defer cancel()
 	_, err := runIPSet(ctx, "", t.IPSet, "add", set, ip, "timeout", strconv.Itoa(seconds), "-exist")
+	return err
+}
+
+func (t IPTables) AllowTemp(ip string, seconds int) error {
+	fam := "4"
+	if strings.Contains(ip, ":") {
+		fam = "6"
+	}
+	ctx, cancel := ctx60()
+	defer cancel()
+	if _, err := runIPSet(ctx, "", t.IPSet, "add", "xg_tallow"+fam, ip, "timeout", strconv.Itoa(seconds), "-exist"); err != nil {
+		return err
+	}
+	_, err := runIPSet(ctx, "", t.IPSet, "del", "xg_tban"+fam, ip, "-exist")
 	return err
 }
 

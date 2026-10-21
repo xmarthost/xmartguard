@@ -712,3 +712,58 @@ func TestParseAddrMappedCIDR(t *testing.T) {
 		}
 	}
 }
+
+// Audit A4 F9: a ban the kernel made itself (DoS) survives a rebuild that
+// runs before the minute tick records it (a CAPTCHA solve, a portal change).
+func TestRebuildKeepsKernelDoSBans(t *testing.T) {
+	providers(t, func(t *testing.T, provider string) {
+		m := newManager(t, provider)
+		if _, err := m.Settings.Patch([]byte(`{"firewall":{"dos":true}}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Apply(); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Backend().AddTempBan("203.0.113.77", 600); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Apply(); err != nil {
+			t.Fatal(err)
+		}
+		if els, _ := m.Backend().TempBanned(); !contains(els, "203.0.113.77") {
+			t.Fatalf("kernel DoS ban dropped by the rebuild: %v", els)
+		}
+	})
+}
+
+// Audit A4 F9: a solved CAPTCHA lifts the ban and allows the address in the
+// kernel at once, without rebuilding the ruleset.
+func TestCaptchaSolvedWithoutRebuild(t *testing.T) {
+	providers(t, func(t *testing.T, provider string) {
+		m := newManager(t, provider)
+		if err := m.Apply(); err != nil {
+			t.Fatal(err)
+		}
+		m.AutoBan("203.0.113.88", "test", "bruteforce")
+		if els, _ := m.Backend().TempBanned(); !contains(els, "203.0.113.88") {
+			t.Fatalf("not banned: %v", els)
+		}
+		// A marker the kernel holds that a rebuild would drop.
+		if err := m.Backend().AddTempBan("203.0.113.99", 600); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.CaptchaSolved("203.0.113.88", time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		els, _ := m.Backend().TempBanned()
+		if contains(els, "203.0.113.88") || !contains(els, "203.0.113.99") {
+			t.Fatalf("temp bans after the solve: %v", els)
+		}
+		if !strings.Contains(kernelDump(m), "203.0.113.88") {
+			t.Fatal("solved address not allowed in the kernel")
+		}
+		if c, _ := m.Check("203.0.113.88"); c.Status != "allowed" {
+			t.Fatalf("check after the solve: %+v", c)
+		}
+	})
+}

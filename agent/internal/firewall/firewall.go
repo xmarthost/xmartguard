@@ -354,6 +354,12 @@ func (m *Manager) Apply() error {
 			err = b.Remove()
 		}
 	} else {
+		// Bans the kernel made itself (DoS) are kept in the database only
+		// once a minute: record them first, or this rebuild drops them
+		// (audit A4 F9).
+		if m.Settings.Get().Firewall.DoS && b.Available() == nil && b.Healthy() {
+			m.syncDoSBans()
+		}
 		var rs Ruleset
 		rs, err = m.Build()
 		if err == nil {
@@ -728,8 +734,19 @@ func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 	if allow < time.Minute {
 		allow = time.Hour
 	}
-	_, err = m.Add(KindTempAllow, c, "solved CAPTCHA", allow)
-	return err
+	if _, err := m.store(KindTempAllow, c, "solved CAPTCHA", allow, AllowOpts{}); err != nil {
+		return err
+	}
+	if !m.Settings.Get().Firewall.Enabled {
+		return nil
+	}
+	// Only this address changes: no rebuild of the whole ruleset (with the
+	// IPDB and country lists) for every visitor who solves (audit A4 F9).
+	if err := m.Backend().AllowTemp(c, int(allow.Seconds())); err != nil {
+		return m.Apply()
+	}
+	forgetRedirects(c)
+	return nil
 }
 
 // CheckResult explains how the firewall treats an address.
