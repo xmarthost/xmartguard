@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.0** (see `VERSION`).
+- Current release: **0.23.1** (see `VERSION`).
 
 ## Working rules
 
@@ -218,6 +218,17 @@ project. It holds the rules, the current state and what is still open.
   WAF feed keys; file actions never follow an account's links; the WAF
   fixes of A3 were reverted (they weakened blocking in the Apache tests)
   and are still open.
+- **Audit fix release 2** (0.23.1): the A3 WAF fixes redone one by one
+  with the Apache tests (forged WordPress cookies, Cloudflare and
+  forwarded headers, API headers, PATH_INFO, settings values), plus the
+  remaining scanner, firewall, CAPTCHA page and portal findings. Status
+  per finding in `docs/AUDIT.md` ("Status after release 0.23.1"). Notable
+  behaviour changes: a scanner whitelist entry without a folder no longer
+  exempts PHP/JS/script files (use the full path); a forged
+  X-Forwarded-For no longer skips the fake Googlebot/Bingbot rule; the
+  0.5 AI endpoint is gone and each server may send 2000 files an hour to
+  the portal AI; the agent websocket allows 3 unauthenticated sockets per
+  server and 30 connections a minute per address.
 - **CAPTCHA bypass review** (0.22.26):
   - Login paths through PATH_INFO: PHP runs `/wp-login.php` for
     `/wp-login.php/x`, and every login-page rule (CAPTCHA gate, central

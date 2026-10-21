@@ -70,3 +70,18 @@ writing theirs; their commits name the findings).
 | A8 web | F2-F13; F1 server side via A10 F2 | - |
 | A9 install/deploy | F2, F5-F11, F12 (actions), F13 | F1 signing, F3 old secrets (owner), F4 (agent side done in A1 F4), F12 images |
 | A10 contracts | F1, F2, F3, F4 (part), F5 (part), F6 (part) | F7, F8, F9 |
+
+## Status after release 0.23.1 (2026-10-21)
+
+Fixed since 0.23.0 (each with a regression test; WAF fixes also pass the
+13 Apache + OWASP CRS tests, run as root with `XG_DESTRUCTIVE_TESTS=1`):
+
+| Area | Fixed in 0.23.1 | Still open |
+|------|-----------------|------------|
+| A2 scanner | F7 (a bare file name no longer whitelists code files everywhere), F17 (Recheck and the scan share one content verdict) | - |
+| A3 WAF | F1 (forged editor cookie no longer switches the CRS off: admin/REST markers), F2 (PATH_INFO), F3 (behind Cloudflare only CF-Connecting-IP), F4 (forged X-Forwarded-For no longer lets a fake Googlebot pass), F5 (an API header skips the IPDB POST block only on API-looking calls), F6 (settings values checked; bad values never reach the rules), F7 (part: exclusions that work without ctl), F8, F9, F10, F11, F12 (WAF events carry the cPanel account), F13, F15 (custom rules refuse @pmf, @ipMatchF, proxy:), F16 (Bad Bot list drops short and browser words) | F7 rest (scoped exclusions on LiteSpeed), F14 (CAPTCHA redirect with a port in Host: not changed, LiteSpeed's TX macro in redirects is unverified and cPanel sites use 80/443) |
+| A4 firewall | F9 (rebuilds keep kernel DoS bans; a solved CAPTCHA changes only its address), F11 (RADb routes only inside the service's known networks) | - |
+| A5 CAPTCHA | F19 (withdrawals already coalesced; passes saved together) | - |
+| A7 portal services | F4 (CAPTCHA page messages as text, framed only on the CAPTCHA host), F6 (no 0.5 AI endpoint, 2000 files/hour per server), F12 + F17 (agent websocket limits), F18 (dead AI training/review code removed; `min_servers` is not shown in the UI) | - |
+| A9 install/deploy | - | F1 release signing (owner key), F3 old secrets in history (owner), F12 images |
+| A10 contracts | F9 (one agent.update parameter builder) | F7 (per-server keys win over portal keys: owner decision), F8 (dead handlers and test-only functions: cleanup after the freeze) |
