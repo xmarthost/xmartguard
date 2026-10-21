@@ -209,3 +209,16 @@ func TestCleanMappedCIDR(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// Audit A4 F11: a RADb route someone registered for Meta's AS outside
+// Meta's own networks is not trusted.
+func TestRADBRoutesOnlyInsideKnownNetworks(t *testing.T) {
+	got := insideOf([]string{"157.240.10.0/24", "157.0.0.0/8", "203.0.113.0/24", "2a03:2880:f000::/36", "2001:db8::/32", "bad"},
+		[]string{"157.240.0.0/16", "2a03:2880::/29"}, 10)
+	if strings.Join(got, ",") != "157.240.10.0/24,2a03:2880:f000::/36" {
+		t.Fatalf("got %v", got)
+	}
+	if n := len(insideOf([]string{"157.240.1.0/24", "157.240.2.0/24", "157.240.3.0/24"}, []string{"157.240.0.0/16"}, 2)); n != 2 {
+		t.Fatalf("cap: %d", n)
+	}
+}

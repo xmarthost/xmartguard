@@ -303,6 +303,34 @@ func scanAddrs(b []byte) []string {
 	return out
 }
 
+// insideOf keeps the networks in l that lie within one of nets (at most max).
+func insideOf(l, nets []string, max int) []string {
+	var within []*net.IPNet
+	for _, n := range nets {
+		if _, nw, err := net.ParseCIDR(n); err == nil {
+			within = append(within, nw)
+		}
+	}
+	var out []string
+	for _, r := range l {
+		_, rn, err := net.ParseCIDR(r)
+		if err != nil {
+			continue
+		}
+		ones, _ := rn.Mask.Size()
+		for _, w := range within {
+			if wo, _ := w.Mask.Size(); ones >= wo && w.Contains(rn.IP) && len(w.IP) == len(rn.IP) {
+				out = append(out, r)
+				break
+			}
+		}
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
 // RADBAddr is the routing registry queried for "radb" services (tests
 // point it at a local server).
 var RADBAddr = "whois.radb.net:43"
@@ -420,7 +448,10 @@ func (s *Store) fetch(ctx context.Context, svc Service) ([]string, string, error
 		if err != nil {
 			return nil, "", err
 		}
-		return raw, "official", nil
+		// RADb is not authoritative: anyone can register a route for any
+		// AS. Only routes inside the service's known networks count, and
+		// only so many (audit A4 F11).
+		return insideOf(raw, svc.Builtin, 2000), "official", nil
 	}
 	if svc.URL != "" {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, svc.URL, nil)
