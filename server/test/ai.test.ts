@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 import { createOwner } from '../src/routes/users.js';
-import { aiPayload, aiPayloadV2 } from '../src/routes/ai.js';
+import { aiPayloadV2, aiQuota } from '../src/routes/ai.js';
 import { SYSTEM, parseAnswer, userMessage } from '../src/ai/prompt.js';
 import { cooldownFor } from '../src/ai/providers.js';
 
@@ -192,14 +192,15 @@ describe('AI gateway', () => {
     expect((await agentPost('/api/agent/ai/sync', { ...envelope({ cursor: 0, base: 'v1', model_version: 0 }), server_id: crypto.randomUUID() })).status).toBe(401);
   });
 
-  it('still serves 0.5 agents', async () => {
-    const ts = String(Math.floor(Date.now() / 1000));
-    const system = 'sys';
-    const prompt = 'legacy file';
-    const signature = crypto.sign(null, Buffer.from(aiPayload(serverId, ts, system, prompt)), keys.privateKey).toString('base64');
-    const r = await agentPost('/api/agent/ai', { server_id: serverId, ts, signature, system, prompt });
-    expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ verdict: 'malicious', confidence: 90, model: 'custom/big-model' });
+  it('has no 0.5 endpoint, and limits files per server (audit A7 F6)', async () => {
+    expect((await agentPost('/api/agent/ai', { server_id: serverId, ts: '1', signature: 'x', system: 's', prompt: 'p' })).status).toBe(404);
+    const before = aiQuota.filesPerHour;
+    aiQuota.filesPerHour = 0;
+    try {
+      expect((await agentPost('/api/agent/ai/judge', envelope({ files: [file('q', '1|<?php echo 1;')] }))).status).toBe(429);
+    } finally {
+      aiQuota.filesPerHour = before;
+    }
   });
 
   it('answers an error, and keeps running, when a batch cannot be stored', async () => {

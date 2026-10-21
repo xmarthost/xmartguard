@@ -14,9 +14,24 @@ import type { AgentHub } from '../agents/hub.js';
  * account) and the gateway agents call.
  */
 
-/** Old (0.5) agents sign `xg-ai-v1:<server>:<ts>:<sha256(system+"\n"+prompt)>`. */
-export function aiPayload(serverId: string, ts: string, system: string, prompt: string): string {
-  return `xg-ai-v1:${serverId}:${ts}:${sha256(system + '\n' + prompt)}`;
+/**
+ * Files a server may send to the AI per hour (audit A7 F6): every call uses
+ * the platform's keys, so one server can not use them up for everyone.
+ * Files left over are sent again later by the agent.
+ */
+export const aiQuota = { filesPerHour: 2000 };
+const judged = new Map<string, { at: number; files: number }>();
+function overQuota(serverId: string, files: number): boolean {
+  const now = Date.now();
+  let q = judged.get(serverId);
+  if (!q || now - q.at > 3600_000) {
+    if (judged.size > 10_000) judged.clear();
+    q = { at: now, files: 0 };
+    judged.set(serverId, q);
+  }
+  if (q.files + files > aiQuota.filesPerHour) return true;
+  q.files += files;
+  return false;
 }
 
 /** 0.6+ agents sign `xg-ai-v2:<server>:<ts>:<sha256(payload)>`. */
@@ -97,13 +112,6 @@ const SyncBody = z.object({
   model_version: z.number().int().min(0),
 });
 
-const LegacyBody = z.object({
-  server_id: z.string().uuid(),
-  ts: z.string().regex(/^\d{1,12}$/),
-  signature: z.string().max(200),
-  system: z.string().max(8_000),
-  prompt: z.string().max(300_000),
-});
 
 export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: AgentHub): void {
   async function agentOf(serverId: string, ts: string, message: string, signature: string, reply: FastifyReply) {
@@ -335,6 +343,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
     } catch {
       return reply.code(400).send({ error: 'invalid payload' });
     }
+    if (overQuota(server_id, body.files.length)) return reply.code(429).send({ error: 'AI quota for this server reached; try again later' });
     const results = await gw.judge(account, server_id, body.files);
     try {
       const moved = await recordFalsePositives(pool, server_id, body.files, results);
@@ -357,29 +366,5 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
       return reply.code(400).send({ error: 'invalid payload' });
     }
     return gw.sync(body.base, body.cursor, body.model_version);
-  });
-
-  /** 0.5 agents: one file, their own instructions. Answered by the same keys. */
-  app.post('/api/agent/ai', { bodyLimit: 400_000 }, async (req, reply) => {
-    const b = LegacyBody.safeParse(req.body);
-    if (!b.success) return reply.code(400).send({ error: 'invalid request' });
-    const { server_id, ts, signature, system, prompt } = b.data;
-    const account = await agentOf(server_id, ts, aiPayload(server_id, ts, system, prompt), signature, reply);
-    if (!account) return;
-    try {
-      const r = await gw.ask(account, system + '\nReply with JSON only: {"verdict":"malicious|suspicious|clean","confidence":0-100,"reason":"..."}', prompt, 400);
-      const text = r.text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-      const ans = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
-      if (!['malicious', 'suspicious', 'clean'].includes(ans.verdict)) throw new Error('unexpected answer');
-      return {
-        verdict: ans.verdict,
-        confidence: Math.max(0, Math.min(100, Math.round(Number(ans.confidence) || 0))),
-        reason: String(ans.reason ?? '').slice(0, 600),
-        model: r.model,
-      };
-    } catch (err) {
-      const e = err as Error & { noKeys?: boolean };
-      return reply.code(e.noKeys ? 503 : 502).send({ error: e.message.slice(0, 300) });
-    }
   });
 }
