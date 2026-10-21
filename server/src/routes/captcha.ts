@@ -413,7 +413,10 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!config.enabled || !provider) {
       return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
     }
-    const frame = !p.preview && p.frame && p.n !== '';
+    // Framed only on the CAPTCHA host when it has its own: a website must
+    // never frame a page of the portal's own origin (audit A7 F4).
+    const onPortal = !!captchaHost && captchaHost !== new URL(cfg.publicUrl).host.toLowerCase() && (req.headers.host ?? '').toLowerCase() !== captchaHost;
+    const frame = !p.preview && p.frame && p.n !== '' && !onPortal;
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : frame ? { s: p.s, ip: p.ip, h: p.h, u: p.u, n: p.n } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
     const design = (p.preview && p.design) || config.design;
     // The page names the website only when its server confirms the site is

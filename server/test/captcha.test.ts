@@ -452,13 +452,23 @@ describe('CAPTCHA on the website’s own address', () => {
 
   it('may be framed by that website only, and gives the server a ticket instead of a reload', async () => {
     const url = `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&n=${nonce}&frame=1&u=/wp-login.php`;
-    const page = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.88' } });
-    const body = await page.text();
-    expect(page.status).toBe(200);
-    expect(page.headers.get('x-frame-options')).toBeNull();
-    expect(page.headers.get('content-security-policy')).toContain('frame-ancestors https://shop.example.com:* https://shop.example.com');
+    const page = await h.app.inject({ method: 'GET', url, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.88' } });
+    const body = page.body;
+    expect(page.statusCode).toBe(200);
+    expect(page.headers['x-frame-options']).toBeUndefined();
+    expect(page.headers['content-security-policy']).toContain('frame-ancestors https://shop.example.com:* https://shop.example.com');
     expect(body).toContain('FRAME=true');
     expect(body).toContain(`"n":"${nonce}"`);
+    // Audit A7 F4: the framing page's message text is never shown, and
+    // messages are set as text, not markup.
+    expect(body).not.toContain('e.data.error');
+    expect(body).toContain('st.textContent=t');
+    expect(body).not.toContain('st.innerHTML');
+    // The portal's own host never lets a website frame the page.
+    const onPortal = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.88' } });
+    expect(onPortal.headers.get('x-frame-options')).toBe('DENY');
+    expect(onPortal.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(await onPortal.text()).toContain('FRAME=false');
     // Without the frame parameters: no one may frame it.
     const plain = await fetch(h.url + `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-login.php`, { headers: { 'x-forwarded-for': '203.0.113.88' } });
     expect(plain.headers.get('x-frame-options')).toBe('DENY');

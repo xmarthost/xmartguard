@@ -144,7 +144,9 @@ export function renderPage(d: PageData): string {
       ? ''
       : `<script>
 var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},FRAME=${d.frame ? 'true' : 'false'},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
-function show(t,c){st.className='status'+(c?' '+c:'');st.innerHTML=t}
+// Messages are text: an error from the server or the framing page can not
+// add markup (audit A7 F4). Only the spinner is markup.
+function show(t,c,spin){st.className='status'+(c?' '+c:'');st.textContent=t;if(spin){var s=document.createElement('span');s.className='spin';st.prepend(s)}}
 // After an error the check is not restarted by itself (it would solve again
 // and repeat the same error): the visitor chooses to try again.
 function fail(t){show(t,'err');ag.hidden=false;bd.className='badge err'}
@@ -163,10 +165,11 @@ function back(url){
     if(left<=0){clearInterval(iv);location.replace(url)}},1000);
 }
 // In a frame: the website's page reports when the pass could not be set.
-window.addEventListener('message',function(e){if(FRAME&&e.source===window.parent&&e.data&&e.data.xg==='error')fail(e.data.error||'The check could not be confirmed. Please reload the page.')});
+// Its text is not shown: the framing page is not trusted with this page.
+window.addEventListener('message',function(e){if(FRAME&&e.source===window.parent&&e.data&&e.data.xg==='error')fail('The check could not be confirmed. Please reload the page.')});
 ag.onclick=function(){ag.hidden=true;bd.className='badge';if(usingAltcha){startAltcha()}else{show('Please confirm you are not a robot.');if(window.turnstile)turnstile.reset()}};
 function done(sol){
-  show('<span class="spin"></span>Checking…');
+  show('Checking…','',true);
   fetch('/v/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({},sol,P))})
   .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
   .then(function(x){
@@ -180,7 +183,7 @@ function done(sol){
 // ALTCHA: the browser solves a small puzzle by itself (no third party).
 function startAltcha(){
   usingAltcha=true;ag.hidden=true;
-  show('<span class="spin"></span>Checking your browser…');
+  show('Checking your browser…','',true);
   var go=function(){
     box.innerHTML='';
     altcha=document.createElement('altcha-widget');
