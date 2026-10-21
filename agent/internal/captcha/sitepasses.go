@@ -46,6 +46,25 @@ type SitePasses struct {
 	quiet  map[int]time.Time
 	// pending is set while a WAF apply for withdrawn values waits to run.
 	pending atomic.Bool
+	// saving is the timer of a save that gathers the passes given meanwhile.
+	saving *time.Timer
+}
+
+// saveDelay gathers the passes given together into one save: the state can
+// hold many thousand passes (audit A5 F19).
+var saveDelay = 2 * time.Second
+
+// saveSoon saves within saveDelay (p.mu held).
+func (p *SitePasses) saveSoon() {
+	if p.Save == nil || p.saving != nil {
+		return
+	}
+	p.saving = time.AfterFunc(saveDelay, func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.saving = nil
+		p.save()
+	})
 }
 
 // applyDelay gathers the withdrawals that arrive together into one apply.
@@ -154,7 +173,7 @@ func (p *SitePasses) Give(ip string, now time.Time) string {
 		p.st.Given[tok] = map[string]int64{}
 	}
 	p.st.Given[tok][k] = now.Add(passLife).Unix()
-	p.save()
+	p.saveSoon()
 	return tok
 }
 

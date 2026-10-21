@@ -1,11 +1,13 @@
 package captcha
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -109,8 +111,12 @@ func TestSiteMode(t *testing.T) {
 // withdrawn as soon as the WAF reports it from an address it was not given
 // to; the visitor it was given to keeps passing until then.
 func TestSitePassShared(t *testing.T) {
+	old := saveDelay
+	saveDelay = 10 * time.Millisecond
+	defer func() { saveDelay = old }()
+	var mu sync.Mutex
 	saved := []byte(nil)
-	p := &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef"), Save: func(b []byte) { saved = b }}
+	p := &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef"), Save: func(b []byte) { mu.Lock(); saved = b; mu.Unlock() }}
 	now := time.Date(2026, 10, 19, 23, 0, 0, 0, time.UTC)
 	tok := p.Give("203.0.113.5", now)
 	slot := -1
@@ -134,7 +140,8 @@ func TestSitePassShared(t *testing.T) {
 		}
 	}
 	// Restarted agent: the state comes back.
-	q := &SitePasses{Secret: p.Secret, Load: func() []byte { return saved }}
+	time.Sleep(100 * time.Millisecond)
+	q := &SitePasses{Secret: p.Secret, Load: func() []byte { mu.Lock(); defer mu.Unlock(); return saved }}
 	if q.Slots(now)[slot][0] != tok || q.Used("203.0.113.5", slot, now) {
 		t.Fatal("state lost across a restart")
 	}
@@ -154,5 +161,25 @@ func TestSitePassShared(t *testing.T) {
 	// The other values stay; bad input is ignored.
 	if p.Used("nope", 0, now) || p.Used("198.51.100.7", SiteSlots, now) || (&SitePasses{}).Give("203.0.113.5", now) != "" {
 		t.Fatal("bad input")
+	}
+}
+
+// Audit A5 F19: passes given together are saved once, not once each.
+func TestSitePassesSavedTogether(t *testing.T) {
+	old := saveDelay
+	saveDelay = 50 * time.Millisecond
+	defer func() { saveDelay = old }()
+	var mu sync.Mutex
+	saves := 0
+	p := &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef"), Save: func([]byte) { mu.Lock(); saves++; mu.Unlock() }}
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		p.Give(fmt.Sprintf("198.51.100.%d", i), now)
+	}
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if saves != 1 {
+		t.Fatalf("%d saves for 100 passes", saves)
 	}
 }
