@@ -916,20 +916,25 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule REQUEST_HEADERS:User-Agent "!@rx (?:googlebot|bingbot|applebot|yandex|duckduckbot|google-inspectiontool|adsbot-google|mediapartners-google)" "t:none,t:lowercase"`)
 		}
 		// Search engines are exempt (fake ones are blocked by their own rule).
-		// A visitor clicking filters always sends a Referer, so only clients
-		// with neither cookies nor a Referer are blocked.
 		search := `SecRule REQUEST_HEADERS:User-Agent "!@rx (?:googlebot|bingbot|applebot|yandex|duckduckbot|google-inspectiontool|adsbot-google|mediapartners-google)" "t:none,t:lowercase"`
 		if !off[IDShopScrape] {
-			// A browser moving within the site says so even when the site
-			// sends no Referer (Referrer-Policy: no-referrer).
-			w(`SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,setvar:tx.xg_same_origin=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDShopScrape+2000, IDShopScrape, IDShopScrape+1000)
+			// A visitor clicking a filter on the site: the browser says the
+			// request came from the same site (Sec-Fetch-Site, sent by every
+			// current browser) and the Referer, when sent, is this site.
+			// A Referer alone is not enough: the filter botnets send one
+			// (blacksoulltd.com on business900, 2026-10-22: ~800 requests a
+			// minute from 28,000 addresses with browser User-Agents, which
+			// put LiteSpeed into a restart loop).
+			w(`SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, IDShopScrape+2000)
+			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,setvar:tx.xg_same_origin=1"`)
+			w(`SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, IDShopScrape+5000)
+			w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)" "t:none,t:lowercase,capture,chain"`)
+			w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,setvar:tx.xg_same_origin=1"`)
 			w(`SecRule ARGS_GET:/^filter_/|ARGS_GET:/^pa_/ "@rx ^[^,]*,[^,]*," "id:%d,phase:1,t:none,t:urlDecodeUni,deny,status:403,log,msg:'xPGuard - Shop filter scraping blocked (no cookies, many filter values)',tag:'xpguard/bot',chain"`, IDShopScrape)
 			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
-			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
 			w(`  %s`, search)
 			w(`SecRule &ARGS_GET:/^filter_/ "@ge 3" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - Shop filter scraping blocked (no cookies, many filters)',tag:'xpguard/bot',chain"`, IDShopScrape+1000)
 			w(`  SecRule &REQUEST_COOKIES "@eq 0" "t:none,chain"`)
-			w(`  SecRule &REQUEST_HEADERS:Referer "@eq 0" "t:none,chain"`)
 			w(`  %s`, search)
 		}
 		if !off[IDCartSpam] {
@@ -1050,8 +1055,9 @@ func Render(c settings.WAF, o Options) string {
 		out = guardChains(out, `SecRule &TX:xg_trusted "@eq 0" "t:none,chain"`, IDRootProbe, IDRootProbe+1000, IDEmptyUAWP, IDEmptyUAWP+1000,
 			IDXMLRPCGet, IDGateNoCookie, IDGateBadCookie, IDCentralGate, IDCentralNoBrowser, IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, IDNoUAPost, IDNoUAPost+1000, IDFakeSearchBot, IDFakeSearchBot+1000, IDFakeSearchBot+2000)
 	}
-	// Same for the shop filter rules' same-origin exemption (IDShopScrape+2000;
-	// a negated header test would not match a request without the header).
+	// The shop filter rules test the same-site marker (IDShopScrape+2000 and
+	// +5000; a negated header test would not match a request without the
+	// header).
 	out = guardChains(out, `SecRule &TX:xg_same_origin "@eq 0" "t:none,chain"`, IDShopScrape, IDShopScrape+1000)
 	// And for the theme colour stylesheets (IDThemeColorCSS).
 	out = guardChains(out, `SecRule &TX:xg_color_css "@eq 0" "t:none,chain"`, IDStaticPHP, IDPHPInAssets)

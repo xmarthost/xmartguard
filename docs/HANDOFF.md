@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.3** (see `VERSION`).
+- Current release: **0.23.4** (see `VERSION`).
 
 ## Working rules
 
@@ -218,6 +218,17 @@ project. It holds the rules, the current state and what is still open.
   WAF feed keys; file actions never follow an account's links; the WAF
   fixes of A3 were reverted (they weakened blocking in the Apache tests)
   and are still open.
+- **Shop filter botnet** (0.23.4): business900 had 74 LiteSpeed
+  restarts in a day: blacksoulltd.com got ~800 filter-URL requests a
+  minute (`?filter_cat=…&filter_color=…&filter_size=…`) from ~28,000
+  addresses with browser User-Agents, no cookies and a Referer; lsphp hit
+  the account's LVE memory (OOM kills) and the 503 watchdog restarted
+  LiteSpeed. Rule 7700510/7701510 let any Referer through. Now only a
+  same-site browser signal exempts a cookie-less request: Sec-Fetch-Site
+  same-origin with no Referer (+2000) or with this site's Referer (+5000).
+  The rule still watches until it is approved in the portal (open item 1).
+  Another assistant also added a .htaccess block and .user.ini limits to
+  that account (backups next to the files).
 - **PHP2Shell and agent memory** (0.23.3):
   - PHP2Shell (CVE-2026-109618, CVE-2026-109619, PHP releases of
     2026-10-21: unauthenticated RCE while PHP parses a request). WAF

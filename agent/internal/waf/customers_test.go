@@ -78,7 +78,10 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		// Scrapers with a browser User-Agent walking filter combinations.
 		{"Scraper on many filter values", "shop.example.com", "GET", "/shop/?filter_color=yellow,white,orange", "", "", nil, 403},
 		{"Scraper on many filters", "shop.example.com", "GET", "/shop/?filter_color=red&filter_size=xl&filter_brand=acme", "", "", nil, 403},
-		{"Visitor clicking many filter values", "shop.example.com", "GET", "/shop/?filter_color=yellow,white,orange", "", "", []string{"Referer: https://shop.example.com/shop/?filter_color=yellow,white"}, 200},
+		// A browser clicking a filter sends Sec-Fetch-Site and the site's
+		// Referer; filter botnets send only a Referer (business900, 2026-10-22).
+		{"Visitor clicking many filter values", "shop.example.com", "GET", "/shop/?filter_color=yellow,white,orange", "", "", []string{"Sec-Fetch-Site: same-origin", "Referer: https://shop.example.com/shop/?filter_color=yellow,white"}, 200},
+		{"Filter bot with only a Referer", "shop.example.com", "GET", "/shop/?filter_color=yellow,white,orange", "", "", []string{"Referer: https://shop.example.com/shop/?filter_color=yellow,white"}, 403},
 		{"Visitor on a no-referrer site clicking many filters", "shop.example.com", "GET", "/shop/?filter_color=red&filter_size=xl&filter_brand=acme", "", "", []string{"Sec-Fetch-Site: same-origin"}, 200},
 		{"Guest's first add-to-cart with a nonce", "shop.example.com", "GET", "/shop/?add-to-cart=55&_wpnonce=f00d", "", "", nil, 200},
 		{"Visitor with cookies on many filters", "shop.example.com", "GET", "/shop/?filter_color=red&filter_size=xl&filter_brand=acme", "", "", []string{"Cookie: _ga=GA1.1.1"}, 200},

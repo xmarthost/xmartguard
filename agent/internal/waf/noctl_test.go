@@ -58,7 +58,7 @@ func TestExemptionsWithoutCtl(t *testing.T) {
 		t.Error("Tor POST rule must not skip API calls")
 	}
 	for _, id := range []int{IDShopScrape, IDShopScrape + 1000} {
-		if next(id) != `SecRule &TX:xg_same_origin "@eq 0" "t:none,chain"` || !strings.Contains(ruleLine(out, IDShopScrape+2000), "setvar:tx.xg_same_origin=1") {
+		if next(id) != `SecRule &TX:xg_same_origin "@eq 0" "t:none,chain"` || !strings.Contains(strings.Join(chainOf(out, IDShopScrape+2000), "\n"), "setvar:tx.xg_same_origin=1") {
 			t.Errorf("shop rule %d does not skip same-site browsing: %s", id, next(id))
 		}
 	}
@@ -111,6 +111,14 @@ func TestExemptionsOnApacheWithoutCtl(t *testing.T) {
 	check("GET to xmlrpc.php", true, send("GET", "/xmlrpc.php"))
 	check("shop filter scraping", true, send("GET", "/xg-ok.html?filter_color=a,b,c"))
 	check("shopper moving within the site", false, send("GET", "/xg-ok.html?filter_color=a,b,c", "Sec-Fetch-Site: same-origin"))
+	// The filter botnet of blacksoulltd.com (business900, 2026-10-22): three
+	// filters, browser User-Agent, no cookies, a Referer of the site.
+	flood := "/xg-ok.html?filter_cat=pants&filter_color=red&filter_size=3xl"
+	check("filter flood with a forged Referer", true, send("GET", flood, "Referer: https://shop.example.com/shop/"))
+	check("filter flood claiming same-site from another site", true, send("GET", flood, "Sec-Fetch-Site: same-origin", "Referer: https://evil.example/"))
+	check("shopper clicking a filter on the site", false, send("GET", flood, "Sec-Fetch-Site: same-origin", "Referer: https://shop.example.com/shop/"))
+	check("shopper with a cookie", false, send("GET", flood, "Cookie: woocommerce_items_in_cart=1"))
+	check("one filter value from a link", false, send("GET", "/xg-ok.html?filter_color=red"))
 	// The same request from a trusted service (Jetpack, a monitor).
 	trusted = []string{"127.0.0.0/8"}
 	apply()

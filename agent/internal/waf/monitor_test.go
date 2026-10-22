@@ -36,7 +36,7 @@ func TestNewRulesWatchUntilApproved(t *testing.T) {
 		t.Errorf("old rule changed: %s", l)
 	}
 	// The Sec-Fetch exemption keeps working.
-	if l := ruleLine(out, IDShopScrape+2000); !strings.Contains(l, "ctl:ruleRemoveById") {
+	if l := strings.Join(chainOf(out, IDShopScrape+2000), "\n"); !strings.Contains(l, "setvar:tx.xg_same_origin=1") {
 		t.Errorf("exemption changed: %s", l)
 	}
 	out = Render(c, Options{Dir: "/r", Intel: (&Intel{Enforce: []int{IDShopScrape, 7700001}}).Clean()})
