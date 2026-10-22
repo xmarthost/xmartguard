@@ -57,18 +57,18 @@ type Auditor struct {
 	MySQLUsers func(ctx context.Context) ([][2]string, error)
 	// Hostnames and addresses of this server (database users may connect
 	// from them).
-	OwnNames  func() []string
-	ProcDir   string
-	CronDir   string
-	PHPInis   []string // glob patterns
-	PHPConfs  []string // cPanel userdata files with phpversion
+	OwnNames func() []string
+	ProcDir  string
+	CronDir  string
+	PHPInis  []string // glob patterns
+	PHPConfs []string // cPanel userdata files with phpversion
 	// PHPBins are the installed PHP interpreters (glob patterns) and
 	// PHPVersion reads one's version (tests replace both).
 	PHPBins    []string
 	PHPVersion func(bin string) string
-	Now       func() time.Time
-	MaxFiles  int
-	MaxPerKey int
+	Now        func() time.Time
+	MaxFiles   int
+	MaxPerKey  int
 }
 
 func (a *Auditor) now() time.Time {
