@@ -115,6 +115,10 @@ const (
 	IDVPRevSlider   = 7701003
 	IDVPDuplicator  = 7701004
 	IDVPLiteSpeed   = 7701005
+	// IDVPPHPFormName: PHP2Shell (CVE-2026-109618): a form field name of
+	// megabytes exhausts PHP's memory while it parses the request, before
+	// any script runs.
+	IDVPPHPFormName = 7701006
 	IDGateNoCookie  = 7700902
 	IDGateBadCookie = 7700903
 	IDCentralGate   = 7700904
@@ -214,6 +218,7 @@ var Catalog = []RuleInfo{
 	{IDVPRevSlider, "virtual_patches", "Slider Revolution: block the revslider_show_image file download with ../ (arbitrary file read)", "block"},
 	{IDVPDuplicator, "virtual_patches", "Duplicator: block duplicator_download with ../ (CVE-2020-11738, arbitrary file read)", "block"},
 	{IDVPLiteSpeed, "virtual_patches", "LiteSpeed Cache: block its debug logs in wp-content/litespeed/debug (CVE-2024-44000, session cookie leak)", "block"},
+	{IDVPPHPFormName, "virtual_patches", "PHP2Shell: block form posts with a field name longer than 16 KB (CVE-2026-109618, PHP remote code execution while PHP reads the form; update PHP too)", "block"},
 }
 
 // Package is a group of rule categories shown as one card in the portal.
@@ -678,6 +683,10 @@ func Render(c settings.WAF, o Options) string {
 			}
 		}
 		rule(IDVPLiteSpeed, `SecRule REQUEST_FILENAME "@rx /wp-content/+litespeed/+debug/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - Virtual patch: LiteSpeed Cache debug log (CVE-2024-44000)',tag:'xpguard/vpatch'"`, IDVPLiteSpeed)
+		// No form has field names of 16 KB; the exploit needs one larger
+		// than PHP's memory limit (or a body cut at the request body limit
+		// still shows more than 16 KB of it).
+		rule(IDVPPHPFormName, `SecRule ARGS_POST_NAMES "@rx (?s)^.{16385}" "id:%d,phase:2,t:none,deny,status:403,log,msg:'xPGuard - Virtual patch: PHP form field name of more than 16 KB (PHP2Shell, CVE-2026-109618)',tag:'xpguard/vpatch'"`, IDVPPHPFormName)
 	}
 	if c.BruteForce {
 		// Successful WordPress logins redirect (302); a failed one shows the form again (200).

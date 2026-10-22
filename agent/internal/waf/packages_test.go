@@ -202,6 +202,16 @@ func TestPackagesOnApache(t *testing.T) {
 		}
 	}
 
+	// PHP2Shell (CVE-2026-109618): a form field name of more than 16 KB is
+	// refused before PHP parses it; long values and normal forms are not.
+	longName := strings.Repeat("a", 20000) + "=1"
+	if code := send("POST", "/index.php", browser, longName); code != 403 {
+		t.Errorf("form with a 20 KB field name: %d, want 403", code)
+	}
+	if code := send("POST", "/index.php", browser, "content="+strings.Repeat("b", 60000)+"&title=x"); code == 403 || code == 0 {
+		t.Errorf("form with a long value: %d", code)
+	}
+
 	// Audit A3 F4: a forged X-Forwarded-For does not make a fake Googlebot
 	// pass; behind Cloudflare only CF-Connecting-IP names the crawler.
 	const direct, cfAddr = "192.0.2.77", "104.16.0.78"

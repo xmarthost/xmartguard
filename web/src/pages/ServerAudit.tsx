@@ -31,6 +31,7 @@ const CHECKS: Record<string, string> = {
   wp_debug: 'WordPress debug',
   php: 'PHP settings',
   php_eol: 'Old PHP',
+  php_cve: 'PHP security update',
   stuck_php: 'Stuck PHP',
   cron: 'Cron jobs',
 };

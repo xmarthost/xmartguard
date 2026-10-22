@@ -62,6 +62,10 @@ type Auditor struct {
 	CronDir   string
 	PHPInis   []string // glob patterns
 	PHPConfs  []string // cPanel userdata files with phpversion
+	// PHPBins are the installed PHP interpreters (glob patterns) and
+	// PHPVersion reads one's version (tests replace both).
+	PHPBins    []string
+	PHPVersion func(bin string) string
 	Now       func() time.Time
 	MaxFiles  int
 	MaxPerKey int
@@ -95,6 +99,7 @@ func (a *Auditor) Run(ctx context.Context) Report {
 	}
 	add("website_files", web, webErr)
 	add("php", a.phpSettings(), nil)
+	add("php_cve", a.phpCVEs(), nil)
 	add("lsphp", a.stuckPHP(), nil)
 	add("cron", a.cronJobs(), nil)
 	sev := map[string]int{"high": 0, "medium": 1, "low": 2}
@@ -557,6 +562,70 @@ func (a *Auditor) phpSettings() []Item {
 		}
 		out = append(out, Item{Check: "php_eol", Severity: "medium", Title: strconv.Itoa(len(doms)) + " domain(s) on PHP " + v + " (no security fixes)",
 			Detail: strings.Join(shown, ", ") + more + ". Move them to PHP 8.2 or newer (MultiPHP Manager)."})
+	}
+	return out
+}
+
+// ---- PHP releases with known remote code execution ----
+
+// phpFixed is the first release of each PHP branch with the fixes for
+// PHP2Shell (CVE-2026-109618, CVE-2026-109619: unauthenticated remote code
+// execution through any PHP script, PHP releases of 2026-10-21). Branches
+// 7.4 to 8.1 got source backports only: their patched builds keep the
+// version number, so the package date has to be checked.
+var phpFixed = map[string]int{"8.2": 35, "8.3": 36, "8.4": 27, "8.5": 12}
+
+var phpBackportOnly = map[string]bool{"7.4": true, "8.0": true, "8.1": true}
+
+var rePHPRelease = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
+
+func phpVersionOf(bin string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "-n", "-r", "echo PHP_VERSION;").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// phpCVEs lists the installed PHP interpreters that are older than the
+// release fixing a known remote code execution.
+func (a *Auditor) phpCVEs() []Item {
+	bins := a.PHPBins
+	if bins == nil {
+		bins = []string{"/opt/cpanel/ea-php*/root/usr/bin/php", "/opt/alt/php*/usr/bin/php", "/usr/local/lsws/lsphp*/bin/php", "/usr/bin/php"}
+	}
+	ver := a.PHPVersion
+	if ver == nil {
+		ver = phpVersionOf
+	}
+	var out []Item
+	seen := map[string]bool{}
+	for _, g := range bins {
+		files, _ := filepath.Glob(g)
+		for _, f := range files {
+			real, err := filepath.EvalSymlinks(f)
+			if err != nil || seen[real] {
+				continue
+			}
+			seen[real] = true
+			m := rePHPRelease.FindStringSubmatch(ver(f))
+			if m == nil {
+				continue
+			}
+			branch := m[1] + "." + m[2]
+			patch, _ := strconv.Atoi(m[3])
+			const cve = "PHP2Shell (CVE-2026-109618, CVE-2026-109619): unauthenticated remote code execution through any PHP page"
+			mitigate := " Until then: session.upload_progress.enabled = Off (and on PHP 8.5 fatal_error_backtraces = Off) in the server-wide php.ini, then restart PHP."
+			if fixed, ok := phpFixed[branch]; ok && patch < fixed {
+				out = append(out, Item{Check: "php_cve", Severity: "high", Title: "PHP " + m[0] + " is open to " + cve, Path: f,
+					Detail: "Update to PHP " + branch + "." + strconv.Itoa(fixed) + " or newer (cPanel: EasyApache/MultiPHP updates; CloudLinux: alt-php updates)." + mitigate})
+			} else if phpBackportOnly[branch] {
+				out = append(out, Item{Check: "php_cve", Severity: "high", Title: "PHP " + m[0] + " (no official fix) may be open to " + cve, Path: f,
+					Detail: "This branch only got source backports: install your vendor's patched build (check that the package was built on or after 2026-10-21), or move the sites to PHP 8.2 or newer." + mitigate})
+			}
+		}
 	}
 	return out
 }

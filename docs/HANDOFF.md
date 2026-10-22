@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.2** (see `VERSION`).
+- Current release: **0.23.3** (see `VERSION`).
 
 ## Working rules
 
@@ -218,6 +218,19 @@ project. It holds the rules, the current state and what is still open.
   WAF feed keys; file actions never follow an account's links; the WAF
   fixes of A3 were reverted (they weakened blocking in the Apache tests)
   and are still open.
+- **PHP2Shell and agent memory** (0.23.3):
+  - PHP2Shell (CVE-2026-109618, CVE-2026-109619, PHP releases of
+    2026-10-21: unauthenticated RCE while PHP parses a request). WAF
+    virtual patch 7701006 refuses form posts with a field name over 16 KB
+    (the exploit needs megabytes). Audit check `php_cve` lists installed
+    PHP interpreters older than 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12, and
+    7.4-8.1 (backports keep the version number: check the package date),
+    with the interim mitigation (session.upload_progress.enabled = Off).
+    xPGuard does not change php.ini itself.
+  - Agents grew to ~5 GB on busy servers: the WordPress.org plugin
+    checksums cache held up to 5000 versions as maps of maps (~1 MB each).
+    Now sorted keyed 64-bit hashes (8 bytes a file), at most 4M (32 MB).
+    `agent.profile` reports memory (RSS, heap, by area and function).
 - **WHMCS admin saves on LiteSpeed** (0.23.2): my.galaxyhoster.com
   (cloud2, admin folder `/proka/`) could not save General Settings: CRS
   941100 scored 38. The WHMCS exclusion (7700027/28) raised the threshold

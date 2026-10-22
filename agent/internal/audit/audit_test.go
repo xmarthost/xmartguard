@@ -179,11 +179,35 @@ func TestCronJobs(t *testing.T) {
 func TestRunOrdersBySeverity(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "cron/bob"), "0 1 * * * wget https://example.com/x\n")
-	a := &Auditor{CronDir: filepath.Join(dir, "cron"), ProcDir: dir, PHPInis: []string{}, PHPConfs: []string{},
+	a := &Auditor{CronDir: filepath.Join(dir, "cron"), ProcDir: dir, PHPInis: []string{}, PHPConfs: []string{}, PHPBins: []string{},
 		MySQLUsers: func(context.Context) ([][2]string, error) { return [][2]string{{"root", "%"}}, nil },
 		Now:        func() time.Time { return time.Unix(1000, 0) }}
 	r := a.Run(context.Background())
 	if len(r.Items) != 2 || r.Items[0].Severity != "high" || r.Counts["high"] != 1 || r.Counts["low"] != 1 {
 		t.Errorf("got %+v", r)
+	}
+}
+
+// PHP2Shell (CVE-2026-109618, CVE-2026-109619): interpreters older than the
+// fixing release are reported; fixed and newer ones are not.
+func TestPHPCVEs(t *testing.T) {
+	dir := t.TempDir()
+	vers := map[string]string{"ea-php83": "8.3.30", "ea-php84": "8.4.27", "ea-php82": "8.2.40", "ea-php81": "8.1.34", "alt-php85": "8.5.11", "ea-php74": "garbage"}
+	for name := range vers {
+		os.MkdirAll(filepath.Join(dir, name), 0o755)
+		os.WriteFile(filepath.Join(dir, name, "php"), nil, 0o755)
+	}
+	a := &Auditor{PHPBins: []string{filepath.Join(dir, "*/php")}, PHPVersion: func(bin string) string { return vers[filepath.Base(filepath.Dir(bin))] }}
+	got := map[string]bool{}
+	for _, it := range a.phpCVEs() {
+		got[filepath.Base(filepath.Dir(it.Path))] = true
+		if it.Severity != "high" || !strings.Contains(it.Title, "CVE-2026-109618") {
+			t.Errorf("item %+v", it)
+		}
+	}
+	for name, want := range map[string]bool{"ea-php83": true, "alt-php85": true, "ea-php81": true, "ea-php84": false, "ea-php82": false, "ea-php74": false} {
+		if got[name] != want {
+			t.Errorf("%s reported %v, want %v", name, got[name], want)
+		}
 	}
 }
