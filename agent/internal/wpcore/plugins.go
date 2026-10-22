@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +28,7 @@ type Plugins struct {
 
 	mu      sync.Mutex
 	sums    map[string]*pluginSums // "slug@version"
+	entries int                    // checksums held in sums
 	version map[string]verEntry    // plugin dir -> version
 }
 
@@ -38,9 +42,36 @@ type PluginSource interface {
 var ErrNoChecksums = errors.New("no public checksums")
 
 type pluginSums struct {
-	files map[string]map[string]bool // rel -> md5 set
-	until time.Time                  // retry time for a failed lookup
+	files fileSums  // nil: no checksums
+	until time.Time // retry time for a failed lookup
 }
+
+// fileSums is a plugin version's official (file, md5) pairs, each kept as a
+// keyed 64-bit hash in a sorted slice: 8 bytes a file instead of a map of
+// maps (a hosting server's thousands of plugin versions took gigabytes).
+// The key is random per process, so a file can not be made to collide
+// with a known one offline.
+type fileSums []uint64
+
+var sumSeed = maphash.MakeSeed()
+
+func sumKey(rel string, md5 [16]byte) uint64 {
+	var h maphash.Hash
+	h.SetSeed(sumSeed)
+	h.WriteString(rel)
+	h.WriteByte(0)
+	h.Write(md5[:])
+	return h.Sum64()
+}
+
+func (f fileSums) has(rel string, md5 [16]byte) bool {
+	k := sumKey(rel, md5)
+	i := sort.Search(len(f), func(i int) bool { return f[i] >= k })
+	return i < len(f) && f[i] == k
+}
+
+// maxSumEntries bounds the checksums kept in memory (8 bytes each).
+const maxSumEntries = 4 << 20
 
 type verEntry struct {
 	version string
@@ -122,7 +153,7 @@ func readHead(path string, n int) []byte {
 }
 
 // parsePluginChecksums reads {"files": {"rel": {"md5": "…" | ["…", …]}}}.
-func parsePluginChecksums(b []byte) (map[string]map[string]bool, error) {
+func parsePluginChecksums(b []byte) (fileSums, error) {
 	var doc struct {
 		Files map[string]struct {
 			MD5 json.RawMessage `json:"md5"`
@@ -131,29 +162,33 @@ func parsePluginChecksums(b []byte) (map[string]map[string]bool, error) {
 	if err := json.Unmarshal(b, &doc); err != nil {
 		return nil, err
 	}
-	out := map[string]map[string]bool{}
+	var out fileSums
+	add := func(rel, h string) {
+		var sum [16]byte
+		if b, err := hex.DecodeString(strings.ToLower(h)); err == nil && len(b) == 16 {
+			copy(sum[:], b)
+			out = append(out, sumKey(rel, sum))
+		}
+	}
 	for rel, f := range doc.Files {
-		set := map[string]bool{}
 		var one string
 		var many []string
 		if json.Unmarshal(f.MD5, &one) == nil && one != "" {
-			set[strings.ToLower(one)] = true
+			add(rel, one)
 		} else if json.Unmarshal(f.MD5, &many) == nil {
 			for _, m := range many {
-				set[strings.ToLower(m)] = true
+				add(rel, m)
 			}
-		}
-		if len(set) > 0 {
-			out[rel] = set
 		}
 	}
 	if len(out) == 0 {
 		return nil, errors.New("no files in the checksums")
 	}
-	return out, nil
+	slices.Sort(out)
+	return slices.Compact(out), nil
 }
 
-func (p *Plugins) checksums(slug, version string) map[string]map[string]bool {
+func (p *Plugins) checksums(slug, version string) fileSums {
 	key := slug + "@" + version
 	p.mu.Lock()
 	if p.sums == nil {
@@ -176,7 +211,7 @@ func (p *Plugins) checksums(slug, version string) map[string]map[string]bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	var files map[string]map[string]bool
+	var files fileSums
 	b, err := p.Source.PluginChecksums(ctx, slug, version)
 	if err == nil {
 		files, err = parsePluginChecksums(b)
@@ -198,13 +233,17 @@ func (p *Plugins) checksums(slug, version string) map[string]map[string]bool {
 	return files
 }
 
-func (p *Plugins) store(key string, files map[string]map[string]bool, until time.Time) {
+func (p *Plugins) store(key string, files fileSums, until time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.sums) > 5000 {
-		p.sums = map[string]*pluginSums{}
+	if p.sums == nil || len(p.sums) > 5000 || p.entries+len(files) > maxSumEntries {
+		p.sums, p.entries = map[string]*pluginSums{}, 0
+	}
+	if old := p.sums[key]; old != nil {
+		p.entries -= len(old.files)
 	}
 	p.sums[key] = &pluginSums{files: files, until: until}
+	p.entries += len(files)
 }
 
 // Known reports whether path is an unmodified file of a WordPress.org plugin.
@@ -220,8 +259,7 @@ func (p *Plugins) Known(path string, sum [16]byte) bool {
 	if ver == "" {
 		return false
 	}
-	files := p.checksums(slug, ver)
-	return files[rel][hex.EncodeToString(sum[:])]
+	return p.checksums(slug, ver).has(rel, sum)
 }
 
 // KnownFile reports an unmodified file (rel inside the plugin's folder) of
@@ -230,7 +268,7 @@ func (p *Plugins) KnownFile(slug, version, rel string, sum [16]byte) bool {
 	if p == nil || p.Source == nil || !reSlug.MatchString(slug) || version == "" || rel == "" {
 		return false
 	}
-	return p.checksums(slug, version)[rel][hex.EncodeToString(sum[:])]
+	return p.checksums(slug, version).has(rel, sum)
 }
 
 // PluginVersionOf reads the Version header of a plugin's main file.

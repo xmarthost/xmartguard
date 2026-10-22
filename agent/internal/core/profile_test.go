@@ -42,3 +42,16 @@ func TestCPUProfileNamesBusyArea(t *testing.T) {
 		t.Fatal("a second profile after the first should work:", err)
 	}
 }
+
+// The profile also says how much memory the agent holds and where.
+func TestMemoryReport(t *testing.T) {
+	keep := make([][]byte, 0, 64)
+	for i := 0; i < 64; i++ {
+		keep = append(keep, make([]byte, 1<<20))
+	}
+	r := memoryReport()
+	if r.RSSMB <= 0 || r.HeapMB < 64 || len(r.Areas) == 0 {
+		t.Fatalf("memory report: %+v", r)
+	}
+	_ = keep[63][0]
+}

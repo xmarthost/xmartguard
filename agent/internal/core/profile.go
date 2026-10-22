@@ -29,6 +29,24 @@ type ProfileReport struct {
 	Activity   Activity      `json:"activity"`
 	Areas      []ProfileLine `json:"areas"`
 	Functions  []ProfileLine `json:"functions"`
+	Memory     MemoryReport  `json:"memory"`
+}
+
+// MemoryReport says how much memory the agent holds and which part holds
+// it (from the heap profile: memory in use, by area).
+type MemoryReport struct {
+	RSSMB      float64   `json:"rss_mb"`      // resident, as top shows it
+	HeapMB     float64   `json:"heap_mb"`     // live Go objects
+	IdleMB     float64   `json:"idle_mb"`     // heap kept for reuse
+	ReleasedMB float64   `json:"released_mb"` // given back to the system
+	Areas      []MemLine `json:"areas"`
+	Functions  []MemLine `json:"functions"`
+}
+
+// MemLine is one area or allocating function and the memory it holds.
+type MemLine struct {
+	Name string  `json:"name"`
+	MB   float64 `json:"mb"`
 }
 
 // Activity is what the agent handled during the profile, per second.
@@ -117,6 +135,7 @@ func (a *Agent) cpuProfile(ctx context.Context, d time.Duration) (*ProfileReport
 		Watches: rt1.Watches, Unwatched: rt1.Unwatched, LastSweepSec: rt1.SweepSecs,
 		ScanRunning: len(kids1) > 0,
 	}
+	rep.Memory = memoryReport()
 	rep.Goroutines = runtime.NumGoroutine()
 	if ents, err := os.ReadDir("/proc/self/task"); err == nil {
 		rep.Threads = len(ents)
@@ -162,6 +181,45 @@ func summarize(p *profile.Profile, wall float64) *ProfileReport {
 		}
 	}
 	return &ProfileReport{Areas: top(areas, total, wall, 15), Functions: top(funcs, total, wall, 25)}
+}
+
+// memoryReport reads the runtime's counters and the heap profile.
+func memoryReport() MemoryReport {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	mb := func(n uint64) float64 { return round1(float64(n) / (1 << 20)) }
+	r := MemoryReport{HeapMB: mb(ms.HeapAlloc), IdleMB: mb(ms.HeapIdle - ms.HeapReleased), ReleasedMB: mb(ms.HeapReleased)}
+	if b, err := os.ReadFile("/proc/self/status"); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(l, "VmRSS:"); ok {
+				kb, _ := strconv.ParseFloat(strings.TrimSuffix(strings.TrimSpace(v), " kB"), 64)
+				r.RSSMB = round1(kb / 1024)
+			}
+		}
+	}
+	var buf bytes.Buffer
+	if err := pprof.Lookup("heap").WriteTo(&buf, 0); err != nil {
+		return r
+	}
+	p, err := profile.Parse(&buf)
+	if err != nil {
+		return r
+	}
+	// The last sample type of a heap profile is the memory in use.
+	sum := summarize(p, 1)
+	var total int64
+	for _, s := range p.Sample {
+		total += s.Value[len(p.SampleType)-1]
+	}
+	toMB := func(l []ProfileLine) []MemLine {
+		out := make([]MemLine, 0, len(l))
+		for _, x := range l {
+			out = append(out, MemLine{x.Name, round1(x.Share / 100 * float64(total) / (1 << 20))})
+		}
+		return out
+	}
+	r.Areas, r.Functions = toMB(sum.Areas), toMB(sum.Functions)
+	return r
 }
 
 func areaOf(fn string) string {
