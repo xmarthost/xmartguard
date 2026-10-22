@@ -200,7 +200,7 @@ var Catalog = []RuleInfo{
 	{IDDoubleEncode, "generic", "Block double-encoded path traversal (%252e%252e) in the address", "block"},
 	{IDBadBots, "bad_bots", "Block vulnerability scanners and abusive tools", "block"},
 	{IDCrawlerCart, "bad_bots", "Block crawlers following add-to-cart and wishlist links (each one writes a session and runs the shop uncached)", "block"},
-	{IDShopScrape, "bad_bots", "Block clients without cookies or Referer walking shop filter combinations (3+ values or 3+ filters: scrapers with a browser User-Agent, AI crawlers)", "block"},
+	{IDShopScrape, "bad_bots", "Block clients without cookies walking shop filter combinations (3+ values or 3+ filters) unless the browser says the click came from the same site: scrapers and botnets with a browser User-Agent, AI crawlers", "block"},
 	{IDCartSpam, "bad_bots", "Block cart spam: remove_item with add-to-cart in one link, and removing cart items without a session cookie", "block"},
 	{IDCrawlerFacets, "bad_bots", "Block crawlers other than search engines on shop filter, sort and page-size URLs (endless uncached combinations)", "block"},
 	{IDRootProbe, "bad_bots", "Block PHP probes on a website's top folder that send neither a User-Agent nor a Referer", "block"},
