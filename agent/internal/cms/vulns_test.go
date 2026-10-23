@@ -3,6 +3,7 @@ package cms
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
@@ -159,5 +161,61 @@ func TestRespreadCrons(t *testing.T) {
 	}
 	if n := RespreadCrons(24); n != 0 {
 		t.Fatal("second pass changed things")
+	}
+}
+
+// wp-cli answers "already updated" when WordPress sees no newer release
+// (premium or closed plugins): the version stays, and the update ran again
+// on every scan (business200: 774 times for one plugin). One try a week per
+// site and version, and only a real update is reported as done.
+func TestAutoUpdateNotRepeated(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	st, _ := settings.Load()
+	if _, err := st.Patch([]byte(`{"cms":{"auto_update":true,"auto_update_cvss":0,"auto_update_days":0}}`)); err != nil {
+		t.Fatal(err)
+	}
+	answer, calls := "Success: Plugin already updated.", 0
+	m := &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		RunWPCLI: func(_ context.Context, _ string, args ...string) (string, error) {
+			calls++
+			return answer, nil
+		}}
+	site := &Site{Type: WordPress, Path: "/home/u/public_html", User: "u", Plugins: []Component{
+		{Slug: "template-kit-import", Version: "1.0.14", Latest: "1.0.17", Vulns: []Vuln{{ID: "CVE-2024-0001", CVSS: 6.4}}}}}
+	if done := m.autoActions(context.Background(), site); len(done) != 0 {
+		t.Fatalf("reported as updated: %v", done)
+	}
+	m.autoActions(context.Background(), site)
+	if calls != 1 {
+		t.Fatalf("wp-cli ran %d times, want once a week", calls)
+	}
+	// A newer installed version is a new try, and a real update is reported.
+	answer = "Success: Updated 1 of 1 plugins."
+	site.Plugins[0].Version = "1.0.15"
+	if done := m.autoActions(context.Background(), site); len(done) != 1 || calls != 2 {
+		t.Fatalf("done %v, calls %d", done, calls)
+	}
+}
+
+// A site inside an extracted cPanel backup is not live: its database login
+// is old and every check said "Access denied" (business200: hundreds a day).
+func TestDiscoverSkipsBackupCopies(t *testing.T) {
+	home := t.TempDir()
+	for _, site := range []string{"public_html", "backup-10.21.2026_00-03-07_u/homedir/public_html"} {
+		d := filepath.Join(home, site)
+		os.MkdirAll(filepath.Join(d, "wp-includes"), 0o755)
+		os.WriteFile(filepath.Join(d, "wp-config.php"), []byte("<?php"), 0o644)
+		os.WriteFile(filepath.Join(d, "wp-includes", "version.php"), []byte("<?php $wp_version = '6.8';"), 0o644)
+	}
+	got := Discover([]Account{{Name: "u", Home: home}}, nil)
+	if len(got) != 1 || got[0].Path != filepath.Join(home, "public_html") {
+		t.Fatalf("found %+v, want only the live site", got)
 	}
 }

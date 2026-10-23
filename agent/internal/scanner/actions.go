@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -56,8 +59,12 @@ func (s *Scanner) Quarantine(id int64) error {
 		return err
 	}
 	defer p.Close()
-	if _, err := p.lstat(); err != nil {
+	st, err := p.lstat()
+	if err != nil {
 		return fmt.Errorf("%w: %s", ErrFileGone, r.path)
+	}
+	if st.Mode&unix.S_IFMT == unix.S_IFLNK && (r.status == "detected" || r.status == "restored" || r.status == StatusAIRestored) {
+		return s.QuarantineLink(id) // a link to another account
 	}
 	dir := QuarantineDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -71,6 +78,46 @@ func (s *Scanner) Quarantine(id int64) error {
 	_ = os.Chmod(dst, 0o000)
 	_ = os.Chown(dst, 0, 0)
 	return s.setStatus(id, "quarantined", dst)
+}
+
+// LinkPrefix marks a quarantined symbolic link: the link was removed and
+// qpath keeps its target, so Restore can make it again.
+const LinkPrefix = "link:"
+
+// QuarantineLink removes a symbolic link to another account's files (never
+// its target) and records where it pointed.
+func (s *Scanner) QuarantineLink(id int64) error {
+	r, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	if r.status != "detected" && r.status != "restored" && r.status != StatusAIRestored {
+		return fmt.Errorf("cannot quarantine a %s link", r.status)
+	}
+	p, err := pin(r.path, false)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrFileGone, r.path)
+		}
+		return err
+	}
+	defer p.Close()
+	st, err := p.lstat()
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrFileGone, r.path)
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFLNK {
+		return errors.New("not a symbolic link")
+	}
+	buf := make([]byte, 4096)
+	n, err := unix.Readlinkat(p.dir, p.name, buf)
+	if err != nil {
+		return &os.PathError{Op: "readlink", Path: r.path, Err: err}
+	}
+	if err := p.remove(); err != nil {
+		return err
+	}
+	return s.setStatus(id, "quarantined", LinkPrefix+string(buf[:n]))
 }
 
 // Disable removes all permissions (chmod 000) but leaves the file in place.
@@ -102,6 +149,24 @@ func (s *Scanner) Restore(id int64) error {
 		return err
 	}
 	mode := os.FileMode(r.mode)
+	switch {
+	case r.status == "quarantined" && strings.HasPrefix(r.qpath, LinkPrefix):
+		p, err := pin(r.path, true)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		if err := unix.Symlinkat(strings.TrimPrefix(r.qpath, LinkPrefix), p.dir, p.name); err != nil {
+			if errors.Is(err, unix.EEXIST) {
+				return fmt.Errorf("a file already exists at %s; move it away first", r.path)
+			}
+			return &os.PathError{Op: "symlink", Path: r.path, Err: err}
+		}
+		if r.uid >= 0 {
+			_ = unix.Fchownat(p.dir, p.name, r.uid, r.gid, unix.AT_SYMLINK_NOFOLLOW)
+		}
+		return s.setStatus(id, "restored", "")
+	}
 	switch r.status {
 	case "quarantined":
 		p, err := pin(r.path, true)
@@ -154,6 +219,9 @@ func (s *Scanner) Delete(id int64) error {
 	}
 	switch r.status {
 	case "quarantined":
+		if strings.HasPrefix(r.qpath, LinkPrefix) {
+			return s.setStatus(id, "deleted", "") // the link is already gone
+		}
 		if err := os.Remove(r.qpath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -254,6 +322,9 @@ func (s *Scanner) ContentPath(id int64) (string, string, error) {
 		return "", "", err
 	}
 	if (r.status == "quarantined" || r.status == "trimmed" || r.status == "cleaned") && r.qpath != "" {
+		if strings.HasPrefix(r.qpath, LinkPrefix) {
+			return "", r.status, errors.New("a removed link has no content")
+		}
 		return r.qpath, r.status, nil
 	}
 	return r.path, r.status, nil

@@ -1,8 +1,12 @@
 package firewall
 
 import (
+	"database/sql"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -59,4 +63,54 @@ func TestIPDBHitsAfterEmptyBaseline(t *testing.T) {
 	if n != 3 {
 		t.Fatalf("hits %d, want 3", n)
 	}
+}
+
+// The counters' keys must not point into the `ipset list` output: one
+// remembered entry kept the whole output (megabytes) alive, and a busy
+// server's agent grew to 3 GB in IPTables.IPDBCounters (business200).
+func TestIPSetCounterKeysAreCopies(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("Name: xg_ipdb4\nType: hash:net\nMembers:\n")
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&b, "10.%d.%d.0/24 packets %d bytes 600\n", i/250, i%250, i+1)
+	}
+	raw := b.String()
+	out := map[string]uint64{}
+	parseIPSetCounters(raw, out)
+	if len(out) != 2000 {
+		t.Fatalf("parsed %d entries, want 2000", len(out))
+	}
+	lo := uintptr(unsafe.Pointer(unsafe.StringData(raw)))
+	hi := lo + uintptr(len(raw))
+	for k := range out {
+		if p := uintptr(unsafe.Pointer(unsafe.StringData(k))); p >= lo && p < hi {
+			t.Fatalf("key %q shares the ipset output's memory", k)
+		}
+	}
+}
+
+// Entries no longer counted are forgotten (the remembered map does not
+// grow with every entry ever seen), and a failed reading changes nothing.
+func TestIPDBHitsForgetsOldEntries(t *testing.T) {
+	db := testDB(t)
+	l := &IPDB{}
+	l.recordHits(db, map[string]uint64{"198.51.100.0/24": 10, "203.0.113.7": 5})
+	l.recordHits(db, map[string]uint64{"198.51.100.0/24": 12})
+	if _, ok := l.last["203.0.113.7"]; ok || len(l.last) != 1 {
+		t.Fatalf("remembered %v, want only the entry counted now", l.last)
+	}
+	l.recordHits(db, nil)
+	if l.last["198.51.100.0/24"] != 12 {
+		t.Fatalf("an empty reading changed the remembered counters: %v", l.last)
+	}
+}
+
+func testDB(t *testing.T) *sql.DB {
+	t.Setenv("XG_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
 }

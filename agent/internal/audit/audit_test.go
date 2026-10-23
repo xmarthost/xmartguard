@@ -1,7 +1,9 @@
 package audit
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -197,7 +199,8 @@ func TestPHPCVEs(t *testing.T) {
 		os.MkdirAll(filepath.Join(dir, name), 0o755)
 		os.WriteFile(filepath.Join(dir, name, "php"), nil, 0o755)
 	}
-	a := &Auditor{PHPBins: []string{filepath.Join(dir, "*/php")}, PHPVersion: func(bin string) string { return vers[filepath.Base(filepath.Dir(bin))] }}
+	a := &Auditor{PHPBins: []string{filepath.Join(dir, "*/php")}, PHPVersion: func(bin string) string { return vers[filepath.Base(filepath.Dir(bin))] },
+		PHPPackage: func(string) (int64, string) { return 0, "" }}
 	got := map[string]bool{}
 	for _, it := range a.phpCVEs() {
 		got[filepath.Base(filepath.Dir(it.Path))] = true
@@ -208,6 +211,63 @@ func TestPHPCVEs(t *testing.T) {
 	for name, want := range map[string]bool{"ea-php83": true, "alt-php85": true, "ea-php81": true, "ea-php84": false, "ea-php82": false, "ea-php74": false} {
 		if got[name] != want {
 			t.Errorf("%s reported %v, want %v", name, got[name], want)
+		}
+	}
+}
+
+// CloudLinux and cPanel backport the PHP2Shell fix into 7.4-8.1 builds that
+// keep their version: a build whose changelog names the CVE is not
+// reported (business200 listed its patched ea-php74/80 as open); one built
+// after the fix day without the note is a low "check" item.
+func TestPHPCVEsBackportedBuilds(t *testing.T) {
+	dir := t.TempDir()
+	vers := map[string]string{"ea-php74": "7.4.33", "ea-php80": "8.0.30", "alt-php81": "8.1.34"}
+	pkgs := map[string]struct {
+		built int64
+		log   string
+	}{
+		"ea-php74":  {1792600000, "* Tue Oct 21 2026 Builder - 7.4.33-19\n- Fix CVE-2026-109618, CVE-2026-109619 (PHP2Shell)"},
+		"ea-php80":  {1792600000, "* Tue Oct 21 2026 Builder - 8.0.30-12\n- Rebuild"},
+		"alt-php81": {1790000000, "* Mon Sep 01 2026 Builder - 8.1.34-3\n- Rebuild"},
+	}
+	for name := range vers {
+		os.MkdirAll(filepath.Join(dir, name), 0o755)
+		os.WriteFile(filepath.Join(dir, name, "php"), nil, 0o755)
+	}
+	a := &Auditor{PHPBins: []string{filepath.Join(dir, "*/php")}, PHPVersion: func(bin string) string { return vers[filepath.Base(filepath.Dir(bin))] },
+		PHPPackage: func(bin string) (int64, string) { p := pkgs[filepath.Base(filepath.Dir(bin))]; return p.built, p.log }}
+	got := map[string]string{}
+	for _, it := range a.phpCVEs() {
+		got[filepath.Base(filepath.Dir(it.Path))] = it.Severity
+	}
+	if want := map[string]string{"ea-php80": "low", "alt-php81": "high"}; len(got) != 2 || got["ea-php80"] != want["ea-php80"] || got["alt-php81"] != want["alt-php81"] {
+		t.Fatalf("reported %v, want %v (ea-php74 patched)", got, want)
+	}
+}
+
+// The private key header alone (a README explaining a setting, a JS bundle
+// that parses keys) is not a leaked key: business200 listed both. A header
+// followed by a key body still is, also inside JSON with escaped newlines.
+func TestLeakedKeyNeedsItsBody(t *testing.T) {
+	dir := t.TempDir()
+	body := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x30, 0x82, 0x04, 0xbd, 0x02, 0x01}, 20)) // inert bytes
+	files := map[string]bool{
+		"README.md":     false,
+		"aiFrontend.js": false,
+		"key.txt":       true,
+		"sa.json":       true,
+	}
+	content := map[string]string{
+		"README.md":     "Paste the key that starts with -----BEGIN PRIVATE KEY----- into the field.\n",
+		"aiFrontend.js": `const h="-----BEGIN PRIVATE KEY-----",f="-----END PRIVATE KEY-----";function p(k){return k.replace(h,"")}`,
+		"key.txt":       "-----BEGIN PRIVATE KEY-----\n" + body + "\n-----END PRIVATE KEY-----\n",
+		"sa.json":       `{"private_key":"-----BEGIN PRIVATE KEY-----\n` + body + `\n-----END PRIVATE KEY-----\n"}`,
+	}
+	for name, want := range files {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte(content[name]), 0o644)
+		if kind, _ := findSecret(p); (kind != "") != want {
+			t.Errorf("%s: found %q, want found=%v", name, kind, want)
 		}
 	}
 }

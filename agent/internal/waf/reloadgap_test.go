@@ -1,6 +1,7 @@
 package waf
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 func TestMain(m *testing.M) {
 	ListReloadGap = func(bool, bool) time.Duration { return 0 }
 	PassSettle = 0
+	ServiceDownWait = 0
 	os.Exit(m.Run())
 }
 
@@ -197,5 +199,104 @@ func TestPassReloadWait(t *testing.T) {
 	}
 	if ListReloadGap = old; old(true, true) > 30*time.Second {
 		t.Fatalf("a CAPTCHA pass on LiteSpeed may wait %v", old(true, true))
+	}
+}
+
+// A check script that answers "service is down" the first n times.
+func downScript(t *testing.T, dir, log string, n int) string {
+	p := filepath.Join(dir, "configtest")
+	cnt := filepath.Join(dir, "count")
+	body := "#!/bin/sh\necho configtest >>" + log + "\nc=$(cat " + cnt + " 2>/dev/null || echo 0)\nc=$((c+1))\necho $c >" + cnt +
+		"\nif [ $c -le " + fmt.Sprint(n) + " ]; then echo \"(XID bze9zy) The \\\"httpd\\\" service is down.\"; exit 1; fi\n"
+	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// restartsrv_httpd --check caught while LiteSpeed restarts said "The httpd
+// service is down" and the new rules were rolled back (business200, 13
+// times a day). It is asked again; rules stay when LiteSpeed comes back.
+func TestLiteSpeedDownDuringRestartKeepsRules(t *testing.T) {
+	tg, calls := countReloads(t, true)
+	dir := filepath.Dir(tg.IncludeFile)
+	tg.configTest = []string{downScript(t, dir, filepath.Join(dir, "calls.log"), 2)}
+	m := &Manager{RulesDir: t.TempDir()}
+	if err := m.install(tg, "SecRule A", nil); err != nil {
+		t.Fatalf("rules rolled back: %v", err)
+	}
+	if got := strings.Join(calls(), ","); got != "configtest,configtest,configtest,lswsctrl" {
+		t.Fatalf("calls = %s", got)
+	}
+	if b, _ := os.ReadFile(tg.IncludeFile); len(b) == 0 {
+		t.Fatal("include not written")
+	}
+}
+
+// Still down after the retries: the rules (not yet loaded) are not the
+// cause, so LiteSpeed is restarted with them and checked again.
+func TestLiteSpeedStillDownRestartsAndChecks(t *testing.T) {
+	tg, calls := countReloads(t, true)
+	dir := filepath.Dir(tg.IncludeFile)
+	tg.configTest = []string{downScript(t, dir, filepath.Join(dir, "calls.log"), 4)}
+	m := &Manager{RulesDir: t.TempDir()}
+	if err := m.install(tg, "SecRule A", nil); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if got := strings.Join(calls(), ","); got != "configtest,configtest,configtest,configtest,lswsctrl,configtest" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
+// A real refusal (not "service is down") still rolls back at once, and on
+// Apache "down" is never retried.
+func TestRefusedRulesStillRollBack(t *testing.T) {
+	tg, calls := countReloads(t, true)
+	dir := filepath.Dir(tg.IncludeFile)
+	bad := filepath.Join(dir, "bad")
+	os.WriteFile(bad, []byte("#!/bin/sh\necho configtest >>"+filepath.Join(dir, "calls.log")+"\necho 'Syntax error on line 3'\nexit 1\n"), 0o755)
+	tg.configTest = []string{bad}
+	m := &Manager{RulesDir: t.TempDir()}
+	if err := m.install(tg, "SecRule A", nil); err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := strings.Join(calls(), ","); got != "configtest" {
+		t.Fatalf("calls = %s", got)
+	}
+	if _, err := os.Stat(tg.IncludeFile); err == nil {
+		t.Fatal("refused rules left in place")
+	}
+	ap, calls2 := countReloads(t, false)
+	d2 := filepath.Dir(ap.IncludeFile)
+	ap.configTest = []string{downScript(t, d2, filepath.Join(d2, "calls.log"), 1)}
+	if err := (&Manager{RulesDir: t.TempDir()}).install(ap, "SecRule A", nil); err == nil {
+		t.Fatal("Apache: down not reported")
+	}
+	if got := strings.Join(calls2(), ","); got != "configtest" {
+		t.Fatalf("Apache calls = %s", got)
+	}
+}
+
+// A WebAdmin rule set naming xpguard-waf.conf on cPanel (business200: the
+// file was missing) gets an empty file: the rules load through
+// modsec2.user.conf, and LiteSpeed must not fail if the set is switched on.
+func TestStaleLiteSpeedRuleSetGetsStub(t *testing.T) {
+	tg, _ := countReloads(t, true)
+	dir := t.TempDir()
+	old := LiteSpeedConf
+	LiteSpeedConf = filepath.Join(dir, "httpd_config.xml")
+	t.Cleanup(func() { LiteSpeedConf = old })
+	os.WriteFile(LiteSpeedConf, []byte("<censorshipRuleSet><name>xPGuard</name><ruleSet>Include $SERVER_ROOT/conf/xpguard-waf.conf</ruleSet></censorshipRuleSet>"), 0o644)
+	if err := (&Manager{RulesDir: t.TempDir()}).install(tg, "SecRule A", nil); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "xpguard-waf.conf"))
+	if err != nil || strings.Contains(string(b), "SecRule") {
+		t.Fatalf("stub %q %v", b, err)
+	}
+	// An existing file is left alone.
+	os.WriteFile(filepath.Join(dir, "xpguard-waf.conf"), []byte("own"), 0o644)
+	if staleRuleSetFile() != "" {
+		t.Fatal("an existing rule set file would be replaced")
 	}
 }

@@ -25,6 +25,7 @@ var NewRules = map[int]string{
 	IDCommentScript:    "0.22.20",
 	IDCommentLinks:     "0.22.20",
 	IDCommentManyLinks: "0.22.20",
+	IDWPPackagePHP:     "0.23.5",
 }
 
 // FirstReviewedPatch: portal virtual patches from this id on are new and

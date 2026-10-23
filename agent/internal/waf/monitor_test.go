@@ -46,7 +46,7 @@ func TestNewRulesWatchUntilApproved(t *testing.T) {
 	if l := ruleLine(out, IDCartSpam); strings.Contains(l, "deny") {
 		t.Errorf("unapproved rule blocks: %s", l)
 	}
-	if got := MonitoredIDs((&Intel{Enforce: []int{IDShopScrape, IDCartSpam, IDNoUAPost, IDCommentScript, IDCommentLinks, IDCommentManyLinks}}).Clean()); len(got) != 0 {
+	if got := MonitoredIDs((&Intel{Enforce: []int{IDShopScrape, IDCartSpam, IDNoUAPost, IDCommentScript, IDCommentLinks, IDCommentManyLinks, IDWPPackagePHP}}).Clean()); len(got) != 0 {
 		t.Errorf("monitored %v", got)
 	}
 }

@@ -676,7 +676,7 @@ func (t IPTables) setMembers(name string) ([]string, error) {
 			continue
 		}
 		if members && line != "" {
-			res = append(res, strings.Fields(line)[0])
+			res = append(res, strings.Clone(strings.Fields(line)[0]))
 		}
 	}
 	return res, nil
@@ -715,7 +715,10 @@ func parseIPSetCounters(raw string, out map[string]uint64) {
 		for i := 1; i+1 < len(f); i++ {
 			if f[i] == "packets" {
 				if n, err := strconv.ParseUint(f[i+1], 10, 64); err == nil && n > 0 {
-					out[f[0]] = n
+					// A copy: the key would otherwise keep the whole
+					// `ipset list` output (megabytes) alive for as long as
+					// the entry is remembered (3 GB on a busy server).
+					out[strings.Clone(f[0])] = n
 				}
 			}
 		}

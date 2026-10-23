@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -561,7 +562,19 @@ func (r *Realtime) skip(path string, name string) bool {
 	r.mu.Lock()
 	home := r.homes[parent]
 	r.mu.Unlock()
-	return home && (skipInHome[name] || name == "access-logs" || name == ".trash" || name == "ssl" || name == ".htpasswds" || name == "lscache")
+	return home && (skipInHome[name] || name == "access-logs" || name == ".trash" || name == "ssl" || name == ".htpasswds" || name == "lscache" || BackupFolder(name))
+}
+
+// cpanelBackup is the folder an extracted cPanel backup makes in a home
+// directory: backup-10.21.2026_00-03-07_user.
+var cpanelBackup = regexp.MustCompile(`^backup-\d{1,2}\.\d{1,2}\.\d{4}_\d{2}-\d{2}-\d{2}_`)
+
+// BackupFolder reports a folder in a home directory that holds a copy of
+// the account (an extracted cPanel backup, Softaculous backups): no live
+// site runs from it. Real-time watches on them used up the kernel's limit
+// (business200: much of 950,000 folders); scheduled scans still check them.
+func BackupFolder(name string) bool {
+	return cpanelBackup.MatchString(name) || name == "softaculous_backups"
 }
 
 // rtSkipAnywhere are folders with many subfolders and no web content.

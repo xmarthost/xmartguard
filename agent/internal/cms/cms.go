@@ -40,6 +40,8 @@ type Manager struct {
 	Vulns *VulnDB
 	// OnAutoAction reports automatic updates/deactivations (notifications).
 	OnAutoAction func(site Site, actions []string)
+	// RunWPCLI replaces wp-cli in tests (nil: WPCLI).
+	RunWPCLI func(ctx context.Context, path string, args ...string) (string, error)
 
 	mu      sync.Mutex
 	running bool

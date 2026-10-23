@@ -2065,7 +2065,9 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 // from it.
 func (a *Agent) clearFalsePositive(j ai.Job, v ai.Verdict) {
 	st := a.Settings.Get()
-	if !st.AI.RestoreClean || v.Confidence < ai.ClearMinConfidence || (v.Source != "ai" && v.Source != "fleet") {
+	// Only a verdict the scanner honours restores: one it does not (another
+	// server's AI) put the file back to be flagged again at once.
+	if !st.AI.RestoreClean || v.Source == ai.SourceAdmin || !ai.Clears(v) {
 		return
 	}
 	f, err := a.Scanner.Get(j.FindingID)

@@ -45,6 +45,11 @@ const (
 	IDWPLookalike   = 7700311
 	IDWPUploadsList = 7700312
 	IDWPCachePHP    = 7700313
+	// IDWPPackagePHP: a PHP file sent to WordPress's plugin, theme or media
+	// uploader, which only take zips and media. CRS 933110 scores it only
+	// 5 (threshold 10): a malicious plugin upload with a stolen admin
+	// session passed on business200 (2026-10-20).
+	IDWPPackagePHP = 7700315
 	// 7700314 (XML-RPC "fake Jetpack") is retired: the Jetpack mobile app
 	// sends that name from its users' own connections.
 	IDStaticPHP    = 7700321
@@ -180,6 +185,7 @@ var Catalog = []RuleInfo{
 	{IDWPLookalike, "wordpress", "Block wp-*.php files that imitate WordPress core names (wp-l0gin.php, wp-configs.php, wp-2019.php)", "block"},
 	{IDWPUploadsList, "wordpress", "Block folder listings of wp-content/uploads and its year/month folders", "block"},
 	{IDWPCachePHP, "wordpress", "Block running PHP files inside wp-content/cache", "block"},
+	{IDWPPackagePHP, "wordpress", "Block PHP files sent to the WordPress plugin, theme and media uploaders (they only take zip files and media)", "block"},
 	{IDLoginWP, "bruteforce", "Count failed WordPress logins", "count"},
 	{IDLoginXMLRPC, "bruteforce", "Count WordPress XML-RPC login calls", "count"},
 	{IDLoginJoomla, "bruteforce", "Count Joomla administrator logins", "count"},
@@ -639,6 +645,10 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule REQUEST_FILENAME "!@rx /wp-(?:%s)\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase"`, strings.Join(quoteAll(wpRootFiles), "|"))
 		}
 		rule(IDWPUploadsList, `SecRule REQUEST_FILENAME "@rx /wp-content/+uploads/+(?:\d{4}/+(?:\d{2}/+)?)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - Uploads folder listing blocked',tag:'xpguard/wordpress'"`, IDWPUploadsList)
+		if !off[IDWPPackagePHP] {
+			w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:update|async-upload|media-new|upload|theme-install|plugin-install)\.php$" "id:%d,phase:2,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP file sent to the WordPress plugin, theme or media uploader blocked',logdata:'%%{MATCHED_VAR}',tag:'xpguard/wordpress',chain"`, IDWPPackagePHP)
+			w(`  SecRule FILES "@rx \.(?:php[0-9]?|phtml|phar|pht|phps)$" "t:none,t:lowercase"`)
+		}
 		if !off[IDWPCachePHP] {
 			// Autoptimize's old non-static mode serves .php files from its cache.
 			w(`SecRule REQUEST_FILENAME "@rx /wp-content/+cache/.*\.(?:php[0-9]?|phtml|phar|pht)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP execution in the cache folder blocked',tag:'xpguard/wordpress',chain"`, IDWPCachePHP)

@@ -8,7 +8,9 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -178,9 +180,15 @@ func (l *IPDB) recordHits(db *sql.DB, counters map[string]uint64) int {
 		n         uint64
 	}
 	var hits []hit
+	prevAll := l.last
+	// Only the entries counted now are kept: one that left the list (or
+	// whose counter was reset) counts in full when it is seen again.
+	// An empty reading (ipset busy, a failed list) changes nothing.
+	if len(counters) > 0 {
+		l.last = counters
+	}
 	for entry, cur := range counters {
-		prev, seen := l.last[entry]
-		l.last[entry] = cur
+		prev, seen := prevAll[entry]
 		if baseline {
 			continue
 		}
@@ -396,7 +404,7 @@ func (m *Manager) IPDBEntries() []string {
 }
 
 func (m *Manager) ipdbEntries() []string {
-	_, entries := m.IPDB.Snapshot()
+	version, entries := m.IPDB.Snapshot()
 	if len(entries) == 0 {
 		return nil
 	}
@@ -404,18 +412,50 @@ func (m *Manager) ipdbEntries() []string {
 	if m.Protected != nil {
 		prot = m.Protected()
 	}
+	// The list is rebuilt only when it or the protected addresses change:
+	// comparing 250,000 entries with every protected address on each call
+	// took a fifth of a core (business200, server1).
+	key := version + "|" + strconv.Itoa(len(entries)) + "|" + strings.Join(prot, ",")
+	m.ipdbMu.Lock()
+	defer m.ipdbMu.Unlock()
+	if key == m.ipdbKey && m.ipdbList != nil {
+		return slices.Clone(m.ipdbList)
+	}
+	var protected []netip.Prefix
+	for _, p := range prot {
+		if pf, ok := parseEntry(p); ok {
+			protected = append(protected, pf)
+		}
+	}
 	out := make([]string, 0, len(entries))
 next:
 	for _, e := range entries {
-		for _, p := range prot {
-			if Contains(e, p) || Contains(p, e) {
-				continue next
+		if pf, ok := parseEntry(e); ok {
+			for _, p := range protected {
+				if pf.Overlaps(p) {
+					continue next
+				}
 			}
 		}
 		out = append(out, e)
 	}
 	sort.Strings(out)
-	return out
+	m.ipdbKey, m.ipdbList = key, out
+	return slices.Clone(out)
+}
+
+// parseEntry reads an address or a CIDR as a prefix.
+func parseEntry(s string) (netip.Prefix, bool) {
+	if strings.Contains(s, "/") {
+		p, err := netip.ParsePrefix(s)
+		return p.Masked(), err == nil
+	}
+	a, err := netip.ParseAddr(s)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	a = a.Unmap()
+	return netip.PrefixFrom(a, a.BitLen()), true
 }
 
 // pollIPDBHits reads the kernel's per-entry counters.

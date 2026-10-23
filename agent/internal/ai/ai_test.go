@@ -263,3 +263,28 @@ func TestShortPath(t *testing.T) {
 		}
 	}
 }
+
+// A finding whose content only another server's AI found clean is judged by
+// this server's AI, not acted on with the fleet verdict (which the scanner
+// does not honour: the file was restored and flagged again every minute).
+func TestFleetCleanFindingAskedHere(t *testing.T) {
+	a, f := setup(t, "")
+	sha := strings.Repeat("c", 64)
+	Save(a.DB, Verdict{SHA256: sha, Verdict: Clean, Confidence: 100, Reason: "plugin", Model: "gemini", Source: "fleet", At: 1})
+	if IsCleared(a.DB, sha) {
+		t.Fatal("another server's AI verdict clears content here")
+	}
+	var got []Verdict
+	a.OnVerdict = func(_ Job, v Verdict) { got = append(got, v) }
+	a.process(context.Background(), []Job{{Path: f, SHA256: sha, FindingID: 7, Signature: "Test"}})
+	if len(got) != 1 || got[0].Source == "fleet" {
+		t.Fatalf("verdicts %+v, want one from this server", got)
+	}
+	// Known content without a finding still uses the stored verdict.
+	got = nil
+	Save(a.DB, Verdict{SHA256: sha, Verdict: Malicious, Confidence: 100, Model: "gemini", Source: "fleet", At: 2})
+	a.process(context.Background(), []Job{{Path: f, SHA256: sha}})
+	if len(got) != 1 || got[0].Source != "fleet" {
+		t.Fatalf("known malware: %+v", got)
+	}
+}

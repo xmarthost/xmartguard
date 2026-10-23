@@ -180,6 +180,12 @@ type Manager struct {
 	ddnsMu sync.Mutex
 	ddns   map[string][]string // hostname -> resolved addresses
 
+	// ipdbMu guards the IPDB list minus protected addresses, built once per
+	// list version and protected set (see ipdbEntries).
+	ipdbMu   sync.Mutex
+	ipdbKey  string
+	ipdbList []string
+
 	// applyMu serialises Apply (build and load): an older snapshot built
 	// during a slow apply must never be loaded after a newer one.
 	applyMu sync.Mutex

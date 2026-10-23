@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 )
 
 // Kinds of CMS.
@@ -54,6 +56,12 @@ func Discover(accounts []Account, domains map[string]string) []Install {
 				return nil
 			}
 			if p != a.Home && skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			// A copy of the account in an extracted backup is not a live
+			// site: its database login is old (business200: hundreds of
+			// "Access denied" database checks a day).
+			if filepath.Dir(p) == filepath.Clean(a.Home) && scanner.BackupFolder(d.Name()) {
 				return filepath.SkipDir
 			}
 			if strings.Count(p, "/")-base > 5 {

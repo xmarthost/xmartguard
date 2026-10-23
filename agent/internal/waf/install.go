@@ -2,6 +2,7 @@ package waf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -374,6 +375,11 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	for name, body := range botFiles {
 		files[filepath.Join(dir, name)] = body
 	}
+	if t.LiteSpeed && !t.Plain {
+		if p := staleRuleSetFile(); p != "" {
+			files[p] = staleRuleSetStub
+		}
+	}
 	prev := map[string][]byte{}
 	// Include files of earlier versions: removed with the same rollback.
 	var stale []string
@@ -475,7 +481,22 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	for _, o := range stale {
 		_ = os.Remove(o)
 	}
-	if out, err := m.runTimeout(t.configTest, 60*time.Second); err != nil {
+	// On cPanel with LiteSpeed the test is restartsrv_httpd --check, which
+	// only says whether the web server runs. Caught while LiteSpeed was
+	// restarting ("The httpd service is down") it rolled back rules that
+	// LiteSpeed had not even read yet: settings never reached business200
+	// (13 times in a day). That answer is asked again; if LiteSpeed is still
+	// down the new rules are not the cause (they load on the restart
+	// below), so they are kept and checked once more after the restart.
+	checkAfter := false
+	out, err := m.runTimeout(t.configTest, 60*time.Second)
+	if err != nil && t.LiteSpeed && !t.Plain && serviceDown(out) {
+		out, err = m.checkUp(t)
+		if err != nil && serviceDown(out) {
+			err, checkAfter = nil, true
+		}
+	}
+	if err != nil {
 		// Roll back so a bad rule never takes the web server down.
 		rollback()
 		return fmt.Errorf("web server rejected the WAF rules (rolled back): %s", strings.TrimSpace(out))
@@ -492,6 +513,14 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	if out, err := m.runTimeout(reload, 120*time.Second); err != nil {
 		m.reloadPending = true
 		return fmt.Errorf("WAF rules written but reload failed (retried on the next apply): %s", strings.TrimSpace(out))
+	}
+	if checkAfter {
+		if out, err := m.checkUp(t); err != nil {
+			// Down after loading the new rules: put the old ones back.
+			rollback()
+			_, _ = m.runTimeout(reload, 120*time.Second)
+			return fmt.Errorf("web server did not start with the WAF rules (rolled back): %s", strings.TrimSpace(out))
+		}
 	}
 	m.reloadPending = false
 	// A visitor who solved the CAPTCHA is sent back when this returns:
@@ -555,6 +584,61 @@ func (m *Manager) PassReloadWait() time.Duration {
 		return 0
 	}
 	return ListReloadGap(liteSpeed, true) - time.Since(m.lastReload)
+}
+
+// serviceDown reports restartsrv's answer for a web server that is not
+// running (as opposed to a configuration it refused).
+func serviceDown(out string) bool {
+	o := strings.ToLower(out)
+	return strings.Contains(o, "service is down") || strings.Contains(o, "is not running")
+}
+
+// ServiceDownWait is how long a LiteSpeed restart is given before the
+// web server check is asked again (tests set it to zero).
+var ServiceDownWait = 10 * time.Second
+
+// checkUp asks the web server check again while LiteSpeed finishes a
+// restart: up to three times, ServiceDownWait apart.
+func (m *Manager) checkUp(t Target) (string, error) {
+	var out string
+	var err error
+	for i := 0; i < 3; i++ {
+		time.Sleep(ServiceDownWait)
+		if out, err = m.runTimeout(t.configTest, 60*time.Second); err == nil || !serviceDown(out) {
+			return out, err
+		}
+	}
+	return out, err
+}
+
+// LiteSpeedConf is LiteSpeed's server configuration (tests replace it).
+var LiteSpeedConf = "/usr/local/lsws/conf/httpd_config.xml"
+
+// staleRuleSetStub fills a WAF rule set file that only the stand-alone
+// LiteSpeed setup uses.
+const staleRuleSetStub = "# Managed by the xPGuard agent.\n# On cPanel, LiteSpeed loads the xPGuard rules through ModSecurity's\n# modsec2.user.conf; this WebAdmin rule set is not needed and is kept\n# empty so LiteSpeed never fails on a missing file.\n"
+
+// staleRuleSetFile is the file of an xPGuard WAF rule set defined in
+// LiteSpeed WebAdmin on a cPanel server (made by hand from the stand-alone
+// instructions, or by an older setup) when that file is missing: the
+// rules reach LiteSpeed through modsec2.user.conf, but a rule set naming
+// a missing file fails as soon as someone switches it on (business200).
+func staleRuleSetFile() string {
+	conf, err := os.ReadFile(LiteSpeedConf)
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(LiteSpeedConf)
+	for _, name := range []string{"xpguard-waf.conf", "xmartguard-waf.conf"} {
+		if !strings.Contains(string(conf), name) {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+			return p
+		}
+	}
+	return ""
 }
 
 // liteSpeedRestart restarts LiteSpeed gracefully (tests replace it).

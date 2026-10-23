@@ -45,7 +45,18 @@ func InsecureSymlink(path string, homesByUID map[uint32]string) (string, bool) {
 	}
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", false // dangling links are harmless
+		// A dangling link is harmless, except one waiting for another
+		// account's secrets to appear: credential theft kits make one for
+		// every account and every CMS (server1: 265,000 links, most to
+		// files that do not exist).
+		if t, ok := lexicalTarget(path); ok && SecretFileName(filepath.Base(t)) {
+			for uid, home := range homesByUID {
+				if uid != ls.Uid && strings.HasPrefix(t, home+"/") {
+					return t, true
+				}
+			}
+		}
+		return "", false
 	}
 	ti, err := os.Stat(target)
 	if err != nil {
@@ -174,3 +185,29 @@ func yaraScan(ctx context.Context, files []string, threads int) map[string]strin
 	}
 	return out
 }
+
+// lexicalTarget is where a link points, made absolute, without following
+// any link on the way.
+func lexicalTarget(path string) (string, bool) {
+	t, err := os.Readlink(path)
+	if err != nil {
+		return "", false
+	}
+	if !filepath.IsAbs(t) {
+		t = filepath.Join(filepath.Dir(path), t)
+	}
+	return filepath.Clean(t), true
+}
+
+// secretNames are files holding database passwords, API tokens or login
+// hashes; a link to another account's copy is only made to read them.
+var secretNames = map[string]bool{
+	"wp-config.php": true, "config.php": true, "configuration.php": true, "settings.php": true,
+	"local.xml": true, "env.php": true, ".env": true, "parameters.yml": true, "database.php": true,
+	"config.inc.php": true, "conf.php": true, "db.php": true, "connect.php": true, "connection.php": true,
+	".accesshash": true, ".my.cnf": true, ".pgpass": true, "shadow": true, "passwd": true, ".lastlogin": true,
+	"id_rsa": true, "authorized_keys": true, ".htpasswd": true, "web.config": true,
+}
+
+// SecretFileName reports a file name that holds secrets.
+func SecretFileName(name string) bool { return secretNames[strings.ToLower(name)] }

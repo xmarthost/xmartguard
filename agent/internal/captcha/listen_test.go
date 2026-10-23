@@ -3,6 +3,7 @@ package captcha
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -51,5 +52,16 @@ func TestSyncRetriesFailedBind(t *testing.T) {
 			t.Fatalf("port %d: %v", p, err)
 		}
 		c.Close()
+	}
+}
+
+// Scanners probing the public CAPTCHA HTTPS port wrote one "TLS handshake
+// error" line each to agent.log (235,000 on business200): counted instead.
+func TestHandshakeErrorsNotLogged(t *testing.T) {
+	srv := HTTPServer(0, http.NotFoundHandler())
+	before := HandshakeErrors.Load()
+	srv.ErrorLog.Printf("http: TLS handshake error from 192.0.2.7:51234: EOF")
+	if HandshakeErrors.Load() != before+1 {
+		t.Fatal("handshake error not counted")
 	}
 }

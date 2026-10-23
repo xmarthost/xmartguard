@@ -122,3 +122,29 @@ func TestAICleanRestoresAtOnce(t *testing.T) {
 		t.Fatalf("flagged again: %+v", again)
 	}
 }
+
+// Another server's AI "clean" does not restore a quarantined file here: the
+// scanner does not honour it, so the file was flagged again a minute later
+// and restored again (1,445 times for one plugin file on business200).
+func TestFleetCleanDoesNotRestore(t *testing.T) {
+	a := newTestAgent(t, `{"scanner":{"virus_action":"quarantine"},"ai":{"enabled":false,"restore_clean":true}}`)
+	dir := filepath.Join(t.TempDir(), "public_html")
+	os.MkdirAll(dir, 0o755)
+	file := filepath.Join(dir, "plugin-main.php")
+	os.WriteFile(file, []byte("<?php @eval($_POST['a']); ?>"), 0o644)
+	id, _ := a.Scanner.Start("path", dir, "test")
+	var fs []scanner.Finding
+	for i := 0; i < 200 && len(fs) == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+		fs, _, _ = a.Scanner.ListFindings(scanner.FindingFilter{ScanID: id, Status: "quarantined", Limit: 10})
+	}
+	if len(fs) != 1 {
+		t.Fatalf("not quarantined: %+v", fs)
+	}
+	v := ai.Verdict{SHA256: fs[0].SHA256, Verdict: ai.Clean, Confidence: 100, Reason: "plugin", Model: "gemini", Source: "fleet", At: 1}
+	ai.Save(a.DB, v)
+	a.onAIVerdict(ai.Job{FindingID: fs[0].ID, SHA256: fs[0].SHA256}, v)
+	if got, _ := a.Scanner.Get(fs[0].ID); got.Status != "quarantined" {
+		t.Fatalf("status %q, want the file kept in quarantine", got.Status)
+	}
+}

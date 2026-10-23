@@ -11,6 +11,7 @@
 package captcha
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -22,13 +23,16 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
@@ -177,9 +181,27 @@ func (s *Server) bindFailed(err error) {
 // after every response (HTTP/2: GOAWAY) sends the next request to the site.
 func HTTPServer(port int, h http.Handler) *http.Server {
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: h, ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 5 * time.Second, ConnContext: connContext}
+		ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 5 * time.Second, ConnContext: connContext,
+		ErrorLog: log.New(quietErrors{}, "", 0)}
 	srv.SetKeepAlivesEnabled(false)
 	return srv
+}
+
+// HandshakeErrors counts failed TLS handshakes on the CAPTCHA listeners.
+var HandshakeErrors atomic.Int64
+
+// quietErrors is the listeners' error log. The HTTPS port is open to the
+// internet (site mode sends visitors to it), and scanners probing it made
+// one "TLS handshake error" line each: 235,000 lines in agent.log on
+// business200. Those are only counted; other server errors are logged.
+type quietErrors struct{}
+
+func (quietErrors) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("TLS handshake error")) {
+		HandshakeErrors.Add(1)
+		return len(p), nil
+	}
+	return os.Stderr.Write(p)
 }
 
 func (s *Server) certs() *CertStore {

@@ -158,7 +158,14 @@ func (a *Analyzer) process(ctx context.Context, batch []Job) {
 				continue
 			}
 		}
-		if v, ok := Cached(a.DB, j.SHA256); ok && v.Verdict != Error && (v.Source != "fallback" || cfg.Provider != "portal") {
+		v, ok := Cached(a.DB, j.SHA256)
+		// Another server's "clean" does not clear a file here (see
+		// isClearedVerdict): this server's AI judges the finding itself.
+		// Acting on it restored the file, the scanner flagged it again a
+		// minute later and the fleet verdict restored it again, 1,445 times
+		// for one plugin file on business200.
+		fleetClean := ok && j.FindingID != 0 && v.Verdict == Clean && !Clears(v)
+		if ok && v.Verdict != Error && (v.Source != "fallback" || cfg.Provider != "portal") && !fleetClean {
 			// Known content: act on the stored verdict (a new detection of a
 			// file the fleet already judged, or known malware reappearing).
 			if a.OnVerdict != nil && (j.FindingID != 0 || v.Verdict == Malicious) {
@@ -396,6 +403,10 @@ var cleared struct {
 	set   map[string]bool
 	admin map[string]bool // cleared by an administrator
 }
+
+// Clears reports whether a verdict puts this content back and keeps it
+// from being flagged again on this server.
+func Clears(v Verdict) bool { return isClearedVerdict(v) }
 
 func isClearedVerdict(v Verdict) bool {
 	// Another server's AI verdict does not clear files here: only this

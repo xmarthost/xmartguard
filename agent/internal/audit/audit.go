@@ -66,6 +66,9 @@ type Auditor struct {
 	// PHPVersion reads one's version (tests replace both).
 	PHPBins    []string
 	PHPVersion func(bin string) string
+	// PHPPackage reads the build time and changelog of the package that
+	// installed a PHP interpreter (tests replace it; nil: rpm).
+	PHPPackage func(bin string) (built int64, changelog string)
 	Now        func() time.Time
 	MaxFiles   int
 	MaxPerKey  int
@@ -198,7 +201,10 @@ var (
 		{"Stripe secret key", regexp.MustCompile(`\b(?:sk|rk)_live_[0-9A-Za-z]{20,}`)},
 		{"GitHub token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}`)},
 		{"Slack token", regexp.MustCompile(`\bxox[abpr]-[0-9A-Za-z-]{20,}`)},
-		{"private key", regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----`)},
+		// The header alone is in documentation and in code that reads keys
+		// (business200: a README and a JS bundle): a real key has its body
+		// (base64 lines, also with escaped newlines in JSON) after it.
+		{"private key", regexp.MustCompile(`-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----(?:\s|\\[rn])+[A-Za-z0-9+/=]{60,}`)},
 	}
 	// Files a web server sends as they are (not run): a key in them is
 	// readable by anyone who guesses the address. PHP files are run, so a
@@ -577,6 +583,25 @@ var phpFixed = map[string]int{"8.2": 35, "8.3": 36, "8.4": 27, "8.5": 12}
 
 var phpBackportOnly = map[string]bool{"7.4": true, "8.0": true, "8.1": true}
 
+// phpFixDate is 2026-10-21 (UTC), the day of the PHP2Shell releases.
+const phpFixDate = 1792540800
+
+// rpmPackage reads the build time and changelog of the RPM owning a file.
+func rpmPackage(path string) (int64, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "rpm", "-qf", "--queryformat", "%{BUILDTIME}\n", path).Output()
+	if err != nil {
+		return 0, ""
+	}
+	built, _ := strconv.ParseInt(strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]), 10, 64)
+	log, _ := exec.CommandContext(ctx, "rpm", "-q", "--changelog", "-f", path).Output()
+	if len(log) > 1<<20 {
+		log = log[:1<<20]
+	}
+	return built, string(log)
+}
+
 var rePHPRelease = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
 
 func phpVersionOf(bin string) string {
@@ -600,6 +625,10 @@ func (a *Auditor) phpCVEs() []Item {
 	if ver == nil {
 		ver = phpVersionOf
 	}
+	pkg := a.PHPPackage
+	if pkg == nil {
+		pkg = rpmPackage
+	}
 	var out []Item
 	seen := map[string]bool{}
 	for _, g := range bins {
@@ -622,8 +651,20 @@ func (a *Auditor) phpCVEs() []Item {
 				out = append(out, Item{Check: "php_cve", Severity: "high", Title: "PHP " + m[0] + " is open to " + cve, Path: f,
 					Detail: "Update to PHP " + branch + "." + strconv.Itoa(fixed) + " or newer (cPanel: EasyApache/MultiPHP updates; CloudLinux: alt-php updates)." + mitigate})
 			} else if phpBackportOnly[branch] {
-				out = append(out, Item{Check: "php_cve", Severity: "high", Title: "PHP " + m[0] + " (no official fix) may be open to " + cve, Path: f,
-					Detail: "This branch only got source backports: install your vendor's patched build (check that the package was built on or after 2026-10-21), or move the sites to PHP 8.2 or newer." + mitigate})
+				// The vendor's patched build keeps the version number: its
+				// changelog names the CVE (CloudLinux, cPanel EA4). Reporting
+				// every 7.4-8.1 build as open listed patched servers too
+				// (business200 after the 2026-10-21 updates).
+				built, log := pkg(real)
+				switch {
+				case strings.Contains(log, "CVE-2026-109618"):
+				case built >= phpFixDate:
+					out = append(out, Item{Check: "php_cve", Severity: "low", Title: "PHP " + m[0] + " was built after the PHP2Shell fixes; its notes do not name the CVE", Path: f,
+						Detail: "Probably patched: check your vendor's notes for CVE-2026-109618 and CVE-2026-109619, or move the sites to PHP 8.2 or newer."})
+				default:
+					out = append(out, Item{Check: "php_cve", Severity: "high", Title: "PHP " + m[0] + " (no official fix) may be open to " + cve, Path: f,
+						Detail: "This branch only got source backports: install your vendor's patched build (built on or after 2026-10-21), or move the sites to PHP 8.2 or newer." + mitigate})
+				}
 			}
 		}
 	}

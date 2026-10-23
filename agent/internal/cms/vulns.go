@@ -388,6 +388,15 @@ func installCrontab(owner, text string) error {
 	return nil
 }
 
+// updateRetry is how long a site's update of one version is not tried again.
+const updateRetry = 7 * 86400
+
+// notUpdated reports wp-cli's answer for an update that changed nothing.
+func notUpdated(out string) bool {
+	o := strings.ToLower(out)
+	return strings.Contains(o, "already updated") || strings.Contains(o, "updated 0 of") || strings.Contains(o, "no updates available")
+}
+
 // autoActions applies the automatic CMS policies to one scanned site and
 // returns a description of what it did.
 func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
@@ -396,10 +405,39 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 		return nil
 	}
 	var done []string
-	run := func(desc string, args ...string) {
-		if out, err := m.WPCLI(ctx, s.Path, args...); err != nil {
+	wp := m.WPCLI
+	if m.RunWPCLI != nil {
+		wp = m.RunWPCLI
+	}
+	run := func(desc string, args ...string) bool {
+		out, err := wp(ctx, s.Path, args...)
+		if err != nil {
 			m.Log.Warn("CMS automatic action failed", "site", s.Path, "action", desc, "err", err)
-		} else {
+			return false
+		}
+		m.Log.Info("CMS automatic action", "site", s.Path, "action", desc, "out", out)
+		done = append(done, desc)
+		return true
+	}
+	// An update is tried once a week per site and version: wp-cli answers
+	// "already updated" when WordPress does not see the newer release (a
+	// premium copy, a closed plugin), the version stays and the update ran
+	// again on every scan (business200: 774 times for one plugin, 1,962
+	// failures).
+	update := func(kind string, c Component) {
+		key := "cms_update_try|" + s.Path + "|" + kind + "|" + c.Slug + "|" + c.Version
+		if t, _ := strconv.ParseInt(store.GetKV(m.DB, key), 10, 64); t > 0 && store.Now()-t < updateRetry {
+			return
+		}
+		_ = store.SetKV(m.DB, key, strconv.FormatInt(store.Now(), 10))
+		out, err := wp(ctx, s.Path, kind, "update", c.Slug)
+		desc := fmt.Sprintf("updated vulnerable %s %s %s → %s", kind, c.Slug, c.Version, c.Latest)
+		switch {
+		case err != nil:
+			m.Log.Warn("CMS automatic action failed", "site", s.Path, "action", desc, "err", err)
+		case notUpdated(out):
+			m.Log.Info("vulnerable "+kind+" has no update WordPress can install; tried again in a week", "site", s.Path, "slug", c.Slug, "version", c.Version, "out", out)
+		default:
 			m.Log.Info("CMS automatic action", "site", s.Path, "action", desc, "out", out)
 			done = append(done, desc)
 		}
@@ -432,12 +470,12 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 		}
 		for _, p := range s.Plugins {
 			if due(p) {
-				run(fmt.Sprintf("updated vulnerable plugin %s %s → %s", p.Slug, p.Version, p.Latest), "plugin", "update", p.Slug)
+				update("plugin", p)
 			}
 		}
 		for _, t := range s.Themes {
 			if due(t) {
-				run(fmt.Sprintf("updated vulnerable theme %s %s → %s", t.Slug, t.Version, t.Latest), "theme", "update", t.Slug)
+				update("theme", t)
 			}
 		}
 	}

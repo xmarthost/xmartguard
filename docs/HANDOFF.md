@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.4** (see `VERSION`).
+- Current release: **0.23.5** (see `VERSION`).
 
 ## Working rules
 
@@ -33,16 +33,20 @@ project. It holds the rules, the current state and what is still open.
   report to the owner says what changed in the engine, not only what was
   restored.
 - **Language**: reply to the owner in Roman Urdu.
-- **Branch**: work on `claude/dreamy-davinci-10tcgi`, then push to `main`:
+- **Branch**: work on the session's branch (0.23.5:
+  `claude/keen-wozniak-eebt73`), then push to `main`:
   ```
-  git push -q -u origin claude/dreamy-davinci-10tcgi && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
+  git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
 - **Releases**: bump `VERSION`, run the tests, commit as
   `Release x.y.z: …`, push. Then give the owner the update command:
   ```
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
-  Rollback is the same command with `--branch backup-0.21.34`.
+  Rollback is the same command with `--branch backup-<version>` (for
+  0.23.5: `--branch backup-0.23.4`, see "Rollback" under 0.23.5 below);
+  agents never downgrade on their own (0.23.0), so they are put back by
+  hand.
 - **Commits**: no AI model names in commits or code. End each commit with
   the session's `Co-Authored-By` / `Claude-Session` trailer.
 - **Tests**:
@@ -80,6 +84,123 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.5: fixes from three server reports** (2026-10-23). The
+  owner had another assistant inspect business200 (mypowerfulserver),
+  business200 (websoulhostservers) and server1 (superfastcloudhosting)
+  read-only; every claim was checked against the code and the live fleet
+  (connector) first. Fixed in the engine, each with a regression test:
+  - **Agent memory (3 GB)**: `agent.profile` on business200 and server1
+    showed 3,065 MB in `IPTables.IPDBCounters`. The counter map's keys were
+    substrings of the whole `ipset list` output, so every remembered entry
+    kept one poll's output (~25 MB) alive. Keys are copies now and only the
+    entries counted in the last reading are remembered
+    (`TestIPSetCounterKeysAreCopies`, `TestIPDBHitsForgetsOldEntries`).
+    The IPDB list minus protected addresses (250,000 entries compared with
+    every protected address on each call, a fifth of a core) is built once
+    per list version (`ipdbEntries`).
+  - **AI restore loop**: a cached *fleet* "clean" verdict restored a
+    quarantined file, but the scanner does not honour another server's AI
+    (audit), so it flagged the file again a minute later: 1,445 rounds for
+    aiomatic-automatic-ai-content-writer.php on business200. A finding whose
+    content only the fleet found clean is now judged by this server's AI,
+    and `clearFalsePositive` restores only on verdicts `ai.Clears` accepts
+    (`TestFleetCleanFindingAskedHere`, `TestFleetCleanDoesNotRestore`).
+  - **WAF settings rolled back on LiteSpeed**: on cPanel + LiteSpeed the
+    test is `restartsrv_httpd --check`, which said "The httpd service is
+    down" while LiteSpeed restarted (13 rollbacks a day on business200).
+    That answer is asked again (3 x 10 s); if LiteSpeed is still down the
+    rules (not yet loaded) are kept, LiteSpeed is restarted and checked
+    again, and only a failure after that rolls back. A real refusal still
+    rolls back at once (`TestLiteSpeedDownDuringRestartKeepsRules`,
+    `TestLiteSpeedStillDownRestartsAndChecks`, `TestRefusedRulesStillRollBack`).
+  - **"xpguard-waf.conf missing" (report K1)**: not a bypass. On cPanel,
+    LiteSpeed loads the rules through modsec2.user.conf (the self test on
+    business200 answered 403, CRS 4.30 active). The WebAdmin rule set
+    "xPGuard" naming xpguard-waf.conf is a leftover of the stand-alone
+    instructions and is switched off (`enableCensorship 0`). When such a
+    rule set names a missing file, the agent now writes an empty
+    commented file so LiteSpeed never fails if someone switches it on
+    (`TestStaleLiteSpeedRuleSetGetsStub`).
+  - **Credential theft kits (symlinks)**: folders of links such as
+    `configTGQ/<account>-WordPress-public_html.txt` to every account's
+    wp-config.php, .env and .accesshash (server1: 265,966 links, business300
+    jpmilk 1,983, server100 ecommupscale 1,627) were only reported. A link
+    to another account's files is now removed whenever the virus action is
+    quarantine or disable (status "quarantined", qpath `link:<target>`;
+    the target is never touched; Restore makes the link again with its
+    owner; manual Quarantine of a link works too). Dangling links into
+    another account's home that name a secret file (wp-config.php, .env,
+    .accesshash, config.php, .my.cnf…, `scanner.SecretFileName`) count too:
+    kits make one for every account and most targets do not exist yet
+    (`TestFleetSymlinkTheftKit`).
+  - **PHP upload through the WordPress uploaders (report bypass 1)**: a
+    malicious plugin uploaded with a stolen admin session on business200
+    passed because CRS 933110 scores 5 (threshold 10). New rule 7700315:
+    a PHP file (php, phtml, phar, pht, phps) sent to update.php
+    (upload-plugin/upload-theme), async-upload.php, media-new.php,
+    upload.php, plugin-install.php or theme-install.php is refused: those
+    only take zips and media. New rules watch until approved (open item 7);
+    `TestWPPackagePHPOnApache` (real Apache + CRS; a control run with the
+    rule off lets the PHP upload through).
+  - **Padded web shells over the size limit**: PHP files (php, phtml,
+    php3-8, pht, inc) over `max_file_size_mb` were never read. They are
+    judged by their first and last 2 MB; official plugin files (whole-file
+    checksum) stay trusted; other big scripts (JS bundles) stay unread
+    (`TestFleetPaddedBigPHP`).
+  - **CMS auto-update loop**: `wp plugin update` answers "already updated"
+    when WordPress sees no newer release (premium or closed plugins), the
+    version stayed and the update ran on every scan (business200: 774 times
+    for template-kit-import, 1,962 failures). One try a week per site and
+    installed version (KV `cms_update_try|…`), and only a real update is
+    reported (`TestAutoUpdateNotRepeated`).
+  - **Backup copies**: extracted cPanel backups in a home
+    (`backup-M.D.YYYY_HH-MM-SS_user/`) and `softaculous_backups` are not
+    watched in real time (`scanner.BackupFolder`; scheduled scans still
+    check them) and not searched for CMS sites, whose old database logins
+    gave hundreds of "Access denied" database checks a day
+    (`TestDiscoverSkipsBackupCopies`).
+  - **CAPTCHA port log spam**: scanners probing the public CAPTCHA HTTPS
+    port wrote one "TLS handshake error" line each (235,000 in agent.log on
+    business200); they are counted (`captcha.HandshakeErrors`), other server
+    errors still logged (`TestHandshakeErrorsNotLogged`). The port stays
+    public: site mode sends visitors to it.
+  - **Audit false positives**: PHP 7.4-8.1 builds whose package changelog
+    names CVE-2026-109618 (CloudLinux/cPanel backports) are no longer
+    listed as open to PHP2Shell; a build from 2026-10-21 or later without
+    the note is a "low" check item (`rpm -qf`; `TestPHPCVEsBackportedBuilds`).
+    A private key header alone (README, JS bundles) is no longer a leaked
+    key: the key body must follow (`TestLeakedKeyNeedsItsBody`).
+  - **Checked and not changed** (claims that were wrong or are settings):
+    the WooCommerce `LanguageFactory.php` "false positive" on server1 is a
+    real dropper (writes a request-supplied XOR payload to a temp folder
+    and includes it): it stays quarantined. IPv6 CAPTCHA redirect counters
+    at 0 are expected (only addresses on the ban or IPDB lists are sent
+    there, and the IPDB is mostly IPv4). agent.log is rotated by the agent
+    at 50 MB. AI failures fall back to the built-in model and are asked
+    again later. `block_php_upload`, the anomaly threshold, PK in ignored
+    countries, quarantine retention and `max_file_size_mb` are per-server
+    settings for the owner; cPanel's modsec_audit logrotate is not
+    xPGuard's. Report items about account clean-up (business500
+    masfosur PHPLock .htaccess files, the three symlink accounts, s5
+    reinfection) are open item 8.
+  - **Testing notes**: on a fresh Ubuntu container install `apache2
+    libapache2-mod-security2 ipset yara iproute2`, then **remove the
+    `modsecurity-crs` package** (Debian's CRS 3 loads next to ours and
+    doubles the scores), clone CRS v4.18.0 (the suite's reference) for
+    `XG_CRS_DIR`, and run each Apache test on its own with Apache stopped
+    and `/etc/apache2/conf-*/xpguard-waf.conf` removed in between (the CRS
+    tests leave the include). All 22 Apache tests pass on CRS 4.18; on CRS
+    4.30 `TestExclusionsWithCRS`'s control check ("checkout passes even
+    without the exclusion") fails, on 0.23.4 too: CRS 4.30 no longer flags
+    that request.
+  - **Rollback**: `backup-0.23.4` is the 0.23.4 code. Portal: the update
+    command with `--branch backup-0.23.4`. Agents keep the previous binary
+    after an update; on each server:
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`
+    (or reinstall from the rolled-back portal's install command). A link
+    quarantined by 0.23.5 cannot be restored by 0.23.4 (it has no
+    `link:` support); nothing else in the database changed.
 
 - **ModSecurity chains**: a `ctl:` action runs on its own link's match, so
   it must sit on the **last** link of a chain, never on the first.
@@ -446,7 +567,20 @@ project. It holds the rules, the current state and what is still open.
    `ridge-compiler-live.php` about every 10 minutes. Clean these accounts
    (look for the dropper in cron, mu-plugins and the database) and change
    their passwords.
-7. **Not built yet**:
+7. **Approve 7700315** (PHP files sent to the WordPress uploaders, 0.23.5)
+   after a few days of watch hits in Rule approvals.
+8. **Accounts the 0.23.5 reports found taken over**: business500 masfosur
+   (4,738 PHPLock .htaccess files still "detected": the signature had been
+   paused, quarantine them after review); credential theft kits on server1
+   minahsp1 (`plugins/dzrpqevxpk/configTGQ`, also its php.ini with
+   disable_functions off), business300 jpmilk (`configWDP`) and server100
+   ecommupscale (`configEMQ`): 0.23.5 removes the links at the next scan;
+   clean the accounts, and since other accounts' wp-config.php and
+   .accesshash could be read, change those database passwords and WHM API
+   tokens. business200 (mypowerfulserver): a malicious plugin was uploaded
+   on 2026-10-20 with a valid admin session (nsantosmaintenanceltd.co.uk):
+   2FA and new admin passwords.
+9. **Not built yet**:
    - M3: uptime/SSL/domain-expiry monitor (14), file versions (15) and
      cPanel plugin v2 (12).
    - M4: targeted virtual patches (07), DB clean (08), outbound monitor

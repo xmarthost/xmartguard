@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -193,5 +194,123 @@ func TestFleetShapeTrustNeedsNoDynamicCall(t *testing.T) {
 	t.Cleanup(func() { os.Remove(HashDBPath()); ReloadHashDB() })
 	if d, _ := s.CheckFile(sapp, info, s.Settings.Get().Scanner); d == nil || d.Signature != "XG-TEST.KnownBad" {
 		t.Fatalf("known-bad hash skipped for a trusted shape: %v", d)
+	}
+}
+
+// A credential theft kit (server1, business300, server100: folders of
+// links named <account>-WordPress-public_html.txt, one to every account's
+// wp-config.php, .env and .accesshash) was only reported, so the links
+// stayed readable. A link to another account's files is removed whenever
+// malware is quarantined, also a dangling one waiting for a secret file to
+// appear; the targets are never touched, and Restore makes the link again.
+// Links inside the account itself or to public files stay.
+func TestFleetSymlinkTheftKit(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to own files as other accounts")
+	}
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	thief, victim := filepath.Join(base, "thief"), filepath.Join(base, "victim")
+	const thiefUID, victimUID = 65533, 65532
+	for _, d := range []string{filepath.Join(thief, "public_html", "kit"), filepath.Join(victim, "public_html")} {
+		os.MkdirAll(d, 0o755)
+	}
+	secret := filepath.Join(victim, "public_html", "wp-config.php")
+	os.WriteFile(secret, []byte("<?php // inert fixture: define('DB_PASSWORD', 'x');"), 0o640)
+	own := filepath.Join(thief, "public_html", "index.php")
+	os.WriteFile(own, []byte("<?php echo 1;"), 0o644)
+	filepath.Walk(victim, func(p string, _ os.FileInfo, _ error) error { return os.Lchown(p, victimUID, victimUID) })
+	homes := map[uint32]string{thiefUID: thief, victimUID: victim}
+	kit := filepath.Join(thief, "public_html", "kit")
+	links := map[string]string{
+		"victim-WordPress-public_html.txt": secret,                                    // live
+		"victim-cpanel.txt":                filepath.Join(victim, ".accesshash"),      // dangling secret
+		"victim-env.txt":                   filepath.Join(victim, "public_html/.env"), // dangling secret
+	}
+	for name, target := range links {
+		p := filepath.Join(kit, name)
+		os.Symlink(target, p)
+		os.Lchown(p, thiefUID, thiefUID)
+	}
+	keep := map[string]string{
+		"own.txt":     own,                                           // the account's own file
+		"missing.txt": filepath.Join(victim, "public_html/logo.png"), // dangling, not a secret
+	}
+	for name, target := range keep {
+		p := filepath.Join(kit, name)
+		os.Symlink(target, p)
+		os.Lchown(p, thiefUID, thiefUID)
+	}
+	for name := range keep {
+		if _, bad := InsecureSymlink(filepath.Join(kit, name), homes); bad {
+			t.Errorf("%s: flagged", name)
+		}
+	}
+	var ids []int64
+	for name, target := range links {
+		p := filepath.Join(kit, name)
+		got, bad := InsecureSymlink(p, homes)
+		if !bad || got != target {
+			t.Fatalf("%s: not flagged (%q %v)", name, got, bad)
+		}
+		info, _ := os.Lstat(p)
+		f, err := s.Record(0, "manual", p, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + got})
+		if err != nil || f.Status != "quarantined" {
+			t.Fatalf("%s: %+v %v", name, f, err)
+		}
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s: link still there", name)
+		}
+		ids = append(ids, f.ID)
+	}
+	if st, err := os.Stat(secret); err != nil || st.Mode().Perm() != 0o640 {
+		t.Fatalf("target touched: %v %v", st, err)
+	}
+	if err := s.Restore(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := s.Get(ids[0])
+	if back, err := os.Readlink(f.Path); err != nil || back != links[filepath.Base(f.Path)] {
+		t.Fatalf("restore: %q %v", back, err)
+	}
+	if li, _ := os.Lstat(f.Path); li.Sys().(*syscall.Stat_t).Uid != thiefUID {
+		t.Fatal("restored link lost its owner")
+	}
+	if err := s.Delete(ids[1]); err != nil {
+		t.Fatalf("delete a removed link: %v", err)
+	}
+}
+
+// A web shell padded past the size limit (server1's report: an 11 MB file
+// is never read) is judged by its start and end; a big clean PHP file (a
+// generated translation array) stays clean.
+func TestFleetPaddedBigPHP(t *testing.T) {
+	s := newScanner(t)
+	cfg := s.Settings.Get().Scanner
+	limit := int64(cfg.MaxFileSizeMB) << 20
+	dir := t.TempDir()
+	pad := strings.Repeat("/* lorem ipsum dolor sit amet */\n", int(limit/33)+1000)
+	bad := filepath.Join(dir, "cache-handler.php")
+	os.WriteFile(bad, []byte(pad+"<?php @eval($_POST['a']); ?>\n"), 0o644)
+	var b strings.Builder
+	b.WriteString("<?php\nreturn array(\n")
+	for i := 0; int64(b.Len()) <= limit+(1<<20); i++ {
+		fmt.Fprintf(&b, "  'string_%d' => 'Translated text number %d',\n", i, i)
+	}
+	b.WriteString(");\n")
+	clean := filepath.Join(dir, "lang-ur.php")
+	os.WriteFile(clean, []byte(b.String()), 0o644)
+	for path, want := range map[string]bool{bad: true, clean: false} {
+		info, _ := os.Stat(path)
+		if info.Size() <= limit {
+			t.Fatalf("%s: fixture not over the limit", path)
+		}
+		d, err := s.CheckFile(path, info, cfg)
+		if (d != nil) != want {
+			t.Errorf("%s: detection %+v (%v), want %v", filepath.Base(path), d, err, want)
+		}
 	}
 }

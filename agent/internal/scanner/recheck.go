@@ -46,7 +46,7 @@ func (s *Scanner) Recheck(f RecheckFilter, keep func(sha string) bool) (RecheckR
 	if limit <= 0 || limit > 5000 {
 		limit = 500
 	}
-	q := `SELECT id, path, owner, signature, qpath FROM findings WHERE status = 'quarantined' AND qpath != ''`
+	q := `SELECT id, path, owner, signature, qpath FROM findings WHERE status = 'quarantined' AND qpath != '' AND qpath NOT LIKE 'link:%'`
 	args := []any{}
 	if f.Signature != "" {
 		q += ` AND signature = ?`

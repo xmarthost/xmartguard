@@ -434,6 +434,9 @@ func (s *Scanner) checkFile(path string, info fs.FileInfo, cfg settings.Scanner)
 		}
 	}
 	if ScriptExts[ext] {
+		if bigPHPExts[ext] {
+			return s.bigScriptVerdict(path, ext, info)
+		}
 		return nil, nil // larger than the size limit
 	}
 	if ext == ".zip" {
@@ -529,6 +532,45 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 		return final(&Detection{CatSuspicious, "LMD." + name})
 	}
 	return nil, nil
+}
+
+// bigPHPExts are PHP files judged by their start and end when they are
+// larger than the size limit: a web shell padded past it (an 11 MB file
+// with the code at one end) was never read. Other big scripts (JS
+// bundles, data) stay unread.
+var bigPHPExts = map[string]bool{".php": true, ".phtml": true, ".php3": true, ".php4": true, ".php5": true, ".php7": true,
+	".php8": true, ".pht": true, ".inc": true}
+
+// bigScriptEdge is how much of each end of a big PHP file is read.
+const bigScriptEdge = 2 << 20
+
+// bigScriptVerdict judges a PHP file over the size limit by its first and
+// last bigScriptEdge bytes. An official plugin file (whole-file checksum)
+// stays trusted.
+func (s *Scanner) bigScriptVerdict(path, ext string, info fs.FileInfo) (*Detection, error) {
+	if info.Size() > 1<<30 {
+		return nil, nil
+	}
+	f, err := openScanned(path, info)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	var sum [16]byte
+	copy(sum[:], h.Sum(nil))
+	if (s.KnownGood != nil && s.KnownGood(sum)) || (s.KnownGoodPath != nil && s.KnownGoodPath(path, sum)) {
+		return nil, ErrTrusted
+	}
+	head := make([]byte, bigScriptEdge)
+	n, _ := f.ReadAt(head, 0)
+	tail := make([]byte, bigScriptEdge)
+	m, _ := f.ReadAt(tail, max(0, info.Size()-bigScriptEdge))
+	content := append(append(head[:n:n], '\n'), tail[:m]...)
+	return s.contentVerdict(path, ext, content)
 }
 
 // knownBadHash reports a finding whose exact content is in the known-bad
@@ -839,13 +881,30 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 	case CatBinary:
 		action = cfg.BinaryAction
 	case CatSymlink:
-		action = settings.ActionNotify
-		if cfg.DeleteSymlinks {
+		// A link that opens another account's files (wp-config.php,
+		// .accesshash, .env: a credential theft kit on server1 held
+		// 265,000) is removed whenever malware is quarantined; its target
+		// is never touched and Restore makes the link again.
+		switch {
+		case cfg.DeleteSymlinks:
 			if err := removeFile(path); err == nil {
 				f.Status = "deleted"
 				_ = s.setStatus(f.ID, "deleted", "")
 			}
+		case cfg.VirusAction == settings.ActionQuarantine || cfg.VirusAction == settings.ActionDisable:
+			if f.Owner == "root" && !ScanRootFiles {
+				break
+			}
+			if err := s.QuarantineLink(f.ID); err == nil {
+				f.Status = "quarantined"
+			} else if errors.Is(err, ErrFileGone) {
+				f.Status, f.Note = "deleted", NoteGone
+				_, _ = s.DB.Exec(`UPDATE findings SET status = 'deleted', note = ?, updated_at = ? WHERE id = ?`, NoteGone, store.Now(), f.ID)
+			} else {
+				s.Log.Warn("removing a link to another account failed", "path", path, "err", err)
+			}
 		}
+		return
 	}
 	// Root's files are never acted on (see ScanRootFiles).
 	if f.Owner == "root" && !ScanRootFiles {
