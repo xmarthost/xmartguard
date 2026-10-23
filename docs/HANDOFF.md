@@ -656,10 +656,12 @@ project. It holds the rules, the current state and what is still open.
    tokens. business200 (mypowerfulserver): a malicious plugin was uploaded
    on 2026-10-20 with a valid admin session (nsantosmaintenanceltd.co.uk):
    2FA and new admin passwords.
-9. **After 0.23.6 is on every server**: check `fw.check 57.141.20.4`
-   shows TRUSTED-SERVICE (Meta), then remove the owner's whitelist entry
-   57.141.20.0/24 "META" on all servers (it turns the WAF off for that
-   range); and check `trusted.status` for google-agents and mistral-user.
+9. **Meta whitelist (0.23.6)**: done on 2026-10-23 on the 16 servers on
+   0.23.6 (`trusted.refresh`: Meta 893 -> 923 addresses, the RADb routes
+   of 57.141.x now count; google-agents 20 and mistral-user 4 from their
+   official lists; `fw.check 57.141.20.4` TRUSTED-SERVICE; then `fw.remove`
+   allow 57.141.20.0/24). Still to do on business200.mypowerfulserver.com,
+   which was on 0.23.5: update it, run `trusted.refresh`, check, remove.
 10. **Not built yet**:
    - M3: uptime/SSL/domain-expiry monitor (14), file versions (15) and
      cPanel plugin v2 (12).
