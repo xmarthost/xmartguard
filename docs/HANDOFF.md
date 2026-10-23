@@ -660,8 +660,8 @@ project. It holds the rules, the current state and what is still open.
    0.23.6 (`trusted.refresh`: Meta 893 -> 923 addresses, the RADb routes
    of 57.141.x now count; google-agents 20 and mistral-user 4 from their
    official lists; `fw.check 57.141.20.4` TRUSTED-SERVICE; then `fw.remove`
-   allow 57.141.20.0/24). Still to do on business200.mypowerfulserver.com,
-   which was on 0.23.5: update it, run `trusted.refresh`, check, remove.
+   allow 57.141.20.0/24), and the same on business200.mypowerfulserver.com
+   after its update: all 17 servers done.
 10. **Not built yet**:
    - M3: uptime/SSL/domain-expiry monitor (14), file versions (15) and
      cPanel plugin v2 (12).
