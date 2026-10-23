@@ -1,6 +1,7 @@
 package captcha
 
 import (
+	cryptotls "crypto/tls"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,14 @@ func TestSiteMode(t *testing.T) {
 	}
 	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-src https://captcha.xpguard.org") {
 		t.Fatalf("CSP %q", csp)
+	}
+	// The pass goes to this server's CAPTCHA port, not over the browser's
+	// older connection to the website (business200: the website's WAF
+	// refused it and the visitor solved the check again and again).
+	// (This page was asked for over plain HTTP: the CAPTCHA HTTP port.)
+	if !strings.Contains(body, `P="http://shop.example.com:7780/.xpguard/pass"`) ||
+		!strings.Contains(w.Header().Get("Content-Security-Policy"), "connect-src 'self' http://shop.example.com:7780/.xpguard/pass;") {
+		t.Fatalf("pass address:\n%s\n%s", body, w.Header().Get("Content-Security-Policy"))
 	}
 	pass := func(n, from string) *httptest.ResponseRecorder {
 		return req("POST", "/.xpguard/pass", "n="+n+"&back="+url.QueryEscape("/wp-login.php?redirect_to=/wp-admin/"), from)
@@ -181,5 +190,51 @@ func TestSitePassesSavedTogether(t *testing.T) {
 	defer mu.Unlock()
 	if saves != 1 {
 		t.Fatalf("%d saves for 100 passes", saves)
+	}
+}
+
+// The page on the website's own port (the firewall sends banned visitors
+// there) posts its pass to the CAPTCHA port: the answer is readable by that
+// website's pages only, and the cookie is the website's (no port).
+func TestSitePassFromWebsitePort(t *testing.T) {
+	s, _ := newServer(t)
+	s.ServerID = "15d69a72-653a-47b6-90f6-fde737bce061"
+	s.Passes = &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef")}
+	s.Settings.Patch([]byte(`{"waf":{"enabled":true},"captcha":{"central":true,"central_url":"https://captcha.xpguard.org/v","central_mode":"site"}}`))
+	page := func(host string, tls bool) string {
+		r := httptest.NewRequest("GET", "/wp-login.php", nil)
+		r.Host = host
+		r.Header.Set("Accept", "text/html")
+		if tls {
+			r.TLS = &cryptotls.ConnectionState{}
+		}
+		r.RemoteAddr = "203.0.113.5:4000"
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w.Body.String()
+	}
+	if b := page("shop.example.com", true); !strings.Contains(b, `P="https://shop.example.com:7743/.xpguard/pass"`) {
+		t.Fatalf("https page:\n%s", b)
+	}
+	if b := page("shop.example.com", false); !strings.Contains(b, `P="http://shop.example.com:7780/.xpguard/pass"`) {
+		t.Fatalf("http page:\n%s", b)
+	}
+	post := func(origin string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/.xpguard/pass", strings.NewReader("n=00000000000000000000000000000000&back=/"))
+		r.Host = "shop.example.com:7743"
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		r.Header.Set("Origin", origin)
+		r.RemoteAddr = "203.0.113.5:4000"
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	if w := post("https://shop.example.com"); w.Header().Get("Access-Control-Allow-Origin") != "https://shop.example.com" || w.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatalf("website origin not allowed: %v", w.Header())
+	}
+	for _, o := range []string{"https://evil.example", "https://shop.example.com.evil.example", "null"} {
+		if w := post(o); w.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("%s allowed", o)
+		}
 	}
 }

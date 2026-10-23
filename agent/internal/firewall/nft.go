@@ -246,7 +246,6 @@ func (r Ruleset) Render() string {
 		}
 	}
 	if cp := r.Captcha; cp != nil {
-		// Only connections the captcha chain redirected reach these ports from banned addresses.
 		// IPDB web visitors sent to the CAPTCHA are blocked from the site:
 		// count and sample their new connections like IPDB drops. Redirected
 		// and not temporarily banned means IPDB-listed; looking the address up
@@ -260,7 +259,9 @@ func (r Ruleset) Render() string {
 				fmt.Fprintf(&b, "\t\tct state new ct status dnat tcp dport { %d, %d } counter jump captcha_ipdb comment \"xg-ipdb\"\n", cp.HTTPPort, cp.HTTPSPort)
 			}
 		}
-		fmt.Fprintf(&b, "\t\tct status dnat tcp dport { %d, %d } accept\n", cp.HTTPPort, cp.HTTPSPort)
+		// The CAPTCHA server's own ports, also from banned addresses: the
+		// check page sends its pass there directly (captcha.passURL).
+		fmt.Fprintf(&b, "\t\ttcp dport { %d, %d } accept\n", cp.HTTPPort, cp.HTTPSPort)
 	}
 	b.WriteString("\t\tip saddr @exempt4 jump exempt\n\t\tip6 saddr @exempt6 jump exempt\n")
 	jump := func(match, chain, comment string) {

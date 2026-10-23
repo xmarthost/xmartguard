@@ -1,7 +1,7 @@
 import { isCloudflare, plainIP } from '../proxy.js';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { z } from 'zod';
 import type { Pool } from '../db.js';
 import { masterAccount, scopeAccounts } from '../tenancy.js';
@@ -78,6 +78,14 @@ const MAX_OTHER_ADDRESSES = 3;
 const otherAddresses = new Map<string, Map<string, number>>();
 
 export function allowOtherAddress(visitor: string, target: string, now = Date.now()): boolean {
+  // A shared egress network (iCloud Private Relay, WARP, Meta's agent
+  // browsers) is many people: the same person's two addresses there are
+  // not "another address", and strangers solving there must not use up
+  // one person's allowance (oxannebradley.org, 2026-10-23).
+  // Only those networks: a solver passing its /24 neighbours (one hosting
+  // network full of bots) still counts.
+  const ev = egressNetwork(visitor);
+  if (ev !== '' && ev === egressNetwork(target)) return true;
   const hour = now - 3600_000;
   let m = otherAddresses.get(visitor);
   if (!m) {
@@ -111,21 +119,57 @@ export function altchaAllowed(keys: string[], mode: 'auto' | 'altcha', now = Dat
 }
 
 /**
+ * Networks where one person's traffic moves between addresses of both
+ * families: Cloudflare WARP and iCloud Private Relay (a site over IPv4,
+ * the check over IPv6), and Meta's cloud (the Muse agent's browser and
+ * Meta AI fetch pages from 57.141.0.0/16 and solve from 2a03:2880::/29).
+ */
+const SHARED_EGRESS: Record<string, string[]> = {
+  relay: ['104.28.0.0/15', '2606:54c1::/32', '2a09:bac0::/29'],
+  meta: ['57.141.0.0/16', '2a03:2880::/29'],
+};
+const sharedEgress = Object.entries(SHARED_EGRESS).map(([name, cidrs]) => {
+  const b = new BlockList();
+  for (const c of cidrs) {
+    const [net, bits] = c.split('/');
+    b.addSubnet(net, Number(bits), isIP(net) === 6 ? 'ipv6' : 'ipv4');
+  }
+  return { name, b };
+});
+
+/**
+ * The daily ALTCHA allowance is kept per solving and per checked address;
+ * on a shared egress network per website as well: thousands of people
+ * share each address there, and strangers used up a customer's allowance.
+ */
+export function altchaKeysFor(solver: string, target: string, host: string): string[] {
+  const per = (a: string) => (egressNetwork(a) ? `${a}|${host}` : a);
+  return [`s:${per(solver)}`, `t:${per(target)}`];
+}
+
+/** The shared egress network an address is in ('' = none). */
+export function egressNetwork(a: string): string {
+  const x = plainIP(a);
+  const v = isIP(x);
+  if (!v) return '';
+  return sharedEgress.find((e) => e.b.check(x, v === 6 ? 'ipv6' : 'ipv4'))?.name ?? '';
+}
+
+/**
  * The visitor's own network for the ALTCHA fallback: the same /24 (IPv4)
  * or /48 (IPv6), where carrier-grade NAT hands out neighbouring
- * addresses, or both in Cloudflare's WARP / iCloud Private Relay egress
- * (104.28.0.0/15), where one person's traffic moves between addresses.
+ * addresses, or both in one shared egress network (SHARED_EGRESS).
  */
 export function sameNetwork(a: string, b: string): boolean {
   const n = (x: string) => x.toLowerCase().replace(/^::ffff:/, '');
   a = n(a);
   b = n(b);
+  const ea = egressNetwork(a);
+  if (ea !== '' && ea === egressNetwork(b)) return true;
   if (isIP(a) === 4 && isIP(b) === 4) {
     const pa = a.split('.').map(Number);
     const pb = b.split('.').map(Number);
-    if (pa[0] === pb[0] && pa[1] === pb[1] && pa[2] === pb[2]) return true;
-    const relay = (p: number[]) => p[0] === 104 && (p[1] === 28 || p[1] === 29);
-    return relay(pa) && relay(pb);
+    return pa[0] === pb[0] && pa[1] === pb[1] && pa[2] === pb[2];
   }
   if (isIP(a) === 6 && isIP(b) === 6) {
     // The first three groups, with "::" expanded.
@@ -518,7 +562,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         // ALTCHA where Turnstile is the check: only the visitor's own network
         // (or its other family), not from a hosting network, a few times a
         // day, for a shorter time.
-        const altchaKeys = [`s:${ip}`, `t:${p.ip}`];
+        const altchaKeys = altchaKeysFor(ip, p.ip, p.h);
         if (method === 'altcha' && provider !== 'turnstile') {
           if ((provider === 'auto' && other && sameFamily && !sameNetwork(ip, p.ip)) || !altchaAllowed(altchaKeys, provider === 'auto' ? 'auto' : 'altcha')) {
             await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);

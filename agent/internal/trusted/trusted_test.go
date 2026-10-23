@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -220,5 +221,39 @@ func TestRADBRoutesOnlyInsideKnownNetworks(t *testing.T) {
 	}
 	if n := len(insideOf([]string{"157.240.1.0/24", "157.240.2.0/24", "157.240.3.0/24"}, []string{"157.240.0.0/16"}, 2)); n != 2 {
 		t.Fatalf("cap: %d", n)
+	}
+}
+
+// Meta's crawler and agent network 57.141.0.0/16 (the Muse agent's
+// browser) counts when RADb lists it for AS32934; routes outside Meta's
+// known networks still do not (audit A4 F11).
+func TestMetaAgentNetworkTrusted(t *testing.T) {
+	var meta Service
+	for _, svc := range Services {
+		if svc.ID == "meta" {
+			meta = svc
+		}
+	}
+	got := insideOf([]string{"57.141.20.0/24", "57.141.0.0/24", "57.142.0.0/16", "157.240.0.0/16"}, meta.Builtin, 2000)
+	if strings.Join(got, ",") != "57.141.20.0/24,57.141.0.0/24,157.240.0.0/16" {
+		t.Fatalf("got %v", got)
+	}
+	s := New(filepath.Join(t.TempDir(), "c.json"))
+	if s.Match("57.141.20.4", nil) == "" || s.Match("2a03:2880:16ff:4d::", nil) == "" {
+		t.Fatal("Meta's agent addresses not trusted before the first refresh")
+	}
+}
+
+// A cached built-in list is replaced by the release's built-in list (Meta's
+// 57.141.0.0/16 came in 0.23.6); fetched lists stay until the next refresh.
+func TestCachedBuiltinListUpdated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "c.json")
+	os.WriteFile(path, []byte(`[{"id":"meta","cidrs":["157.240.0.0/16"],"source":"builtin"},{"id":"googlebot","cidrs":["192.0.2.0/24"],"source":"official"}]`), 0o600)
+	s := New(path)
+	if s.Match("57.141.20.4", nil) == "" {
+		t.Fatal("old built-in Meta list kept")
+	}
+	if s.Match("192.0.2.9", nil) == "" {
+		t.Fatal("fetched list dropped")
 	}
 }

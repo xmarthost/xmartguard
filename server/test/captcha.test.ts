@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 import { envelopeMessage } from '../src/agent-sign.js';
-import { hostingCheck, offlineWait, parseParams, sameNetwork, shownIP, turnstile } from '../src/routes/captcha.js';
+import { allowOtherAddress, altchaAllowed, altchaKeysFor, egressNetwork, hostingCheck, noteAltchaPass, offlineWait, parseParams, sameNetwork, shownIP, turnstile } from '../src/routes/captcha.js';
 
 let h: Harness;
 let admin: Client;
@@ -388,6 +388,51 @@ describe('CAPTCHA page: no passing bots through', () => {
     expect(sameNetwork('2001:db8:4f77:25b9::3c2:25', '2001:db8:4f77::1')).toBe(true);
     expect(sameNetwork('2001:db8:4f77::1', '2001:db8:4f78::1')).toBe(false);
     expect(sameNetwork('192.0.2.1', '2001:db8::1')).toBe(false);
+    // iCloud Private Relay and WARP: the site over IPv4, the check over IPv6
+    // (oxannebradley.org: 104.29.202.184 solved from 2606:54c1:1:2c0::3c0:2f).
+    expect(sameNetwork('104.29.202.184', '2606:54c1:1:2c0::3c0:2f')).toBe(true);
+    expect(sameNetwork('2a09:bac5:a7b8:25a5::3c0:5e', '104.28.213.42')).toBe(true);
+    // Meta's agent browsers (Muse): 57.141.20.x solving from 2a03:2880::.
+    expect(sameNetwork('57.141.20.52', '2a03:2880:16ff:4d::')).toBe(true);
+    // Different operators stay different networks.
+    expect(sameNetwork('57.141.20.52', '104.28.1.1')).toBe(false);
+    expect(sameNetwork('104.29.202.184', '2001:db8::1')).toBe(false);
+    expect(egressNetwork('57.141.0.2')).toBe('meta');
+    expect(egressNetwork('192.0.2.1')).toBe('');
+  });
+
+  it('keeps the daily ALTCHA allowance per website on shared egress networks', () => {
+    expect(altchaKeysFor('198.51.100.7', '198.51.100.7', 'a.example')).toEqual(['s:198.51.100.7', 't:198.51.100.7']);
+    expect(altchaKeysFor('2606:54c1:1:2c0::3c0:2f', '104.29.202.184', 'oxannebradley.org')).toEqual([
+      's:2606:54c1:1:2c0::3c0:2f|oxannebradley.org',
+      't:104.29.202.184|oxannebradley.org',
+    ]);
+    // Strangers on the same relay address using up the allowance on other
+    // sites do not touch this site's.
+    const now = Date.now();
+    const busy = altchaKeysFor('104.29.202.184', '104.29.202.184', 'busy.example');
+    for (let i = 0; i < 10; i++) noteAltchaPass(busy, now);
+    expect(altchaAllowed(busy, 'altcha', now)).toBe(false);
+    expect(altchaAllowed(altchaKeysFor('104.29.202.184', '104.29.202.184', 'oxannebradley.org'), 'altcha', now)).toBe(true);
+    // Elsewhere one address's allowance is for all sites.
+    const home = altchaKeysFor('198.51.100.8', '198.51.100.8', 'busy.example');
+    for (let i = 0; i < 10; i++) noteAltchaPass(home, now);
+    expect(altchaAllowed(altchaKeysFor('198.51.100.8', '198.51.100.8', 'oxannebradley.org'), 'altcha', now)).toBe(false);
+  });
+
+  it('does not count a shared egress network as another address', () => {
+    // One Meta IPv6 address solved for 16 Meta IPv4 addresses in an hour:
+    // many people behind one network, not one solver passing bots.
+    for (let i = 1; i <= 16; i++) expect(allowOtherAddress('2a03:2880:16ff:5e::', `57.141.20.${i}`)).toBe(true);
+    // Elsewhere the limit of 3 other addresses an hour stays.
+    for (let i = 1; i <= 3; i++) expect(allowOtherAddress('198.51.100.7', `203.0.113.${i}`)).toBe(true);
+    // Also for neighbours in the solver's own /24 (a hosting network of bots).
+    for (let i = 1; i <= 3; i++) expect(allowOtherAddress('192.0.2.200', `192.0.2.${i}`)).toBe(true);
+    expect(allowOtherAddress('192.0.2.200', '192.0.2.9')).toBe(false);
+    expect(allowOtherAddress('198.51.100.7', '203.0.113.9')).toBe(false);
+    // A shared egress solver passing addresses outside its network still counts.
+    for (let i = 1; i <= 3; i++) expect(allowOtherAddress('2a03:2880:16ff:77::', `203.0.113.${20 + i}`)).toBe(true);
+    expect(allowOtherAddress('2a03:2880:16ff:77::', '203.0.113.99')).toBe(false);
   });
 
   it('refuses the ALTCHA fallback from hosting and cloud networks (AbuseIPDB usage type)', async () => {

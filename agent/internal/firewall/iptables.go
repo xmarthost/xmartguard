@@ -386,8 +386,10 @@ func renderRules(r Ruleset, v6 bool) string {
 			}
 			jump(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -m conntrack --ctstate NEW -m conntrack --ctstate DNAT%s", cp.HTTPPort, cp.HTTPSPort, notBanned), "xg-ipdb", ChainIPDBCap)
 		}
-		// Only redirected connections from banned addresses reach these ports.
-		add(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -m conntrack --ctstate DNAT -j ACCEPT", cp.HTTPPort, cp.HTTPSPort))
+		// The CAPTCHA server's own ports, also from banned addresses: the
+		// check page sends its pass there directly (captcha.passURL), not
+		// over the browser's older connection to the website.
+		add(fmt.Sprintf("-p tcp -m multiport --dports %d,%d -j ACCEPT", cp.HTTPPort, cp.HTTPSPort))
 	}
 	add("-m set --match-set xg_exempt" + sfx + " src -j " + ChainExempt)
 	add("-m set --match-set xg_exempt" + sfx + " src -j RETURN")

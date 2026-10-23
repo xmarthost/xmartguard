@@ -96,8 +96,14 @@ var Services = []Service{
 		UA: []string{"seranking"}, RDNS: []string{"seranking.com"}},
 
 	// Social networks: link previews when a page is shared.
-	{ID: "meta", Name: "Meta: Facebook, Instagram, WhatsApp link previews (facebookexternalhit)", Group: "social", Format: "radb", URL: "AS32934",
-		Builtin: []string{"31.13.24.0/21", "31.13.64.0/18", "45.64.40.0/22", "66.220.144.0/20", "69.63.176.0/20", "69.171.224.0/19",
+	// 57.141.0.0/16 is Meta's newer crawler and agent network
+	// (meta-externalagent, Meta-ExternalFetcher, the Muse agent's cloud
+	// browser): its sessions solve the CAPTCHA from 2a03:2880::. Missing
+	// from the known networks, its RADb routes were dropped and the range
+	// ended up on the IPDB: Muse users could not log in to their own
+	// WordPress (oxannebradley.org, 2026-10-23).
+	{ID: "meta", Name: "Meta: Facebook, Instagram, WhatsApp link previews, Meta AI and the Muse agent's browser", Group: "social", Format: "radb", URL: "AS32934",
+		Builtin: []string{"31.13.24.0/21", "31.13.64.0/18", "45.64.40.0/22", "57.141.0.0/16", "66.220.144.0/20", "69.63.176.0/20", "69.171.224.0/19",
 			"74.119.76.0/22", "102.132.96.0/20", "103.4.96.0/22", "129.134.0.0/16", "157.240.0.0/16", "163.70.128.0/17",
 			"173.252.64.0/18", "179.60.192.0/22", "185.60.216.0/22", "185.89.216.0/22", "204.15.20.0/22", "2a03:2880::/29", "2620:0:1c00::/40"}},
 	{ID: "telegram", Name: "Telegram (link previews, bot webhooks)", Group: "social", Format: "lines",
@@ -120,6 +126,12 @@ var Services = []Service{
 		URL: "https://www.perplexity.com/perplexity-user.json"},
 	{ID: "perplexitybot", Name: "PerplexityBot (Perplexity search)", Group: "ai", Format: "prefixes",
 		URL: "https://www.perplexity.com/perplexitybot.json"},
+	// Agents that browse and act for a user (Gemini agent mode, Mistral's
+	// Le Chat): from the providers' published lists.
+	{ID: "google-agents", Name: "Google user-triggered agents (Google-Agent: Gemini agent mode)", Group: "ai", Format: "scan",
+		URL: "https://developers.google.com/static/crawling/ipranges/user-triggered-agents.json"},
+	{ID: "mistral-user", Name: "MistralAI-User (Le Chat answers and agents)", Group: "ai", Format: "scan",
+		URL: "https://mistral.ai/mistralai-user-ips.json"},
 	{ID: "commoncrawl", Name: "CCBot (Common Crawl)", Group: "ai", Format: "scan",
 		URL:     "https://index.commoncrawl.org/ccbot.json",
 		Builtin: []string{"3.41.188.32/29", "18.97.9.168/29", "18.97.14.80/29", "18.97.14.88/30", "2600:1f28:365:8000::/56"},
@@ -255,7 +267,10 @@ func (s *Store) load() {
 	}
 	for _, svc := range Services {
 		cur, ok := st[svc.ID]
-		if !ok || len(cur.CIDRs) == 0 {
+		// A cached copy of the built-in list is this release's built-in
+		// list (a new release adds networks; the cache kept the old ones
+		// until the list could be fetched).
+		if !ok || len(cur.CIDRs) == 0 || cur.Source == "builtin" {
 			cur = State{CIDRs: clean(svc.Builtin), Source: "builtin"}
 			if len(cur.CIDRs) == 0 {
 				cur.Source = "none"

@@ -101,7 +101,7 @@ func TestRenderIsValidNFT(t *testing.T) {
 	}
 	script := rs.Render()
 	for _, want := range []string{"delete table inet xpguard", "@deny4 counter jump drop_deny", "update @dos4", "198.51.100.9 timeout 3600s",
-		"tcp dport { 22, 80, 8000-8100 } accept", "chain output", "redirect to :7780", "ct status dnat tcp dport { 7780, 7743 } accept",
+		"tcp dport { 22, 80, 8000-8100 } accept", "chain output", "redirect to :7780", "tcp dport { 7780, 7743 } accept",
 		"ip saddr != @tempban4 counter jump captcha_ipdb comment \"xg-ipdb\"", "log prefix \"XG-ICAP \""} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script missing %q", want)
@@ -351,7 +351,7 @@ func TestRenderIPTables(t *testing.T) {
 		`--comment "xg-ipdb" -j XPGUARD_IPDB`,
 		`-A XPGUARD_IPDB -m limit`,
 		`-A XPGUARD_OUT -p udp -m multiport --dports 53 -j RETURN`,
-		`--dports 7780,7743 -m conntrack --ctstate DNAT -j ACCEPT`,
+		`--dports 7780,7743 -j ACCEPT`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
@@ -369,7 +369,7 @@ func TestRenderIPTables(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, cap4)
 		}
 	}
-	if strings.Index(cap4, "-j XPGUARD_ICAP") > strings.Index(cap4, "--ctstate DNAT -j ACCEPT") {
+	if strings.Index(cap4, "-j XPGUARD_ICAP") > strings.Index(cap4, "--dports 7780,7743 -j ACCEPT") {
 		t.Error("CAPTCHA connections accepted before they are counted")
 	}
 	rs.Captcha.IPDB = false

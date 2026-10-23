@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.5** (see `VERSION`).
+- Current release: **0.23.6** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.5: `--branch backup-0.23.4`, see "Rollback" under 0.23.5 below);
+  0.23.6: `--branch backup-0.23.5`; see "Rollback" under 0.23.6 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,81 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.6: CAPTCHA failures, Meta's Muse agent, AI agents**
+  (2026-10-23). The owner switched the CAPTCHA to ALTCHA only, customers
+  still failed it, and oxannebradley.org's owner (his WordPress posts are
+  made by Meta's Muse agent, whose cloud browser logs in for him) was
+  locked out; the owner had whitelisted 57.141.20.0/24 ("META") on every
+  server. `captcha_events` (24 h): 2,846 ALTCHA rejected, 1,320 passed,
+  360 failed. Findings and engine fixes:
+  - **Meta's 57.141.0.0/16 was not trusted.** Meta (AS32934, RADb) is a
+    trusted service, but since audit A4 F11 only RADb routes inside the
+    service's known networks count, and 57.141.0.0/16 (meta-externalagent,
+    Meta-ExternalFetcher, the Muse agent's cloud browser) was not one: the
+    range ended up on the IPDB (fw.check: IPDB, not trusted), its visitors
+    were sent to the CAPTCHA on login pages, and its IPv6 half
+    (2a03:2880::/29) was trusted. Added to Meta's known networks; a cached
+    built-in list is replaced by the release's (`TestMetaAgentNetworkTrusted`,
+    `TestCachedBuiltinListUpdated`). Trusted = never banned or IPDB-blocked,
+    no CAPTCHA, bot rules skipped; the CRS and the shop filter rules
+    (7700510, same-origin marker) still apply: the same range scraped
+    nextouch.pk's filters 53 times in 2 days and is still refused.
+  - **The owner's whitelist of 57.141.20.0/24 should go** once 0.23.6 runs:
+    a firewall whitelist turns the WAF off for the address
+    (`ctl:ruleEngine=Off`, renderExempt), so every Meta crawler and every
+    Muse user in the world reached the sites with no WAF at all. AI agent
+    cloud browsers (Muse, ChatGPT agent, Gemini agent) are used by anyone,
+    so they are never whitelisted; trusting them (above) is the safe level.
+  - **Shared networks in the portal's ALTCHA checks** (`server/src/routes/captcha.ts`):
+    one person's traffic on iCloud Private Relay / WARP (104.28.0.0/15,
+    2606:54c1::/32, 2a09:bac0::/29) or Meta's cloud (57.141.0.0/16,
+    2a03:2880::/29) moves between addresses and families: `sameNetwork`
+    treats both families of one such network as the same network,
+    `allowOtherAddress` does not count them (one Meta IPv6 address had
+    solved for 16 Meta IPv4 addresses an hour and was refused), and the
+    daily ALTCHA allowance there is per website (`altchaKeysFor`), so
+    strangers on a shared relay address cannot use up a customer's.
+    Tests in `server/test/captcha.test.ts`.
+  - **Site mode: solved but never let in.** On the website's own address
+    (central_mode "site") the page traded the portal's ticket with
+    `fetch('/.xpguard/pass')`. A visitor the firewall redirects (banned,
+    IPDB-listed) still holds the browser's earlier HTTP/2 connection to the
+    website, while the agent closes its connections after every answer, so
+    the pass went to the website, whose WAF refused it (7700711, IPDB POST):
+    109.70.100.15 solved 5 times in a minute on roxannebradley.org, each
+    followed by a 403 on `/.xpguard/pass`. The page now posts to the
+    CAPTCHA port itself (`captcha.passURL`: https host:7743, or http
+    host:7780 for an http page), with CORS for that website only
+    (`allowSiteOrigin`); the cookie has no port, so the website gets it.
+    The firewall accepts the CAPTCHA ports from everyone, not only
+    redirected (DNAT) connections, so a banned visitor reaches them
+    directly (`TestSitePassFromWebsitePort`, firewall tests).
+  - **Shared egress for IPDB POST blocks**: `waf.SharedEgressRanges` now
+    has all of the relays (104.28.0.0/15 and the IPv6 halves), as the
+    portal (`TestSharedEgressCoversRelays`).
+  - **AI agents in the trusted list**: Google user-triggered agents
+    (Google-Agent, Gemini agent mode,
+    developers.google.com/static/crawling/ipranges/user-triggered-agents.json)
+    and MistralAI-User (mistral.ai/mistralai-user-ips.json), both read
+    with the "scan" format. ChatGPT agent and ChatGPT-User already come
+    from openai.com/chatgpt-user.json; Claude, Perplexity and Meta are
+    there. Not added on purpose: agents without a published list (Manus,
+    Genspark, cloud-browser services such as Browserbase or Cloudflare
+    Browser Rendering): trusting them would trust a whole cloud that anyone
+    rents. Browsers that run on the user's own computer (Perplexity
+    Comet, ChatGPT Atlas, Claude in Chrome) come from the user's own
+    connection and need nothing. The container used for 0.23.6 could not
+    reach these URLs: check `trusted.status` on a server after the update
+    (source "official", addresses > 0); an unreachable list shows
+    "none" and changes nothing.
+  - **Still to watch**: 23.82.99.148 (279 failed checks on
+    glasgowfitness.com) and 43.172/43.173.x (Tencent cloud solving for its
+    own neighbours) are bots; the failures are correct.
+  - **Rollback**: `backup-0.23.5`. Portal: the update command with
+    `--branch backup-0.23.5`. Agents: on each server
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
+    Nothing in the databases changed.
 
 - **Release 0.23.5: fixes from three server reports** (2026-10-23). The
   owner had another assistant inspect business200 (mypowerfulserver),
@@ -497,7 +572,8 @@ project. It holds the rules, the current state and what is still open.
   7700503). A customer testing with a browser User-Agent plus "GPTBot" from
   their own connection is a fake and still gets 403.
 - **Shared egress networks** (`waf.SharedEgressRanges`: Apple Private Relay
-  17.0.0.0/8 and 104.28.0.0/16) never get IPDB POST blocks: many real
+  17.0.0.0/8, 104.28.0.0/15, 2606:54c1::/32 and 2a09:bac0::/29 since
+  0.23.6) never get IPDB POST blocks: many real
   people share each address.
 - **Bans**:
   - Policy-only blocks (only CRS 920xxx rules matched) never ban.
@@ -580,7 +656,11 @@ project. It holds the rules, the current state and what is still open.
    tokens. business200 (mypowerfulserver): a malicious plugin was uploaded
    on 2026-10-20 with a valid admin session (nsantosmaintenanceltd.co.uk):
    2FA and new admin passwords.
-9. **Not built yet**:
+9. **After 0.23.6 is on every server**: check `fw.check 57.141.20.4`
+   shows TRUSTED-SERVICE (Meta), then remove the owner's whitelist entry
+   57.141.20.0/24 "META" on all servers (it turns the WAF off for that
+   range); and check `trusted.status` for google-agents and mistral-user.
+10. **Not built yet**:
    - M3: uptime/SSL/domain-expiry monitor (14), file versions (15) and
      cPanel plugin v2 (12).
    - M4: targeted virtual patches (07), DB clean (08), outbound monitor

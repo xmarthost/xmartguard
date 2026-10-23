@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 )
 
 // The portal's check on the website's own address (settings CentralMode
@@ -88,10 +91,52 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, ip, back strin
 	// after "&u=".
 	src := c.CentralURL + "?s=" + url.QueryEscape(s.ServerID) + "&ip=" + url.QueryEscape(ip) + "&h=" + url.QueryEscape(host) +
 		"&n=" + nonce + "&frame=1&u=" + safeBack(back)
+	pass := passURL(host, c, r.TLS != nil)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-src "+origin+"; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-src "+origin+"; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' "+pass+"; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	w.WriteHeader(status)
-	_ = siteTmpl.Execute(w, map[string]any{"Src": template.URL(src), "Origin": origin, "Nonce": nonce, "Back": safeBack(back)})
+	_ = siteTmpl.Execute(w, map[string]any{"Src": template.URL(src), "Origin": origin, "Nonce": nonce, "Back": safeBack(back), "Pass": pass})
+}
+
+// passURL is where the page trades the ticket: this server's CAPTCHA HTTPS
+// port, never the website's own port. A visitor the firewall sends here
+// still holds the browser's earlier connection to the website (HTTP/2),
+// while this server closes its own after every answer; a "/.xpguard/pass"
+// on the page's own port went over the old connection to the website,
+// whose WAF refused it (an IPDB-listed POST), so the visitor solved the
+// check again and again and never got in (business200, 2026-10-23). The
+// pass cookie has no port, so the website gets it all the same.
+func passURL(host string, c settings.Captcha, secure bool) string {
+	// The page's own scheme: a cookie from the other one is another site's
+	// for the browser.
+	scheme, port := "https", c.HTTPSPort
+	if !secure {
+		scheme, port = "http", c.HTTPPort
+	}
+	if port <= 0 {
+		port = map[bool]int{true: 7743, false: 7780}[secure]
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + pathPrefix + "pass"
+}
+
+// allowSiteOrigin lets the page on the website's own port read the pass
+// answer (and keep the cookie): only that website's own pages.
+func allowSiteOrigin(w http.ResponseWriter, r *http.Request) {
+	o := r.Header.Get("Origin")
+	u, err := url.Parse(o)
+	if o == "" || err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Path != "" {
+		return
+	}
+	host := r.Host
+	if h, _, e := net.SplitHostPort(host); e == nil {
+		host = h
+	}
+	if !strings.EqualFold(u.Hostname(), strings.Trim(host, "[]")) {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", o)
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Add("Vary", "Origin")
 }
 
 // sitePass trades the portal's ticket for the pass cookie and sends the
@@ -99,6 +144,7 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, ip, back strin
 func (s *Server) sitePass(w http.ResponseWriter, r *http.Request, ip string) {
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	_ = r.ParseForm()
+	allowSiteOrigin(w, r)
 	w.Header().Set("Content-Type", "application/json")
 	if !s.useTicket(r.PostForm.Get("n"), ip) {
 		w.WriteHeader(http.StatusForbidden)
@@ -134,11 +180,11 @@ var siteTmpl = template.Must(template.New("s").Parse(`<!doctype html>
 <style>html,body{margin:0;height:100%;background:#f8fafc}iframe{position:fixed;inset:0;width:100%;height:100%;border:0;display:block}</style>
 </head><body><iframe src="{{.Src}}" title="Security check"></iframe>
 <script>
-var N={{.Nonce}},O={{.Origin}},B={{.Back}};
+var N={{.Nonce}},O={{.Origin}},B={{.Back}},P={{.Pass}};
 window.addEventListener('message',function(e){
   if(e.origin!==O||!e.data||e.data.xg!=='pass'||e.data.n!==N)return;
   var f=e.source;
-  fetch('/.xpguard/pass',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'n='+encodeURIComponent(N)+'&back='+encodeURIComponent(B)})
+  fetch(P,{method:'POST',mode:'cors',credentials:'include',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'n='+encodeURIComponent(N)+'&back='+encodeURIComponent(B)})
   .then(function(r){return r.json()})
   .then(function(j){if(j.redirect){f.postMessage({xg:'back'},O);location.replace(j.redirect)}else{f.postMessage({xg:'error',error:j.error||''},O)}})
   .catch(function(){f.postMessage({xg:'error',error:''},O)});

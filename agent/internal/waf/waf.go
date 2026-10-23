@@ -293,10 +293,12 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 }
 
 // SharedEgressRanges are relays thousands of people share: iCloud Private
-// Relay (Apple's 17.0.0.0/8) and Cloudflare WARP (104.28.0.0/16). One user's
-// abuse puts the address on the IPDB, so it never blocks their POSTs (the
-// CRS still inspects them).
-var SharedEgressRanges = []string{"17.0.0.0/8", "104.28.0.0/16"}
+// Relay (Apple's 17.0.0.0/8; Cloudflare's egress for it and WARP,
+// 104.28.0.0/15 with 2606:54c1::/32 and 2a09:bac0::/29). One user's abuse
+// puts the address on the IPDB, so it never blocks their POSTs (the CRS
+// still inspects them). The same relays' 104.29.x and IPv6 addresses were
+// missing (the CAPTCHA log of 2026-10-23 shows customers on all of them).
+var SharedEgressRanges = []string{"17.0.0.0/8", "104.28.0.0/15", "2606:54c1::/32", "2a09:bac0::/29"}
 
 // rblFiles are the address lists of the IPDB POST block and Tor rules.
 func (m *Manager) rblFiles(cfg settings.WAF) map[string]string {
