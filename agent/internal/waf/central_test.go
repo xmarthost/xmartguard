@@ -44,7 +44,7 @@ func TestCentralRuleRender(t *testing.T) {
 			t.Errorf("rendered with %+v", bad)
 		}
 	}
-	f := CentralFiles(&Central{Suspects: []string{"203.0.113.9", "2001:db8::/32"}})
+	f := CentralFiles(&Central{Suspects: []string{"203.0.113.9", "2001:db8::/32"}}, nil)
 	if f[FileCaptchaSuspects] != "203.0.113.9\n2001:db8::/32\n" || f[FileCaptchaPass] != placeholderIP+"\n" {
 		t.Fatalf("files %q", f)
 	}

@@ -229,9 +229,13 @@ func (m *Manager) dynamic() Dynamic {
 }
 
 // strictList: addresses with a bad reputation (IPDB, Tor, bans).
-func (m *Manager) strictList() []string {
+func (m *Manager) strictList(withoutIPDB bool) []string {
 	var out []string
-	for _, f := range []func() []string{m.IPDBIPs, m.TorIPs, m.BlockedIPs} {
+	lists := []func() []string{m.IPDBIPs, m.TorIPs, m.BlockedIPs}
+	if withoutIPDB {
+		lists = lists[1:] // read from the IPDB marks
+	}
+	for _, f := range lists {
 		if f != nil {
 			out = append(out, f()...)
 		}
@@ -318,7 +322,7 @@ func (m *Manager) Learn(now int64) (bool, error) {
 		}
 	}
 	rows.Close()
-	strict := newIPList(m.strictList())
+	strict := newIPList(m.strictList(false))
 	type cluster struct {
 		clean, dirty map[string]bool
 		nets         map[string]bool

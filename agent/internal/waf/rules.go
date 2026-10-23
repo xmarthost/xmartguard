@@ -356,6 +356,36 @@ func viaProxies(id int) []proxyRead {
 	}
 }
 
+// The IPDB list holds a quarter of a million networks, and every rule
+// that reads a list file keeps its own copy in every web server process:
+// about 35 MB each (measured on Apache with ModSecurity 2). The IPDB POST
+// block, the CAPTCHA suspects and soft blocking read it up to 18 times
+// (LiteSpeed used 235 MB a process on cloud2). It is now read once per
+// address source, and those rules test the result.
+const (
+	// IDMarkIPDB marks the visitor's own address; viaProxies(IDMarkIPDB+1)
+	// the address behind Cloudflare (7700061) and a local proxy (7705061).
+	IDMarkIPDB = 7700060
+	// IDMarkSuspect and IDMarkSuspect+1 mark the CAPTCHA suspects.
+	IDMarkSuspect = 7700062
+	// IDSoftStrictIPDB.. +2: soft blocking's bad reputation from the marks.
+	IDSoftStrictIPDB = 7700064
+)
+
+// ipdbMarkVars are the variables of renderIPDBMarks: the visitor's own
+// address, then the address behind each proxy kind (viaProxies order).
+var ipdbMarkVars = []string{"xg_ipdb", "xg_ipdb_cf", "xg_ipdb_lp"}
+
+// renderIPDBMarks looks the IPDB list up once for each address source.
+func renderIPDBMarks(w func(string, ...any), dir string) {
+	w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,setvar:tx.%s=1"`, dir, FileIPDBIPs, IDMarkIPDB, ipdbMarkVars[0])
+	for i, v := range viaProxies(IDMarkIPDB + 1) {
+		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,chain"`, dir, v.file, v.id)
+		w(`  SecRule %s "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`, v.headers)
+		w(`    SecRule TX:1 "@ipMatchFromFile %s/%s" "t:none,setvar:tx.%s=1"`, dir, FileIPDBIPs, ipdbMarkVars[i+1])
+	}
+}
+
 // placeholderIP keeps an empty list loadable (@ipMatchFromFile refuses an
 // empty file); it is a documentation address no visitor has.
 const placeholderIP = "192.0.2.255"
@@ -384,6 +414,10 @@ type Options struct {
 	Intel *Intel
 	// Dynamic: learned exclusions and cPanel's per-website switches.
 	Dynamic Dynamic
+	// IPDBMarks: the IPDB list is looked up once per address source and
+	// the IPDB POST, CAPTCHA suspect and soft blocking rules read the
+	// result (see renderIPDBMarks).
+	IPDBMarks bool
 }
 
 // TorMode is the Tor rule rendered for a setting: "captcha" needs the
@@ -423,11 +457,17 @@ type Central struct {
 // Files the central CAPTCHA rule reads.
 const (
 	FileCaptchaSuspects = "captcha-suspects.txt"
-	FileCaptchaPass     = "captcha-pass.txt"
+	// FileCaptchaNotSuspects: IPDB entries the agent does not send to the
+	// CAPTCHA (allowed, protected); read with the IPDB marks.
+	FileCaptchaNotSuspects = "captcha-not-suspects.txt"
+	FileCaptchaPass        = "captcha-pass.txt"
 )
 
-// CentralFiles are the address lists of the central CAPTCHA rule.
-func CentralFiles(c *Central) map[string]string {
+// CentralFiles are the address lists of the central CAPTCHA rule. With
+// ipdb (the IPDB list the marks read; nil without them) the suspects file
+// holds only the suspects that are not on it, and FileCaptchaNotSuspects
+// the IPDB entries that are no suspects (allowed, protected).
+func CentralFiles(c *Central, ipdb []string) map[string]string {
 	list := func(l []string) string {
 		var ok []string
 		for _, a := range l {
@@ -440,7 +480,27 @@ func CentralFiles(c *Central) map[string]string {
 		}
 		return strings.Join(ok, "\n") + "\n"
 	}
-	return map[string]string{FileCaptchaSuspects: list(c.Suspects), FileCaptchaPass: list(c.Pass)}
+	suspects, not := c.Suspects, []string(nil)
+	if ipdb != nil {
+		in := make(map[string]bool, len(ipdb))
+		for _, a := range ipdb {
+			in[a] = true
+		}
+		sus := make(map[string]bool, len(c.Suspects))
+		suspects = nil
+		for _, a := range c.Suspects {
+			sus[a] = true
+			if !in[a] {
+				suspects = append(suspects, a)
+			}
+		}
+		for _, a := range ipdb {
+			if !sus[a] {
+				not = append(not, a)
+			}
+		}
+	}
+	return map[string]string{FileCaptchaSuspects: list(suspects), FileCaptchaNotSuspects: list(not), FileCaptchaPass: list(c.Pass)}
 }
 
 var reCentralURL = regexp.MustCompile(`^https://[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9/_-]*$`)
@@ -503,6 +563,9 @@ func Render(c settings.WAF, o Options) string {
 		off[id] = true
 	}
 	renderExempt(w, o.Dynamic)
+	if o.IPDBMarks {
+		renderIPDBMarks(w, o.Dir)
+	}
 	renderCPanelOff(w, o.Dynamic)
 	renderExclusions(w, c, off, o.Dynamic)
 	if len(c.WhitelistIPs) > 0 {
@@ -810,11 +873,22 @@ func Render(c settings.WAF, o Options) string {
 		} else {
 			pending = []notPassed{{IDCentralGate, IDCentralNoBrowser, fmt.Sprintf(`SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none`, o.Dir, FileCaptchaPass)}}
 		}
+		if !ct.All {
+			// The suspects, once: IPDB-listed (the marks) except the few the
+			// agent left out, and the others from their own short list (see
+			// CentralFiles). Every gate rule reading the full list kept a copy
+			// of it in each web server process.
+			if o.IPDBMarks {
+				w(`SecRule TX:%s "@eq 1" "id:%d,phase:1,t:none,pass,nolog,chain"`, ipdbMarkVars[0], IDMarkSuspect)
+				w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,setvar:tx.xg_suspect=1"`, o.Dir, FileCaptchaNotSuspects)
+			}
+			w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,setvar:tx.xg_suspect=1"`, o.Dir, FileCaptchaSuspects, IDMarkSuspect+1)
+		}
 		gateRule := func(id int, cond, action, msg, browser string) {
 			w(`SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,%s,log,msg:'%s',tag:'xpguard/captcha',chain"`,
 				strings.Join(urls, "|"), id, action, msg)
 			if !ct.All {
-				w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+				w(`  SecRule TX:xg_suspect "@eq 1" "t:none,chain"`)
 			}
 			if browser == "" {
 				w(`  %s"`, cond)
@@ -848,7 +922,7 @@ func Render(c settings.WAF, o Options) string {
 				w(`SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,pass,log,msg:'xPGuard - CAPTCHA pass cookie used',tag:'xpguard/captcha',chain"`,
 					strings.Join(urls, "|"), IDCentralPassUsed+i)
 				if !ct.All {
-					w(`  SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaSuspects)
+					w(`  SecRule TX:xg_suspect "@eq 1" "t:none,chain"`)
 				}
 				w(`  SecRule REQUEST_HEADERS:Cookie "@rx (?:^|;)\s*%s=(?:%s)\s*(?:;|$)" "t:none"`, GateCookie, strings.Join(sl, "|"))
 			}
@@ -991,6 +1065,35 @@ func Render(c settings.WAF, o Options) string {
 	// addresses. viaCF also blocks visitors Cloudflare marks with that
 	// country code (id+2000; T1 is Tor).
 	rblRule := func(id int, post bool, list, msg string, viaCF string) {
+		if post && list == FileIPDBIPs && o.IPDBMarks {
+			// The marks of renderIPDBMarks instead of the list itself.
+			heads := []struct {
+				id         int
+				what, mark string
+				headers    string
+			}{{id, "", ipdbMarkVars[0], ""}}
+			for i, v := range viaProxies(id + 1000) {
+				heads = append(heads, struct {
+					id         int
+					what, mark string
+					headers    string
+				}{v.id, " (behind a proxy)", ipdbMarkVars[i+1], v.headers})
+			}
+			for _, h := range heads {
+				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, h.id, msg, h.what)
+				w(`  SecRule &TX:xg_wp_editing "@eq 0" "t:none,chain"`)
+				w(`  SecRule &TX:xg_api "@eq 0" "t:none,chain"`)
+				if h.headers == "" {
+					w(`  SecRule TX:%s "@eq 1" "t:none,chain"`, h.mark)
+					w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
+					continue
+				}
+				w(`  SecRule TX:%s "@eq 1" "t:none,chain"`, h.mark)
+				w(`  SecRule %s "@rx ^\s*([0-9A-Fa-f:.]{3,45})" "capture,chain"`, h.headers)
+				w(`    SecRule TX:1 "!@ipMatchFromFile %s/%s" "t:none"`, o.Dir, FileRBLExempt)
+			}
+			return
+		}
 		head := func(id int, what, first string) {
 			if post {
 				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, id, msg, what)

@@ -318,7 +318,10 @@ func migrateLegacy(dir string) (moved, ok bool) {
 
 // OpenPath opens a database file directly.
 func OpenPath(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	// synchronous NORMAL: with WAL a crash of the agent loses nothing, and
+	// a power cut only the last moments; FULL (the default) waited for the
+	// disk on every write of the WAF and connection logs.
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}

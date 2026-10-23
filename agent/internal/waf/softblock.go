@@ -58,13 +58,16 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 	if relaxed < 10 {
 		relaxed = 10
 	}
+	// With the IPDB marks (rules.conf, read first) the IPDB part of the
+	// bad-reputation list comes from them; the file keeps the rest.
+	marks := m.Settings != nil && m.ipdbMarks(m.Settings.Get().WAF)
 	strict := filepath.Join(m.RulesDir, FileStrictIPs)
 	pass := filepath.Join(m.RulesDir, FileCaptchaPass)
 	proxies := filepath.Join(m.RulesDir, FileProxyRanges)
 	trusted := m.trustedList()
 	files := map[string]string{
-		strict:                                  AddrFile(m.strictList()),
-		pass:                                    CentralFiles(c)[FileCaptchaPass],
+		strict:                                  AddrFile(m.strictList(marks)),
+		pass:                                    CentralFiles(c, nil)[FileCaptchaPass],
 		proxies:                                 strings.Join(ProxyRanges, "\n") + "\n",
 		filepath.Join(m.RulesDir, FileCFRanges): strings.Join(cloudflareRanges(), "\n") + "\n",
 		filepath.Join(m.RulesDir, FileLocalProxys): "127.0.0.1\n::1\n",
@@ -89,6 +92,11 @@ func (m *Manager) softBlock(crs CRSConfig, in int) (softBlockRules, bool) {
 		w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_verified=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, tf, IDSoftTrusted, relaxed)
 	}
 	byAddr(IDSoftStrict, strict, fmt.Sprintf("setvar:tx.xg_strict=1,setvar:tx.inbound_anomaly_score_threshold=%d", in))
+	if marks {
+		for i, v := range ipdbMarkVars {
+			w(`SecRule TX:%s "@eq 1" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_strict=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, v, IDSoftStrictIPDB+i, in)
+		}
+	}
 	if m.TrustedCountryIPs != nil {
 		// Whitelisted countries (after the bad-reputation list, so it wins:
 		// mobile and office addresses there are shared by many people).

@@ -300,10 +300,33 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 // missing (the CAPTCHA log of 2026-10-23 shows customers on all of them).
 var SharedEgressRanges = []string{"17.0.0.0/8", "104.28.0.0/15", "2606:54c1::/32", "2a09:bac0::/29"}
 
+// ipdbMarks reports whether the IPDB list is read once into marks
+// (renderIPDBMarks) for the rules that need it: the IPDB POST block, and
+// the CAPTCHA (its suspects and soft blocking).
+func (m *Manager) ipdbMarks(cfg settings.WAF) bool {
+	if !cfg.Enabled || m.IPDBIPs == nil || m.Settings == nil {
+		return false
+	}
+	return cfg.IPDBPost || m.Settings.Get().Captcha.Central
+}
+
+// markedIPDB is the IPDB list the marks read (nil without marks).
+func (m *Manager) markedIPDB(cfg settings.WAF) []string {
+	if !m.ipdbMarks(cfg) {
+		return nil
+	}
+	l := m.IPDBIPs()
+	if l == nil {
+		l = []string{}
+	}
+	return l
+}
+
 // rblFiles are the address lists of the IPDB POST block and Tor rules.
 func (m *Manager) rblFiles(cfg settings.WAF) map[string]string {
 	tor := cfg.TorAction == "post" || cfg.TorAction == "block" || cfg.TorAction == "captcha"
-	if !cfg.IPDBPost && !tor {
+	marks := m.ipdbMarks(cfg)
+	if !cfg.IPDBPost && !tor && !marks {
 		return nil
 	}
 	get := func(f func() []string) []string {
@@ -313,7 +336,7 @@ func (m *Manager) rblFiles(cfg settings.WAF) map[string]string {
 		return f()
 	}
 	files := map[string]string{FileRBLExempt: AddrFile(get(m.RBLExempt))}
-	if cfg.IPDBPost {
+	if cfg.IPDBPost || marks {
 		files[FileIPDBIPs] = AddrFile(get(m.IPDBIPs))
 	}
 	if tor {
@@ -332,7 +355,7 @@ func (m *Manager) CentralChanged() bool {
 	if c == nil {
 		return false
 	}
-	for name, body := range CentralFiles(c) {
+	for name, body := range CentralFiles(c, m.markedIPDB(m.Settings.Get().WAF)) {
 		cur, err := os.ReadFile(filepath.Join(m.RulesDir, name))
 		if err != nil || string(cur) != body {
 			return true
@@ -483,6 +506,7 @@ func (m *Manager) apply(mode applyMode) error {
 				opts.VerifiedBots = m.VerifiedBots()
 			}
 			opts.Dynamic = m.dynamic()
+			opts.IPDBMarks = m.ipdbMarks(cfg)
 			if cfg.UploadScan {
 				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
 			}
@@ -493,7 +517,7 @@ func (m *Manager) apply(mode applyMode) error {
 		rules = selfTestRule + "\n" + rules
 		bots := m.listFiles(cfg)
 		if central != nil {
-			for k, v := range CentralFiles(central) {
+			for k, v := range CentralFiles(central, m.markedIPDB(cfg)) {
 				bots[k] = v
 			}
 		}

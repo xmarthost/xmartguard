@@ -25,3 +25,20 @@ func TestColumnsAddedOnOpen(t *testing.T) {
 		t.Fatalf("note column missing: %v", err)
 	}
 }
+
+// WAL with synchronous NORMAL: the agent's logs are written without waiting
+// for the disk on every row (FULL, the default, did).
+func TestDatabaseSynchronousNormal(t *testing.T) {
+	db, err := OpenPath(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var mode int
+	var journal string
+	db.QueryRow(`PRAGMA synchronous`).Scan(&mode)
+	db.QueryRow(`PRAGMA journal_mode`).Scan(&journal)
+	if mode != 1 || journal != "wal" {
+		t.Fatalf("synchronous %d, journal %s", mode, journal)
+	}
+}

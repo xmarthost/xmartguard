@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.6** (see `VERSION`).
+- Current release: **0.23.7** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 and 0.23.7 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.6: `--branch backup-0.23.5`; see "Rollback" under 0.23.6 below);
+  0.23.7: `--branch backup-0.23.6`; see "Rollback" under 0.23.7 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,59 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.7: web server memory (IPDB list copies)** (2026-10-23).
+  The owner had another assistant look at the RAM on cloud2.xmarthost.com
+  (a customer VPS, LiteSpeed). The "3.97 GB" in the report was 3.97 %;
+  the real cost was the web server: every rule that reads a list file
+  with `@ipMatchFromFile` keeps its own parsed copy of it in every web
+  server process (measured on Apache: ~35 MB per 240,000-entry list).
+  - **The IPDB list was loaded up to ~13 times per process.** The IPDB
+    POST block read `ipdb-ips.txt` once per address source (3), and the
+    CAPTCHA suspects file, which held the whole IPDB list plus the recent
+    bans, was read by 6 gate/slot rules, and the soft-block strict list
+    held it again. Measured: 460 MB per Apache worker before, 115 MB
+    after (same lists). Now the IPDB list is read 3 times (the visitor's
+    own address, behind Cloudflare, behind a local proxy) by mark rules
+    right after the exemptions (`renderIPDBMarks`: `tx.xg_ipdb`,
+    `tx.xg_ipdb_cf`, `tx.xg_ipdb_lp`, ids 7700060/7700061/7705061), and
+    every other rule tests the marks:
+    - IPDB POST block (same ids and messages as before): `TX:<mark> == 1`
+      plus the `rbl-exempt` check.
+    - CAPTCHA gate (`!ct.All`): one rule sets `tx.xg_suspect` for
+      `TX:xg_ipdb == 1` unless the address is in
+      `captcha-not-suspects.txt` (IPDB entries the agent left out of the
+      suspects: solved, allowed, protected), one for
+      `captcha-suspects.txt`, which now holds only the suspects that are
+      not on the IPDB (`CentralFiles(c, ipdb)`: S \ I and I \ S, both
+      small); gate and slot rules test `TX:xg_suspect`.
+    - Soft block strict: the strict list without the IPDB
+      (`strictList(true)`) plus rules on the marks (7700064-7700066).
+    The marks are only used when the WAF is on, the IPDB list exists and
+    IPDB POST or the central CAPTCHA is on (`Manager.ipdbMarks`);
+    otherwise the rules are as before. Tests: `TestIPDBListReadOnce`
+    (rendering), `TestIPDBMarksOnApache` (real Apache: IPDB suspect gets
+    the CAPTCHA and 403 on POST, a left-out IPDB entry opens the page, a
+    suspect off the IPDB still gets the CAPTCHA and may POST). LiteSpeed
+    reads the same ModSecurity rules; check `ps -o rss -C litespeed` (or
+    lsphp/httpd) on cloud2 before and after the update.
+  - **SQLite**: the agent database runs WAL with `synchronous(NORMAL)`
+    now (FULL waited for the disk on every WAF/connection log write);
+    `TestDatabaseSynchronousNormal`.
+  - **Report claims checked and not changed**: agent.log rotation (the
+    agent rotates it at 50 MB itself), the ModSecurity audit log size
+    (cPanel's SecAuditLog settings, not ours), 7700308 and 7701308 both
+    present (the proxy variant, by design), port 7780 (both CAPTCHA ports
+    bind in `sync()`), portal reconnects (45 s ping exists; needs the
+    error text from agent.log to act on), conn_log size (capped at 7 days
+    or 200,000 rows by design). Not done, possible later: `GOMEMLIMIT` for
+    the agent; one IPDB read instead of 3 with a macro (LiteSpeed's macro
+    support is unverified).
+  - **Rollback**: `backup-0.23.6`. Portal: the update command with
+    `--branch backup-0.23.6`. Agents: on each server
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`
+    (the next WAF apply writes the old rules back). Nothing in the
+    databases changed.
 
 - **Release 0.23.6: CAPTCHA failures, Meta's Muse agent, AI agents**
   (2026-10-23). The owner switched the CAPTCHA to ALTCHA only, customers
