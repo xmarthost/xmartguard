@@ -342,6 +342,9 @@ describe('CAPTCHA page: other addresses and ALTCHA', () => {
     expect(page.body).toContain('MODE="turnstile"');
     // The ALTCHA box waits for the visitor's tick (no auto-start).
     expect(page.body).not.toContain("'auto','onload'");
+    // The box glows softly until it is ticked (not for reduced motion).
+    expect(page.body).toContain('.widget .altcha[data-state=unverified]{position:relative;border-radius:6px;animation:xglow');
+    expect(page.body).toContain('@media (prefers-reduced-motion:reduce){.widget .altcha[data-state=unverified]::after{display:none}');
     expect(page.body).toContain('hu:JSON.stringify(hs)');
     // ALTCHA only: works without Turnstile keys; no Cloudflare on the page.
     await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '', secret_key: '', minutes: 60, provider: 'altcha' });

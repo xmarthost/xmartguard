@@ -115,6 +115,11 @@ body.d-midnight{color:#e6edf8;background:#0b1424;background-image:radial-gradien
 .again:hover{background:#f1f5fb}
 .preview{background:#fff7e6;border:1px solid #f6d9a8;color:#8a5a00;border-radius:12px;padding:10px 14px;font-size:14px;margin:0 0 16px}
 .widget altcha-widget{width:100%;max-width:300px;--altcha-max-width:300px}
+.widget .altcha[data-state=unverified]{position:relative;border-radius:6px;animation:xglow 2.6s ease-in-out infinite}
+.widget .altcha[data-state=unverified]::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(110deg,transparent 40%,rgba(59,130,246,.18) 50%,transparent 60%) no-repeat;background-size:250% 100%;animation:xsheen 4s ease-in-out infinite}
+@keyframes xglow{0%,100%{box-shadow:0 0 0 1px rgba(37,99,235,.10),0 0 8px rgba(37,99,235,.14)}50%{box-shadow:0 0 0 3px rgba(37,99,235,.18),0 0 22px 3px rgba(37,99,235,.40)}}
+@keyframes xsheen{0%{background-position:160% 0}55%,100%{background-position:-60% 0}}
+@media (prefers-reduced-motion:reduce){.widget .altcha[data-state=unverified]::after{display:none}.widget .altcha[data-state=unverified]{animation:none;box-shadow:0 0 0 2px rgba(37,99,235,.12),0 0 14px rgba(37,99,235,.22)}}
 .spin{display:inline-block;width:16px;height:16px;border:2px solid #cfd9ea;border-top-color:#1d4f96;border-radius:50%;animation:s 1s linear infinite;vertical-align:-3px;margin-right:8px}
 @keyframes s{to{transform:rotate(360deg)}}
 .box{background:#fff5f2;border:1px solid #f6d3c8;border-radius:14px;padding:14px 16px;color:#8a2d14;font-size:15px;line-height:1.5}

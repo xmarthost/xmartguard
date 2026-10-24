@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.13** (see `VERSION`).
+- Current release: **0.23.14** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.13 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.14 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.13: `--branch backup-0.23.12`; see "Rollback" under 0.23.13 below);
+  0.23.14: `--branch backup-0.23.13`; see "Rollback" under 0.23.14 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,15 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.14: the ALTCHA box glows until it is ticked**
+  (2026-10-24). The owner asked for a soft shine so visitors see the box:
+  a pulsing blue glow on its sides (`xglow`) and a light sweep across it
+  (`xsheen`, an overlay with `pointer-events:none`, so clicks reach the
+  box). Only while `data-state=unverified`; it stops once ticked. Reduced
+  motion: a still glow. All three looks (classic, minimal, midnight). The
+  real-browser test still passes (a real click ticks it). Rollback:
+  `backup-0.23.13` (portal only; agents unchanged apart from the version).
 
 - **Release 0.23.13: ALTCHA ticked by a person; IPDB CAPTCHA in the
   CAPTCHA page; agent updates and "80" checksums** (2026-10-24).
