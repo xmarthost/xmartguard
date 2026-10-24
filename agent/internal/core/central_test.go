@@ -87,6 +87,20 @@ func TestCentralCaptchaAgent(t *testing.T) {
 	if !c.Central || c.CentralURL != "https://captcha.xpguard.org/v" || c.CentralMinutes != 30 || store.GetKV(a.DB, kvCentralVersion) != "3" {
 		t.Fatalf("settings %+v", c)
 	}
+	// The IPDB CAPTCHA set for the fleet on the portal's CAPTCHA page; not
+	// sent (older portals, "each server's own"): the server's stays.
+	before := a.Settings.Get().IPDB.Captcha
+	h["captcha.central"](ctx, cfg)
+	if a.Settings.Get().IPDB.Captcha != before {
+		t.Fatal("IPDB CAPTCHA changed without the portal's word")
+	}
+	for _, on := range []bool{!before, before} {
+		v := on
+		b, _ := json.Marshal(centralConfig{Version: 3, Enabled: true, URL: "https://captcha.xpguard.org/v", Minutes: 30, IPDBCaptcha: &v})
+		if _, err := h["captcha.central"](ctx, b); err != nil || a.Settings.Get().IPDB.Captcha != on {
+			t.Fatalf("IPDB CAPTCHA %v: %v %v", on, a.Settings.Get().IPDB.Captcha, err)
+		}
+	}
 	bad, _ := json.Marshal(centralConfig{Version: 4, Enabled: true, URL: "javascript:alert(1)"})
 	if _, err := h["captcha.central"](ctx, bad); err == nil {
 		t.Fatal("bad CAPTCHA page address accepted")

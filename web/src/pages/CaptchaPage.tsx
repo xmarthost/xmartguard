@@ -7,7 +7,7 @@ import { Card, Pager, SettingRow, Toggle, useAction } from '../components/contro
 import { useApi } from '../hooks';
 
 interface Resp {
-  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean; design?: Design; countdown?: number; site_servers?: string[] };
+  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean; design?: Design; countdown?: number; site_servers?: string[]; ipdb_captcha?: IPDBCaptcha };
   version: number;
   updated_at: string | null;
   url: string;
@@ -17,6 +17,7 @@ interface Resp {
 
 type Provider = 'auto' | 'turnstile' | 'altcha';
 type Design = 'classic' | 'minimal' | 'midnight';
+type IPDBCaptcha = '' | 'on' | 'off';
 
 /** The page's looks: name, description and a small sketch of it. */
 const DESIGNS: { id: Design; name: string; desc: string; bg: string; card: string; text: string }[] = [
@@ -70,6 +71,7 @@ export default function CaptchaPage() {
   const [design, setDesign] = useState<Design>('classic');
   const [countdown, setCountdown] = useState(5);
   const [siteServers, setSiteServers] = useState<string[]>([]);
+  const [ipdbCaptcha, setIPDBCaptcha] = useState<IPDBCaptcha>('');
   const [filter, setFilter] = useState('');
 
   useEffect(() => {
@@ -82,6 +84,7 @@ export default function CaptchaPage() {
     setDesign(res.data.config.design ?? 'classic');
     setCountdown(res.data.config.countdown ?? 5);
     setSiteServers(res.data.config.site_servers ?? []);
+    setIPDBCaptcha(res.data.config.ipdb_captcha ?? '');
     setSecret('');
   }, [res.data]);
 
@@ -97,12 +100,13 @@ export default function CaptchaPage() {
     strictIP !== Boolean(d.config.strict_ip) ||
     design !== (d.config.design ?? 'classic') ||
     countdown !== (d.config.countdown ?? 5) ||
+    ipdbCaptcha !== (d.config.ipdb_captcha ?? '') ||
     [...siteServers].sort().join() !== [...(d.config.site_servers ?? [])].sort().join();
   const online = d.servers.filter((s) => s.online).length;
   const preview = d.servers[0] ? `${d.url}?s=${d.servers[0].id}&preview=1` : '';
   const save = () =>
     run(
-      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP, design, countdown, site_servers: siteServers }).then((r) => (res.reload(), r)),
+      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP, design, countdown, site_servers: siteServers, ipdb_captcha: ipdbCaptcha }).then((r) => (res.reload(), r)),
       (r) => `Saved: applied on ${r.pushed} online server${r.pushed === 1 ? '' : 's'}${r.offline ? `; ${r.offline} offline will follow when they reconnect` : ''}`,
     );
 
@@ -191,6 +195,16 @@ export default function CaptchaPage() {
           desc='Off (recommended): mobile networks and many ISPs reach different sites from different addresses, so the visitor may solve the check from another address, up to 3 addresses an hour. On: such visitors see "This check was opened for another address".'
         >
           <Toggle on={strictIP} disabled={!admin || busy} onChange={setStrictIP} />
+        </SettingRow>
+        <SettingRow
+          title="IPDB and firewall visitors"
+          desc="Addresses on the IPDB list or banned by a server's firewall are blocked on every port. On the website ports (80, 443) the firewall can show them this check instead, so a real person on a listed address gets in and a bot stays out. Each server's own: keep what each server's IPDB settings say."
+        >
+          <select className="input w-56" value={ipdbCaptcha} disabled={!admin || busy} onChange={(e) => setIPDBCaptcha(e.target.value as IPDBCaptcha)}>
+            <option value="">Each server's own setting</option>
+            <option value="on">Show the check on all servers</option>
+            <option value="off">Block only, on all servers</option>
+          </select>
         </SettingRow>
         <SettingRow title="Do not ask a verified address again for" desc="How long a solved check lets the address in on that server: into the login pages, and out of a temporary ban or the IPDB block.">
           <select className="input w-40" value={minutes} disabled={!admin || busy} onChange={(e) => setMinutes(Number(e.target.value))}>
@@ -318,6 +332,7 @@ interface Check {
   method?: string;
   solver_ip?: string;
   reason?: string;
+  source?: string;
 }
 
 const PAGE_SIZES = [25, 50, 100, 200];
@@ -336,11 +351,12 @@ function RecentChecks({ admin }: { admin: boolean }) {
   const [limit, setLimit] = useState(savedPageSize);
   const [offset, setOffset] = useState(0);
   const [result, setResult] = useState('');
+  const [source, setSource] = useState('');
   const [q, setQ] = useState('');
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState<Set<string>>(new Set());
   const { run, busy } = useAction();
-  const path = `/api/captcha/events?limit=${limit}&offset=${offset}&result=${result}&q=${encodeURIComponent(query)}`;
+  const path = `/api/captcha/events?limit=${limit}&offset=${offset}&result=${result}&source=${source}&q=${encodeURIComponent(query)}`;
   const res = useApi<{ events: Check[]; total: number }>(path);
   useEffect(() => setSel(new Set()), [path]);
   // Search as you type, a moment after the last key.
@@ -380,6 +396,11 @@ function RecentChecks({ admin }: { admin: boolean }) {
           <option value="failed">Failed check</option>
           <option value="rejected">Refused</option>
           <option value="offline">Server offline</option>
+        </select>
+        <select className="input w-44" value={source} aria-label="Sent by" onChange={(e) => (setOffset(0), setSource(e.target.value))}>
+          <option value="">All visitors</option>
+          <option value="firewall">IPDB and firewall</option>
+          <option value="login">Login pages</option>
         </select>
         <select
           className="input w-32"
@@ -453,7 +474,10 @@ function RecentChecks({ admin }: { admin: boolean }) {
                         </div>
                       )}
                     </td>
-                    <td className="py-2 pr-3 break-all">{r.host}</td>
+                    <td className="py-2 pr-3 break-all">
+                      {r.host}
+                      <div className="text-xs text-slate-400">{r.source === 'firewall' ? 'IPDB / firewall' : 'Login page'}</div>
+                    </td>
                     <td className="py-2 pr-3">{r.server}</td>
                     <td className="py-2 pr-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>

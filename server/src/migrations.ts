@@ -765,4 +765,12 @@ CREATE INDEX audit_login_failed_idx ON audit_events (lower(detail->>'email'), cr
 ALTER TABLE captcha_events ADD COLUMN reason text NOT NULL DEFAULT '';
 `,
   },
+  {
+    version: '030_captcha_event_source',
+    sql: `
+-- Who was sent to the check: '' a login page's suspect, 'firewall' a
+-- visitor the server's firewall redirected (IPDB, ban).
+ALTER TABLE captcha_events ADD COLUMN source text NOT NULL DEFAULT '';
+`,
+  },
 ];

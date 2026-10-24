@@ -995,7 +995,7 @@ export function FirewallPage() {
           <SettingRow title="Temporarily banned visitors" desc="Addresses banned for a while (brute force, WAF, DoS) see the CAPTCHA on the websites; solving it lifts their ban">
             <Toggle on={fw.captcha} disabled={!isAdmin || busy} onChange={(v) => save({ captcha: v }, v ? 'CAPTCHA for banned visitors on' : 'CAPTCHA for banned visitors off')} />
           </SettingRow>
-          <SettingRow title="IPDB-listed visitors" desc="Addresses on the IPDB see the CAPTCHA instead of being dropped; solving it lets them in">
+          <SettingRow title="IPDB-listed visitors" desc="IPDB-listed addresses stay blocked; on the website ports a person among them sees the CAPTCHA and solving it lets them in. The CAPTCHA page can set this for all servers at once.">
             <Toggle on={all.ipdb.captcha} disabled={!isAdmin || busy} onChange={(v) => saveAny({ ipdb: { captcha: v } }, v ? 'CAPTCHA for IPDB-listed visitors on' : 'CAPTCHA for IPDB-listed visitors off')} />
           </SettingRow>
           <SettingRow

@@ -255,7 +255,7 @@ export default function ServerIPDB() {
                 {events.map((e) => (
                   <div
                     key={e.id}
-                    className={`grid grid-cols-[10px_9.5rem_minmax(0,1fr)_8.5rem_4.5rem] items-center gap-x-3 rounded-md bg-slate-50 px-3 py-2 text-[13px] whitespace-nowrap ${
+                    className={`grid grid-cols-[10px_9.5rem_minmax(0,1fr)_8.5rem_6.5rem] items-center gap-x-3 rounded-md bg-slate-50 px-3 py-2 text-[13px] whitespace-nowrap ${
                       fresh.has(e.id) ? 'xg-live-new' : ''
                     }`}
                   >
@@ -273,13 +273,17 @@ export default function ServerIPDB() {
                       {e.dst_port ? ` : ${e.dst_port}` : ''}
                     </span>
                     <span className="text-xs text-slate-500 tabular-nums">{fmtClock(e.at)}</span>
-                    {e.action === 'captcha' ? (
-                      <span className="text-xs font-semibold text-amber-600" title="Web traffic sent to the CAPTCHA page instead of the website">
-                        ● CAPTCHA
-                      </span>
-                    ) : (
-                      <span className="text-xs font-semibold text-green-600">● BLOCKED</span>
-                    )}
+                    <span className="text-xs font-semibold text-green-600">
+                      ● BLOCKED
+                      {e.action === 'captcha' && (
+                        <span
+                          className="block text-[11px] font-medium text-amber-600"
+                          title="Blocked from the website; a person on this address is shown the CAPTCHA and gets in after solving it. Bots never solve it, so they stay blocked."
+                        >
+                          CAPTCHA offered
+                        </span>
+                      )}
+                    </span>
                   </div>
                 ))}
               </div>

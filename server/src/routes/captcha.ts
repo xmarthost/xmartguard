@@ -46,10 +46,19 @@ export const CaptchaConfig = z.object({
   // server's CAPTCHA port, this page in a full-window frame, a pass cookie:
   // no web server reload). The others send visitors to this domain.
   site_servers: z.array(z.string().uuid()).max(5000).default([]),
+  // Visitors on the IPDB get this check on websites instead of a dropped
+  // connection (each server's ipdb.captcha): 'on' / 'off' for the whole
+  // fleet, '' each server keeps its own setting.
+  ipdb_captcha: z.enum(['', 'on', 'off']).default(''),
 });
 export type CaptchaConfig = z.infer<typeof CaptchaConfig>;
 
-const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [] };
+const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], ipdb_captcha: '' };
+
+/** The setting a server applies (captcha.central, also when it asks). */
+export function centralParams(version: number, c: CaptchaConfig, url: string, serverId: string) {
+  return { version, enabled: c.enabled, url, minutes: c.minutes, mode: modeFor(c, serverId), ...(c.ipdb_captcha ? { ipdb_captcha: c.ipdb_captcha === 'on' } : {}) };
+}
 
 /** Where a server's websites show the check: 'site' on their own address, '' here. */
 export function modeFor(c: CaptchaConfig, serverId: string): 'site' | '' {
@@ -329,6 +338,8 @@ export function parseParams(rawUrl: string) {
     // ticket number (the server trades the portal's word for a cookie).
     n: /^[a-f0-9]{32}$/.test(head.get('n') ?? '') ? (head.get('n') as string) : '',
     frame: head.get('frame') === '1',
+    // k=fw: a visitor the server's firewall sent (IPDB, ban).
+    k: head.get('k') === 'fw' ? 'fw' : '',
     // The server's CAPTCHA port (site mode): the page sends a browser that
     // reaches it on to the website's own address (see probePage).
     g: /^[0-9]{1,5}$/.test(head.get('g') ?? '') && Number(head.get('g')) > 0 && Number(head.get('g')) < 65536 ? Number(head.get('g')) : 0,
@@ -343,6 +354,24 @@ function validParams(p: { s: string; ip: string; h: string; u: string }): string
   if (!reHost.test(p.h)) return 'This check link is not valid.';
   if (!p.u.startsWith('/') || p.u.startsWith('//') || p.u.length > 2000 || /[\s<>"\\]/.test(p.u)) return 'This check link is not valid.';
   return null;
+}
+
+/**
+ * Whether an ALTCHA answer came with a person's tick: a trusted click (or
+ * Space on the box) at least 0.7 s after the page opened and within 30
+ * minutes, and pointer movement, a touch or a key press on the page. A
+ * page that solved itself (the old auto-start) or a script that posts an
+ * answer has none of these.
+ */
+export function humanTick(raw: string | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const h = JSON.parse(raw) as { t?: unknown; m?: unknown; k?: unknown; tr?: unknown; tc?: unknown };
+    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+    return h.tr === true && n(h.t) >= 700 && n(h.t) <= 30 * 60_000 && (n(h.m) >= 2 || h.tc === true || n(h.k) >= 1);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -428,9 +457,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
   // method: the check solved (turnstile / altcha); solver: the address the
   // page was solved from when it is not the website's visitor itself.
   // reason: why a check was refused or failed (shown in the reports).
-  async function record(accountId: string, serverId: string, ip: string, host: string, result: string, method = '', solver = '', reason = '') {
+  async function record(accountId: string, serverId: string, ip: string, host: string, result: string, method = '', solver = '', reason = '', source = '') {
     await pool
-      .query('INSERT INTO captcha_events (account_id, server_id, ip, host, result, method, solver_ip, reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [
+      .query('INSERT INTO captcha_events (account_id, server_id, ip, host, result, method, solver_ip, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [
         accountId,
         serverId,
         ip,
@@ -439,6 +468,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         method,
         sameIP(solver, ip) ? '' : solver,
         reason.slice(0, 200),
+        source,
       ])
       .catch(() => undefined);
     // Kept 30 days (pruned hourly, see index.ts).
@@ -494,7 +524,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // never frame a page of the portal's own origin (audit A7 F4).
     const onPortal = !!captchaHost && captchaHost !== new URL(cfg.publicUrl).host.toLowerCase() && (req.headers.host ?? '').toLowerCase() !== captchaHost;
     const frame = !p.preview && p.frame && p.n !== '' && !onPortal;
-    const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : frame ? { s: p.s, ip: p.ip, h: p.h, u: p.u, n: p.n } : { s: p.s, ip: p.ip, h: p.h, u: p.u };
+    const kind = p.k ? { k: p.k } : {};
+    const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : frame ? { s: p.s, ip: p.ip, h: p.h, n: p.n, ...kind, u: p.u } : { s: p.s, ip: p.ip, h: p.h, ...kind, u: p.u };
     const design = (p.preview && p.design) || config.design;
     // The page names the website only when its server confirms the site is
     // one of its own: a made-up link can not make this domain show another
@@ -547,8 +578,11 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     u: z.string(),
     token: z.string().min(1).max(4096).optional(),
     altcha: z.string().min(1).max(8192).optional(),
+    // What the visitor did on the page before an ALTCHA answer (humanTick).
+    hu: z.string().max(300).optional(),
     // Opened in a frame on the website's own address (see /v).
     n: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+    k: z.enum(['fw']).optional(),
     preview: z.boolean().optional(),
   });
   app.post(
@@ -578,6 +612,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         const r = await earlier;
         return reply.code(r.code).send(r.body);
       }
+      // A visitor the server's firewall sent (IPDB, ban): told apart in the reports.
+      const source = b.data.k === 'fw' ? 'firewall' : '';
+      const rec = (result: string, method: string, solver: string, reason = '') => record(accountId, p.s, p.ip, p.h, result, method, solver, reason, source);
       const run = async (): Promise<{ code: number; body: unknown }> => {
         const ip = visitorIP(req, cfg.trustProxy);
         const method = b.data.altcha ? 'altcha' : 'turnstile';
@@ -603,7 +640,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         const sameFamily = isIP(ip) === isIP(p.ip);
         const strict = config.strict_ip && sameFamily;
         if (other && (strict || !allowOtherAddress(ip, p.ip, Date.now(), p.h))) {
-          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, strict ? 'solved from another address (strict setting)' : 'solver passed too many other addresses this hour');
+          await rec('rejected', method, ip, strict ? 'solved from another address (strict setting)' : 'solver passed too many other addresses this hour');
           return res(403, {
             error:
               config.strict_ip && sameFamily
@@ -618,26 +655,33 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         if (method === 'altcha' && provider !== 'turnstile') {
           const elsewhere = provider === 'auto' && other && sameFamily && !sameNetwork(ip, p.ip);
           if (elsewhere || !altchaAllowed(altchaKeys, provider === 'auto' ? 'auto' : 'altcha')) {
-            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, elsewhere ? 'ALTCHA from another network' : 'ALTCHA daily limit');
+            await rec('rejected', method, ip, elsewhere ? 'ALTCHA from another network' : 'ALTCHA daily limit');
             return res(403, { error: 'Too many checks from this address. Please try again later.' });
           }
           // Not on a privacy relay (iCloud Private Relay, WARP, Meta's agent
           // browsers): AbuseIPDB calls those data centres, but they are
           // people (Private Relay visitors were refused on 14 websites).
           if (provider === 'auto' && egressNetwork(ip) === '' && (await hostingAddress(pool, ip))) {
-            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, 'ALTCHA from a hosting network');
+            await rec('rejected', method, ip, 'ALTCHA from a hosting network');
             return res(403, { error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
           }
+        }
+        // ALTCHA is proof of work a script solves as well as a browser: the
+        // box must have been ticked by a person (a real click or key press,
+        // not at once, with some pointer, touch or key activity).
+        if (method === 'altcha' && !humanTick(b.data.hu)) {
+          await rec('failed', method, ip, 'box not ticked by a person');
+          return res(403, { error: 'Please tick the box yourself to confirm you are human.' });
         }
         // Solved from a data centre for another address: CAPTCHA farms solve
         // for bots on proxy addresses (glasgowfitness.com: one proxy address
         // passed every few minutes from DigitalOcean and hosting addresses).
         if (other && egressNetwork(ip) === '' && (await hostingAddress(pool, ip))) {
-          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, 'solved from a hosting network for another address');
+          await rec('rejected', method, ip, 'solved from a hosting network for another address');
           return res(403, { error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
         }
         if (!(await solved())) {
-          await record(accountId, p.s, p.ip, p.h, 'failed', method, ip, 'wrong answer');
+          await rec('failed', method, ip, 'wrong answer');
           return res(403, { error: 'The check failed. Please try again.' });
         }
         // An agent reconnecting (update, WAF reload, network blip) is back
@@ -646,7 +690,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           await new Promise((r) => setTimeout(r, 500));
         }
         if (!hub.isOnline(p.s)) {
-          await record(accountId, p.s, p.ip, p.h, 'offline', method, ip, 'website server offline');
+          await rec('offline', method, ip, 'website server offline');
           return res(503, { error: "The website's server cannot be reached right now. Please try again in a minute." });
         }
         try {
@@ -661,12 +705,12 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
             await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip, ...short }, 90_000);
           }
         } catch (e) {
-          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, 'server refused: ' + (e as Error).message);
+          await rec('rejected', method, ip, 'server refused: ' + (e as Error).message);
           req.log.warn({ err: (e as Error).message, server: p.s, host: p.h }, 'captcha pass refused');
           return res(403, { error: 'This website could not confirm the check. Please try again later.' });
         }
         if (method === 'altcha') noteAltchaPass(altchaKeys);
-        await record(accountId, p.s, p.ip, p.h, 'passed', method, ip);
+        await rec('passed', method, ip);
         return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}`, ...(b.data.n ? { frame: true } : {}) });
       };
       const pending = run();
@@ -700,6 +744,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         design: cur.config.design,
         countdown: cur.config.countdown,
         site_servers: cur.config.site_servers,
+        ipdb_captcha: cur.config.ipdb_captcha,
       },
       version: cur.version,
       updated_at: cur.updated_at,
@@ -720,6 +765,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     design: z.enum(CAPTCHA_DESIGNS).default('classic'),
     countdown: z.number().int().min(0).max(15).default(5),
     site_servers: z.array(z.string().uuid()).max(5000).default([]),
+    ipdb_captcha: z.enum(['', 'on', 'off']).default(''),
   });
   app.put('/api/captcha', admin, async (req, reply) => {
     const b = Save.safeParse(req.body);
@@ -750,7 +796,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         continue;
       }
       pushed++;
-      void hub.command(s.id, 'captcha.central', { version, enabled: c.enabled, url: pageUrl, minutes: c.minutes, mode: modeFor(c, s.id) }, 120_000).catch(() => undefined);
+      void hub.command(s.id, 'captcha.central', centralParams(version, c, pageUrl, s.id), 120_000).catch(() => undefined);
     }
     return { version, pushed, offline };
   });
@@ -761,6 +807,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     limit: z.coerce.number().int().refine((n) => [25, 50, 100, 200].includes(n)).default(50),
     offset: z.coerce.number().int().min(0).default(0),
     result: z.enum(['', 'passed', 'failed', 'rejected', 'offline']).default(''),
+    // firewall: visitors the servers' firewalls sent (IPDB, bans); login:
+    // the login pages' suspects.
+    source: z.enum(['', 'firewall', 'login']).default(''),
     q: z.string().trim().max(100).default(''),
   });
   app.get('/api/captcha/events', viewer, async (req, reply) => {
@@ -774,6 +823,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       args.push(f.data.result);
       where.push(`e.result = $${args.length}`);
     }
+    if (f.data.source) where.push(f.data.source === 'firewall' ? "e.source = 'firewall'" : "e.source = ''");
     if (f.data.q) {
       args.push(`%${f.data.q.replace(/[\\%_]/g, (c) => '\\' + c)}%`);
       where.push(`(e.ip ILIKE $${args.length} OR e.host ILIKE $${args.length} OR e.solver_ip ILIKE $${args.length})`);
@@ -781,7 +831,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const w = where.join(' AND ');
     const total = await pool.query(`SELECT count(*)::int AS n FROM captcha_events e WHERE ${w}`, args);
     const rows = await pool.query(
-      `SELECT e.id::text, e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
+      `SELECT e.id::text, e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, e.source, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
        WHERE ${w} ORDER BY e.at DESC, e.id DESC LIMIT ${f.data.limit} OFFSET ${f.data.offset}`,
       args,
     );
@@ -807,6 +857,6 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!r) return;
     const cur = await load(pool, r.accountId);
     if (cur.version === 0 || cur.version === r.data.version) return { unchanged: true };
-    return { config: { version: cur.version, enabled: cur.config.enabled, url: pageUrl, minutes: cur.config.minutes, mode: modeFor(cur.config, r.serverId) } };
+    return { config: centralParams(cur.version, cur.config, pageUrl, r.serverId) };
   });
 }

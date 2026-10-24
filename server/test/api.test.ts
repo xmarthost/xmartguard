@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
+import { looksCompressed } from '../src/app.js';
 
 let h: Harness;
 let c: Client;
@@ -155,6 +156,31 @@ describe('downloads', () => {
       h.cfg.downloadsDir = old;
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('sends checksums that start like zlib data readable (gzip asked)', async () => {
+    // A release hash starting "80" looks like a zlib header to the
+    // compression, which then labelled the plain text gzip: every agent
+    // update failed with "gzip: invalid header".
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xg-dl-'));
+    const sum = '80ce5f0b0c3a6a1e1c9d4b2f7e8a9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b  xpguard-agent-linux-amd64\n';
+    fs.writeFileSync(path.join(dir, 'xpguard-agent-linux-amd64.sha256'), sum);
+    const old = h.cfg.downloadsDir;
+    h.cfg.downloadsDir = dir;
+    try {
+      for (const enc of ['gzip', 'br', 'gzip, deflate, br']) {
+        const r = await fetch(h.url + '/downloads/xpguard-agent-linux-amd64.sha256', { headers: { 'accept-encoding': enc } });
+        expect(r.status).toBe(200);
+        expect(await r.text()).toBe(sum);
+      }
+    } finally {
+      h.cfg.downloadsDir = old;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    // Any other answer starting like that is sent uncompressed.
+    for (const head of ['80', '8O', 'XG', 'H,', 'x ', '(4']) expect(looksCompressed(head + 'rest')).toBe(true);
+    expect(looksCompressed(Buffer.from([0x1f, 0x8b, 0x08, 0]))).toBe(true);
+    for (const head of ['{"', '[1', '<!', '#!', 'signature,', 'ab', '81']) expect(looksCompressed(head)).toBe(false);
   });
 
   it('refuses arbitrary download paths', async () => {

@@ -340,7 +340,11 @@ func (s *Server) centralURL(r *http.Request, ip string) string {
 		return ""
 	}
 	back := r.URL.RequestURI()
+	// k=fw: a visitor the firewall sent here (IPDB, ban); the gate path is
+	// a login page's (the portal's reports tell the two apart).
+	kind := "&k=fw"
 	if r.URL.Path == pathPrefix+"gate" || r.URL.Path == legacyPrefix+"gate" {
+		kind = ""
 		back = "/"
 		if i := strings.Index(r.URL.RawQuery, "back="); i >= 0 {
 			back = r.URL.RawQuery[i+5:]
@@ -357,7 +361,7 @@ func (s *Server) centralURL(r *http.Request, ip string) string {
 	}
 	// The page ("u") goes last and as it is: the portal reads everything
 	// after "&u=".
-	return fmt.Sprintf("%s?s=%s&ip=%s&h=%s&u=%s", c.CentralURL, url.QueryEscape(s.ServerID), url.QueryEscape(ip), url.QueryEscape(host), back)
+	return fmt.Sprintf("%s?s=%s&ip=%s&h=%s%s&u=%s", c.CentralURL, url.QueryEscape(s.ServerID), url.QueryEscape(ip), url.QueryEscape(host), kind, back)
 }
 
 // token binds a challenge answer to an address and an expiry.

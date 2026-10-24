@@ -260,10 +260,12 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         "The CAPTCHA page's log (suspicious visitors of login pages sent to the portal's check), newest first, with a summary: " +
         'results (passed, failed, rejected, offline) by check (turnstile, altcha), why checks were refused (reasons), addresses that solved the page for other addresses ' +
         '(solver_ip; many targets from one solver is someone passing bots through), and the addresses that failed most. ' +
-        'Filters: result, method, q (address, solver or site), hours.',
+        'source "firewall" is a visitor a server\'s firewall sent (IPDB, ban), "" a login page\'s suspect. ' +
+        'Filters: result, method, source (firewall or login), q (address, solver or site), hours.',
       inputSchema: obj({
         result: { type: 'string', enum: ['passed', 'failed', 'rejected', 'offline'] },
         method: { type: 'string', enum: ['turnstile', 'altcha'] },
+        source: { type: 'string', enum: ['firewall', 'login'] },
         q: { type: 'string' },
         hours: { type: 'integer', minimum: 1, maximum: 720, default: 24 },
         limit: { type: 'integer', minimum: 1, maximum: 500, default: 100 },
@@ -273,6 +275,8 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         const where = ['e.account_id = ANY($1::uuid[])', 'e.at > now() - make_interval(hours => $2::int)'];
         if (a.result) where.push(`e.result = $${args.push(String(a.result))}`);
         if (a.method) where.push(`e.method = $${args.push(String(a.method))}`);
+        if (a.source === 'firewall') where.push("e.source = 'firewall'");
+        if (a.source === 'login') where.push("e.source = ''");
         if (a.q) {
           const i = args.push('%' + String(a.q).slice(0, 100).replace(/[\\%_]/g, (c) => '\\' + c) + '%');
           where.push(`(e.ip ILIKE $${i} OR e.host ILIKE $${i} OR e.solver_ip ILIKE $${i})`);
@@ -280,11 +284,11 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         const w = where.join(' AND ');
         const [events, byResult, solvers, failing, reasons] = await Promise.all([
           pool.query(
-            `SELECT e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
+            `SELECT e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, e.source, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
               WHERE ${w} ORDER BY e.at DESC, e.id DESC LIMIT ${clamp(a.limit, 100, 500)}`,
             args,
           ),
-          pool.query(`SELECT e.result, e.method, count(*)::int AS n FROM captcha_events e WHERE ${w} GROUP BY 1, 2 ORDER BY 3 DESC`, args),
+          pool.query(`SELECT e.result, e.method, e.source, count(*)::int AS n FROM captcha_events e WHERE ${w} GROUP BY 1, 2, 3 ORDER BY 4 DESC`, args),
           pool.query(
             `SELECT e.solver_ip, count(DISTINCT e.ip)::int AS targets, count(*) FILTER (WHERE e.result = 'passed')::int AS passed, count(*)::int AS checks
                FROM captcha_events e WHERE ${w} AND e.solver_ip <> '' GROUP BY 1 ORDER BY 2 DESC, 4 DESC LIMIT 20`,

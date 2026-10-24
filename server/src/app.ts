@@ -124,7 +124,14 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   });
   await app.register(websocket, { options: { maxPayload: 4 * 1024 * 1024 } });
 
-  app.addHook('onSend', async (req, reply) => {
+  app.addHook('onSend', async (req, reply, payload) => {
+    // @fastify/compress passes a body whose first bytes look like gzip or
+    // zlib through as it is, yet still labels it compressed: clients then
+    // fail to read it (an agent update broke on a checksum file starting
+    // "80"). Such bodies are sent uncompressed instead. This hook runs
+    // before the route's compress hook. Streams are handled where they are
+    // sent (downloads).
+    if ((typeof payload === 'string' || Buffer.isBuffer(payload)) && looksCompressed(payload)) req.headers['x-no-compression'] = '1';
     reply.header('X-Content-Type-Options', 'nosniff');
     // The CAPTCHA page shown in a frame on a website's own address says
     // who may frame it in its CSP (frame-ancestors); everything else: no one.
@@ -208,4 +215,11 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
     hub.closeAll();
   });
   return { app, hub, ipdb, ai, wp, sigs, crs };
+}
+
+/** The first bytes match what @fastify/compress takes for gzip or zlib data. */
+export function looksCompressed(body: string | Buffer): boolean {
+  const b = typeof body === 'string' ? Buffer.from(body.slice(0, 3)) : body;
+  if (b.length > 2 && b[0] === 0x1f && b[1] === 0x8b && b[2] === 0x08) return true;
+  return b.length > 1 && (b[0] & 0x0f) === 0x08 && (b[0] & 0x80) === 0 && ((b[0] << 8) + b[1]) % 31 === 0;
 }

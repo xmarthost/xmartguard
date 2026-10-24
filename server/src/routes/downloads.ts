@@ -47,7 +47,13 @@ export function downloadRoutes(app: FastifyInstance, cfg: Config): void {
     if (!found) return reply.code(404).send({ error: 'not found' });
     reply.header('Cache-Control', 'no-cache');
     reply.header('Content-Length', found.size);
-    reply.type(file.endsWith('.sha256') ? 'text/plain; charset=utf-8' : 'application/octet-stream');
+    if (file.endsWith('.sha256')) {
+      // A short text, sent whole: a stream starting "80" (a hash) would be
+      // mislabelled gzip by the compression (see looksCompressed in app.ts).
+      reply.type('text/plain; charset=utf-8');
+      return reply.send(await fs.readFile(found.file));
+    }
+    reply.type('application/octet-stream');
     return reply.send(createReadStream(found.file));
   });
 }

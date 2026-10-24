@@ -43,8 +43,16 @@ func TestSiteMode(t *testing.T) {
 	if w := req("GET", "/.xpguard/ping.gif?123", "", "203.0.113.5"); w.Code != 200 || w.Header().Get("Content-Type") != "image/gif" || !strings.HasPrefix(w.Body.String(), "GIF89a") {
 		t.Fatalf("ping: %d %q", w.Code, w.Header().Get("Content-Type"))
 	}
+	// A visitor the firewall sent here (IPDB, ban) is marked for the
+	// portal's reports.
+	if w := req("GET", "/shop/", "", "203.0.113.5"); w.Code != 403 || !strings.Contains(w.Body.String(), "&amp;frame=1&amp;k=fw&amp;u=/shop/") {
+		t.Fatalf("firewall visitor: %d", w.Code)
+	}
 	w := req("GET", "/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1", "", "203.0.113.5")
 	body := w.Body.String()
+	if strings.Contains(body, "k=fw") {
+		t.Fatal("login-page visitor marked as the firewall's")
+	}
 	if w.Code != 200 || w.Header().Get("Location") != "" {
 		t.Fatalf("gate page: %d %q", w.Code, w.Header().Get("Location"))
 	}

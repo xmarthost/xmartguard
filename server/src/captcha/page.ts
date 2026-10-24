@@ -180,19 +180,28 @@ function done(sol){
     back(x.j.redirect);
   }).catch(function(){fail('Network error. Please try again.')});
 }
-// ALTCHA: the browser solves a small puzzle by itself (no third party).
+// ALTCHA: the visitor ticks the box, then the browser solves a small
+// puzzle (no third party). It no longer starts by itself: it passed within
+// a second with no one at the page. What a person does on the page goes
+// with the answer (only real events count): when the box was ticked, and
+// pointer, touch and key activity.
+var hs={t:0,m:0,k:0,tr:false,tc:false};
+document.addEventListener('pointermove',function(e){if(e.isTrusted)hs.m++},{passive:true});
+document.addEventListener('touchstart',function(e){if(e.isTrusted)hs.tc=true},{passive:true});
+document.addEventListener('keydown',function(e){if(e.isTrusted)hs.k++});
+box.addEventListener('click',function(e){if(e.isTrusted&&usingAltcha&&!hs.tr){hs.tr=true;hs.t=Date.now()-t0}},true);
 function startAltcha(){
-  usingAltcha=true;ag.hidden=true;
-  show('Checking your browser…','',true);
+  usingAltcha=true;ag.hidden=true;hs.tr=false;hs.t=0;
+  show('Loading the check…','',true);
   var go=function(){
     box.innerHTML='';
     altcha=document.createElement('altcha-widget');
     altcha.setAttribute('challenge','/v/altcha/challenge');
-    altcha.setAttribute('auto','onload');
     altcha.setAttribute('configuration',JSON.stringify({hideFooter:true,hideLogo:true,minDuration:600}));
-    altcha.addEventListener('verified',function(e){done({altcha:e.detail.payload})});
+    altcha.addEventListener('verified',function(e){done({altcha:e.detail.payload,hu:JSON.stringify(hs)})});
     altcha.addEventListener('statechange',function(e){if(e.detail&&e.detail.state==='error')fail('The check could not finish. Please try again.')});
     box.appendChild(altcha);
+    stopClock();show('Tick the box to confirm you are human.');
   };
   if(customElements.get('altcha-widget')){go();return}
   var s=document.createElement('script');s.type='module';s.src='/v/altcha.js';
@@ -235,7 +244,7 @@ ${body}
 <noscript><div class="box">Please enable JavaScript to continue.</div></noscript>
 <details><summary>Why am I seeing this?</summary>
 <p>${host} uses xPGuard to keep attackers away. Your address was recently seen sending suspicious requests, or it is on a list of addresses used for attacks, or this page is only open to people, so we ask you to confirm that you are a person.</p>
-<p>After the check you go straight back to the page you asked for, and this address is not asked again for a while. ${provider === 'altcha' ? 'Your browser solves a small puzzle by itself' : 'The check is run by Cloudflare Turnstile'}; no account or personal details are needed.</p>
+<p>After the check you go straight back to the page you asked for, and this address is not asked again for a while. ${provider === 'altcha' ? 'You tick the box and your browser solves a small puzzle' : 'The check is run by Cloudflare Turnstile'}; no account or personal details are needed.</p>
 </details>
 <div class="foot"><span>Powered by <img src="/xpguard-wordmark.png" alt="xPGuard"></span></div>
 </main>

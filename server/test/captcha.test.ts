@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 import { envelopeMessage } from '../src/agent-sign.js';
-import { allowOtherAddress, altchaAllowed, altchaKeysFor, egressNetwork, hostingCheck, noteAltchaPass, offlineWait, parseParams, sameNetwork, shownIP, turnstile } from '../src/routes/captcha.js';
+import { allowOtherAddress, altchaAllowed, humanTick, altchaKeysFor, egressNetwork, hostingCheck, noteAltchaPass, offlineWait, parseParams, sameNetwork, shownIP, turnstile } from '../src/routes/captcha.js';
 
 let h: Harness;
 let admin: Client;
@@ -51,6 +51,9 @@ async function agent(path: string, payload: unknown) {
   return { status: r.status, body: await r.json() };
 }
 
+// A person's tick on the ALTCHA box (see humanTick).
+const HU = JSON.stringify({ t: 1500, m: 12, k: 0, tr: true, tc: false });
+
 const link = () => `/v?s=${serverId}&ip=203.0.113.5&h=shop.example.com&u=/wp-login.php?redirect_to=/wp-admin/&reauth=1`;
 
 async function verify(body: Record<string, string>, ip = '203.0.113.5') {
@@ -60,13 +63,13 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, g: 0 });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', g: 0, design: undefined });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
   it('is off until the Turnstile keys are saved', async () => {
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [] });
+    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], ipdb_captcha: '' });
     expect(g.body.url).toBe('https://captcha.example.org/v');
     const page = await h.app.inject({ method: 'GET', url: link() });
     expect(page.statusCode).toBe(503);
@@ -81,7 +84,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(put.status).toBe(200);
     expect(put.body.version).toBe(1);
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [] });
+    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], ipdb_captcha: '' });
     expect(JSON.stringify(g.body)).not.toContain('0x4AAAAAAAsecret');
     // Saving without a secret keeps the saved one.
     expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 })).status).toBe(200);
@@ -313,17 +316,33 @@ describe('CAPTCHA page: other addresses and ALTCHA', () => {
     expect(js.statusCode).toBe(200);
     expect(js.headers['content-type']).toContain('javascript');
     passes.length = 0;
+    // A correct answer without a person's tick (the page used to solve by
+    // itself on load, a script posts one) is refused, and does not use up
+    // the answer.
     const a = await solve();
-    expect((await verify({ ...p(), altcha: a }, '203.0.113.77')).status).toBe(200);
+    for (const hu of [undefined, '{}', JSON.stringify({ t: 1500, m: 12, tr: false }), JSON.stringify({ t: 200, m: 12, tr: true }), JSON.stringify({ t: 1500, m: 0, k: 0, tr: true }), 'not json']) {
+      const r = await verify({ ...p(), altcha: a, ...(hu === undefined ? {} : { hu }) }, '203.0.113.77');
+      expect(r.status).toBe(403);
+      expect(r.body.error).toContain('tick the box yourself');
+    }
+    const { rows } = await h.pool.query("SELECT reason FROM captcha_events WHERE ip = '203.0.113.77' ORDER BY id DESC LIMIT 1");
+    expect(rows[0].reason).toBe('box not ticked by a person');
+    // A touch or a key press (keyboard users) counts as a person too.
+    expect(humanTick(JSON.stringify({ t: 900, m: 0, tr: true, tc: true }))).toBe(true);
+    expect(humanTick(JSON.stringify({ t: 900, m: 0, k: 1, tr: true }))).toBe(true);
+    expect((await verify({ ...p(), altcha: a, hu: HU }, '203.0.113.77')).status).toBe(200);
     expect(passes).toHaveLength(1);
     // A solution works once.
-    expect((await verify({ ...p(), altcha: a }, '203.0.113.77')).status).toBe(403);
-    expect((await verify({ ...p(), altcha: 'eyJ4IjoxfQ==' }, '203.0.113.77')).status).toBe(403);
+    expect((await verify({ ...p(), altcha: a, hu: HU }, '203.0.113.77')).status).toBe(403);
+    expect((await verify({ ...p(), altcha: 'eyJ4IjoxfQ==', hu: HU }, '203.0.113.77')).status).toBe(403);
     // Turnstile only: ALTCHA is not accepted, the page shows Turnstile.
     await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, provider: 'turnstile' });
-    expect((await verify({ ...p(), altcha: await solve() }, '203.0.113.77')).status).toBe(403);
+    expect((await verify({ ...p(), altcha: await solve(), hu: HU }, '203.0.113.77')).status).toBe(403);
     let page = await h.app.inject({ method: 'GET', url: link() });
     expect(page.body).toContain('MODE="turnstile"');
+    // The ALTCHA box waits for the visitor's tick (no auto-start).
+    expect(page.body).not.toContain("'auto','onload'");
+    expect(page.body).toContain('hu:JSON.stringify(hs)');
     // ALTCHA only: works without Turnstile keys; no Cloudflare on the page.
     await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '', secret_key: '', minutes: 60, provider: 'altcha' });
     page = await h.app.inject({ method: 'GET', url: link() });
@@ -331,7 +350,7 @@ describe('CAPTCHA page: other addresses and ALTCHA', () => {
     expect(page.body).toContain('MODE="altcha"');
     expect(page.headers['content-security-policy']).toContain("worker-src 'self' blob:");
     expect((await verify({ ...p(), token: 'good-token' }, '203.0.113.77')).status).toBe(403);
-    expect((await verify({ ...p(), altcha: await solve() }, '203.0.113.77')).status).toBe(200);
+    expect((await verify({ ...p(), altcha: await solve(), hu: HU }, '203.0.113.77')).status).toBe(200);
   }, 60_000);
 });
 
@@ -363,21 +382,21 @@ describe('CAPTCHA page: no passing bots through', () => {
   it('takes ALTCHA, where Turnstile is the check, only for the own network, a few times a day, for an hour', async () => {
     passes.length = 0;
     // Not for an address of another network (cloud solvers passing bots).
-    expect((await verify({ ...p('192.0.2.21'), altcha: await solve() }, '198.51.100.120')).status).toBe(403);
+    expect((await verify({ ...p('192.0.2.21'), altcha: await solve(), hu: HU }, '198.51.100.120')).status).toBe(403);
     expect(passes).toHaveLength(0);
     for (let i = 0; i < 3; i++) {
-      expect((await verify({ ...p('192.0.2.22'), altcha: await solve() }, '192.0.2.22')).status).toBe(200);
+      expect((await verify({ ...p('192.0.2.22'), altcha: await solve(), hu: HU }, '192.0.2.22')).status).toBe(200);
     }
     expect(passes[0]).toEqual({ ip: '192.0.2.22', host: 'shop.example.com', also: '', minutes: 60 });
     // The fourth in a day is refused; Turnstile still works for that visitor.
-    expect((await verify({ ...p('192.0.2.22'), altcha: await solve() }, '192.0.2.22')).status).toBe(403);
+    expect((await verify({ ...p('192.0.2.22'), altcha: await solve(), hu: HU }, '192.0.2.22')).status).toBe(403);
     expect((await verify({ ...p('192.0.2.22'), token: 'good-token' }, '192.0.2.22')).status).toBe(200);
     expect(passes[3]).toEqual({ ip: '192.0.2.22', host: 'shop.example.com', also: '' });
     const ev = await admin.req('GET', '/api/captcha/events?q=192.0.2.22&result=passed&limit=25');
     expect(ev.body.events.map((x: { method: string }) => x.method).sort()).toEqual(['altcha', 'altcha', 'altcha', 'turnstile']);
     // Carrier-grade NAT (a neighbouring address) and Cloudflare WARP / iCloud Private Relay are the visitor's own network.
-    expect((await verify({ ...p('203.0.113.229'), altcha: await solve() }, '203.0.113.228')).status).toBe(200);
-    expect((await verify({ ...p('104.29.10.1'), altcha: await solve() }, '104.29.20.2')).status).toBe(200);
+    expect((await verify({ ...p('203.0.113.229'), altcha: await solve(), hu: HU }, '203.0.113.228')).status).toBe(200);
+    expect((await verify({ ...p('104.29.10.1'), altcha: await solve(), hu: HU }, '104.29.20.2')).status).toBe(200);
   }, 60_000);
 
   it('knows the own network', () => {
@@ -447,12 +466,12 @@ describe('CAPTCHA page: no passing bots through', () => {
     hostingCheck.lookup = async (_key: string, ip: string) => ip === '192.0.2.31';
     try {
       passes.length = 0;
-      const dc = await verify({ ...p('192.0.2.31'), altcha: await solve() }, '192.0.2.31');
+      const dc = await verify({ ...p('192.0.2.31'), altcha: await solve(), hu: HU }, '192.0.2.31');
       expect(dc.status).toBe(403);
       expect(dc.body.error).toContain('hosting or cloud network');
       // Turnstile still decides for that address; a home address passes ALTCHA.
       expect((await verify({ ...p('192.0.2.31'), token: 'good-token' }, '192.0.2.31')).status).toBe(200);
-      expect((await verify({ ...p('192.0.2.32'), altcha: await solve() }, '192.0.2.32')).status).toBe(200);
+      expect((await verify({ ...p('192.0.2.32'), altcha: await solve(), hu: HU }, '192.0.2.32')).status).toBe(200);
       expect(passes).toHaveLength(2);
       // Why it was refused is recorded.
       const { rows } = await h.pool.query("SELECT reason FROM captcha_events WHERE ip = '192.0.2.31' AND result = 'rejected' ORDER BY id DESC LIMIT 1");
@@ -471,7 +490,7 @@ describe('CAPTCHA page: no passing bots through', () => {
     hostingCheck.lookup = async () => true;
     try {
       passes.length = 0;
-      const relay = await verify({ ...p('87.81.235.80'), altcha: await solve() }, '2606:54c1:1:eff::50c:3d');
+      const relay = await verify({ ...p('87.81.235.80'), altcha: await solve(), hu: HU }, '2606:54c1:1:eff::50c:3d');
       expect(relay.status).toBe(200);
       const farm = await verify({ ...p('198.51.100.148'), token: 'good-token' }, '203.0.113.123');
       expect(farm.status).toBe(403);
@@ -605,6 +624,50 @@ describe('CAPTCHA on the website’s own address', () => {
     } finally {
       online = true;
     }
+  });
+
+  it('sets the IPDB CAPTCHA for all servers, or leaves each server its own', async () => {
+    const commands: { action: string; params: any }[] = [];
+    const before = h.hub.command;
+    h.hub.command = async (id: string, action: string, params: unknown) => {
+      commands.push({ action, params });
+      return before(id, action, params);
+    };
+    const base = { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, site_servers: [serverId] };
+    try {
+      for (const [v, want] of [['on', true], ['off', false], ['', undefined]] as const) {
+        commands.length = 0;
+        expect((await admin.req('PUT', '/api/captcha', { ...base, ipdb_captcha: v })).status).toBe(200);
+        expect((await admin.req('GET', '/api/captcha')).body.config.ipdb_captcha).toBe(v);
+        const pushed = commands.find((c) => c.action === 'captcha.central')?.params;
+        const pulled = (await agent('/api/agent/captcha/config', { version: 0 })).body.config;
+        for (const c of [pushed, pulled]) {
+          if (want === undefined) expect(c).not.toHaveProperty('ipdb_captcha');
+          else expect(c.ipdb_captcha).toBe(want);
+        }
+      }
+      expect((await admin.req('PUT', '/api/captcha', { ...base, ipdb_captcha: 'maybe' })).status).toBe(400);
+    } finally {
+      h.hub.command = before;
+    }
+  });
+
+  it('tells IPDB and firewall visitors apart from login pages in the reports (a label only)', async () => {
+    const page = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=198.51.100.77&h=shop.example.com&k=fw&u=/`, headers: { host: 'captcha.example.org', 'x-forwarded-for': '198.51.100.77' } });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain('"k":"fw"');
+    expect(parseParams('/v?s=x&k=evil&u=/').k).toBe('');
+    const fw = await verify({ s: serverId, ip: '198.51.100.77', h: 'shop.example.com', u: '/', k: 'fw', token: 'good-token' }, '198.51.100.77');
+    expect(fw.status).toBe(200);
+    const login = await verify({ s: serverId, ip: '198.51.100.78', h: 'shop.example.com', u: '/wp-login.php', token: 'good-token' }, '198.51.100.78');
+    expect(login.status).toBe(200);
+    // Any other kind is refused, not recorded under a made-up source.
+    expect((await verify({ s: serverId, ip: '198.51.100.79', h: 'shop.example.com', u: '/', k: 'x', token: 'good-token' }, '198.51.100.79')).status).toBe(400);
+    const f = await admin.req('GET', '/api/captcha/events?source=firewall&q=198.51.100.7');
+    expect(f.body.events.map((e: any) => [e.ip, e.source])).toEqual([['198.51.100.77', 'firewall']]);
+    const l = await admin.req('GET', '/api/captcha/events?source=login&q=198.51.100.78');
+    expect(l.body.events.map((e: any) => [e.ip, e.source])).toEqual([['198.51.100.78', '']]);
+    expect((await admin.req('GET', '/api/captcha/events?source=other')).status).toBe(400);
   });
 
   it('shows the checks of customers’ servers to the master account', async () => {

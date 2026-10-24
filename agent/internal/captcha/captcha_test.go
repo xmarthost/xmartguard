@@ -301,13 +301,15 @@ func TestCentralRedirect(t *testing.T) {
 		t.Fatalf("own page while the portal's is off: %d", w.Code)
 	}
 	s.Settings.Patch([]byte(`{"captcha":{"central":true,"central_url":"https://captcha.xpguard.org/v"}}`))
+	// A visitor the firewall sent (any page) is marked k=fw for the
+	// portal's reports; the login-page gate is not.
 	for target, u := range map[string]string{
-		"/blog/?p=1": "/blog/?p=1",
-		"/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1": "/wp-login.php?redirect_to=/wp-admin/&reauth=1",
-		"/.xpguard/gate?back=//evil.com":                                    "/",
+		"/blog/?p=1": "&k=fw&u=/blog/?p=1",
+		"/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1": "&u=/wp-login.php?redirect_to=/wp-admin/&reauth=1",
+		"/.xpguard/gate?back=//evil.com":                                    "&u=/",
 	} {
 		w := get(target)
-		want := "https://captcha.xpguard.org/v?s=15d69a72-653a-47b6-90f6-fde737bce061&ip=203.0.113.5&h=shop.example.com&u=" + u
+		want := "https://captcha.xpguard.org/v?s=15d69a72-653a-47b6-90f6-fde737bce061&ip=203.0.113.5&h=shop.example.com" + u
 		if w.Code != 302 || w.Header().Get("Location") != want {
 			t.Errorf("%s: %d %q", target, w.Code, w.Header().Get("Location"))
 		}

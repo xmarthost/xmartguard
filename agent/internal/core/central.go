@@ -38,6 +38,10 @@ type centralConfig struct {
 	Minutes int    `json:"minutes"`
 	// Mode "site": the check is shown on the websites' own addresses.
 	Mode string `json:"mode"`
+	// IPDBCaptcha: visitors on the IPDB get the check on websites instead of
+	// a dropped connection (settings ipdb.captcha), set for the whole fleet
+	// on the portal's CAPTCHA page; absent: each server keeps its own.
+	IPDBCaptcha *bool `json:"ipdb_captcha,omitempty"`
 }
 
 const (
@@ -342,8 +346,12 @@ func (a *Agent) applyCentralConfig(ctx context.Context, c centralConfig) error {
 	if c.Mode == "site" {
 		mode = "site"
 	}
-	patch, _ := json.Marshal(map[string]any{"captcha": map[string]any{
-		"central": c.Enabled, "central_url": c.URL, "central_minutes": c.Minutes, "central_mode": mode}})
+	p := map[string]any{"captcha": map[string]any{
+		"central": c.Enabled, "central_url": c.URL, "central_minutes": c.Minutes, "central_mode": mode}}
+	if c.IPDBCaptcha != nil {
+		p["ipdb"] = map[string]any{"captcha": *c.IPDBCaptcha}
+	}
+	patch, _ := json.Marshal(p)
 	if _, err := a.setSettings(ctx, patch, ""); err != nil {
 		return err
 	}

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.12** (see `VERSION`).
+- Current release: **0.23.13** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.12 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.13 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.12: `--branch backup-0.23.11`; see "Rollback" under 0.23.12 below);
+  0.23.13: `--branch backup-0.23.12`; see "Rollback" under 0.23.13 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,62 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.13: ALTCHA ticked by a person; IPDB CAPTCHA in the
+  CAPTCHA page; agent updates and "80" checksums** (2026-10-24).
+  - **ALTCHA no longer solves by itself**: the widget had `auto="onload"`,
+    so the check passed within a second with nobody there. Now the visitor
+    ticks the box; the page sends what the tick looked like (`hu`: a trusted
+    click, time from page load, pointer moves, touch, keys) and the portal's
+    `humanTick` refuses a check without a trusted click after at least
+    0.7 s and a pointer move, a touch or a key (reason "box not ticked by a
+    person"; the visitor sees "Please tick the box yourself" and Try again).
+    A scripted browser can forge these signals: it only raises the bar; the
+    proof of work, the hosting/other-address checks and the limits stay the
+    real defence. Tests: `humanTick` cases in captcha.test.ts and
+    `altcha-browser.test.ts` (real Chromium: no pass without a tick, a real
+    click passes, a script `.click()` is refused; skipped without
+    Playwright).
+  - **IPDB / firewall CAPTCHA in the reports**: the agent marks visitors the
+    firewall redirected (IPDB, bans) with `k=fw` (portal redirect and the
+    site-mode frame; not the login gate). The portal records them as
+    `captcha_events.source = 'firewall'` (migration 030; '' = login
+    pages). CAPTCHA page » Recent checks has a "Sent by" filter (IPDB and
+    firewall / Login pages) and a label under each website; the connector's
+    `captcha_events` takes `source`. `k` is only a label: a visitor setting
+    it changes no decision. Agents before 0.23.13 do not send it (their
+    IPDB visitors show as login pages until they update).
+  - **IPDB CAPTCHA for all servers**: CAPTCHA page » "IPDB and firewall
+    visitors": each server's own setting (default, nothing pushed) / show
+    the check on all servers / block only on all servers. Sent with
+    `captcha.central` and `/api/agent/captcha/config` as `ipdb_captcha`;
+    the agent then sets `ipdb.captcha` (central.go). With "all servers" a
+    change of the per-server toggle (Firewall » CAPTCHA) is overwritten on
+    the next CAPTCHA save.
+  - **IPDB live list wording**: every row says BLOCKED; web connections
+    redirected to the check also say "CAPTCHA offered". Those are visitors
+    on ports 80/443; bots almost never load the page, so most never see a
+    check. Mail, SSH and other ports are dropped.
+  - **Agent update broken by a checksum starting "80"**: @fastify/compress
+    takes a body whose first bytes look like zlib (e.g. "80", "XG", "H,")
+    or gzip for already compressed, sends it as it is, yet labels it gzip.
+    The streamed `.sha256` of a release starting "80" (1 in 256 releases)
+    made every agent update fail ("gzip: invalid header"); this release's
+    build hit it in `agent-update.test.ts`. Checksums are now sent whole
+    (short, never compressed), and any string/Buffer answer starting like
+    that is sent uncompressed (`looksCompressed`, app.ts onSend). Test:
+    api.test.ts "sends checksums that start like zlib data readable".
+  - Compared with cPGuard's IPDB article (information only, own code):
+    fleet reports + AbuseIPDB + feeds, scored by reporters/reports and
+    expiring (theirs: a cloud advisor every 2 h; ours rebuilt within
+    minutes); trusted services and the fleet's own addresses never listed;
+    ipset/nft drops; optional kernel log; Check IP (fw.check / IPDB page);
+    an ignore list that survives reloads; IPDB CAPTCHA (theirs removes the
+    address from the block; ours lets it in for the set time and keeps a
+    solved address off the list for 30 days, `ipdb_cleared`).
+  - **Rollback**: `backup-0.23.12`. Portal: the update command with
+    `--branch backup-0.23.12` (the `source` column stays, unused). Agents:
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.12: CAPTCHA report review (24 h of 2026-10-24)**.
   `captcha_events`: 1,318 passed, 582 rejected, 75 failed.
