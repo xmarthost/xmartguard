@@ -55,6 +55,24 @@ browserTest('ALTCHA waits for a real tick', async () => {
   await b.close();
 }, 60_000);
 
+// A phone: one tap on the box, no pointer movement (Safari on iPhones
+// behind iCloud Private Relay failed the first try before 0.23.15).
+browserTest('ALTCHA passes a single tap on a phone', async () => {
+  const { chromium } = createRequire(import.meta.url)(PW);
+  const b = await chromium.launch();
+  const ctx = await b.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+  const page = await ctx.newPage();
+  await page.goto(`${h.url}/v?s=${serverId}&ip=127.0.0.1&h=shop.example.com&u=/`);
+  await page.locator('altcha-widget label').waitFor();
+  await page.waitForTimeout(1200);
+  const before = passes.length;
+  await page.locator('altcha-widget label').tap();
+  await page.waitForFunction(() => /ok|err/.test(document.getElementById('status')?.className ?? ''), null, { timeout: 20000 });
+  expect(await page.textContent('#status')).toContain('Verified');
+  expect(passes.length).toBe(before + 1);
+  await b.close();
+}, 60_000);
+
 // Site mode ("the website's own address"): the server's page on the
 // website frames this page; the tick happens inside the frame and the
 // frame tells the website's page (postMessage), which sets the pass.

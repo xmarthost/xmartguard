@@ -66,8 +66,13 @@ export function entryText(cidr: string): string {
   return cidr.replace(/\/(32|128)$/, '');
 }
 
-/** Days a CAPTCHA-solved address stays off the list while public feeds still name it. */
-export const CLEARED_DAYS = 30;
+/**
+ * Days a CAPTCHA-solved address stays off the shared list at most (any new
+ * attack report ends it sooner). A day, not longer: on shared servers a
+ * check can be solved once by a paid solving service, and the list is the
+ * fleet's first defence.
+ */
+export const CLEARED_DAYS = 1;
 
 /**
  * Most entries taken from one ipdb.sync answer (what an agent sends at
@@ -286,9 +291,10 @@ export class IPDBService {
         WHERE NOT EXISTS (SELECT 1 FROM ipdb_whitelist w WHERE w.cidr >>= e.cidr OR e.cidr >>= w.cidr)
           AND NOT (e.cidr >>= ANY($1::inet[]))
           -- Solved the CAPTCHA (single addresses; manual entries stay): off
-          -- the list until reported again, feeds until the clearing ends.
-          AND NOT EXISTS (SELECT 1 FROM ipdb_cleared k WHERE k.ip::cidr = e.cidr AND e.source <> 'manual'
-                            AND (e.source = 'feed' OR NOT EXISTS (SELECT 1 FROM ipdb_reports r WHERE r.ip = k.ip AND r.reported_at > k.cleared_at)))
+          -- the list until the clearing ends (CLEARED_DAYS) or a server
+          -- reports a new attack from it, whatever listed it (feeds too).
+          AND NOT EXISTS (SELECT 1 FROM ipdb_cleared k WHERE k.ip::cidr = e.cidr AND e.source <> 'manual' AND k.until > now()
+                            AND NOT EXISTS (SELECT 1 FROM ipdb_reports r WHERE r.ip = k.ip AND r.reported_at > k.cleared_at))
         ORDER BY (e.source = 'manual') DESC, e.last_seen DESC
         LIMIT $2`,
       [await this.protectedIPs(), c.ipdbMaxEntries],
@@ -451,7 +457,7 @@ export class IPDBService {
         );
       }
       // A person proved they are behind the address: it leaves the list
-      // until a server reports it again (public feeds: for CLEARED_DAYS).
+      // for CLEARED_DAYS at most, until a server reports it again.
       // Taken from the platform's own servers only: a customer's agent could
       // name any address (an attacker's) to take it off every server's list.
       const solved = (await this.trusted(srv.account_id)) ? (data.solved ?? []).slice(0, SYNC_MAX.solved).filter((s) => s && reportable(String(s.ip))) : [];

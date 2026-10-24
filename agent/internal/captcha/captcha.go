@@ -518,7 +518,7 @@ func (s *Server) verify(w http.ResponseWriter, r *http.Request, ip string) {
 	// Close the redirected connection so the next request goes to the site.
 	w.Header().Set("Connection", "close")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = doneTmpl.Execute(w, map[string]any{"Back": back, "For": duration(cfg.AllowMinutes)})
+	_ = doneTmpl.Execute(w, map[string]any{"Back": back, "For": duration(min(cfg.AllowMinutes, 1440))})
 }
 
 // duration reads an allow time in minutes ("60 minutes", "24 hours").

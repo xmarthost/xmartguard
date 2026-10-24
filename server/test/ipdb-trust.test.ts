@@ -74,6 +74,29 @@ describe("IPDB: one customer's agent cannot change the fleet's list", () => {
     expect(ipdb.entries).not.toContain('198.51.100.31');
   });
 
+  it('clears a solved address for a day at most, and lists it again on a new attack (feeds too)', async () => {
+    await h.pool.query("INSERT INTO ipdb_entries (cidr, source, reason, note) VALUES ('198.51.100.32', 'feed', 'test feed', 'test'), ('198.51.100.33', 'feed', 'test feed', 'test')");
+    const own = await server(master);
+    const at = Date.now() / 1000 - 60;
+    answers.set(own, { solved: [{ ip: '198.51.100.32', at }, { ip: '198.51.100.33', at }] });
+    await ipdb.syncServer(own);
+    await ipdb.rebuild();
+    expect(ipdb.entries).not.toContain('198.51.100.32');
+    expect(ipdb.entries).not.toContain('198.51.100.33');
+    const { rows } = await h.pool.query("SELECT extract(epoch FROM until - cleared_at)::int AS s FROM ipdb_cleared WHERE ip = '198.51.100.32'");
+    expect(rows[0].s).toBe(86400);
+    // It attacks after the solve: back on the list at once, although a
+    // public feed listed it (before: kept off for 30 days).
+    answers.set(own, { reports: reports('198.51.100.32', 1) });
+    await ipdb.syncServer(own);
+    await ipdb.rebuild();
+    expect(ipdb.entries).toContain('198.51.100.32');
+    // The day is over: listed again too.
+    await h.pool.query("UPDATE ipdb_cleared SET until = now() - interval '1 second' WHERE ip = '198.51.100.33'");
+    await ipdb.rebuild();
+    expect(ipdb.entries).toContain('198.51.100.33');
+  });
+
   it("protects only a few addresses a customer's inventory names", async () => {
     const many = Array.from({ length: 1000 }, (_, i) => `203.0.113.${i % 250}`).map((ip, i) => (i < 250 ? ip : `198.18.${Math.floor(i / 250)}.${i % 250}`));
     await server(await customer('Cust D'), { primary_ip: '192.0.2.10', ips: many });

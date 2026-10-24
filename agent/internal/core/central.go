@@ -114,7 +114,7 @@ func (a *Agent) centralSuspects() []string {
 	// Never the server itself, the portal, allowed addresses or trusted services.
 	skip := map[string]bool{}
 	if a.Firewall != nil {
-		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow} {
+		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow, firewall.KindCaptchaPass} {
 			if rs, err := a.Firewall.List(kind); err == nil {
 				for _, r := range rs {
 					if !r.Inbound() {
@@ -446,6 +446,13 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if !a.siteHere(in.IP, in.Host) {
 			return nil, fmt.Errorf("%s is not a website on this server", in.Host)
 		}
+		// Banned for attacking after an earlier solved check, or
+		// blacklisted: solving again does not let it in.
+		if a.Firewall != nil {
+			if err := a.Firewall.PassRefused(in.IP); err != nil {
+				return nil, err
+			}
+		}
 		ips := []string{in.IP}
 		if in.Also != "" && in.Also != in.IP && net.ParseIP(in.Also) != nil {
 			ips = append(ips, in.Also)
@@ -492,6 +499,11 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		}
 		if !a.siteHere(in.IP, in.Host) {
 			return nil, fmt.Errorf("%s is not a website on this server", in.Host)
+		}
+		if a.Firewall != nil {
+			if err := a.Firewall.PassRefused(in.IP); err != nil {
+				return nil, err
+			}
 		}
 		if !a.Captcha.AddTicket(in.Nonce, in.IP) {
 			return nil, errors.New("invalid ticket")

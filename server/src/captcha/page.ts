@@ -190,13 +190,19 @@ function done(sol){
 // a second with no one at the page. What a person does on the page goes
 // with the answer (only real events count): when the box was ticked, and
 // pointer, touch and key activity.
-var hs={t:0,m:0,k:0,tr:false,tc:false};
-document.addEventListener('pointermove',function(e){if(e.isTrusted)hs.m++},{passive:true});
-document.addEventListener('touchstart',function(e){if(e.isTrusted)hs.tc=true},{passive:true});
-document.addEventListener('keydown',function(e){if(e.isTrusted)hs.k++});
-box.addEventListener('click',function(e){if(e.isTrusted&&usingAltcha&&!hs.tr){hs.tr=true;hs.t=Date.now()-t0}},true);
+// The tick is a real click, tap or press on the box after it appeared
+// (Safari on iPhones: the tap, not only the click, counts); t is the time
+// from the box appearing to the tick.
+var hs={t:0,m:0,p:0,k:0,tr:false,tc:false},tA=0;
+function act(e){return e.isTrusted}
+['pointermove','mousemove'].forEach(function(n){document.addEventListener(n,function(e){if(act(e))hs.m++},{passive:true})});
+['pointerdown','mousedown'].forEach(function(n){document.addEventListener(n,function(e){if(act(e))hs.p++},{passive:true,capture:true})});
+['touchstart','touchend'].forEach(function(n){document.addEventListener(n,function(e){if(act(e))hs.tc=true},{passive:true,capture:true})});
+document.addEventListener('keydown',function(e){if(act(e))hs.k++},true);
+function boxTick(e){if(act(e)&&usingAltcha&&tA&&!hs.tr&&altcha&&altcha.contains(e.target)){hs.tr=true;hs.t=Date.now()-tA}}
+['click','pointerup','touchend'].forEach(function(n){box.addEventListener(n,boxTick,{passive:true,capture:true})});
 function startAltcha(){
-  usingAltcha=true;ag.hidden=true;hs.tr=false;hs.t=0;
+  usingAltcha=true;ag.hidden=true;hs.tr=false;hs.t=0;tA=0;
   show('Loading the check…','',true);
   var go=function(){
     box.innerHTML='';
@@ -206,6 +212,7 @@ function startAltcha(){
     altcha.addEventListener('verified',function(e){done({altcha:e.detail.payload,hu:JSON.stringify(hs)})});
     altcha.addEventListener('statechange',function(e){if(e.detail&&e.detail.state==='error')fail('The check could not finish. Please try again.')});
     box.appendChild(altcha);
+    tA=Date.now();
     stopClock();show('Tick the box to confirm you are human.');
   };
   if(customElements.get('altcha-widget')){go();return}

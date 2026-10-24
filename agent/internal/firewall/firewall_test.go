@@ -762,7 +762,8 @@ func TestCaptchaSolvedWithoutRebuild(t *testing.T) {
 		if !strings.Contains(kernelDump(m), "203.0.113.88") {
 			t.Fatal("solved address not allowed in the kernel")
 		}
-		if c, _ := m.Check("203.0.113.88"); c.Status != "allowed" {
+		// Out of the ban, not whitelisted (a CAPTCHA pass).
+		if c, _ := m.Check("203.0.113.88"); c.Status != "none" || strings.Join(c.Found, ",") != "CAPTCHA-PASS" {
 			t.Fatalf("check after the solve: %+v", c)
 		}
 	})

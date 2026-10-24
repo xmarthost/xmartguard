@@ -202,6 +202,7 @@ const FOUND: Record<string, string> = {
   WHITELIST: 'Whitelisted: never blocked by the firewall',
   'WHITELIST-COUNTRY': 'Its country is whitelisted: never blocked by the firewall (WAF and CAPTCHA settings still apply)',
   'TEMP-ALLOW': 'Temporarily allowed',
+  'CAPTCHA-PASS': 'Solved the CAPTCHA: let past the IPDB block for a while (at most a day). Not a whitelist: ports, DoS limits, the WAF and new bans still apply, and a new ban ends it',
   IGNORE: 'Ignored by automatic blocking',
   BLACKLIST: 'Blacklisted: blocked permanently',
   'TEMP-BAN': 'Temporarily banned',
@@ -330,7 +331,7 @@ function CheckIPModal({ serverId, initial, onClose }: { serverId: string; initia
                     <li key={f}>
                       <b className="text-navy-900">{f}</b> — {FOUND[f] ?? ''}
                       {res.matches
-                        .filter((m) => ({ allow: 'WHITELIST', deny: 'BLACKLIST', tempban: 'TEMP-BAN', tempallow: 'TEMP-ALLOW', ignore: 'IGNORE' })[m.kind] === f)
+                        .filter((m) => ({ allow: 'WHITELIST', deny: 'BLACKLIST', tempban: 'TEMP-BAN', tempallow: 'TEMP-ALLOW', captchapass: 'CAPTCHA-PASS', ignore: 'IGNORE' })[m.kind] === f)
                         .map((m) => (
                           <div key={m.kind + m.cidr} className="ml-4 text-xs text-slate-500">
                             {m.cidr}
@@ -762,6 +763,10 @@ export function FirewallPage() {
       <Section title="Temporary allow" desc="Manage temporarily allowed IP addresses">
         <AddRemove serverId={id!} kind="tempallow" label="Allow IP" removeLabel="Remove temporary allow" withDuration />
         <div className="text-right"><button className="text-sm text-navy-700 hover:underline" onClick={() => setView({ kind: 'tempallow', title: 'Temporarily allowed' })}>View temporary list</button></div>
+        <p className="text-xs text-slate-500">
+          A solved CAPTCHA is not a temporary allow: it only lets the address past the IPDB block, for at most a day, and a new ban ends it.{' '}
+          <button className="text-navy-700 hover:underline" onClick={() => setView({ kind: 'captchapass', title: 'CAPTCHA passes' })}>View CAPTCHA passes</button>
+        </p>
       </Section>
 
       <Section title="Dynamic DNS (DDNS) Allowlist" desc="Automatically update the IP allowlist using a Dynamic DNS hostname (resolved every 5 minutes)">

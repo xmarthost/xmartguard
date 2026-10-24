@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +167,16 @@ func TestCentralCaptchaAgent(t *testing.T) {
 	p, _ = json.Marshal(map[string]any{"ip": "198.51.100.10", "host": "shop.example.com", "minutes": 100000})
 	if r, _ := h["captcha.pass"](ctx, p); r.(map[string]any)["minutes"] == 100000 {
 		t.Fatal("pass longer than configured")
+	}
+	// Banned for attacking after a solved check (or blacklisted): solving
+	// again lets it in nowhere (no login-page pass, no site ticket).
+	a.DB.Exec(`INSERT INTO fw_rules (kind, cidr, comment, created_at, expires_at) VALUES ('tempban','198.51.100.66','5 failed SSH logins (after a solved CAPTCHA)',?,?)`, now, now+3600)
+	if err := pass("198.51.100.66", "shop.example.com"); err == nil || !strings.Contains(err.Error(), "attacked after solving") {
+		t.Fatalf("pass after an attack following a solved check: %v", err)
+	}
+	a.DB.Exec(`INSERT INTO fw_rules (kind, cidr, comment, created_at, expires_at) VALUES ('deny','198.51.100.67','',?,0)`, now)
+	if err := pass("198.51.100.67", "shop.example.com"); err == nil {
+		t.Fatal("pass for a blacklisted address")
 	}
 	// Expired passes drop out.
 	store.SetKV(a.DB, kvCentralPass, `{"198.51.100.7":1}`)

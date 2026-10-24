@@ -58,7 +58,7 @@ func TestWhitelistReplacesTempAllow(t *testing.T) {
 	if err := m.CaptchaSolved("203.0.113.40", 0); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := m.Check("203.0.113.40"); strings.Join(r.Found, ",") != "TEMP-ALLOW" {
+	if r, _ := m.Check("203.0.113.40"); strings.Join(r.Found, ",") != "CAPTCHA-PASS" {
 		t.Fatalf("before whitelisting: %v", r.Found)
 	}
 	if _, err := m.Add(KindAllow, "203.0.113.40", "transfer", 0); err != nil {
@@ -76,6 +76,7 @@ func TestWhitelistReplacesTempAllow(t *testing.T) {
 	}
 	// Old data: a temporary allow next to a whitelist entry is cleaned up.
 	m.DB.Exec(`INSERT INTO fw_rules (kind, cidr, comment, created_at, expires_at) VALUES ('tempallow','203.0.113.40','solved CAPTCHA',1,9999999999)`)
+	m.DB.Exec(`INSERT INTO fw_rules (kind, cidr, comment, created_at, expires_at) VALUES ('captchapass','203.0.113.40','solved CAPTCHA',1,9999999999)`)
 	m.expire()
 	if r, _ := m.Check("203.0.113.40"); strings.Join(r.Found, ",") != "WHITELIST" {
 		t.Fatalf("old temporary allow kept: %v", r.Found)

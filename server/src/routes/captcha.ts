@@ -27,11 +27,20 @@ import { checkAbuseIPDB, loadAbuseIPDB } from '../ipdb/abuseipdb.js';
  * website is one of its own before the visitor is sent back.
  */
 
+/**
+ * The longest a solved check lets an address in (servers cap it too): on
+ * shared servers a check solved once, perhaps by a paid solving service,
+ * must not open the door for days.
+ */
+export const MAX_PASS_MINUTES = 24 * 60;
+
 export const CaptchaConfig = z.object({
   enabled: z.boolean(),
   site_key: z.string().trim().max(200),
   secret_key: z.string().trim().max(200),
-  minutes: z.number().int().min(10).max(7 * 24 * 60),
+  // At most a day (MAX_PASS_MINUTES); longer saved values (up to 7 days
+  // before 0.23.15) are read as a day.
+  minutes: z.number().int().min(10).max(7 * 24 * 60).transform((v) => Math.min(v, MAX_PASS_MINUTES)),
   // auto: Turnstile, and ALTCHA when Turnstile cannot load for a visitor
   // (or when no Turnstile keys are set); turnstile or altcha: only that one.
   provider: z.enum(['auto', 'turnstile', 'altcha']).default('auto'),
@@ -357,21 +366,35 @@ function validParams(p: { s: string; ip: string; h: string; u: string }): string
 }
 
 /**
- * Whether an ALTCHA answer came with a person's tick: a trusted click (or
- * Space on the box) at least 0.7 s after the page opened and within 30
- * minutes, and pointer movement, a touch or a key press on the page. A
- * page that solved itself (the old auto-start) or a script that posts an
- * answer has none of these.
+ * Whether an ALTCHA answer came with a person's tick: a real click, tap or
+ * press on the box (tr) at least half a second after the box appeared (t)
+ * and within two hours, with some pointer movement, a press, a touch or a
+ * key on the page. A page that solved itself (the old auto-start) or a
+ * script that clicks the box or posts an answer has none of these. Real
+ * input from a driven browser can fake them: this raises the bar, the
+ * proof of work and the network checks stay the defence.
  */
 export function humanTick(raw: string | undefined): boolean {
-  if (!raw) return false;
+  const h = tickSignals(raw);
+  return !!h && h.tr && h.t >= 500 && h.t <= 2 * 3600_000 && (h.m >= 1 || h.p >= 1 || h.tc || h.k >= 1);
+}
+
+function tickSignals(raw: string | undefined) {
+  if (!raw) return null;
   try {
-    const h = JSON.parse(raw) as { t?: unknown; m?: unknown; k?: unknown; tr?: unknown; tc?: unknown };
-    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-    return h.tr === true && n(h.t) >= 700 && n(h.t) <= 30 * 60_000 && (n(h.m) >= 2 || h.tc === true || n(h.k) >= 1);
+    const h = JSON.parse(raw) as Record<string, unknown>;
+    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.round(v)) : 0);
+    return { t: n(h.t), m: n(h.m), p: n(h.p), k: n(h.k), tr: h.tr === true, tc: h.tc === true };
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** The refusal's reason with what the page saw (to tell a real visitor's miss from a script). */
+export function tickReason(raw: string | undefined): string {
+  const h = tickSignals(raw);
+  if (!h) return 'box not ticked by a person (no page signals)';
+  return `box not ticked by a person (tick ${h.tr ? 'yes' : 'no'} after ${h.t} ms, moves ${h.m}, presses ${h.p}, touch ${h.tc ? 'yes' : 'no'}, keys ${h.k})`;
 }
 
 /**
@@ -670,7 +693,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         // box must have been ticked by a person (a real click or key press,
         // not at once, with some pointer, touch or key activity).
         if (method === 'altcha' && !humanTick(b.data.hu)) {
-          await rec('failed', method, ip, 'box not ticked by a person');
+          await rec('failed', method, ip, tickReason(b.data.hu));
           return res(403, { error: 'Please tick the box yourself to confirm you are human.' });
         }
         // Solved from a data centre for another address: CAPTCHA farms solve
@@ -759,7 +782,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     site_key: z.string().trim().max(200),
     // Empty keeps the saved secret.
     secret_key: z.string().trim().max(200),
-    minutes: z.number().int().min(10).max(7 * 24 * 60),
+    minutes: z.number().int().min(10).max(MAX_PASS_MINUTES),
     provider: z.enum(['auto', 'turnstile', 'altcha']).default('auto'),
     strict_ip: z.boolean().default(false),
     design: z.enum(CAPTCHA_DESIGNS).default('classic'),

@@ -326,10 +326,22 @@ describe('CAPTCHA page: other addresses and ALTCHA', () => {
       expect(r.body.error).toContain('tick the box yourself');
     }
     const { rows } = await h.pool.query("SELECT reason FROM captcha_events WHERE ip = '203.0.113.77' ORDER BY id DESC LIMIT 1");
-    expect(rows[0].reason).toBe('box not ticked by a person');
-    // A touch or a key press (keyboard users) counts as a person too.
+    // The reason says what the page saw (a real visitor's miss or a script).
+    expect(rows[0].reason).toBe('box not ticked by a person (no page signals)');
+    await verify({ ...p(), altcha: a, hu: JSON.stringify({ t: 1500, m: 3, p: 1, tr: false, tc: true }) }, '203.0.113.77');
+    const { rows: r2 } = await h.pool.query("SELECT reason FROM captcha_events WHERE ip = '203.0.113.77' ORDER BY id DESC LIMIT 1");
+    expect(r2[0].reason).toBe('box not ticked by a person (tick no after 1500 ms, moves 3, presses 1, touch yes, keys 0)');
+    // A touch, a press or a key (keyboard users) counts as a person too:
+    // Safari on iPhones (iCloud Private Relay visitors) sends a tap with no
+    // pointer movement and failed the first try before 0.23.15.
     expect(humanTick(JSON.stringify({ t: 900, m: 0, tr: true, tc: true }))).toBe(true);
+    expect(humanTick(JSON.stringify({ t: 900, m: 0, p: 1, tr: true }))).toBe(true);
     expect(humanTick(JSON.stringify({ t: 900, m: 0, k: 1, tr: true }))).toBe(true);
+    expect(humanTick(JSON.stringify({ t: 600, m: 1, tr: true }))).toBe(true);
+    // Not a tick: none, at once, or hours later.
+    expect(humanTick(JSON.stringify({ t: 900, m: 5, p: 2, tr: false }))).toBe(false);
+    expect(humanTick(JSON.stringify({ t: 300, m: 5, tr: true }))).toBe(false);
+    expect(humanTick(JSON.stringify({ t: 3 * 3600_000, m: 5, tr: true }))).toBe(false);
     expect((await verify({ ...p(), altcha: a, hu: HU }, '203.0.113.77')).status).toBe(200);
     expect(passes).toHaveLength(1);
     // A solution works once.
@@ -653,6 +665,17 @@ describe('CAPTCHA on the website’s own address', () => {
     } finally {
       h.hub.command = before;
     }
+  });
+
+  it('lets a solved check count for a day at most (also a longer saved value)', async () => {
+    const base = { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', site_servers: [serverId] };
+    expect((await admin.req('PUT', '/api/captcha', { ...base, minutes: 4320 })).status).toBe(400);
+    expect((await admin.req('PUT', '/api/captcha', { ...base, minutes: 1440 })).status).toBe(200);
+    // Saved before 0.23.15 with 7 days: read as a day, and servers get a day.
+    await h.pool.query("UPDATE captcha_config SET config = jsonb_set(config::jsonb, '{minutes}', '10080')");
+    expect((await admin.req('GET', '/api/captcha')).body.config.minutes).toBe(1440);
+    expect((await agent('/api/agent/captcha/config', { version: 0 })).body.config.minutes).toBe(1440);
+    expect((await admin.req('PUT', '/api/captcha', { ...base, minutes: 60 })).status).toBe(200);
   });
 
   it('tells IPDB and firewall visitors apart from login pages in the reports (a label only)', async () => {

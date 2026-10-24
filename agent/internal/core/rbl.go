@@ -18,7 +18,7 @@ import (
 func (a *Agent) rblExempt() []string {
 	out := a.wafTrustedCIDRs()
 	if a.Firewall != nil {
-		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow} {
+		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow, firewall.KindCaptchaPass} {
 			if rs, err := a.Firewall.List(kind); err == nil {
 				for _, r := range rs {
 					if !r.Inbound() {

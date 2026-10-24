@@ -45,8 +45,6 @@ const DURATIONS: [number, string][] = [
   [360, '6 hours'],
   [720, '12 hours'],
   [1440, '24 hours'],
-  [4320, '3 days'],
-  [10080, '7 days'],
 ];
 
 const RESULT: Record<string, [string, string]> = {
@@ -206,7 +204,7 @@ export default function CaptchaPage() {
             <option value="off">Block only, on all servers</option>
           </select>
         </SettingRow>
-        <SettingRow title="Do not ask a verified address again for" desc="How long a solved check lets the address in on that server: into the login pages, and out of a temporary ban or the IPDB block.">
+        <SettingRow title="Do not ask a verified address again for" desc="How long a solved check lets the address in on that server (at most a day): into the login pages, and out of a temporary ban or past the IPDB block. It is not a whitelist: an attack bans the address again, ends this, and solving again does not lift that ban.">
           <select className="input w-40" value={minutes} disabled={!admin || busy} onChange={(e) => setMinutes(Number(e.target.value))}>
             {DURATIONS.map(([v, l]) => (
               <option key={v} value={v}>

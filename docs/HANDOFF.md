@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.14** (see `VERSION`).
+- Current release: **0.23.15** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.14 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.15 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.14: `--branch backup-0.23.13`; see "Rollback" under 0.23.14 below);
+  0.23.15: `--branch backup-0.23.14`; see "Rollback" under 0.23.15 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,57 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.15: a solved CAPTCHA is no longer a whitelist**
+  (2026-10-25). The owner asked whether one solved check gives an
+  attacker on a shared server a free pass, and for how long. It did:
+  - **Server**: `CaptchaSolved` stored a `tempallow` (default 12 h, up to
+    7 days), which the kernel accepts first (`@tempallow accept`): every
+    port open (port filter skipped), no DoS limit, and `AutoBan` skipped
+    allowed addresses, so no new ban (brute force on SSH/mail/wp-login,
+    WAF bans) and no IPDB report for that time.
+  - **Portal**: `ipdb_cleared` kept a solved address off the fleet's IPDB
+    for 30 days; for feed entries even when servers reported new attacks.
+  - **Now**: a new kind `captchapass` (firewall.go `KindCaptchaPass`,
+    kernel sets `cpass4/6`, ipset `xg_cpass4/6`). It only skips the IPDB
+    drop (`ip saddr != @cpass4 ip saddr @ipdb4 ... drop_ipdb`) and the
+    IPDB redirect (ban redirects come first); no accept. At most a day
+    (`MaxCaptchaPass`; portal `MAX_PASS_MINUTES`, the 3 and 7 day choices
+    are gone and longer saved values read as a day). `AutoBan` and the DoS
+    ban sync end the pass (`endPass`) and mark the ban
+    " (after a solved CAPTCHA)"; such a ban is not lifted by solving again
+    (`PassRefused`: also in `captcha.pass` and `captcha.ticket`, so the
+    portal records "server refused: … attacked after solving the
+    CAPTCHA …"). The IPDB report of such a ban goes to the portal (passes
+    are not in the report skip list). Passes still exempt the WAF's IPDB
+    POST block and the login-page suspects list (rbl.go, central.go), so
+    the person can post forms; other WAF rules apply. Old `tempallow`
+    rows with comment "solved CAPTCHA" become passes of at most a day at
+    start (`passesFromTempAllows`). Firewall » Temporary allow has "View
+    CAPTCHA passes"; Check IP shows CAPTCHA-PASS.
+  - Portal `CLEARED_DAYS` = 1, and a new report ends the clearing for
+    every source (feeds too).
+  - **ALTCHA tick from the logs**: 17 "box not ticked by a person" in 12 h,
+    nearly all iCloud Private Relay visitors (87.81.x / 2606:54c1::,
+    Safari) who passed on the second try 30-60 s later. Not reproduced
+    (no WebKit in the container). The page now also counts presses
+    (pointerdown/mousedown), touchend and a pointerup/touchend on the box
+    as the tick, measures from the box appearing (at least 0.5 s, at most
+    2 h), and the refusal reason carries the signals ("tick no after …
+    ms, moves …, presses …, touch …, keys …"): read them in the reports
+    if visitors still fail. Also fixed on the way: a function named
+    `tick` clashed with the page's timer variable.
+  - Tests: firewall `TestCaptchaPassRendersIPDBOnly` (nft and iptables
+    rules), `TestCaptchaPassEndsOnNewBan` (both kernels),
+    `TestOldCaptchaTempAllowsBecomePasses`; core
+    `TestCentralCaptchaAgent` (refused pass); server ipdb-trust "clears a
+    solved address for a day at most…", captcha "lets a solved check count
+    for a day at most…", humanTick cases; browser "ALTCHA passes a single
+    tap on a phone". `TestCaptchaSolvedWithoutRebuild` and
+    `TestWhitelistReplacesTempAllow` now expect CAPTCHA-PASS.
+  - **Rollback**: `backup-0.23.14`. Portal: the update command with
+    `--branch backup-0.23.14`. Agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`
+    (an older agent ignores `captchapass` rows; they expire within a day).
 
 - **Release 0.23.14: the ALTCHA box glows until it is ticked**
   (2026-10-24). The owner asked for a soft shine so visitors see the box:
@@ -145,7 +196,8 @@ project. It holds the rules, the current state and what is still open.
     ipset/nft drops; optional kernel log; Check IP (fw.check / IPDB page);
     an ignore list that survives reloads; IPDB CAPTCHA (theirs removes the
     address from the block; ours lets it in for the set time and keeps a
-    solved address off the list for 30 days, `ipdb_cleared`).
+    solved address off the list for a while, `ipdb_cleared`: 30 days
+    until 0.23.15, now a day at most, see 0.23.15).
   - **Rollback**: `backup-0.23.12`. Portal: the update command with
     `--branch backup-0.23.12` (the `source` column stays, unused). Agents:
     `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.

@@ -35,8 +35,11 @@ type Ruleset struct {
 	Allow, Deny, Ignore []string
 	// AllowRules are whitelist entries limited to a protocol, ports or
 	// one direction (rendered one rule each).
-	AllowRules                 []Rule
-	TempAllow, TempBan         map[string]time.Duration
+	AllowRules         []Rule
+	TempAllow, TempBan map[string]time.Duration
+	// CaptchaPass: addresses whose visitor solved the CAPTCHA, let past the
+	// IPDB block (drop and redirect) only (KindCaptchaPass).
+	CaptchaPass                map[string]time.Duration
 	CountryBlock, CountryAllow []string // IPs/CIDRs (both families)
 	DoS                        bool
 	DoSPerMinute               int
@@ -149,6 +152,7 @@ func (r Ruleset) Render() string {
 	i4, i6 := split(r.Ignore)
 	ta4, ta6 := splitTimed(r.TempAllow)
 	tb4, tb6 := splitTimed(r.TempBan)
+	cp4, cp6 := splitTimed(r.CaptchaPass)
 	cb4, cb6 := split(r.CountryBlock)
 	ca4, ca6 := split(r.CountryAllow)
 	// Ignored countries can overlap user entries; interval sets reject overlaps.
@@ -162,6 +166,8 @@ func (r Ruleset) Render() string {
 	set(&b, "tempallow6", "ipv6_addr", "timeout", ta6)
 	set(&b, "tempban4", "ipv4_addr", "timeout", tb4)
 	set(&b, "tempban6", "ipv6_addr", "timeout", tb6)
+	set(&b, "cpass4", "ipv4_addr", "timeout", cp4)
+	set(&b, "cpass6", "ipv6_addr", "timeout", cp6)
 	set(&b, "country_allow4", "ipv4_addr", "interval", ca4)
 	set(&b, "country_block4", "ipv4_addr", "interval", cb4)
 	set(&b, "country_allow6", "ipv6_addr", "interval", ca6)
@@ -222,6 +228,11 @@ func (r Ruleset) Render() string {
 			// The port first: a set lookup counts on the IPDB set's elements,
 			// so other traffic must not reach it here.
 			for _, st := range sets {
+				// A solved CAPTCHA lets the address past the IPDB only: a
+				// ban still sends it to the check (tempban comes first).
+				if strings.HasPrefix(st, "ipdb") {
+					fmt.Fprintf(&b, "\t\t%s saddr @cpass%s return\n", fam[0], fam[1])
+				}
 				fmt.Fprintf(&b, "\t\ttcp dport 80 %s saddr @%s redirect to :%d\n", fam[0], st, cp.HTTPPort)
 				fmt.Fprintf(&b, "\t\ttcp dport 443 %s saddr @%s redirect to :%d\n", fam[0], st, cp.HTTPSPort)
 			}
@@ -267,8 +278,10 @@ func (r Ruleset) Render() string {
 	jump := func(match, chain, comment string) {
 		fmt.Fprintf(&b, "\t\t%s counter jump %s comment \"%s\"\n", match, chain, comment)
 	}
-	jump("ip saddr @ipdb4", "drop_ipdb", "xg-ipdb")
-	jump("ip6 saddr @ipdb6", "drop_ipdb", "xg-ipdb")
+	// A solved CAPTCHA (cpass) lets the address past the IPDB only; that
+	// test first, as an IPDB lookup counts on the matched element.
+	jump("ip saddr != @cpass4 ip saddr @ipdb4", "drop_ipdb", "xg-ipdb")
+	jump("ip6 saddr != @cpass6 ip6 saddr @ipdb6", "drop_ipdb", "xg-ipdb")
 	jump("ip saddr @deny4", "drop_deny", "xg-deny")
 	jump("ip6 saddr @deny6", "drop_deny", "xg-deny")
 	jump("ip saddr @tempban4", "drop_tempban", "xg-tempban")

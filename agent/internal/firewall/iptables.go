@@ -20,9 +20,11 @@ type Backend interface {
 	Apply(Ruleset) error
 	Remove() error
 	AddTempBan(ip string, seconds int) error
-	// AllowTemp lets ip in for seconds and lifts its temporary ban, without
-	// rebuilding the ruleset (a solved CAPTCHA).
-	AllowTemp(ip string, seconds int) error
+	// PassTemp lets ip past the IPDB block for seconds and lifts its
+	// temporary ban, without rebuilding the ruleset (a solved CAPTCHA).
+	PassTemp(ip string, seconds int) error
+	// EndPass ends that (the address is banned again).
+	EndPass(ip string) error
 	TempBanned() ([]string, error)
 	Counters() map[string]uint64
 	// IPDBCounters returns packets dropped per IPDB list entry.
@@ -57,12 +59,12 @@ func (n NFT) AddTempBan(ip string, seconds int) error {
 	return n.AddElement(set, fmt.Sprintf("%s timeout %ds", ip, seconds))
 }
 
-func (n NFT) AllowTemp(ip string, seconds int) error {
+func (n NFT) PassTemp(ip string, seconds int) error {
 	fam := "4"
 	if strings.Contains(ip, ":") {
 		fam = "6"
 	}
-	if err := n.AddElement("tempallow"+fam, fmt.Sprintf("%s timeout %ds", ip, seconds)); err != nil {
+	if err := n.AddElement("cpass"+fam, fmt.Sprintf("%s timeout %ds", ip, seconds)); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -73,6 +75,21 @@ func (n NFT) AllowTemp(ip string, seconds int) error {
 		return err
 	}
 	return nil
+}
+
+func (n NFT) EndPass(ip string) error {
+	fam := "4"
+	if strings.Contains(ip, ":") {
+		fam = "6"
+	}
+	els, err := n.SetElements("cpass" + fam)
+	if err != nil || !slices.Contains(els, ip) {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err = n.run(ctx, "", "delete", "element", "inet", Table, "cpass"+fam, "{ "+ip+" }")
+	return err
 }
 
 func (n NFT) TempBanned() ([]string, error) {
@@ -114,6 +131,7 @@ func ipsets() []ipset {
 		{"xg_deny4", "hash:net", "inet", false, false}, {"xg_deny6", "hash:net", "inet6", false, false},
 		{"xg_tallow4", "hash:ip", "inet", true, false}, {"xg_tallow6", "hash:ip", "inet6", true, false},
 		{"xg_tban4", "hash:ip", "inet", true, false}, {"xg_tban6", "hash:ip", "inet6", true, false},
+		{"xg_cpass4", "hash:ip", "inet", true, false}, {"xg_cpass6", "hash:ip", "inet6", true, false},
 		{"xg_cblock4", "hash:net", "inet", false, false}, {"xg_callow4", "hash:net", "inet", false, false},
 		{"xg_cblock6", "hash:net", "inet6", false, false}, {"xg_callow6", "hash:net", "inet6", false, false},
 		{"xg_ipdb4", "hash:net", "inet", false, true}, {"xg_ipdb6", "hash:net", "inet6", false, true},
@@ -227,6 +245,7 @@ func renderIPSet(r Ruleset) string {
 		"xg_allow4": a4, "xg_allow6": a6, "xg_exempt4": i4, "xg_exempt6": i6, "xg_deny4": d4, "xg_deny6": d6,
 		"xg_tallow4": timed(r.TempAllow, false), "xg_tallow6": timed(r.TempAllow, true),
 		"xg_tban4": timed(r.TempBan, false), "xg_tban6": timed(r.TempBan, true),
+		"xg_cpass4": timed(r.CaptchaPass, false), "xg_cpass6": timed(r.CaptchaPass, true),
 		"xg_cblock4": cb4, "xg_callow4": ca4, "xg_cblock6": cb6, "xg_callow6": ca6, "xg_ipdb4": p4, "xg_ipdb6": p6,
 	}
 	var b strings.Builder
@@ -394,7 +413,9 @@ func renderRules(r Ruleset, v6 bool) string {
 	add("-m set --match-set xg_exempt" + sfx + " src -j " + ChainExempt)
 	add("-m set --match-set xg_exempt" + sfx + " src -j RETURN")
 	if len(r.IPDB) > 0 {
-		jump("-m set --match-set xg_ipdb"+sfx+" src", "xg-ipdb", ChainIPDB)
+		// A solved CAPTCHA (xg_cpass) lets the address past the IPDB only;
+		// that test first, as the IPDB set counts its matched entries.
+		jump("-m set ! --match-set xg_cpass"+sfx+" src -m set --match-set xg_ipdb"+sfx+" src", "xg-ipdb", ChainIPDB)
 	}
 	jump("-m set --match-set xg_deny"+sfx+" src", "xg-deny", ChainDeny)
 	jump("-m set --match-set xg_tban"+sfx+" src", "xg-tempban", ChainTempBan)
@@ -509,6 +530,11 @@ func renderNAT(r Ruleset, v6 bool) string {
 			fmt.Fprintf(&b, "-A %s -m set --match-set xg_allow%s src -j RETURN\n", ChainCaptcha, sfx)
 			fmt.Fprintf(&b, "-A %s -m set --match-set xg_exempt%s src -j RETURN\n", ChainCaptcha, sfx)
 			fmt.Fprintf(&b, "-A %s -m set --match-set xg_tallow%s src -j RETURN\n", ChainCaptcha, sfx)
+			// A solved CAPTCHA lets the address past the IPDB only: a ban
+			// still sends it to the check (the ban set comes first).
+			if strings.HasPrefix(st, "xg_ipdb") {
+				fmt.Fprintf(&b, "-A %s -m set --match-set xg_cpass%s src -j RETURN\n", ChainCaptcha, sfx)
+			}
 			fmt.Fprintf(&b, "-A %s -p tcp --dport 80 -m set --match-set %s src -j REDIRECT --to-ports %d\n", ChainCaptcha, st, cp.HTTPPort)
 			fmt.Fprintf(&b, "-A %s -p tcp --dport 443 -m set --match-set %s src -j REDIRECT --to-ports %d\n", ChainCaptcha, st, cp.HTTPSPort)
 		}
@@ -647,17 +673,28 @@ func (t IPTables) AddTempBan(ip string, seconds int) error {
 	return err
 }
 
-func (t IPTables) AllowTemp(ip string, seconds int) error {
+func (t IPTables) PassTemp(ip string, seconds int) error {
 	fam := "4"
 	if strings.Contains(ip, ":") {
 		fam = "6"
 	}
 	ctx, cancel := ctx60()
 	defer cancel()
-	if _, err := runIPSet(ctx, "", t.IPSet, "add", "xg_tallow"+fam, ip, "timeout", strconv.Itoa(seconds), "-exist"); err != nil {
+	if _, err := runIPSet(ctx, "", t.IPSet, "add", "xg_cpass"+fam, ip, "timeout", strconv.Itoa(seconds), "-exist"); err != nil {
 		return err
 	}
 	_, err := runIPSet(ctx, "", t.IPSet, "del", "xg_tban"+fam, ip, "-exist")
+	return err
+}
+
+func (t IPTables) EndPass(ip string) error {
+	fam := "4"
+	if strings.Contains(ip, ":") {
+		fam = "6"
+	}
+	ctx, cancel := ctx60()
+	defer cancel()
+	_, err := runIPSet(ctx, "", t.IPSet, "del", "xg_cpass"+fam, ip, "-exist")
 	return err
 }
 

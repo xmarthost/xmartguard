@@ -25,7 +25,21 @@ const (
 	KindTempBan   = "tempban"
 	KindTempAllow = "tempallow"
 	KindIgnore    = "ignore"
+	// KindCaptchaPass: a visitor behind the address solved the CAPTCHA. It
+	// only lets the address past the IPDB block (and its redirect to the
+	// check) for a while: unlike a temporary allow it opens no closed port,
+	// skips no DoS limit and protects from no new ban (shared servers: an
+	// attacker can pay to have a CAPTCHA solved).
+	KindCaptchaPass = "captchapass"
 )
+
+// MaxCaptchaPass is the longest a solved CAPTCHA lets an address past the
+// IPDB block.
+const MaxCaptchaPass = 24 * time.Hour
+
+// afterCaptcha marks a ban of an address that held a CAPTCHA pass: it
+// attacked after a solved check, so the check does not lift this ban.
+const afterCaptcha = " (after a solved CAPTCHA)"
 
 // Rule is one stored firewall entry.
 type Rule struct {
@@ -273,7 +287,7 @@ func (m *Manager) Build() (Ruleset, error) {
 	if err != nil {
 		return Ruleset{}, err
 	}
-	rs := Ruleset{TempAllow: map[string]time.Duration{}, TempBan: map[string]time.Duration{}, DoS: cfg.DoS, DoSPerMinute: cfg.DoSThreshold, DoSBanSeconds: cfg.BanMinutes * 60,
+	rs := Ruleset{TempAllow: map[string]time.Duration{}, TempBan: map[string]time.Duration{}, CaptchaPass: map[string]time.Duration{}, DoS: cfg.DoS, DoSPerMinute: cfg.DoSThreshold, DoSBanSeconds: cfg.BanMinutes * 60,
 		LogDrops: cfg.LogBlocked}
 	now := time.Now().Unix()
 	for _, r := range all {
@@ -292,6 +306,8 @@ func (m *Manager) Build() (Ruleset, error) {
 			rs.TempAllow[r.CIDR] = time.Duration(r.ExpiresAt-now) * time.Second
 		case KindTempBan:
 			rs.TempBan[r.CIDR] = time.Duration(r.ExpiresAt-now) * time.Second
+		case KindCaptchaPass:
+			rs.CaptchaPass[r.CIDR] = time.Duration(r.ExpiresAt-now) * time.Second
 		}
 	}
 	// Protected addresses (this server, the portal) pass every rule. The
@@ -481,15 +497,16 @@ func (m *Manager) store(kind, addr, comment string, ttl time.Duration, o AllowOp
 		if svc := m.trustedService(c); svc != "" {
 			return Rule{}, fmt.Errorf("%s belongs to %s, a trusted service that is never blocked (turn it off under Firewall » Trusted services to block it)", c, svc)
 		}
-	case KindTempAllow:
+	case KindTempAllow, KindCaptchaPass:
 	default:
 		return Rule{}, fmt.Errorf("unknown rule kind %q", kind)
 	}
-	if (kind == KindTempBan || kind == KindTempAllow) && strings.Contains(c, "/") {
+	temp := kind == KindTempBan || kind == KindTempAllow || kind == KindCaptchaPass
+	if temp && strings.Contains(c, "/") {
 		return Rule{}, errors.New("temporary rules take a single IP address, not a CIDR")
 	}
 	var expires int64
-	if kind == KindTempBan || kind == KindTempAllow {
+	if temp {
 		if ttl < time.Minute || ttl > 30*24*time.Hour {
 			return Rule{}, errors.New("duration must be between 1 minute and 30 days")
 		}
@@ -515,7 +532,7 @@ func (m *Manager) store(kind, addr, comment string, ttl time.Duration, o AllowOp
 	// Whitelisted for good: a temporary allow (a solved CAPTCHA) is no
 	// longer needed, and its blocks are over.
 	if fullAllow(kind, o) {
-		_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempallow' AND cidr = ?`, c)
+		_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind IN ('tempallow','captchapass') AND cidr = ?`, c)
 		_, _ = m.DB.Exec(`UPDATE fw_events SET status = 'unblocked' WHERE ip = ? AND status IN ('blocked','captcha')`, c)
 	}
 	if kind == KindDeny || kind == KindTempBan {
@@ -703,19 +720,22 @@ var forgetRedirects = func(addr string) {
 	_ = exec.CommandContext(ctx, bin, "-D", "-f", fam, "-p", "tcp", "-s", addr, "--dst-nat").Run()
 }
 
-// CaptchaSolved lifts temporary bans on ip and allows it for the given
-// time, after its visitor solved the CAPTCHA. Permanent (manual) blocks
-// stay: only automatic bans and the IPDB can be passed with a CAPTCHA.
+// CaptchaSolved lifts the temporary ban on ip and lets it past the IPDB
+// block for the given time (at most MaxCaptchaPass), after its visitor
+// solved the CAPTCHA. It is not a whitelist: the port filter, the DoS limit,
+// the WAF and new bans still apply, and a new ban ends the pass. Permanent
+// (manual) blocks stay, and so does a ban earned after an earlier solved
+// check (afterCaptcha): one paid-for solve does not buy a second chance.
 func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 	c, err := ParseAddr(ip)
 	if err != nil || strings.Contains(c, "/") {
 		return fmt.Errorf("invalid address %q", ip)
 	}
+	if err := m.PassRefused(c); err != nil {
+		return err
+	}
 	whitelisted := false
 	for _, r := range mustRules(m) {
-		if r.Kind == KindDeny && Contains(r.CIDR, c) {
-			return fmt.Errorf("%s is blocked permanently", c)
-		}
 		if r.Kind == KindAllow && !r.Advanced() && Contains(r.CIDR, c) {
 			whitelisted = true
 		}
@@ -740,7 +760,8 @@ func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 	if allow < time.Minute {
 		allow = time.Hour
 	}
-	if _, err := m.store(KindTempAllow, c, "solved CAPTCHA", allow, AllowOpts{}); err != nil {
+	allow = min(allow, MaxCaptchaPass)
+	if _, err := m.store(KindCaptchaPass, c, "solved CAPTCHA", allow, AllowOpts{}); err != nil {
 		return err
 	}
 	if !m.Settings.Get().Firewall.Enabled {
@@ -748,11 +769,57 @@ func (m *Manager) CaptchaSolved(ip string, allow time.Duration) error {
 	}
 	// Only this address changes: no rebuild of the whole ruleset (with the
 	// IPDB and country lists) for every visitor who solves (audit A4 F9).
-	if err := m.Backend().AllowTemp(c, int(allow.Seconds())); err != nil {
+	if err := m.Backend().PassTemp(c, int(allow.Seconds())); err != nil {
 		return m.Apply()
 	}
 	forgetRedirects(c)
 	return nil
+}
+
+// PassRefused says why a solved CAPTCHA does not let ip in: blacklisted for
+// good, or banned for attacking after an earlier solved check.
+func (m *Manager) PassRefused(ip string) error {
+	c, err := ParseAddr(ip)
+	if err != nil {
+		return err
+	}
+	for _, r := range mustRules(m) {
+		if r.Kind == KindDeny && Contains(r.CIDR, c) {
+			return fmt.Errorf("%s is blocked permanently", c)
+		}
+		if r.Kind == KindTempBan && r.CIDR == c && strings.HasSuffix(r.Comment, afterCaptcha) {
+			return fmt.Errorf("%s attacked after solving the CAPTCHA and stays banned until %s", c, time.Unix(r.ExpiresAt, 0).UTC().Format("15:04 UTC"))
+		}
+	}
+	return nil
+}
+
+// passesFromTempAllows turns the temporary allows that solved CAPTCHAs made
+// before 0.23.15 (a full temporary whitelist) into CAPTCHA passes, at most
+// MaxCaptchaPass from now.
+func (m *Manager) passesFromTempAllows() {
+	_, _ = m.DB.Exec(`UPDATE OR IGNORE fw_rules SET kind = 'captchapass', expires_at = min(expires_at, ?) WHERE kind = 'tempallow' AND comment = 'solved CAPTCHA'`,
+		store.Now()+int64(MaxCaptchaPass.Seconds()))
+	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempallow' AND comment = 'solved CAPTCHA'`)
+}
+
+// endPass ends the CAPTCHA pass of an address that is being banned; it
+// reports whether there was one.
+func (m *Manager) endPass(c string) bool {
+	res, err := m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'captchapass' AND cidr = ?`, c)
+	if err != nil {
+		return false
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false
+	}
+	if m.Settings.Get().Firewall.Enabled {
+		if err := m.Backend().EndPass(c); err != nil {
+			_ = m.Apply()
+		}
+	}
+	m.Log.Info("CAPTCHA pass ended: the address was banned", "ip", c)
+	return true
 }
 
 // CheckResult explains how the firewall treats an address.
@@ -818,7 +885,8 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 		res.Trusted = svc
 		found("TRUSTED-SERVICE")
 	}
-	label := map[string]string{KindAllow: "WHITELIST", KindTempAllow: "TEMP-ALLOW", KindIgnore: "IGNORE", KindDeny: "BLACKLIST", KindTempBan: "TEMP-BAN"}
+	label := map[string]string{KindAllow: "WHITELIST", KindTempAllow: "TEMP-ALLOW", KindIgnore: "IGNORE", KindDeny: "BLACKLIST", KindTempBan: "TEMP-BAN", KindCaptchaPass: "CAPTCHA-PASS"}
+	pass := false
 	prio := map[string]int{KindAllow: 5, KindTempAllow: 4, KindIgnore: 3, KindDeny: 2, KindTempBan: 1}
 	best, partial := 0, ""
 	for _, r := range all {
@@ -831,6 +899,10 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 				if partial == "" {
 					partial = "allowed only for " + r.Scope()
 				}
+				continue
+			}
+			if r.Kind == KindCaptchaPass {
+				pass = true
 				continue
 			}
 			if prio[r.Kind] > best {
@@ -864,7 +936,10 @@ func (m *Manager) Check(addr string) (CheckResult, error) {
 		for _, e := range m.ipdbEntries() {
 			if Contains(e, res.IP) {
 				found("IPDB")
-				if best == 0 {
+				if best == 0 && pass {
+					res.Status = "ipdb-listed, let past by a solved CAPTCHA (" + e + ")"
+					best = -1
+				} else if best == 0 {
 					res.Status = "ipdb-blocked (" + e + ")"
 					best = -1
 				}
@@ -983,7 +1058,7 @@ func (m *Manager) expire() {
 	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE expires_at > 0 AND expires_at <= ?`, now)
 	// A temporary allow next to a full whitelist entry for the same address
 	// (a CAPTCHA solved before it was whitelisted) is redundant.
-	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind = 'tempallow' AND cidr IN (SELECT cidr FROM fw_rules WHERE kind = 'allow'
+	_, _ = m.DB.Exec(`DELETE FROM fw_rules WHERE kind IN ('tempallow','captchapass') AND cidr IN (SELECT cidr FROM fw_rules WHERE kind = 'allow'
 		AND coalesce(proto,'') = '' AND coalesce(ports,'') = '' AND coalesce(dir,'') <> 'out')`)
 }
 
@@ -1002,6 +1077,8 @@ func (m *Manager) AutoBan(ip, reason, source string) {
 		m.Log.Debug("automatic ban skipped: trusted service", "ip", c, "service", svc, "reason", reason)
 		return
 	}
+	// A CAPTCHA pass is no protection: an address that attacks after a
+	// solved check is banned like any other (see CaptchaSolved).
 	for _, r := range mustRules(m) {
 		if (r.Kind == KindAllow || r.Kind == KindIgnore || r.Kind == KindTempAllow) && r.Inbound() && Contains(r.CIDR, c) {
 			return
@@ -1015,6 +1092,9 @@ func (m *Manager) AutoBan(ip, reason, source string) {
 	if m.Geo != nil && m.Geo.Lookup(c, cfg.IgnoredCountries) != "" {
 		m.Log.Debug("automatic ban skipped: whitelisted country", "ip", c, "reason", reason)
 		return
+	}
+	if m.endPass(c) {
+		reason += afterCaptcha
 	}
 	ttl := time.Duration(cfg.BanMinutes) * time.Minute
 	now := store.Now()
@@ -1069,6 +1149,7 @@ func (m *Manager) Run(ctx context.Context) {
 	if len(m.Settings.Get().Firewall.DDNS) > 0 {
 		m.RefreshDDNS(ctx)
 	}
+	m.passesFromTempAllows()
 	_ = m.Apply()
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -1139,6 +1220,9 @@ func (m *Manager) syncDoSBans() {
 			now := store.Now()
 			exp := now + int64(cfg.BanMinutes*60)
 			reason := fmt.Sprintf("DoS: more than %d new connections per minute", cfg.DoSThreshold)
+			if m.endPass(ip) {
+				reason += afterCaptcha
+			}
 			_, _ = m.DB.Exec(`INSERT OR IGNORE INTO fw_rules (kind, cidr, comment, created_at, expires_at) VALUES ('tempban',?,?,?,?)`, ip, reason, now, exp)
 			res, err := m.DB.Exec(`INSERT INTO fw_events (ip, reason, source, created_at, expires_at, status) VALUES (?,?,?,?,?,'blocked')`, ip, reason, "dos", now, exp)
 			ev := Event{IP: ip, Reason: reason, Source: "dos", CreatedAt: now, ExpiresAt: exp, Status: "blocked"}
