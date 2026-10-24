@@ -26,16 +26,6 @@ interface Pending {
 
 /** Characters of file excerpts per request (keeps requests inside free-tier token limits). */
 const BATCH_CHARS = 60_000;
-/** Samples the fleet model learns from: AI verdicts at least this confident. */
-const TRAIN_MIN_CONFIDENCE = 80;
-/**
- * Examples of each class needed before training: learning from malicious
- * files alone would push up features every PHP file has and cause false
- * positives, so clean verdicts must balance them.
- */
-export const TRAIN_MIN_PER_CLASS = 5;
-const BUCKETS = 1 << 17;
-
 /**
  * The AI scanner gateway. Agents send files; the gateway answers from the
  * fleet's knowledge base when any server already had the same file judged,
@@ -46,7 +36,6 @@ const BUCKETS = 1 << 17;
  */
 export class AIGateway {
   private queues = new Map<string, { items: Pending[]; chars: number; timer: NodeJS.Timeout | null }>();
-  private training = false;
 
   constructor(
     private pool: Pool,
@@ -55,9 +44,9 @@ export class AIGateway {
   ) {}
 
   /**
-   * The fleet model is no longer retrained on its own from the AI's
-   * verdicts: one wrong verdict taught to every server did too much harm.
-   * An administrator trains it (AI Learning » Train) after reviewing.
+   * Nothing runs in the background: there is no fleet model any more (the
+   * agents have no offline model since 0.23.8; the AI only comments and an
+   * administrator decides).
    */
   start(): void {}
 
@@ -89,7 +78,6 @@ export class AIGateway {
       const k = known.get(f.sha256.toLowerCase());
       if (k) {
         // Another server already had this exact file judged: no tokens spent.
-        if (fleet) await this.saveSample(f, k.verdict, k.confidence);
         out.push(
           Promise.resolve({ id: f.id, verdict: k.verdict, confidence: k.confidence, reason: k.reason, injected: k.injected, cut: k.cut, model: k.model, source: 'fleet' }),
         );
@@ -267,111 +255,23 @@ export class AIGateway {
        WHERE NOT ai_kb.overridden`,
       [f.sha256.toLowerCase(), f.size, a.verdict, a.confidence, a.reason, a.injected, JSON.stringify(a.cut), model, f.name.slice(0, 200), (f.match ?? '').slice(0, 200), p.serverId],
     );
-    await this.saveSample(f, a.verdict, a.confidence);
   }
-
-  private async saveSample(f: FileIn, verdict: string, confidence: number): Promise<void> {
-    if (!f.base || !f.features?.length || typeof f.z !== 'number' || verdict === 'suspicious' || confidence < TRAIN_MIN_CONFIDENCE) return;
-    const features = f.features.filter((x) => Number.isInteger(x) && x >= 0 && x < BUCKETS).slice(0, 20_000);
-    await this.pool.query(
-      `INSERT INTO ai_samples (sha256, base_version, z, features, label) VALUES ($1,$2,$3,$4,$5)
-       ON CONFLICT (sha256, base_version) DO NOTHING`,
-      [f.sha256.toLowerCase(), f.base.slice(0, 80), f.z, features, verdict === 'malicious' ? 1 : 0],
-    );
-  }
-
-  // ------------------------------------------------------------------ fleet model
 
   /**
-   * Trains the update every agent adds to its built-in model: logistic
-   * regression on top of the base model's logit (z), from files an
-   * administrator reviewed (AI Scanner » Shared knowledge: the verdict set
-   * by hand). The AI's own verdicts are kept with the samples as comments
-   * for that review but teach nothing: it called the fake-plugin campaign's
-   * files "backup plugins" more than a hundred times. It only adjusts what
-   * the base model got wrong or was unsure about; weights are kept small
-   * (L2 + clamp) so one mistaken label cannot swing the model.
+   * What an agent downloads: new verdicts since its cursor. delta is always
+   * null (agents before 0.23.8 asked for a fleet model update; there is none).
    */
-  async train(base: string, minPerClass = TRAIN_MIN_PER_CLASS): Promise<{ version: number; samples: number; accuracy: number } | { waiting: string } | null> {
-    this.training = true;
-    try {
-      const { rows } = await this.pool.query<{ z: number; features: number[]; label: number; weight: number }>(
-        `SELECT s.z, s.features, (k.verdict = 'malicious')::int AS label, s.weight
-         FROM ai_samples s JOIN ai_kb k ON k.sha256 = s.sha256
-         WHERE s.base_version = $1 AND k.overridden AND k.verdict <> 'suspicious'
-         ORDER BY s.created_at DESC LIMIT 50000`,
-        [base],
-      );
-      const pos = rows.filter((r) => r.label === 1).length;
-      const neg = rows.length - pos;
-      if (pos < minPerClass || neg < minPerClass) {
-        return { waiting: `collecting examples: ${pos} malicious and ${neg} clean (needs ${minPerClass} of each)` };
-      }
-      const wPos = pos ? Math.min(5, Math.max(0.2, rows.length / (2 * pos))) : 1;
-      const wNeg = neg ? Math.min(5, Math.max(0.2, rows.length / (2 * neg))) : 1;
-      const delta = new Float32Array(BUCKETS);
-      let bias = 0;
-      const epochs = 40;
-      for (let ep = 0; ep < epochs; ep++) {
-        const lr = 0.5 / (1 + ep * 0.1);
-        for (let i = rows.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [rows[i], rows[j]] = [rows[j], rows[i]];
-        }
-        for (const r of rows) {
-          let z = r.z + bias;
-          for (const f of r.features) z += delta[f];
-          const p = 1 / (1 + Math.exp(-Math.max(-30, Math.min(30, z))));
-          const g = (p - r.label) * (r.label ? wPos : wNeg) * r.weight;
-          if (Math.abs(g) < 1e-4) continue;
-          // Spread the step over the file's features, so a file with many
-          // features does not move the model more than a small one.
-          const step = (lr * g) / Math.sqrt(Math.max(1, r.features.length));
-          for (const f of r.features) delta[f] = Math.max(-3, Math.min(3, delta[f] - step));
-          bias = Math.max(-1, Math.min(1, bias - lr * g * 0.01));
-        }
-        for (let i = 0; i < BUCKETS; i++) if (delta[i] !== 0) delta[i] *= 0.995; // L2 decay
-      }
-      let correct = 0;
-      for (const r of rows) {
-        let z = r.z + bias;
-        for (const f of r.features) z += delta[f];
-        if ((z >= 0 ? 1 : 0) === r.label) correct++;
-      }
-      const entries: [number, number][] = [];
-      for (let i = 0; i < BUCKETS; i++) if (Math.abs(delta[i]) >= 0.002) entries.push([i, Math.round(delta[i] * 10000) / 10000]);
-      const version = Date.now();
-      const accuracy = correct / rows.length;
-      await this.pool.query(
-        `INSERT INTO ai_models (base_version, version, bias, entries, samples, accuracy, trained_at) VALUES ($1,$2,$3,$4,$5,$6, now())
-         ON CONFLICT (base_version) DO UPDATE SET version = excluded.version, bias = excluded.bias, entries = excluded.entries,
-           samples = excluded.samples, accuracy = excluded.accuracy, trained_at = now()`,
-        [base, version, Math.round(bias * 10000) / 10000, JSON.stringify(entries), rows.length, accuracy],
-      );
-      this.log.info({ base, samples: rows.length, accuracy, weights: entries.length }, 'AI fleet model trained');
-      return { version, samples: rows.length, accuracy };
-    } finally {
-      this.training = false;
-    }
-  }
-
-  /** What an agent downloads: new verdicts since its cursor and the current model update. */
-  async sync(base: string, cursor: number, modelVersion: number) {
+  async sync(_base: string, cursor: number, _modelVersion: number) {
     const limit = 2000;
     const { rows } = await this.pool.query(
       `SELECT seq, sha256, size, verdict, confidence, reason, model, injected FROM ai_kb WHERE seq > $1 ORDER BY seq LIMIT $2`,
       [cursor, limit],
     );
-    let delta = null;
-    const m = await this.pool.query('SELECT version, bias, entries, samples FROM ai_models WHERE base_version = $1', [base]);
-    if (m.rows[0] && Number(m.rows[0].version) !== modelVersion) {
-      delta = { base_version: base, version: Number(m.rows[0].version), bias: m.rows[0].bias, entries: m.rows[0].entries, samples: m.rows[0].samples };
-    }
     return {
       kb: rows.map(({ seq: _s, size, ...r }) => ({ ...r, size: Number(size) })),
       cursor: rows.length ? Number(rows[rows.length - 1].seq) : cursor,
       more: rows.length === limit,
-      delta,
+      delta: null,
     };
   }
 }

@@ -82,7 +82,7 @@ context. Read it top to bottom once; later use the tables as a map.
 | `core` | Builds every module (`New`), starts loops (`Start`), the **command table** `Handlers()` (portal commands), local-socket server (`panel.go`: root + cPanel-user handlers), settings apply logic, dashboards, reports (`report.go`), host-firewall trust loop (`hosttrust.go`), ClamAV loader loop (`clamav.go`) |
 | `scanner` | Malware scanner: scans (quick/full/path/daily/weekly), realtime inotify, `CheckFile` pipeline, heuristics (`analyze.go`, `heuristics.go`, `families.go`, `rules.go`), hash DB, LMD/YARA feed patterns, zip scanning (`archive.go`), ClamAV hook (`clam.go`), phishing checks (`phishing.go`), quarantine/restore/disable/delete, **Record** (stores findings; skips AI-cleared content), trim of injected code |
 | `clamdb` | Own engine for **ClamAV-format** databases (`.cvd/.cld/.hdb/.hsb/.ndb/.ldb/.fp/.ign2`) matched in-process: hex sigs with wildcards/gaps/alternatives, logical sigs with counts, PCRE subsigs (RE2), subscription download (`fetch.go`) |
-| `ai` | AI scanner: jobs, verdict cache/knowledge base (`ai_verdicts`), cleared-content list (`IsCleared`), built-in model and portal AI provider |
+| `ai` | AI scanner: jobs, verdict cache/knowledge base (`ai_verdicts`), cleared-content list (`IsCleared`, administrator decisions only), portal AI provider (no offline model since 0.23.9) |
 | `ml` | Small built-in ML model (fleet-trained) |
 | `waf` | ModSecurity integration: detection of web server/panel (`install.go`, hooks cPanel via `modsec2.user.conf`), own rules (`rules.go`, ids 7700000–7709999), rule sets (OWASP CRS, WHM vendors, `SecRemoteRules`, custom; `rulesets.go`), self-test (`selftest.go`), log/audit-log reading and events DB (`waf.go`, `auditlog.go`), proxy IP check and trusted-service lists |
 | `firewall` | iptables+ipset or nftables backend, allow/deny/temp lists, countries, DDNS, port filter, DoS, CAPTCHA redirect, IPDB list, brute-force jails (`bruteforce.go`), connection log, **CSF compatibility** (`csf.go`) |
@@ -114,7 +114,7 @@ context. Read it top to bottom once; later use the tables as a map.
 | `routes/agent-cmd.ts` | **allowlist `ACTIONS`** of agent commands the UI may call, with minimum role and timeout. A new agent command is unusable from the portal until listed here |
 | `routes/servers.ts`, `users.ts`, `auth.ts`, `downloads.ts`, `agent.ts` | servers, users, login, installer/binary downloads, agent enrolment/endpoints |
 | `routes/ipdb.ts`, `ipdb/` | shared attacker blocklist (IPDB), geo data |
-| `routes/ai.ts`, `ai/` | AI provider pool with failover (Gemini, Groq, OpenRouter, …), knowledge base, fleet training |
+| `routes/ai.ts`, `ai/` | AI provider pool with failover (Gemini, Groq, OpenRouter, …), knowledge base (fleet training removed in 0.23.9) |
 | `routes/waf-rulesets.ts`, `waf/rulesets.ts` | WAF Rule Sets for all servers, OWASP CRS download service |
 | `routes/mcp.ts` | AI connector (MCP) for Claude and other clients |
 | `routes/mass.ts` | mass operations across servers |

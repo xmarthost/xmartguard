@@ -359,12 +359,12 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
       write: true,
       description:
         'Acts on detected files on a server: quarantine, restore (the scanner remembers this exact file), clear (false positive: restore and tell every server this content is clean), ' +
-        'disable, delete, ignore (whitelist the path) or trim (remove injected code, keep the file).',
+        'disable, delete, ignore (whitelist the path), trim (remove injected code, keep the file) or clean_htaccess (put a quarantined site .htaccess back without the attack\'s blocks).',
       inputSchema: obj(
         {
           server,
           ids: { type: 'array', items: { type: 'integer' }, minItems: 1, maxItems: 500 },
-          action: { type: 'string', enum: ['quarantine', 'restore', 'clear', 'disable', 'delete', 'ignore', 'trim'] },
+          action: { type: 'string', enum: ['quarantine', 'restore', 'clear', 'disable', 'delete', 'ignore', 'trim', 'clean_htaccess'] },
         },
         ['server', 'ids', 'action'],
       ),
@@ -384,7 +384,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
       name: 'mark_file',
       write: true,
       platform: true,
-      description: 'Corrects the AI knowledge base for a file hash (false positive -> "clean", missed malware -> "malicious"). Every server applies the correction and the fleet model retrains on it.',
+      description: 'Corrects the AI knowledge base for a file hash (false positive -> "clean", missed malware -> "malicious"). Every server applies the correction.',
       inputSchema: obj({ sha256: { type: 'string' }, verdict: { type: 'string', enum: ['malicious', 'clean'] }, reason: { type: 'string' } }, ['sha256', 'verdict']),
       run: async (ctx, a) => {
         const sha = String(a.sha256 ?? '').toLowerCase();

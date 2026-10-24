@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xmarthost/xmartguard/agent/internal/ml"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
@@ -82,20 +81,17 @@ func (p *PortalAI) post(ctx context.Context, path string, payload any, out any) 
 
 // fileReq is one file sent to the portal.
 type fileReq struct {
-	ID        string   `json:"id"`
-	SHA256    string   `json:"sha256"`
-	Size      int64    `json:"size"`
-	Name      string   `json:"name"`
-	Match     string   `json:"match,omitempty"` // the local engine's detection, "" for a clean file
-	Path      string   `json:"path,omitempty"`  // flagged file: where (home folder shortened to ~)
-	Line      int      `json:"line,omitempty"`  // and the line and code the signature matched
-	Snippet   string   `json:"snippet,omitempty"`
-	Excerpt   string   `json:"excerpt"`
-	Lines     int      `json:"lines"`
-	Truncated bool     `json:"truncated"`
-	Base      string   `json:"base,omitempty"` // built-in model version (for fleet training)
-	Z         float64  `json:"z,omitempty"`    // its logit for this file
-	Features  []uint32 `json:"features,omitempty"`
+	ID        string `json:"id"`
+	SHA256    string `json:"sha256"`
+	Size      int64  `json:"size"`
+	Name      string `json:"name"`
+	Match     string `json:"match,omitempty"` // the local engine's detection, "" for a clean file
+	Path      string `json:"path,omitempty"`  // flagged file: where (home folder shortened to ~)
+	Line      int    `json:"line,omitempty"`  // and the line and code the signature matched
+	Snippet   string `json:"snippet,omitempty"`
+	Excerpt   string `json:"excerpt"`
+	Lines     int    `json:"lines"`
+	Truncated bool   `json:"truncated"`
 }
 
 type fileResp struct {
@@ -113,10 +109,6 @@ type fileResp struct {
 func (a *Analyzer) analyzePortal(ctx context.Context, jobs []Job, cfg settings.AI) ([]Verdict, error) {
 	out := make([]Verdict, len(jobs))
 	var files []fileReq
-	var base *ml.Model
-	if cfg.Learn {
-		base, _ = ml.Base()
-	}
 	for i, j := range jobs {
 		// The bytes sent must be the content the verdict is saved under: a
 		// file changed since detection would otherwise be judged and its
@@ -138,13 +130,6 @@ func (a *Analyzer) analyzePortal(ctx context.Context, jobs []Job, cfg settings.A
 			}
 			f.Path = ShortPath(origin)
 			f.Line, f.Snippet = scanner.Locate(j.Signature, raw)
-		}
-		if base != nil {
-			if len(raw) > ml.MaxBytes {
-				raw = raw[:ml.MaxBytes]
-			}
-			f.Features = ml.Features(raw)
-			f.Base, f.Z = base.Version, base.Logit(f.Features)
 		}
 		files = append(files, f)
 	}
@@ -198,23 +183,9 @@ func ShortPath(p string) string {
 // SyncInterval is how often fleet knowledge is fetched.
 const SyncInterval = 10 * time.Minute
 
-func deltaPath() string { return filepath.Join(store.StateDir(), "ai-delta.json") }
-
-// LoadDelta applies the fleet model update saved by the last sync.
-func LoadDelta() {
-	raw, err := os.ReadFile(deltaPath())
-	if err != nil {
-		return
-	}
-	var d ml.Delta
-	if json.Unmarshal(raw, &d) == nil {
-		_ = ml.ApplyDelta(&d)
-	}
-}
-
 // RunSync keeps fleet knowledge up to date until ctx ends.
 func (a *Analyzer) RunSync(ctx context.Context) {
-	LoadDelta()
+	_ = os.Remove(filepath.Join(store.StateDir(), "ai-delta.json")) // the fleet model update of agents before 0.23.8
 	select {
 	case <-ctx.Done():
 		return
@@ -236,15 +207,10 @@ func (a *Analyzer) RunSync(ctx context.Context) {
 	}
 }
 
-// Sync fetches verdicts other servers' AI gave (and the fleet's model
-// update) and returns how many verdicts were new.
+// Sync fetches verdicts other servers' AI gave and returns how many were
+// new.
 func (a *Analyzer) Sync(ctx context.Context) (int, error) {
-	base, err := ml.Base()
-	if err != nil {
-		return 0, err
-	}
 	cursor, _ := strconv.ParseInt(store.GetKV(a.DB, "ai_kb_cursor"), 10, 64)
-	modelVer, _ := strconv.ParseInt(store.GetKV(a.DB, "ai_model_version"), 10, 64)
 	total := 0
 	for page := 0; page < 20; page++ {
 		var res struct {
@@ -257,11 +223,11 @@ func (a *Analyzer) Sync(ctx context.Context) (int, error) {
 				Model      string `json:"model"`
 				Injected   bool   `json:"injected"`
 			} `json:"kb"`
-			Cursor int64     `json:"cursor"`
-			More   bool      `json:"more"`
-			Delta  *ml.Delta `json:"delta"`
+			Cursor int64 `json:"cursor"`
+			More   bool  `json:"more"`
 		}
-		if err := a.Portal.post(ctx, "/api/agent/ai/sync", map[string]any{"cursor": cursor, "base": base.Version, "model_version": modelVer}, &res); err != nil {
+		// base and model_version: portals before 0.23.8 require them.
+		if err := a.Portal.post(ctx, "/api/agent/ai/sync", map[string]any{"cursor": cursor, "base": "none", "model_version": 0}, &res); err != nil {
 			return total, err
 		}
 		for _, k := range res.KB {
@@ -274,16 +240,6 @@ func (a *Analyzer) Sync(ctx context.Context) (int, error) {
 		total += len(res.KB)
 		cursor = max(cursor, res.Cursor)
 		_ = store.SetKV(a.DB, "ai_kb_cursor", strconv.FormatInt(cursor, 10))
-		if res.Delta != nil && res.Delta.Version != modelVer {
-			if err := ml.ApplyDelta(res.Delta); err == nil {
-				modelVer = res.Delta.Version
-				if b, err := json.Marshal(res.Delta); err == nil {
-					_ = os.WriteFile(deltaPath(), b, 0o600)
-				}
-				_ = store.SetKV(a.DB, "ai_model_version", strconv.FormatInt(modelVer, 10))
-				a.Log.Info("AI model updated from the fleet", "version", modelVer, "samples", res.Delta.Samples)
-			}
-		}
 		if !res.More {
 			break
 		}

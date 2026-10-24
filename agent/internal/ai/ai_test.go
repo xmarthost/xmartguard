@@ -17,7 +17,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xmarthost/xmartguard/agent/internal/ml"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
@@ -44,17 +43,23 @@ func setup(t *testing.T, patch string) (*Analyzer, string) {
 	return &Analyzer{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, f
 }
 
-func TestBuiltinDefault(t *testing.T) {
+// There is no offline model: the AI is the portal's, an old "builtin"
+// setting moves there, and without the portal a file gets no verdict (it
+// is asked again later) instead of an offline guess.
+func TestPortalOnly(t *testing.T) {
 	a, f := setup(t, "")
-	if s := a.Settings.Get().AI; !s.Enabled || s.Provider != "builtin" || s.Scope != "suspicious" || !s.Learn {
+	if s := a.Settings.Get().AI; !s.Enabled || s.Provider != "portal" || s.Scope != "suspicious" || !s.Learn {
 		t.Fatalf("defaults: %+v", s)
 	}
-	v, err := a.Analyze(context.Background(), Job{Path: f, SHA256: "abc", Signature: "Test"})
-	if err != nil || v.Verdict != Clean || !strings.HasPrefix(v.Model, "builtin") {
-		t.Fatalf("builtin: %+v %v", v, err)
+	if _, err := a.Settings.Patch([]byte(`{"ai":{"provider":"builtin"}}`)); err != nil || a.Settings.Get().AI.Provider != "portal" {
+		t.Fatalf("builtin not moved to the portal: %v %q", err, a.Settings.Get().AI.Provider)
 	}
-	if c, ok := Cached(a.DB, "abc"); !ok || c.Verdict != Clean || c.Source != "builtin" {
-		t.Fatalf("not cached: %+v", c)
+	v, _ := a.Analyze(context.Background(), Job{Path: f, SHA256: "abc", Signature: "Test"})
+	if v.Verdict != "" {
+		t.Fatalf("verdict without the portal: %+v", v)
+	}
+	if _, ok := Cached(a.DB, "abc"); ok {
+		t.Fatal("verdict cached without the portal")
 	}
 }
 
@@ -150,9 +155,9 @@ func TestPortalBatchAndTrimInstructions(t *testing.T) {
 	if len(files) != 2 || f0["match"] != "PHP.X" || !strings.Contains(f0["excerpt"].(string), "2|echo 'hello';") {
 		t.Fatalf("request: %v", got)
 	}
-	// Fleet training data travels with the file when learning is on.
-	if base, _ := ml.Base(); f0["base"] != base.Version || len(f0["features"].([]any)) == 0 {
-		t.Fatalf("no features: %v", f0["base"])
+	// No model features travel with the file (there is no fleet model).
+	if _, ok := f0["features"]; ok {
+		t.Fatalf("features sent: %v", f0)
 	}
 	if c, ok := Cached(a.DB, s1); !ok || !c.Injected || c.Cut[0].From != 2 || c.Size == 0 {
 		t.Fatalf("cached: %+v", c)
@@ -200,42 +205,40 @@ func TestPortalSkipsFileChangedSinceDetection(t *testing.T) {
 	}
 }
 
-func TestPortalDownFallsBackToBuiltin(t *testing.T) {
+func TestPortalDownNoVerdict(t *testing.T) {
 	a, f := setup(t, `{"ai":{"provider":"portal"}}`)
 	a.Portal = &PortalAI{URL: "http://127.0.0.1:1", ServerID: "x", Sign: func([]byte) string { return "" }}
-	v, err := a.Analyze(context.Background(), Job{FindingID: 3, Path: f, SHA256: "fb"})
-	if err != nil || v.Source != "fallback" {
-		t.Fatalf("fallback: %+v %v", v, err)
+	if v, err := a.Analyze(context.Background(), Job{FindingID: 3, Path: f, SHA256: "fb"}); err == nil || v.Verdict != "" {
+		t.Fatalf("portal down: %+v %v", v, err)
 	}
 }
 
-func TestFleetSyncLearnsHashesAndModel(t *testing.T) {
+func TestFleetSyncLearnsHashes(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
-	base, _ := ml.Base()
 	sha := strings.Repeat("ab", 32)
 	aiOnly := strings.Repeat("cd", 32)
 	calls := 0
 	srv := fakePortal(t, pub, func(path string, p map[string]any) any {
 		calls++
-		if path != "/api/agent/ai/sync" || p["base"] != base.Version {
+		if path != "/api/agent/ai/sync" {
 			return map[string]any{}
 		}
 		return map[string]any{
 			"kb": []map[string]any{{"sha256": sha, "size": 1234, "verdict": "malicious", "confidence": 100, "reason": "web shell", "model": "admin"},
 				{"sha256": aiOnly, "size": 99, "verdict": "malicious", "confidence": 97, "reason": "looks like a shell", "model": "groq"}},
 			"cursor": 42,
-			"delta":  map[string]any{"base_version": base.Version, "version": 7, "bias": 0.1, "entries": [][2]float64{{5, 0.5}}, "samples": 3},
+			// A portal before 0.23.8 may still send a model update: ignored.
+			"delta": map[string]any{"base_version": "v1", "version": 7, "bias": 0.1, "entries": [][2]float64{{5, 0.5}}, "samples": 3},
 		}
 	})
 	defer srv.Close()
-	a, _ := setup(t, `{"ai":{"provider":"builtin"}}`)
+	a, _ := setup(t, `{"ai":{"provider":"portal"}}`)
 	a.Portal = portalFor(srv.URL, priv)
 	n, err := a.Sync(context.Background())
 	if err != nil || n != 2 {
 		t.Fatalf("sync: %d %v", n, err)
 	}
-	defer ml.ApplyDelta(nil)
-	if store.GetKV(a.DB, "ai_kb_cursor") != "42" || store.GetKV(a.DB, "ai_model_version") != "7" {
+	if store.GetKV(a.DB, "ai_kb_cursor") != "42" {
 		t.Fatal("cursor not stored")
 	}
 	raw, _ := os.ReadFile(scanner.LearnedHashPath())
@@ -243,12 +246,8 @@ func TestFleetSyncLearnsHashesAndModel(t *testing.T) {
 	if !strings.Contains(string(raw), "1234 "+sha+" "+scanner.LearnedLabel) || strings.Contains(string(raw), aiOnly) {
 		t.Fatalf("learned list: %s", raw)
 	}
-	m, _ := ml.Default()
-	if !strings.HasSuffix(m.Version, "+fleet.7") || m.Weights[5] != base.Weights[5]+0.5 {
-		t.Fatalf("delta not applied: %s", m.Version)
-	}
-	if _, err := os.Stat(filepath.Join(store.StateDir(), "ai-delta.json")); err != nil {
-		t.Fatal("delta not saved")
+	if _, err := os.Stat(filepath.Join(store.StateDir(), "ai-delta.json")); err == nil {
+		t.Fatal("model update saved")
 	}
 }
 
@@ -268,8 +267,18 @@ func TestShortPath(t *testing.T) {
 // this server's AI, not acted on with the fleet verdict (which the scanner
 // does not honour: the file was restored and flagged again every minute).
 func TestFleetCleanFindingAskedHere(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	srv := fakePortal(t, pub, func(path string, p map[string]any) any {
+		res := []map[string]any{}
+		for _, f := range p["files"].([]any) {
+			res = append(res, map[string]any{"id": f.(map[string]any)["id"], "verdict": "clean", "confidence": 95, "reason": "asked again", "model": "m", "source": "ai"})
+		}
+		return map[string]any{"results": res}
+	})
+	defer srv.Close()
 	a, f := setup(t, "")
-	sha := strings.Repeat("c", 64)
+	a.Portal = portalFor(srv.URL, priv)
+	sha := shaOf(t, f)
 	Save(a.DB, Verdict{SHA256: sha, Verdict: Clean, Confidence: 100, Reason: "plugin", Model: "gemini", Source: "fleet", At: 1})
 	if IsCleared(a.DB, sha) {
 		t.Fatal("another server's AI verdict clears content here")

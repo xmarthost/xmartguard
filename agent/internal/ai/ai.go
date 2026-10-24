@@ -1,17 +1,13 @@
 // Package ai gives files a second opinion ("AI scanner").
 //
-// Providers:
-//   - builtin (default): xPGuard's own model (package ml), free, runs
-//     locally, nothing leaves the server;
-//   - portal: the portal asks the free AI APIs configured there (Google
-//     Gemini, Groq, OpenRouter, ...), fails over between keys and providers
-//     when one hits its limit, and shares every verdict with all linked
-//     servers.
+// The portal asks the AI APIs configured there (Google Gemini, Groq,
+// OpenRouter, ...), fails over between keys and providers when one hits
+// its limit, and shares every verdict with all linked servers. There is no
+// offline model (removed in 0.23.8): the AI comments, an administrator
+// decides, and the scanner's own rules are what is trained.
 //
-// With "learn" on, the agent also uses the fleet's knowledge: files any
-// server's AI found malicious are detected here by hash at once, and the
-// built-in model receives the update the portal trained from the AI's
-// verdicts (see Sync).
+// With "learn" on, the agent also uses the fleet's knowledge: files an
+// administrator marked malicious are detected here by hash (see Sync).
 //
 // Verdicts are cached by SHA-256, so each distinct file is judged once.
 package ai
@@ -23,7 +19,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -31,7 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/xmarthost/xmartguard/agent/internal/ml"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
@@ -57,8 +51,9 @@ type Verdict struct {
 	// Cut says where (for Trim).
 	Injected bool          `json:"injected,omitempty"`
 	Cut      []scanner.Cut `json:"cut,omitempty"`
-	// Source: builtin | ai (asked now) | fleet (another server's verdict)
-	// | fallback (built-in model while the portal AI was unavailable).
+	// Source: ai (asked now) | fleet (another server's verdict) | admin |
+	// ai_kept (see SourceAIKept); builtin and fallback in rows of agents
+	// before 0.23.9.
 	Source string `json:"source"`
 	Size   int64  `json:"-"`
 }
@@ -279,29 +274,11 @@ func (a *Analyzer) Analyze(ctx context.Context, j Job) (Verdict, error) {
 // empty Verdict field.
 func (a *Analyzer) AnalyzeBatch(ctx context.Context, jobs []Job) ([]Verdict, error) {
 	cfg := a.Settings.Get().AI
-	out := make([]Verdict, len(jobs))
-	var err error
-	if cfg.Provider == "portal" {
-		out, err = a.analyzePortal(ctx, jobs, cfg)
-		// Findings still get the built-in model's opinion while the portal
-		// AI is unavailable; it is asked again later.
-		for i, v := range out {
-			if v.Verdict == "" && jobs[i].FindingID != 0 {
-				if b, berr := analyzeBuiltin(jobs[i]); berr == nil {
-					b.Source = "fallback"
-					out[i] = b
-				}
-			}
-		}
-	} else {
-		for i, j := range jobs {
-			v, berr := analyzeBuiltin(j)
-			if berr != nil {
-				err = berr
-				continue
-			}
-			out[i] = v
-		}
+	// The portal's AI only; while it is unavailable the files wait and are
+	// asked again later (there is no offline model).
+	out, err := a.analyzePortal(ctx, jobs, cfg)
+	if len(out) != len(jobs) {
+		out = make([]Verdict, len(jobs))
 	}
 	for i := range out {
 		if out[i].Verdict == "" {
@@ -327,42 +304,12 @@ func (a *Analyzer) AnalyzeBatch(ctx context.Context, jobs []Job) ([]Verdict, err
 	return out, err
 }
 
-func analyzeBuiltin(j Job) (Verdict, error) {
-	m, err := ml.Default()
-	if err != nil {
-		return Verdict{}, err
-	}
-	raw, err := readHead(j.Path)
-	if err != nil {
-		return Verdict{}, err
-	}
-	sc := m.Score(raw)
-	v := Verdict{Verdict: m.Verdict(sc), Model: "builtin " + m.Version, Source: "builtin"}
-	if v.Verdict == Clean {
-		v.Confidence = int((1 - sc) * 100)
-		v.Reason = fmt.Sprintf("Model score %.0f%%: the code looks like ordinary application code.", sc*100)
-	} else {
-		v.Confidence = int(sc * 100)
-		v.Reason = fmt.Sprintf("Model score %.0f%%. Strongest indicators: %s.", sc*100, strings.Join(m.Explain(raw, 5), ", "))
-	}
-	return v, nil
-}
-
 // maxJobBytes is the largest file sent to the portal AI (it must be read
 // whole to check its hash).
 const maxJobBytes = 64 << 20
 
-// readHead and fileSHA read through scanner.OpenFile: no link an account
-// planted is followed, and a FIFO or device is refused.
-func readHead(p string) ([]byte, error) {
-	f, err := scanner.OpenFile(p)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, ml.MaxBytes))
-}
-
+// fileSHA reads through scanner.OpenFile: no link an account planted is
+// followed, and a FIFO or device is refused.
 func fileSHA(p string) string {
 	f, err := scanner.OpenFile(p)
 	if err != nil {

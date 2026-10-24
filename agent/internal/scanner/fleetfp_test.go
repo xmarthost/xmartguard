@@ -3,16 +3,20 @@ package scanner
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // Every kind of file restored from quarantine after a fleet review is kept
@@ -392,5 +396,165 @@ func TestFleetSystemSymlinks(t *testing.T) {
 		if f, _ := s.Get(ids[name]); f.Status != want {
 			t.Errorf("%s: status %q, want %q", name, f.Status, want)
 		}
+	}
+}
+
+// Malware run by cron from ~/.cache/.<hex> (business500: baezonco,
+// dndsnatu) was only caught by a learned hash: the scan skipped ~/.cache.
+// Its own files are checked now; package caches below it stay skipped.
+func TestFleetHomeCacheLoader(t *testing.T) {
+	s := newScanner(t)
+	root := writeTree(t, map[string]string{
+		".cache/.6c06cf44589da250b74db94f6909955535088504a": malicious["eval.php"],
+		".cache/composer/files/vendor/pkg/x.php":            malicious["eval.php"],
+		"public_html/index.php":                             "<?php echo 'hello';",
+	})
+	// A scan of the account, and a full scan (the home is one of the roots).
+	for _, roots := range [][]string{{root}, {root, t.TempDir()}} {
+		var hits []string
+		_, err := s.scanTree(context.Background(), roots, time.Time{}, 0, s.Settings.Get().Scanner, treeHooks{
+			hit: func(path string, _ fs.FileInfo, _ Detection) { hits = append(hits, path) },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hits) != 1 || !strings.HasSuffix(hits[0], "/.cache/.6c06cf44589da250b74db94f6909955535088504a") {
+			t.Fatalf("roots %v: hits %v, want only the loader in ~/.cache", roots, hits)
+		}
+	}
+}
+
+// The kit writes a site's .htaccess back over and over (business500
+// masfosur: 784 times). Each return is cleaned in place: the site keeps
+// its WordPress rules instead of losing the file each time.
+func TestFleetReturnedRootHtaccessCleaned(t *testing.T) {
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	site := filepath.Join(t.TempDir(), "public_html")
+	os.MkdirAll(site, 0o755)
+	os.WriteFile(filepath.Join(site, "wp-config.php"), []byte("<?php // inert fixture"), 0o640)
+	hacked := "<FilesMatch '.(py|exe|php|PHP|Php|suspected)$'>\nOrder allow,deny\nDeny from all\n</FilesMatch>\n" +
+		"<FilesMatch '^(index.php|wp-login.php|adminfuns.php)$'>\nOrder allow,deny\nAllow from all\n</FilesMatch>\n" +
+		"<IfModule mod_rewrite.c>\nRewriteEngine On\nRewriteBase /\nRewriteRule ^index.php$ - [L]\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteCond %{REQUEST_FILENAME} !-d\nRewriteRule . index.php [L]\n</IfModule>\n"
+	ht := filepath.Join(site, ".htaccess")
+	os.WriteFile(ht, []byte(hacked), 0o644)
+	info, _ := os.Lstat(ht)
+	d := htaccessHack([]byte(hacked))
+	if d == nil {
+		t.Fatal("fixture not detected")
+	}
+	// The state on the server: the first copy quarantined, the cleaning
+	// lost the race with the kit's next write.
+	sum := sha256File(ht)
+	if _, err := s.DB.Exec(`INSERT INTO findings (scan_id, source, path, owner, category, signature, sha256, size, status, created_at, updated_at) VALUES (0,'realtime',?,'u','virus',?,?,?,'quarantined',1,1)`,
+		ht, d.Signature, sum, info.Size()); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.Record(0, "realtime", ht, info, *d)
+	if err != nil || f.Status != "quarantined" || f.Repeats != 1 {
+		t.Fatalf("%+v %v", f, err)
+	}
+	got, err := os.ReadFile(ht)
+	if err != nil {
+		t.Fatal("site's .htaccess removed")
+	}
+	if htaccessHack(got) != nil || !strings.Contains(string(got), "RewriteRule . index.php [L]") {
+		t.Fatalf("not cleaned: %q", got)
+	}
+	// Elsewhere a returned file is still removed.
+	other := filepath.Join(site, "wp-content", "uploads", ".htaccess")
+	os.MkdirAll(filepath.Dir(other), 0o755)
+	os.WriteFile(other, []byte(hacked), 0o644)
+	oi, _ := os.Lstat(other)
+	s.DB.Exec(`INSERT INTO findings (scan_id, source, path, owner, category, signature, sha256, size, status, created_at, updated_at) VALUES (0,'realtime',?,'u','virus',?,?,?,'quarantined',1,1)`,
+		other, d.Signature, sum, oi.Size())
+	if _, err := s.Record(0, "realtime", other, oi, *d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(other); err == nil {
+		t.Fatal("returned lock in uploads not removed")
+	}
+}
+
+// buildPhar writes a phar in PHP's format (uncompressed members).
+func buildPhar(stub string, files map[string]string) []byte {
+	var man, data bytes.Buffer
+	u32 := func(b *bytes.Buffer, v int) { b.Write([]byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)}) }
+	u32(&man, len(files))
+	man.Write([]byte{0x11, 0x00}) // API 1.1.0
+	u32(&man, 0x10000)            // has a signature
+	u32(&man, 0)                  // alias
+	u32(&man, 0)                  // metadata
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		u32(&man, len(n))
+		man.WriteString(n)
+		u32(&man, len(files[n]))
+		u32(&man, 1792800000)
+		u32(&man, len(files[n]))
+		u32(&man, 0)
+		u32(&man, 0o644)
+		u32(&man, 0)
+		data.WriteString(files[n])
+	}
+	var out bytes.Buffer
+	out.WriteString(stub + "__HALT_COMPILER(); ?>\r\n")
+	u32(&out, man.Len())
+	out.Write(man.Bytes())
+	out.Write(data.Bytes())
+	out.Write(bytes.Repeat([]byte{0xab}, 20))
+	out.Write([]byte{2, 0, 0, 0})
+	out.WriteString("GBMB")
+	return out.Bytes()
+}
+
+// composer.phar (the official 2.8.12, in aroojacademy's home on server100)
+// and wp-cli.phar were "PHP.Obfuscated.HaltCompilerPayload": the
+// libraries' own eval after __HALT_COMPILER, judged as one file. A phar is
+// judged by its stub and each script in it now; a web shell inside one, or
+// in its stub, is still caught, and a file that only looks like a phar is
+// judged as before.
+func TestFleetPharByMembers(t *testing.T) {
+	s := newScanner(t)
+	stub := "#!/usr/bin/env php\n<?php\nPhar::mapPhar('tool.phar');\nrequire 'phar://tool.phar/bin/tool';\n"
+	lib := map[string]string{
+		"bin/tool":                 "<?php\nrequire __DIR__ . '/../src/App.php';\n(new App())->run();\n",
+		"src/App.php":              "<?php\nclass App { public function run() { echo 'inert fixture'; } }\n",
+		"vendor/twig/Template.php": "<?php\n// a template engine compiles templates to PHP\nfunction render(string $compiled) { return eval('?>' . $compiled); }\n",
+	}
+	check := func(name string, content []byte) *Detection {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), name)
+		os.WriteFile(p, content, 0o644)
+		info, _ := os.Lstat(p)
+		d, err := s.CheckFile(p, info, s.Settings.Get().Scanner)
+		if err != nil && err != ErrTrusted {
+			t.Fatal(err)
+		}
+		return d
+	}
+	clean := buildPhar(stub, lib)
+	if old := analyze(".phar", clean); old == nil || old.Signature != "PHP.Obfuscated.HaltCompilerPayload" {
+		t.Fatalf("fixture does not reproduce the old false positive: %+v", old)
+	}
+	if d := check("composer.phar", clean); d != nil {
+		t.Fatalf("clean phar flagged: %+v", d)
+	}
+	shell := map[string]string{"src/App.php": lib["src/App.php"], "src/x.php": "<?php @eval($_POST['a']); ?>"}
+	if d := check("tool.phar", buildPhar(stub, shell)); d == nil || d.Category != CatVirus || !strings.HasPrefix(d.Signature, "Archive.") {
+		t.Fatalf("web shell inside a phar: %+v", d)
+	}
+	if d := check("tool.phar", buildPhar("<?php @eval($_POST['a']); ?>\n<?php ", lib)); d == nil || d.Category != CatVirus {
+		t.Fatalf("web shell in the stub: %+v", d)
+	}
+	broken := append([]byte(stub+"__HALT_COMPILER(); ?>\n"), []byte("\xff\xff\xff\x7f garbage eval($x)")...)
+	if d := check("tool.phar", broken); d == nil {
+		t.Fatal("not a phar: no longer judged as a whole")
 	}
 }

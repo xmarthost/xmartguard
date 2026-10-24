@@ -168,14 +168,14 @@ type Captcha struct {
 	CentralMode string `json:"central_mode"`
 }
 
-// AI gives files a second opinion ("AI scanner"). The default provider is
-// xPGuard's built-in model: free, local, no network. "portal" sends files
-// to the portal, which asks the free AI APIs configured there (Gemini, Groq,
+// AI gives files a second opinion ("AI scanner"): the agent sends files to
+// the portal, which asks the AI APIs configured there (Gemini, Groq,
 // OpenRouter, ...) with automatic failover between keys, and shares every
-// verdict with all linked servers.
+// verdict with all linked servers. Its verdict is a comment; there is no
+// offline model since 0.23.8.
 type AI struct {
 	Enabled  bool   `json:"enabled"`
-	Provider string `json:"provider"` // builtin | portal
+	Provider string `json:"provider"` // portal (the only one since 0.23.8)
 	// Scope is what the portal AI checks: "suspicious" findings only, or
 	// "all" new and changed code files (to learn from them).
 	Scope string `json:"scope"`
@@ -191,9 +191,8 @@ type AI struct {
 	// 0.23.8: the AI never restores a file; its clean verdict is advice and
 	// an administrator restores.
 	RestoreClean bool `json:"restore_clean"`
-	// Learn uses the fleet's shared knowledge: files any linked server's AI
-	// found malicious are detected here at once, and the built-in model is
-	// updated with what the AI taught it.
+	// Learn uses the fleet's shared knowledge: files an administrator
+	// marked malicious (on any server) are detected here at once.
 	Learn bool `json:"learn"`
 }
 
@@ -584,7 +583,7 @@ func Defaults() Settings {
 			UserOutdated: "never", ExcludeUsers: []string{},
 		},
 		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 1440, HTTPPort: 7780, HTTPSPort: 7743, CentralMinutes: 720},
-		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true},
+		AI:        AI{Enabled: true, Provider: "portal", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
 		Cron:      CronMonitor{Enabled: true, Disable: true, WhitelistUsers: []string{}},
 		Rootkit:   Rootkit{Enabled: true},
@@ -828,11 +827,10 @@ func normalize(s *Settings) {
 	}
 	s.Captcha.SiteKey, s.Captcha.SecretKey = strings.TrimSpace(s.Captcha.SiteKey), strings.TrimSpace(s.Captcha.SecretKey)
 	switch s.AI.Provider {
-	case "":
-		s.AI.Provider = "builtin"
-	case "ollama", "anthropic":
-		// 0.5 per-server LLM providers: AI APIs are now configured once on
-		// the portal.
+	case "", "builtin", "ollama", "anthropic":
+		// The offline model (builtin, removed in 0.23.8) and 0.5's
+		// per-server LLM providers: AI APIs are configured once on the
+		// portal.
 		s.AI.Provider = "portal"
 	}
 	if s.AI.Scope == "" {
@@ -1049,7 +1047,7 @@ func validate(s Settings) error {
 		return errors.New("invalid CAPTCHA ports")
 	}
 	switch s.AI.Provider {
-	case "builtin", "portal":
+	case "portal":
 	default:
 		return fmt.Errorf("invalid AI provider %q", s.AI.Provider)
 	}

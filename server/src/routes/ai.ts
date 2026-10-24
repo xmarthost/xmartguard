@@ -4,7 +4,7 @@ import type { Pool } from '../db.js';
 import { audit, requirePlatform } from '../auth.js';
 import { sha256 } from '../security.js';
 import { verifyAgent } from '../agent-sign.js';
-import { TRAIN_MIN_PER_CLASS, type AIGateway } from '../ai/gateway.js';
+import type { AIGateway } from '../ai/gateway.js';
 import { PRESETS, complete, listModels, preset } from '../ai/providers.js';
 import { recordFalsePositives } from '../ai/learning.js';
 import type { AgentHub } from '../agents/hub.js';
@@ -240,7 +240,7 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
 
   app.get('/api/ai/status', { preHandler: requirePlatform('viewer') }, async (req) => {
     const acc = req.user!.accountId;
-    const [p, kb, models] = await Promise.all([
+    const [p, kb] = await Promise.all([
       pool.query(
         `SELECT count(*)::int AS total, count(*) FILTER (WHERE enabled)::int AS enabled,
            count(*) FILTER (WHERE enabled AND (cooldown_until IS NULL OR cooldown_until <= now()))::int AS ready,
@@ -255,24 +255,15 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
            coalesce(sum(hits - 1), 0)::bigint AS reused
          FROM ai_kb`,
       ),
-      pool.query('SELECT base_version, version, samples, accuracy, trained_at, jsonb_array_length(entries) AS weights FROM ai_models ORDER BY trained_at DESC LIMIT 3'),
     ]);
     // Engine signatures the AI overruled most (false positives to fix in the rules).
     const overruled = await pool.query(
       `SELECT match, count(*)::int AS files FROM ai_kb WHERE verdict = 'clean' AND match <> '' GROUP BY match ORDER BY files DESC LIMIT 10`,
     );
-    const samples = await pool.query(
-      'SELECT count(*)::int AS n, count(*) FILTER (WHERE label = 1)::int AS malicious, count(*) FILTER (WHERE label = 0)::int AS clean FROM ai_samples',
-    );
     return {
       providers: { ...p.rows[0], files: Number(p.rows[0].files), tokens: Number(p.rows[0].tokens) },
       kb: { ...kb.rows[0], reused: Number(kb.rows[0].reused) },
-      samples: samples.rows[0].n,
-      samples_malicious: samples.rows[0].malicious,
-      samples_clean: samples.rows[0].clean,
-      train_min_per_class: TRAIN_MIN_PER_CLASS,
       overruled: overruled.rows,
-      models: models.rows,
     };
   });
 
@@ -318,13 +309,6 @@ export function aiRoutes(app: FastifyInstance, pool: Pool, gw: AIGateway, hub?: 
     if (!rowCount) return reply.code(404).send({ error: 'not found' });
     await audit(pool, { accountId: req.user!.accountId, userId: req.user!.id, action: 'ai.kb_override', detail: { sha256: sha, verdict: b.data.verdict }, ip: req.ip });
     return { ok: true };
-  });
-
-  app.post('/api/ai/train', { preHandler: requirePlatform('admin') }, async () => {
-    const { rows } = await pool.query('SELECT DISTINCT base_version FROM ai_samples');
-    const out = [];
-    for (const r of rows) out.push({ base: r.base_version, result: await gw.train(r.base_version) });
-    return { trained: out };
   });
 
   // ---------------------------------------------------------------- agents

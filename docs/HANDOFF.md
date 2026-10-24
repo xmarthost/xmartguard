@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.8** (see `VERSION`).
+- Current release: **0.23.9** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.8 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.9 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.8: `--branch backup-0.23.7`; see "Rollback" under 0.23.8 below);
+  0.23.9: `--branch backup-0.23.8`; see "Rollback" under 0.23.9 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,74 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.9: no offline AI model; fleet clean-up findings**
+  (2026-10-24). The owner: "offline system khatm kro" (the AI is only a
+  real AI, through the portal; the scanner's rules are what is trained),
+  and permission for the clean-ups below.
+  - **Offline model removed**: `agent/internal/ml` (the built-in logistic
+    model and `model.bin`), the provider "Built-in AI model (free,
+    offline)", the fallback to it while the portal AI is down (files now
+    wait and are asked again), `ai-train` / `ai-score`, the fleet model
+    (portal `train`, `/api/ai/train`, "Train fleet model now", the delta in
+    `/api/agent/ai/sync`, now always null) and the features sent with each
+    file. An old `provider: builtin` becomes `portal`. The signature
+    engine (rules, families, hashes, YARA, WordPress/plugin checksums) is
+    untouched: it never used the model. Tables `ai_samples` and
+    `ai_models` stay (unused). Tests: `TestPortalOnly`,
+    `TestPortalDownNoVerdict`, `TestFleetSyncLearnsHashes`, server
+    "shares verdicts with every server, and no model update".
+  - **WordPress cron jobs killed** (business500, server100: wslsecurity,
+    kamaltubemills, hashi, techicon, diacompk …): cPanel runs
+    `jailshell -c cd /home/u/public_html/wp; php -q wp-cron.php`; the
+    process monitor read `/home/u/public_html/wp;` (with the `;`) as a
+    deleted script and killed it. Shell words are trimmed of `;&|'"()<>`
+    and the folder of a `cd` is no script (`TestAssessLevels`).
+  - **~/.cache was never scanned**: malware run by cron from
+    `~/.cache/.<40 hex>` (business500 baezonco, dndsnatu) was caught only
+    by a learned hash. The files directly in `~/.cache` are scanned now;
+    package caches below it stay skipped (`TestFleetHomeCacheLoader`).
+    Real-time does not watch it (watch limit); the daily scan covers it.
+  - **PHP archives judged by their members**: composer.phar (official
+    2.8.12, sha256 f446ea71…, in aroojacademy's home) and wp-cli.phar were
+    `PHP.Obfuscated.HaltCompilerPayload` (suspicious; with the AI only
+    advising they would stay in quarantine). A well-formed phar is parsed
+    (`scanner/phar.go`): its stub and every script are judged like zip
+    members (`Archive.<signature>`); a file that does not parse is judged
+    as before (`TestFleetPharByMembers`; checked locally on the real
+    composer.phar and wp-cli.phar, not committed).
+  - **A site's .htaccess written back by a kit** (business500 masfosur
+    `public_html/.htaccess`, 784 returns) was removed on every return, so
+    the site lost its permalinks; it is cleaned in place now
+    (`removeReturned`, `TestFleetReturnedRootHtaccessCleaned`). New
+    `finding.action` "clean_htaccess" (and in the connector) puts a
+    quarantined site .htaccess back without the attack's blocks.
+  - **Clean-up done through the connector (owner's permission)**:
+    business500 masfosur 1,810 PHPLock .htaccess files quarantined (its
+    lock allows `system_log.php`, `adminfuns.php`, `classsmtps.php`,
+    `phpzipincs.php` …: the kit's shells; look for them in that account).
+    websoul scans of alhafeezenterpri (6 campaign files quarantined: the
+    variant `plugins/drift-optimizer-x/drift-optimizer-x.php.off`
+    (`PHP.Obfuscated.FunctionTable`) and `<hex>.zip` copies; the AI called
+    them clean at 95-100 %); webnsofts and npcihorg were queued behind it
+    (scans 167, 168: read their findings next).
+    server100 aroojacademy: nothing live besides composer.phar, which the
+    scan quarantined and was restored at once (the phar fix above). Its
+    reinfection source is not visible from the connector (no cron or
+    process events, no database findings): check the account's WordPress
+    admins and `wp_options` by hand.
+  - **Seen, for the owner**: websoul royaldeseobysn
+    `woocommerce-multi-currency.php` (a nulled plugin, "license/update
+    bypass", `PHP.Suspicious.EncodedPayload`) was flagged and put back by
+    the AI every 60 s, about 5,500 times until 10-23 (the portal sent the
+    AI's own verdict back as "fleet", which did not clear it). 0.23.8 ends
+    such loops (the AI does not restore). server100 aiwebtoo: a cron
+    downloading `recon.py` into /tmp every minute was disabled (correct).
+  - **Rollback**: `backup-0.23.8`. Portal: the update command with
+    `--branch backup-0.23.8`. Agents:
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
+    0.23.8 agents get no model update from a 0.23.9 portal (their offline
+    model stays as shipped).
 
 - **Release 0.23.8: the AI only advises; scanner review of the fleet**
   (2026-10-24). The owner asked for a review of the scanner on all

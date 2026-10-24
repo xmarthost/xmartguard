@@ -166,6 +166,12 @@ func TestAssessLevels(t *testing.T) {
 		{ProcInfo{Exe: home + "/.config/.x/kworker", Cmdline: "kworker"}, Suspicious},
 		{ProcInfo{Exe: "/tmp/.ICE/sd", Cmdline: "sd"}, Suspicious},
 		{ProcInfo{Exe: home + "/.nvm/versions/node/v20/bin/node", Cmdline: "node x.js -o stratum+tcp://pool.example:3333"}, Malicious},
+		// cPanel's cron job for WordPress (business500 killed these as
+		// "runs a deleted script ... (/home2/u/public_html/wordpress;)").
+		{ProcInfo{Exe: "/usr/bin/bash", Cmdline: "/usr/local/cpanel/bin/jailshell -c cd " + home + "/public_html/wordpress; /bin/nice -n15 /usr/bin/php -q wp-cron.php >/dev/null 2>&1"}, Clean},
+		{ProcInfo{Exe: "/usr/bin/bash", Cmdline: "/bin/sh -c cd " + home + "/public_html/shop && php artisan schedule:run"}, Clean},
+		// A watchdog whose script deleted itself is still caught.
+		{ProcInfo{Exe: "/usr/bin/bash", Cmdline: "bash " + home + "/public_html/wp-content/.cache/run.sh;"}, Malicious},
 	}
 	for _, c := range cases {
 		if _, got := Assess(c.p, home); got != c.want {

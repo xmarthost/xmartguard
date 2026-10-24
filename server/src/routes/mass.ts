@@ -29,7 +29,7 @@ const OPS: Record<string, { label: string; action: string; params: (p: Record<st
     params: () => ({ ai: { enabled: true, provider: 'portal', scope: 'suspicious', learn: true } }),
   },
   ai_all: {
-    label: 'AI scanner: xPGuard AI checks every new file (self-training)',
+    label: 'AI scanner: xPGuard AI checks every new file',
     action: 'settings.set',
     params: () => ({ ai: { enabled: true, provider: 'portal', scope: 'all', learn: true } }),
   },

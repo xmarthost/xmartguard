@@ -42,12 +42,7 @@ interface Provider {
 interface Status {
   providers: { total: number; enabled: number; ready: number; requests_today: number; files: number; tokens: number };
   kb: { total: number; malicious: number; suspicious: number; clean: number; reused: number };
-  samples: number;
-  samples_malicious: number;
-  samples_clean: number;
-  train_min_per_class: number;
   overruled: { match: string; files: number }[];
-  models: { base_version: string; version: string; samples: number; accuracy: number; trained_at: string; weights: number }[];
 }
 
 interface KBEntry {
@@ -85,7 +80,7 @@ const VERDICT: Record<string, string> = {
 /**
  * Global AI settings: the free AI API keys every linked server's AI scanner
  * uses through the portal, their failover state, and the fleet's shared
- * knowledge (verdicts + trained model).
+ * knowledge (the AI's verdicts, which an administrator confirms or corrects).
  */
 export default function AIScanner() {
   const { user } = useAuth();
@@ -94,14 +89,12 @@ export default function AIScanner() {
   const providers = useApi<{ providers: Provider[] }>('/api/ai/providers', 15_000);
   const presets = useApi<{ presets: Preset[] }>('/api/ai/presets');
   const [edit, setEdit] = useState<Provider | 'new' | null>(null);
-  const { run, busy } = useAction();
 
   const failed = status.error || providers.error || presets.error;
   if (failed && (!status.data || !providers.data || !presets.data)) return <ErrorBox message={failed} />;
   if (!status.data || !providers.data || !presets.data) return <PageLoader />;
   const st = status.data;
   const list = providers.data.providers;
-  const model = st.models[0];
   const label = (kind: string) => presets.data!.presets.find((p) => p.kind === kind)?.label ?? kind;
   const reload = () => {
     providers.reload();
@@ -135,39 +128,15 @@ export default function AIScanner() {
         />
         <StatCard icon={<Zap />} value={num(st.providers.requests_today)} label={`AI requests today · ${num(st.providers.tokens)} tokens in total`} />
         <StatCard icon={<Database />} value={num(st.kb.total)} label={`files known (${num(st.kb.malicious)} malicious) · ${num(st.kb.reused)} answered without AI`} />
-        <StatCard
-          icon={<BrainCircuit />}
-          value={model ? `${Math.round(model.accuracy * 100)}%` : '—'}
-          label={
-            model
-              ? `fleet model: ${num(model.samples)} examples, trained ${ago(model.trained_at)}`
-              : `fleet model: collecting examples (${num(st.samples_malicious)} malicious, ${num(st.samples_clean)} clean; ${st.train_min_per_class} of each needed)`
-          }
-        />
+        <StatCard icon={<BrainCircuit />} value={num(st.kb.clean)} label="files the AI called clean: comments only, you decide (Shared knowledge)" />
       </div>
 
       <Card
         title="AI API keys"
         desc="Tried in priority order (1 first). Keys with the same priority share the load. A key that hits its limit rests and comes back by itself."
-        right={
-          admin && st.samples > 0 ? (
-            <button
-              className="btn-outline"
-              disabled={busy}
-              onClick={() =>
-                run(
-                  () => api<{ trained: { result: { waiting?: string; samples?: number } | null }[] }>('POST', '/api/ai/train').finally(reload),
-                  (r) => r.trained.map((t) => t.result?.waiting ?? `Fleet model trained on ${t.result?.samples ?? 0} examples`).join('; ') || 'Nothing to train yet',
-                )
-              }
-            >
-              <RefreshCw className="h-4 w-4" /> Train fleet model now
-            </button>
-          ) : undefined
-        }
       >
         {list.length === 0 ? (
-          <Empty text="No AI API keys yet. Until you add one, servers use their built-in model.">
+          <Empty text="No AI API keys yet. Until you add one, detections get no AI comment.">
             {admin && (
               <button className="btn-primary mt-3" onClick={() => setEdit('new')}>
                 <Plus className="h-4 w-4" /> Add a free API key
@@ -225,7 +194,7 @@ export default function AIScanner() {
           </li>
           <li className="flex gap-2">
             <BrainCircuit className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-            Verdicts train the built-in model of every server (fleet model), so detection improves even without the AI.
+            The AI only comments: it never restores a file and teaches nothing by itself. Its verdicts are reviewed, and the scanner's rules are improved from that review.
           </li>
         </ul>
       </Card>
@@ -495,7 +464,7 @@ function KnowledgeBase({ admin, onChange }: { admin: boolean; onChange: () => vo
     run(() => api('PUT', `/api/ai/kb/${e.sha256}`, { verdict: v, reason: reason || undefined }).then(() => (kb.reload(), onChange())), 'Saved; servers update within 10 minutes');
   };
   return (
-    <Card title="Shared knowledge" desc="Every file the AI judged, on any server. Correct a verdict and all servers follow (and the fleet model learns from it).">
+    <Card title="Shared knowledge" desc="Every file the AI judged, on any server. Correct a verdict and all servers follow.">
       <div className="mb-3 flex flex-wrap gap-2">
         {['', 'malicious', 'suspicious', 'clean'].map((v) => (
           <button

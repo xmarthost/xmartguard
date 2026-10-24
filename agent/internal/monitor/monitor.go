@@ -354,7 +354,15 @@ func Assess(p ProcInfo, home string) (string, Level) {
 	// folder that no longer exists (watchdogs that respawn malware delete
 	// their own script).
 	if underAny(exe, systemExeDirs) && isInterpreter(exe) && home != "" {
-		for _, a := range strings.Fields(p.Cmdline)[1:] {
+		args := strings.Fields(p.Cmdline)[1:]
+		for i, a := range args {
+			// A shell command line ("cd /home/u/public_html/wp; php -q
+			// wp-cron.php", cPanel's cron jobs): the folder of a cd is no
+			// script, and ; & | end a word.
+			a = strings.Trim(a, `;&|'"()<>`)
+			if i > 0 && strings.Trim(args[i-1], `;&|'"(`) == "cd" {
+				continue
+			}
 			if strings.HasPrefix(a, home+"/") && websiteFolder(a, home) {
 				if _, err := os.Stat(a); os.IsNotExist(err) {
 					return "runs a deleted script from the website folder (" + a + ")", Malicious

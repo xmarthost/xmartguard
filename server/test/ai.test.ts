@@ -53,7 +53,7 @@ beforeAll(async () => {
   });
   await new Promise<void>((r) => api.listen(0, '127.0.0.1', r));
   apiUrl = `http://127.0.0.1:${(api.address() as AddressInfo).port}/v1`;
-  h = await startHarness({ aiBatchWaitMs: 300, aiTraining: false });
+  h = await startHarness({ aiBatchWaitMs: 300 });
   const { rows: acc } = await h.pool.query('SELECT id FROM accounts LIMIT 1');
   const { rows } = await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'web1', $2) RETURNING id", [acc[0].id, pub]);
   serverId = rows[0].id;
@@ -149,47 +149,23 @@ describe('AI gateway', () => {
     expect(st.body.providers).toMatchObject({ total: 2, ready: 1 });
   });
 
-  it('shares verdicts and the trained model with every server', async () => {
+  it('shares verdicts with every server, and no model update', async () => {
     let s = await agentPost('/api/agent/ai/sync', envelope({ cursor: 0, base: 'v1', model_version: 0 }));
     expect(s.status).toBe(200);
     expect(s.body.kb).toHaveLength(2);
+    // There is no fleet model any more (agents have no offline model).
     expect(s.body.delta).toBeNull();
+    expect((await admin.req('POST', '/api/ai/train')).status).toBe(404);
     const cursor = s.body.cursor;
 
-    // The AI's own verdicts teach nothing: only files an administrator
-    // reviewed are training examples.
-    const add = async (name: string, features: number[], z: number, aiLabel: number, verdict: string, overridden: boolean) => {
-      await h.pool.query('INSERT INTO ai_samples (sha256, base_version, z, features, label) VALUES ($1, $2, $3, $4, $5)', [sha(name), 'v1', z, features, aiLabel]);
-      await h.pool.query('INSERT INTO ai_kb (sha256, verdict, confidence, overridden) VALUES ($1, $2, 100, $3)', [sha(name), verdict, overridden]);
-    };
-    for (let i = 0; i < 6; i++) await add('ai-m' + i, [5, 9, 300 + i], -1, 1, 'malicious', false);
-    for (let i = 0; i < 6; i++) await add('ai-c' + i, [5, 7, 400 + i], 1, 0, 'clean', false);
-    let trained = await admin.req('POST', '/api/ai/train');
-    expect(trained.body.trained[0].result.waiting).toContain('0 malicious and 0 clean');
-    // Reviewed examples of both kinds train the update: feature 9 appears
-    // only in malicious files, 7 only in clean ones, 5 in both. The AI said
-    // "clean" for the m files: the administrator's label counts.
-    for (let i = 0; i < 6; i++) {
-      await add('m' + i, [5, 9, 100 + i], -1, 0, 'malicious', true);
-      await add('c' + i, [5, 7, 200 + i], 1, 0, 'clean', true);
-    }
-    trained = await admin.req('POST', '/api/ai/train');
-    expect(trained.body.trained[0].result).toMatchObject({ samples: 12, accuracy: 1 });
-    s = await agentPost('/api/agent/ai/sync', envelope({ cursor, base: 'v1', model_version: 0 }));
-    expect(s.body.delta.base_version).toBe('v1');
-    const reviewed = s.body.cursor;
-    const w = new Map<number, number>(s.body.delta.entries);
-    expect(w.get(9)!).toBeGreaterThan(0.5);
-    expect(w.get(7)!).toBeLessThan(-0.5);
-    expect(Math.abs(w.get(5) ?? 0)).toBeLessThan(Math.abs(w.get(9)!));
-
     // An admin marks the malicious file clean: it is re-sent to agents.
-    const kb = await admin.req('GET', '/api/ai/kb?verdict=malicious&q=fa.php');
+    const kb = await admin.req('GET', '/api/ai/kb?verdict=malicious');
     expect(kb.body.entries[0]).toMatchObject({ name: 'fa.php', server: 'web1' });
     const fix = await admin.req('PUT', `/api/ai/kb/${kb.body.entries[0].sha256}`, { verdict: 'clean', reason: 'our own admin tool' });
     expect(fix.status).toBe(200);
-    s = await agentPost('/api/agent/ai/sync', envelope({ cursor: reviewed, base: 'v1', model_version: 0 }));
+    s = await agentPost('/api/agent/ai/sync', envelope({ cursor, base: 'v1', model_version: 0 }));
     expect(s.body.kb).toEqual([expect.objectContaining({ verdict: 'clean', confidence: 100 })]);
+    expect(s.body.delta).toBeNull();
   });
 
   it('rejects forged, altered and stale requests', async () => {

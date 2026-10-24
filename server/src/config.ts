@@ -49,8 +49,6 @@ export interface Config {
   aiBatchFiles: number;
   /** How long a request waits for more files to share its batch. */
   aiBatchWaitMs: number;
-  /** Background retraining of the fleet model (disabled in tests). */
-  aiTraining: boolean;
   /** Official WordPress core files: background sync (disabled in tests) and sources. */
   wpCoreSync: boolean;
   wpCoreMinVersion: string;
@@ -166,7 +164,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     aiTimeoutSeconds: int(env.AI_TIMEOUT_SECONDS, 90),
     aiBatchFiles: int(env.AI_BATCH_FILES, 6),
     aiBatchWaitMs: int(env.AI_BATCH_WAIT_MS, 2500),
-    aiTraining: bool(env.AI_TRAINING, true),
     wpCoreSync: bool(env.WP_CORE_SYNC, true),
     wpCoreMinVersion: env.WP_CORE_MIN_VERSION || '5.8',
     wpApi: (env.WP_API || 'https://api.wordpress.org').replace(/\/+$/, ''),

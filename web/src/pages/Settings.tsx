@@ -39,7 +39,7 @@ interface ScannerS {
 }
 interface AIS {
   enabled: boolean;
-  provider: 'builtin' | 'portal';
+  provider: 'portal';
   scope: 'suspicious' | 'all';
   max_per_hour: number;
   max_kb: number;
@@ -558,19 +558,6 @@ function DBWhitelistEditor({ items, disabled, onChange }: { items: { id: string;
   );
 }
 
-const AI_PROVIDERS = [
-  {
-    v: 'builtin',
-    l: 'Built-in AI model (free, offline)',
-    d: 'xPGuard’s own model runs on this server. Free, private, nothing is sent anywhere. It uses only decisions an administrator approved for the fleet.',
-  },
-  {
-    v: 'portal',
-    l: 'xPGuard AI (free AI APIs)',
-    d: 'Files go to your portal, which asks the free AI APIs you added under AI Scanner (Gemini, Groq, OpenRouter, …) and switches to the next key when one reaches its limit. Needed for Trim and for "all new files".',
-  },
-] as const;
-
 function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: boolean; onSave: (p: Partial<AIS>) => void }) {
   const dis = !admin || busy;
   // The portal's AI keys are the platform's: a customer cannot read their
@@ -585,22 +572,15 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
       <SettingRow title="AI scanner" desc="Let AI check files. A confident “malicious” verdict can apply the virus action automatically." recommended>
         <Toggle on={s.enabled} disabled={dis} onChange={(v) => onSave({ enabled: v })} />
       </SettingRow>
-      <div className="space-y-2 py-3">
-        {AI_PROVIDERS.map((p) => (
-          <label key={p.v} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${f.provider === p.v ? 'border-navy-600 bg-navy-100/40' : 'border-slate-200'}`}>
-            <input type="radio" className="mt-1" disabled={dis} checked={f.provider === p.v} onChange={() => setF({ ...f, provider: p.v })} />
-            <div>
-              <div className="text-sm font-medium text-navy-900">{p.l}</div>
-              <div className="text-xs text-slate-500">{p.d}</div>
-            </div>
-          </label>
-        ))}
-      </div>
-      {f.provider === 'portal' && (
+      <p className="py-3 text-xs text-slate-500">
+        Files go to your portal, which asks the AI APIs you added under AI Scanner (Gemini, Groq, OpenRouter, …) and switches to the next key when one reaches its
+        limit. The AI only comments: its verdict and reason are shown next to each detection, and you decide.
+      </p>
+      {(
         <>
           <div className={`mb-3 rounded-lg p-3 text-sm ${!platform || (pa && pa.ready > 0) ? 'bg-green-50 text-green-800' : 'bg-amber-50 text-amber-800'}`}>
             {!platform ? (
-              'Files go to the AI keys of the portal; while none is free the built-in model answers.'
+              'Files go to the AI keys of the portal; while none is free they wait and are asked again later.'
             ) : !pa ? (
               portalAI.error ? `Could not check the portal AI keys: ${portalAI.error}` : 'Checking the portal AI keys…'
             ) : pa.enabled === 0 ? (
@@ -609,10 +589,10 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
                 <Link className="font-medium underline" to="/ai">
                   AI Scanner
                 </Link>
-                ; until then this server uses its built-in model.
+                ; until then detections get no AI comment.
               </>
             ) : pa.ready === 0 ? (
-              'All AI API keys are resting after reaching their limits; files wait for the next free key (the built-in model answers meanwhile).'
+              'All AI API keys are resting after reaching their limits; files wait for the next free key.'
             ) : (
               <>
                 Ready: {pa.ready} of {pa.enabled} AI API keys available.{' '}

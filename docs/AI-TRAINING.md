@@ -1,133 +1,43 @@
-# Training the built-in AI scanner
+# AI scanner and how the scanner is trained
 
-The AI scanner's default provider is xPGuard's own model: a logistic
-regression over code features (function calls, request variables, code at
-the top/bottom of a file, obfuscation measurements). It is free, runs inside
-the agent and sends nothing anywhere. It only judges files the signature
-engine already marked **suspicious**, so it never floods a server with false
-alarms.
+## What the AI does (0.23.9)
 
-The model improves with more real quarantine data. To retrain:
+The AI scanner is a real AI only: the agent sends a file (an excerpt of
+it) to the portal, which asks the AI APIs configured under AI Scanner
+(Gemini, Groq, OpenRouter, ...), with failover between keys, and shares
+every verdict with all linked servers. There is no offline model any more
+(the built-in logistic model, `ai-train`, `ai-score` and the "fleet
+model" were removed in 0.23.9).
 
-1. Collect quarantined malware from your servers into one folder (for
-   example `/opt/xpguard/data/quarantine` from several servers, or another
-   product's quarantine). Encoded/binary quarantine files are skipped
-   automatically.
-2. Collect clean code: current WordPress releases, popular plugins/themes,
-   Joomla, OpenCart, Laravel … (one folder per project).
-3. Train:
+The AI only comments. Its verdict and reason are shown next to each
+detection; it never restores a file, never clears content and teaches
+nothing by itself (0.23.8). The AI called the fake-plugin campaign's
+files "backup" and "security" plugins more than a hundred times while the
+same model called other copies malicious.
 
-   ```sh
-   xpguard-agent ai-train -v \
-     --malicious /path/to/quarantine \
-     --clean /path/to/wordpress --clean /path/to/woocommerce --clean /path/to/joomla \
-     --out /etc/xpguard/ai-model.bin
-   ```
+| Signal | Effect |
+|---|---|
+| AI says clean | A comment only: the file stays where the scanner put it and is still flagged |
+| AI says malicious (>= 80 %) | With "Act on confident verdicts" the virus action is applied ("Only advise" turns this off) |
+| Administrator restores a file | That exact content is not flagged again on this server |
+| Administrator sets a verdict in AI Scanner » Shared knowledge | Clean: cleared on every server. Malicious: a hash detection on every server (`XG.AI.Learned`) |
 
-   The command prints the held-out detection rate and false-positive rate and
-   lists the worst mistakes for review. Quarantine files that are identical
-   to clean code, or named like a clean library file that the signature
-   engine does not flag, are dropped as probable false positives of the tool
-   that quarantined them.
-4. Restart the agent (`systemctl restart xpguard-agent`) to use
-   `/etc/xpguard/ai-model.bin`; without it the model shipped in the agent
-   is used. `xpguard-agent ai-score FILE…` shows a file's score and the
-   strongest indicators.
+## How the scanner is trained
 
-To ship a retrained model to every server, write it to
-`agent/internal/ml/model.bin` and release a new agent.
+"Trained" means the signature engine: behaviour rules and families,
+known-good lists (WordPress core and plugin checksums), known-bad hashes
+and YARA. It improves from reviewed cases, never on its own:
 
-Reference model (v0.5.0): 411 unique malicious files from a real quarantine
-and ~50,000 clean files (WordPress 6.5–7.x, WooCommerce, Jetpack, Elementor,
-Yoast, Joomla, Drupal, Magento, OpenCart, PrestaShop, Laravel, Moodle,
-Nextcloud, phpMyAdmin, Roundcube …). Held out: 87% detected at 0.05% false
-positives (suspicious threshold).
+1. Review the AI's comments against the files (daily): the connector's
+   `ai_knowledge` and `list_findings` show the verdict and reason,
+   `get_finding_content` the file.
+2. Set the true verdict in Shared knowledge (fleet-wide hash decision).
+3. For a wrong rule (a false positive class or missed malware), the rule
+   is fixed in the engine with an inert regression fixture
+   (`agent/internal/scanner/fleetfp_test.go`, `families_test.go`) and
+   released, so every server and every new server handles that kind of
+   file.
 
-## Fleet training (0.6)
-
-Besides retraining the shipped model from quarantine data, every server can
-learn continuously from the AI APIs configured in the portal:
-
-1. With "Learn from all servers" on, the agent sends the built-in model's
-   feature indices and its logit (`z`) with each file it asks the portal AI
-   about. File contents are not stored for training.
-2. Every AI verdict keeps the file's features (`ai_samples`) with the AI's
-   comment. Since 0.23.8 only files an administrator reviewed in AI
-   Scanner » Shared knowledge (the verdict set by hand) are training
-   examples, with the administrator's label: the AI called the fake-plugin
-   campaign's files "backup plugins" more than a hundred times, and those
-   labels taught the model that the campaign is clean. Review the AI's
-   comments (daily), set the true verdict, then "Train fleet model now".
-3. Once there are at least 5 malicious and 5 clean examples (learning from
-   malicious files alone would raise the score of every PHP file), every 5
-   minutes (or with "Train fleet model now") the portal trains a small
-   update on top of the base model: logistic regression on `z + Σ delta`,
-   class-balanced, L2-decayed and clamped to ±3 per weight so a single wrong
-   verdict cannot swing it. Only weights that changed are kept.
-4. Agents download the update with the shared verdicts every 10 minutes and
-   score with `base + delta` (model version `<base>+fleet.<n>`). Malicious
-   verdicts of at least 90% also become hash detections (`XG.AI.Learned`).
-
-When a new agent release ships a retrained base model, samples are kept per
-base version and the update is trained again for the new base as servers send
-files.
-
-## Making detection better (research notes, 0.7)
-
-What reduces false positives most is not a smarter model but knowing which
-files are genuine: official checksums for WordPress core (every release and
-beta) and WordPress.org plugins, the same approach Wordfence uses. xPGuard now trusts those files outright and repairs modified core files from
-the official release.
-
-For the model itself, published work on PHP web shells points to:
-
-- **Opcode / AST features** instead of raw tokens (PHP VLD opcode n-grams,
-  simplified syntax trees) resist obfuscation better; a future agent could
-  extract them with `php -d vld…` where PHP is installed.
-- **Long files**: attention over sliding windows beats truncation; our
-  excerpt (start, end, windows around risky calls) follows the same idea for
-  the AI APIs.
-- **Incremental learning** from newly confirmed samples, with balanced
-  benign examples, keeps a model current; the fleet model does this with AI
-  verdicts and needs clean examples as much as malicious ones (hence the
-  5 + 5 minimum).
-- **Data**: benign code from real frameworks (WordPress, plugins) matters as
-  much as malware. Quarantine data from your servers (malicious) plus the
-  AI's "clean" verdicts on detections (hard negatives) are the most useful
-  training material; send quarantine archives to retrain the shipped model
-  with `xpguard-agent ai-train`.
-
-## How verdicts feed back into detection
-
-| Signal | Where it is stored | Effect |
-|---|---|---|
-| Administrator restores a file | Agent: `ai_verdicts` (source `admin`, sha256) | That exact content is never flagged again on this server; any change is scanned again |
-| "Clear (false positive)" | Portal: `ai_kb` clean, overridden | Every server skips that content; the fleet model retrains on it |
-| Online AI says clean | Agent + portal `ai_kb` | **Advice only (0.23.8)**: shown next to the detection; the file stays where it is (quarantine) and is still flagged. An administrator restores. |
-| Online AI says malicious (≥80%) | Agent | With "Act on confident verdicts" the virus action is applied |
-| Administrator's verdict in Shared knowledge | Portal `ai_kb` (overridden) | Clean: cleared on every server. Malicious: hash detection on every server. Both become training labels |
-| Every AI verdict with features | Portal `ai_samples` | Kept for the administrator's review; only reviewed files (overridden) train the fleet update |
-
-The AI's *reason* text is kept for people (Scanner Logs, AI Scanner »
-Shared knowledge, MCP). The learning itself uses the verdict, the
-confidence and the file's features; the reason is not parsed.
-
-## Roadmap for better detection
-
-1. **Labelled corpus** — keep collecting quarantine samples (malicious) and
-   restored/cleared files (clean) from real servers; restored files are the
-   most valuable clean samples because they are exactly the false positives.
-2. **FP regression suite** — every reported false positive becomes a case in
-   `families_test.go`/`heuristics` tests before the rule is changed.
-3. **Clean-code baseline** — official plugin/theme checksums from
-   WordPress.org (already used for core and plugins), extended to popular
-   premium plugins by hashing the copies seen on many servers with no
-   detections (fleet reputation).
-4. **Retrain on reasons** — group AI reasons by family (loader, uploader,
-   SEO spam…) and turn frequent families into behaviour rules with tests.
-5. **Measure** — `xpguard-agent check --misses --no-hash` on the malware
-   corpus (target >95% rules-only) and on clean corpora (target 0 virus
-   hits) before every release.
-6. **AI review over MCP** — an assistant connected through the AI Connector
-   reviews low-confidence verdicts and new detections across the fleet and
-   proposes rule changes, which are released only after the tests above.
+Measure before a release: `xpguard-agent check /path --misses` (and
+`--no-hash` for the rules alone) on a malware corpus and on clean
+projects (see SIGNATURES.md).

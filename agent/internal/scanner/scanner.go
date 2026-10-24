@@ -5,6 +5,7 @@ package scanner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
@@ -516,6 +517,11 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	if IsELF(content) {
 		return binaryCheck(path, content)
 	}
+	if ext == ".phar" {
+		if d, ok := scanPhar(content); ok {
+			return final(d)
+		}
+	}
 	if d := analyze(ext, content); d != nil {
 		return final(capHeuristic(path, ext, d))
 	}
@@ -785,7 +791,7 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		var qid int64
 		var repeats int64
 		if err := s.DB.QueryRow(`SELECT id, repeats FROM findings WHERE path = ? AND sha256 = ? AND status = 'quarantined' ORDER BY id DESC LIMIT 1`, path, f.SHA256).Scan(&qid, &repeats); err == nil && s.actionFor(d.Category, f.Owner) == settings.ActionQuarantine {
-			if sha256File(path) == f.SHA256 && removeFile(path) == nil {
+			if sha256File(path) == f.SHA256 && removeReturned(path, d, info) == nil {
 				repeats++
 				_, _ = s.DB.Exec(`UPDATE findings SET repeats = ?, updated_at = ?, scan_id = CASE WHEN ? > 0 THEN ? ELSE scan_id END WHERE id = ?`, repeats, now, scanID, scanID, qid)
 				f.ID, f.Status, f.Repeats = qid, "quarantined", repeats
@@ -811,6 +817,24 @@ func (s *Scanner) Record(scanID int64, source, path string, info fs.FileInfo, d 
 		s.noteHtaccess(f.Owner, path, now)
 	}
 	return f, nil
+}
+
+// removeReturned takes a returned infected file away again. A site's own
+// .htaccess (a WordPress root) is cleaned in place instead: removing it
+// took the site's permalinks away each time the kit wrote it back
+// (business500 masfosur: 784 times).
+func removeReturned(path string, d Detection, info fs.FileInfo) error {
+	if strings.HasPrefix(d.Signature, "Htaccess.") && filepath.Base(path) == ".htaccess" && isWPRoot(filepath.Dir(path)) {
+		raw, more, err := ReadFileLimit(path, 4<<20)
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if err == nil && !more && ok {
+			if p, err := pin(path, false); err == nil {
+				defer p.Close()
+				return p.write(bytes.NewReader(CleanHtaccess(raw, siteBase(filepath.Dir(path)))), int(st.Uid), int(st.Gid), info.Mode().Perm(), true)
+			}
+		}
+	}
+	return removeFile(path)
 }
 
 // htStorm counts an account's hacked .htaccess files in a window.
@@ -1270,30 +1294,7 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 			h.progress(files, u.path, finished(), u.label)
 			lastProgress = time.Now()
 		}
-		walkErr = filepath.WalkDir(u.path, func(path string, d fs.DirEntry, err error) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if err != nil {
-				return nil // unreadable entry: skip
-			}
-			if d.IsDir() {
-				if path != u.path && (u.shallow || skipDir(root, path, d)) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Type()&fs.ModeSymlink != 0 {
-				if target, bad := InsecureSymlink(path, homeMap); bad {
-					if info, err := os.Lstat(path); err == nil {
-						h.hit(path, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + target})
-					}
-				}
-				return nil
-			}
-			if !d.Type().IsRegular() {
-				return nil
-			}
+		queue := func(path string, d fs.DirEntry) error {
 			info, err := d.Info()
 			if err != nil {
 				return nil
@@ -1315,6 +1316,47 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 				return ctx.Err()
 			}
 			return nil
+		}
+		walkErr = filepath.WalkDir(u.path, func(path string, d fs.DirEntry, err error) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err != nil {
+				return nil // unreadable entry: skip
+			}
+			if d.IsDir() {
+				if path != u.path && (u.shallow || skipDir(root, path, d)) {
+					// ~/.cache holds package caches (skipped), but malware
+					// run by cron hides directly in it as .<hex>
+					// (business500: baezonco, dndsnatu): its own files are
+					// checked.
+					if d.Name() == ".cache" && filepath.Dir(path) == root {
+						if ents, err := os.ReadDir(path); err == nil {
+							for _, e := range ents {
+								if e.Type().IsRegular() {
+									if err := queue(filepath.Join(path, e.Name()), e); err != nil {
+										return err
+									}
+								}
+							}
+						}
+					}
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Type()&fs.ModeSymlink != 0 {
+				if target, bad := InsecureSymlink(path, homeMap); bad {
+					if info, err := os.Lstat(path); err == nil {
+						h.hit(path, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + target})
+					}
+				}
+				return nil
+			}
+			if !d.Type().IsRegular() {
+				return nil
+			}
+			return queue(path, d)
 		})
 		if walkErr != nil {
 			break

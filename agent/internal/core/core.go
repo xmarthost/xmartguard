@@ -820,6 +820,10 @@ func (a *Agent) Handlers() map[string]client.Handler {
 				err = a.Scanner.Delete(id)
 			case "trim":
 				err = a.trimFinding(id)
+			case "clean_htaccess":
+				// A quarantined site .htaccess put back without the attack's
+				// blocks (the site's own and WordPress's rules kept).
+				err = a.Scanner.CleanHackedHtaccess(id)
 			case "clear":
 				// A false positive: restore the file and never flag this
 				// content again (on every server, through the portal).
