@@ -82,44 +82,31 @@ func TestRestoredFileIsNotFlaggedAgain(t *testing.T) {
 	}
 }
 
-// A quarantined file the AI finds clean (≥90%) is put back at once, shows as
-// restored by AI, and is not flagged again while unchanged.
-func TestAICleanRestoresAtOnce(t *testing.T) {
-	a := newTestAgent(t, `{"scanner":{"virus_action":"quarantine"},"ai":{"enabled":false,"restore_clean":true}}`)
-	dir := filepath.Join(t.TempDir(), "public_html")
-	os.MkdirAll(dir, 0o755)
-	file := filepath.Join(dir, "theme-functions.php")
-	os.WriteFile(file, []byte("<?php @eval($_POST['a']); ?>"), 0o644)
-	id, _ := a.Scanner.Start("path", dir, "test")
-	var fs []scanner.Finding
-	for i := 0; i < 200 && len(fs) == 0; i++ {
-		time.Sleep(20 * time.Millisecond)
-		fs, _, _ = a.Scanner.ListFindings(scanner.FindingFilter{ScanID: id, Status: "quarantined", Limit: 10})
+// Files the AI put back before it only advised stay where they are after
+// the update (they run on sites): kept cleared until they change or an
+// administrator decides, and another AI "clean" does not undo that. An AI
+// clean verdict for a quarantined file clears nothing.
+func TestAIRestoredBeforeStaysKept(t *testing.T) {
+	a := newTestAgent(t, `{"scanner":{"virus_action":"quarantine"},"ai":{"enabled":false}}`)
+	const kept, fresh = "0f0e0d0c0b0a09080706050403020100ffeeddccbbaa99887766554433221100", "00112233445566778899aabbccddeeff0f0e0d0c0b0a09080706050403020100"
+	if _, err := a.DB.Exec(`INSERT INTO findings (source, path, category, signature, sha256, size, status, created_at, updated_at) VALUES ('manual','/home/u/public_html/a.php','virus','PHP.Backdoor.DynamicCall',?,10,'ai_restored',1,1)`, kept); err != nil {
+		t.Fatal(err)
 	}
-	if len(fs) != 1 {
-		t.Fatalf("not quarantined: %+v", fs)
+	a.DB.Exec(`INSERT INTO findings (source, path, category, signature, sha256, size, status, created_at, updated_at) VALUES ('manual','/home/u/public_html/b.php','virus','PHP.Backdoor.DynamicCall',?,10,'quarantined',1,1)`, fresh)
+	for _, sha := range []string{kept, fresh} {
+		a.DB.Exec(`INSERT INTO ai_verdicts (sha256, verdict, confidence, reason, model, at, source) VALUES (?,'clean',95,'plugin','gemini',1,'ai')`, sha)
 	}
-	f := fs[0]
-	v := ai.Verdict{SHA256: f.SHA256, Verdict: ai.Clean, Confidence: 100, Reason: "plugin helpers", Model: "gemini", Source: "ai", At: 1}
-	ai.Save(a.DB, v)
-	a.onAIVerdict(ai.Job{FindingID: f.ID, SHA256: f.SHA256}, v)
-	got, _ := a.Scanner.Get(f.ID)
-	if got.Status != scanner.StatusAIRestored {
-		t.Fatalf("status %q", got.Status)
+	a.DB.Exec(`DELETE FROM kv WHERE key = 'ai.kept_restored'`)
+	ai.ReloadCleared(a.DB) // as when the updated agent starts
+	if !ai.IsCleared(a.DB, kept) {
+		t.Fatal("file restored by the AI before the update not kept")
 	}
-	if _, err := os.Stat(file); err != nil {
-		t.Fatal("file not back at its location")
+	if ai.IsCleared(a.DB, fresh) {
+		t.Fatal("AI clean verdict for a quarantined file clears it")
 	}
-	id2, _ := a.Scanner.Start("path", dir, "test")
-	for i := 0; i < 3000; i++ { // up to a minute on a busy machine
-		scans, _ := a.Scanner.ListScans(1)
-		if len(scans) > 0 && scans[0].ID == id2 && scans[0].Status == "completed" {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if again, _, _ := a.Scanner.ListFindings(scanner.FindingFilter{ScanID: id2, Limit: 10}); len(again) != 0 {
-		t.Fatalf("flagged again: %+v", again)
+	ai.Save(a.DB, ai.Verdict{SHA256: kept, Verdict: ai.Clean, Confidence: 99, Reason: "again", Model: "gemini", Source: "ai", At: 2})
+	if !ai.IsCleared(a.DB, kept) {
+		t.Fatal("a new AI verdict undid the kept file")
 	}
 }
 

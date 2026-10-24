@@ -40,7 +40,9 @@ func InsecureSymlink(path string, homesByUID map[uint32]string) (string, bool) {
 		return "", false
 	}
 	ls, ok := li.Sys().(*syscall.Stat_t)
-	if !ok {
+	// Root's links are the system's (cPanel's /home/user -> /home2/user,
+	// CageFS's skeleton, /opt/alt configs): no account can make one.
+	if !ok || ls.Uid == 0 {
 		return "", false
 	}
 	target, err := filepath.EvalSymlinks(path)
@@ -63,7 +65,14 @@ func InsecureSymlink(path string, homesByUID map[uint32]string) (string, bool) {
 		return "", false
 	}
 	ts, ok := ti.Sys().(*syscall.Stat_t)
-	if !ok || ts.Uid == ls.Uid {
+	if !ok || ts.Uid == ls.Uid || inHome(target, homesByUID[ls.Uid]) {
+		// The owner's own files, or anything in their own home (npm's
+		// node_modules/.bin links to files unpacked with another uid).
+		return "", false
+	}
+	// A file of the owner's group they may read anyway: cPanel's domlogs
+	// (root:<account> 0640) linked from ~/logs.
+	if ts.Gid == ls.Gid && ti.Mode().Perm()&0o040 != 0 && ti.Mode().IsRegular() {
 		return "", false
 	}
 	for uid, home := range homesByUID {
@@ -75,6 +84,21 @@ func InsecureSymlink(path string, homesByUID map[uint32]string) (string, bool) {
 		return target, true
 	}
 	return "", false
+}
+
+// inHome reports a resolved path inside home (also when home itself is a
+// link, /home/user -> /home2/user).
+func inHome(target, home string) bool {
+	if home == "" {
+		return false
+	}
+	if target == home || strings.HasPrefix(target, home+"/") {
+		return true
+	}
+	if real, err := filepath.EvalSymlinks(home); err == nil && real != home {
+		return target == real || strings.HasPrefix(target, real+"/")
+	}
+	return false
 }
 
 // YARABin locates the yara binary ("" when not installed).

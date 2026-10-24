@@ -657,11 +657,11 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
             {
               v: true,
               l: 'Act on confident verdicts (recommended)',
-              d: 'At least 80% sure it is malware: the virus action is applied. At least 90% sure it is clean: the file is put back from quarantine and not flagged again.',
+              d: 'At least 80% sure it is malware: the virus action is applied. A clean verdict is only shown next to the detection: the AI never puts a file back, you restore it.',
             },
           ].map((o) => (
-            <label key={String(o.v)} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${f.act === o.v && f.restore_clean === o.v ? 'border-navy-600 bg-navy-100/40' : 'border-slate-200'}`}>
-              <input type="radio" className="mt-1" disabled={dis} checked={f.act === o.v && f.restore_clean === o.v} onChange={() => setF({ ...f, act: o.v, restore_clean: o.v })} />
+            <label key={String(o.v)} className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 ${f.act === o.v ? 'border-navy-600 bg-navy-100/40' : 'border-slate-200'}`}>
+              <input type="radio" className="mt-1" disabled={dis} checked={f.act === o.v} onChange={() => setF({ ...f, act: o.v })} />
               <div>
                 <div className="text-sm font-medium text-navy-900">{o.l}</div>
                 <div className="text-xs text-slate-500">{o.d}</div>
@@ -669,7 +669,6 @@ function AISection({ s, admin, busy, onSave }: { s: AIS; admin: boolean; busy: b
             </label>
           ))}
         </div>
-        {f.act !== f.restore_clean && <p className="mt-2 text-xs text-amber-700">Set by hand earlier: {f.act ? 'acts on malware but does not restore' : 'restores clean files but does not act on malware'}. Pick one above.</p>}
       </div>
       <div className="flex justify-end">
         <button className="btn-primary" disabled={dis || JSON.stringify(f) === JSON.stringify(s)} onClick={() => onSave(f)}>

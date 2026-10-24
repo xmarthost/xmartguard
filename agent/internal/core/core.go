@@ -290,6 +290,11 @@ func (a *Agent) Start(ctx context.Context) {
 		} else if n > 0 {
 			a.Log.Info("findings of vanished files closed", "count", n)
 		}
+		if n, err := a.Scanner.CloseSafeLinks(); err != nil {
+			a.Log.Warn("closing findings of safe links failed", "err", err)
+		} else if n > 0 {
+			a.Log.Info("findings of links no longer flagged closed", "count", n)
+		}
 	}()
 	go a.Scanner.WatchNewSites(ctx)
 	go a.Firewall.Run(ctx)
@@ -1996,8 +2001,9 @@ func fwChanged(a, b settings.Firewall) bool {
 func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 	st := a.Settings.Get()
 	a.Log.Info("AI verdict", "path", j.Path, "verdict", v.Verdict, "confidence", v.Confidence, "model", v.Model, "source", v.Source)
-	if v.Verdict == ai.Clean && j.FindingID != 0 {
-		a.clearFalsePositive(j, v)
+	// A clean verdict is only advice: shown next to the detection for an
+	// administrator to decide (restore or keep); nothing is put back.
+	if v.Verdict == ai.Clean {
 		return
 	}
 	if v.Verdict != ai.Malicious || v.Confidence < 80 {
@@ -2056,36 +2062,6 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 	if n := st.Notifications; n.OnVirus {
 		a.alertAdmin("AI scanner confirmed malware",
 			fmt.Sprintf("[AI %d%%] %s\n  file: %s\n  reason: %s\n  action: %s\n", v.Confidence, f.Signature, f.Path, v.Reason, st.Scanner.VirusAction))
-	}
-}
-
-// clearFalsePositive restores a file the AI is sure is clean (a false
-// positive) from quarantine. The verdict already went to the portal, so the
-// same content is not flagged again on any server and the fleet model learns
-// from it.
-func (a *Agent) clearFalsePositive(j ai.Job, v ai.Verdict) {
-	st := a.Settings.Get()
-	// Only a verdict the scanner honours restores: one it does not (another
-	// server's AI) put the file back to be flagged again at once.
-	if !st.AI.RestoreClean || v.Source == ai.SourceAdmin || !ai.Clears(v) {
-		return
-	}
-	f, err := a.Scanner.Get(j.FindingID)
-	if err != nil || (f.Status != "quarantined" && f.Status != "disabled" && f.Status != "detected") {
-		return
-	}
-	if why := ai.Untrusted(f.Path, f.Signature); why != "" {
-		a.Log.Info("AI found a file clean, left for an administrator", "path", f.Path, "signature", f.Signature, "why", why)
-		return
-	}
-	if err := a.Scanner.ClearAs(f.ID, scanner.StatusAIRestored); err != nil {
-		a.Log.Warn("could not restore a file the AI found clean", "path", f.Path, "err", err)
-		return
-	}
-	a.Log.Info("false positive cleared by the AI scanner", "path", f.Path, "signature", f.Signature, "confidence", v.Confidence)
-	if n := st.Notifications; n.OnVirus && f.Status != "detected" {
-		a.alertAdmin("false positive restored",
-			fmt.Sprintf("[AI %d%% clean] %s\n  file: %s\n  reason: %s\n  action: restored from %s; the scanner will not flag this content again.\n", v.Confidence, f.Signature, f.Path, v.Reason, f.Status))
 	}
 }
 

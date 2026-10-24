@@ -25,17 +25,20 @@ func TestInsecureSymlink(t *testing.T) {
 
 	link := filepath.Join(mine, "cfg.txt")
 	os.Symlink(secret, link)
-	homes := map[uint32]string{65534: other, 0: mine}
+	os.Lchown(link, 65533, 65533) // an account's link (root's are the system's)
+	homes := map[uint32]string{65534: other, 65533: mine}
 	if target, bad := InsecureSymlink(link, homes); !bad || target != secret {
 		t.Fatalf("link into another home not flagged: %q %v", target, bad)
 	}
 	ok := filepath.Join(mine, "pub.txt")
 	os.Symlink(public, ok)
+	os.Lchown(ok, 65533, 65533)
 	if _, bad := InsecureSymlink(ok, homes); bad {
 		t.Fatal("link to a world-readable file outside homes flagged")
 	}
 	dangling := filepath.Join(mine, "gone")
 	os.Symlink(filepath.Join(dir, "missing"), dangling)
+	os.Lchown(dangling, 65533, 65533)
 	if _, bad := InsecureSymlink(dangling, homes); bad {
 		t.Fatal("dangling link flagged")
 	}

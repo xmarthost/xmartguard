@@ -187,9 +187,9 @@ type AI struct {
 	// Act lets a "malicious" verdict apply the virus action; otherwise the
 	// verdict is only shown.
 	Act bool `json:"act"`
-	// RestoreClean restores a quarantined or disabled file when the AI is at
-	// least 90% sure it is clean (a false positive), and the scanner stops
-	// flagging that content on every server.
+	// RestoreClean is kept for old settings files and has no effect since
+	// 0.23.8: the AI never restores a file; its clean verdict is advice and
+	// an administrator restores.
 	RestoreClean bool `json:"restore_clean"`
 	// Learn uses the fleet's shared knowledge: files any linked server's AI
 	// found malicious are detected here at once, and the built-in model is
@@ -584,7 +584,7 @@ func Defaults() Settings {
 			UserOutdated: "never", ExcludeUsers: []string{},
 		},
 		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 1440, HTTPPort: 7780, HTTPSPort: 7743, CentralMinutes: 720},
-		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true, RestoreClean: true},
+		AI:        AI{Enabled: true, Provider: "builtin", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
 		Cron:      CronMonitor{Enabled: true, Disable: true, WhitelistUsers: []string{}},
 		Rootkit:   Rootkit{Enabled: true},

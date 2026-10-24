@@ -314,3 +314,83 @@ func TestFleetPaddedBigPHP(t *testing.T) {
 		}
 	}
 }
+
+// System links reported as "Symlink.OtherAccount" on business500,
+// business600 and server1: cPanel's /home/user -> /home2/user and CageFS's
+// skeleton (owned by root), ~/logs/<domain>.bkup -> the domlog cPanel keeps
+// as root:<account> 0640, and npm's node_modules/.bin links to files
+// unpacked with another uid inside the account's own home. None lets the
+// account read anything it could not read already. A kit link to another
+// account's wp-config.php is still flagged.
+func TestFleetSystemSymlinks(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to own files as other accounts")
+	}
+	const userUID, otherUID = 65531, 65530
+	base := t.TempDir()
+	os.Chmod(base, 0o755)
+	user, other := filepath.Join(base, "home", "user"), filepath.Join(base, "home2", "other")
+	logs := filepath.Join(base, "domlogs")
+	for _, d := range []string{filepath.Join(user, "logs"), filepath.Join(user, "nodevenv", "node_modules", ".bin"), filepath.Join(user, "nodevenv", "node_modules", "esbuild", "bin"),
+		filepath.Join(other, "public_html"), logs, filepath.Join(base, "home")} {
+		os.MkdirAll(d, 0o755)
+	}
+	os.Lchown(user, userUID, userUID)
+	os.Lchown(other, otherUID, otherUID)
+	write := func(p string, mode os.FileMode, uid, gid int) {
+		os.WriteFile(p, []byte("inert fixture"), mode)
+		os.Chmod(p, mode)
+		os.Lchown(p, uid, gid)
+	}
+	domlog := filepath.Join(logs, "example.com.bkup")
+	write(domlog, 0o640, 0, userUID)
+	tool := filepath.Join(user, "nodevenv", "node_modules", "esbuild", "bin", "esbuild")
+	write(tool, 0o750, 1001, 1001)
+	secret := filepath.Join(other, "public_html", "wp-config.php")
+	write(secret, 0o640, otherUID, otherUID)
+	homes := map[uint32]string{userUID: user, otherUID: other}
+	link := func(target, p string, uid int) string {
+		os.Symlink(target, p)
+		os.Lchown(p, uid, uid)
+		return p
+	}
+	clean := map[string]string{
+		"cPanel /home link":  link(other, filepath.Join(base, "home", "other"), 0),
+		"domlog backup link": link(domlog, filepath.Join(user, "logs", "example.com.bkup"), userUID),
+		"npm .bin link":      link(tool, filepath.Join(user, "nodevenv", "node_modules", ".bin", "esbuild"), userUID),
+	}
+	for name, p := range clean {
+		if got, bad := InsecureSymlink(p, homes); bad {
+			t.Errorf("%s flagged (-> %s)", name, got)
+		}
+	}
+	kit := link(secret, filepath.Join(user, "other-WordPress-public_html.txt"), userUID)
+	if got, bad := InsecureSymlink(kit, homes); !bad || got != secret {
+		t.Fatalf("kit link to another account's wp-config.php not flagged: %q %v", got, bad)
+	}
+	// Someone else's file the account cannot read (not its group) is still flagged.
+	private := filepath.Join(logs, "private.log")
+	write(private, 0o640, 0, otherUID)
+	if _, bad := InsecureSymlink(link(private, filepath.Join(user, "logs", "private.log"), userUID), homes); !bad {
+		t.Fatal("link to an unreadable file of another group not flagged")
+	}
+	// Findings reported before are closed when the agent starts; the kit's
+	// stays open.
+	s := newScanner(t)
+	ids := map[string]int64{}
+	for name, p := range map[string]string{"system": clean["cPanel /home link"], "domlog": clean["domlog backup link"], "kit": kit} {
+		res, err := s.DB.Exec(`INSERT INTO findings (scan_id, source, path, owner, category, signature, sha256, size, status, created_at, updated_at) VALUES (1,'manual',?,'u','symlink','Symlink.OtherAccount','',10,'detected',1,1)`, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[name], _ = res.LastInsertId()
+	}
+	if n, err := s.CloseSafeLinks(); err != nil || n != 2 {
+		t.Fatalf("closed %d (%v), want 2", n, err)
+	}
+	for name, want := range map[string]string{"system": "cleared", "domlog": "cleared", "kit": "detected"} {
+		if f, _ := s.Get(ids[name]); f.Status != want {
+			t.Errorf("%s: status %q, want %q", name, f.Status, want)
+		}
+	}
+}

@@ -51,9 +51,13 @@ learn continuously from the AI APIs configured in the portal:
 1. With "Learn from all servers" on, the agent sends the built-in model's
    feature indices and its logit (`z`) with each file it asks the portal AI
    about. File contents are not stored for training.
-2. AI verdicts of at least 80% (malicious or clean) become training samples
-   (`ai_samples`); an administrator's correction in AI Scanner » Shared
-   knowledge overrides the label.
+2. Every AI verdict keeps the file's features (`ai_samples`) with the AI's
+   comment. Since 0.23.8 only files an administrator reviewed in AI
+   Scanner » Shared knowledge (the verdict set by hand) are training
+   examples, with the administrator's label: the AI called the fake-plugin
+   campaign's files "backup plugins" more than a hundred times, and those
+   labels taught the model that the campaign is clean. Review the AI's
+   comments (daily), set the true verdict, then "Train fleet model now".
 3. Once there are at least 5 malicious and 5 clean examples (learning from
    malicious files alone would raise the score of every PHP file), every 5
    minutes (or with "Train fleet model now") the portal trains a small
@@ -99,9 +103,10 @@ For the model itself, published work on PHP web shells points to:
 |---|---|---|
 | Administrator restores a file | Agent: `ai_verdicts` (source `admin`, sha256) | That exact content is never flagged again on this server; any change is scanned again |
 | "Clear (false positive)" | Portal: `ai_kb` clean, overridden | Every server skips that content; the fleet model retrains on it |
-| Online AI says clean (≥90%) | Agent + portal `ai_kb` | File restored automatically; hash known clean on all servers |
-| Online AI says malicious (≥90%) | Portal `ai_kb` | Becomes a hash detection on every server within 10 minutes |
-| Every AI verdict with features | Portal `ai_samples` | Hourly retraining of the fleet update of the built-in model |
+| Online AI says clean | Agent + portal `ai_kb` | **Advice only (0.23.8)**: shown next to the detection; the file stays where it is (quarantine) and is still flagged. An administrator restores. |
+| Online AI says malicious (≥80%) | Agent | With "Act on confident verdicts" the virus action is applied |
+| Administrator's verdict in Shared knowledge | Portal `ai_kb` (overridden) | Clean: cleared on every server. Malicious: hash detection on every server. Both become training labels |
+| Every AI verdict with features | Portal `ai_samples` | Kept for the administrator's review; only reviewed files (overridden) train the fleet update |
 
 The AI's *reason* text is kept for people (Scanner Logs, AI Scanner »
 Shared knowledge, MCP). The learning itself uses the verdict, the

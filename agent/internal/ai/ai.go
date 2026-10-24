@@ -231,8 +231,17 @@ func Cached(db *sql.DB, sha string) (Verdict, bool) {
 	return v, true
 }
 
-// Save stores a verdict.
+// Save stores a verdict. An administrator's decision (here or on the
+// portal) is not replaced by the AI, nor a file kept from before the AI only advised by another clean
+// verdict (it would then be flagged again).
 func Save(db *sql.DB, v Verdict) {
+	if v.Source != SourceAdmin && !(v.Source == "fleet" && v.Model == "admin") {
+		var old string
+		if db.QueryRow(`SELECT source FROM ai_verdicts WHERE sha256 = ?`, v.SHA256).Scan(&old) == nil &&
+			(old == SourceAdmin || (old == SourceAIKept && v.Verdict == Clean)) {
+			return
+		}
+	}
 	cut := ""
 	if len(v.Cut) > 0 {
 		b, _ := json.Marshal(v.Cut)
@@ -391,9 +400,14 @@ func baseName(p string) string {
 // (false positive), it is not shared with other servers.
 const SourceAdmin = "admin"
 
-// ClearMinConfidence is how sure the AI must be that a file is clean before
-// it is restored from quarantine and never flagged again.
+// ClearMinConfidence is how sure a clean verdict must be to count as one
+// (an administrator's decisions are 100).
 const ClearMinConfidence = 90
+
+// SourceAIKept marks a file the AI scanner put back before 0.23.8: it stays
+// cleared until it changes or an administrator decides, so files that are
+// running on sites are not quarantined again by the update.
+const SourceAIKept = "ai_kept"
 
 // cleared caches the SHA-256 of files the AI (on any server) or an
 // administrator found clean, for the scanner's per-file check.
@@ -409,16 +423,36 @@ var cleared struct {
 func Clears(v Verdict) bool { return isClearedVerdict(v) }
 
 func isClearedVerdict(v Verdict) bool {
-	// Another server's AI verdict does not clear files here: only this
-	// server's own check of the file, or an administrator's decision.
-	return v.Verdict == Clean && v.Confidence >= ClearMinConfidence && (v.Source == "ai" || (v.Source == "fleet" && v.Model == "admin") || v.Source == SourceAdmin)
+	// The AI only advises: its clean verdict (this server's or another's)
+	// is shown next to the detection and neither restores the file nor stops
+	// the scanner from flagging it. The AI cleared malware of the fake-plugin
+	// campaign as "backup" and "security" plugins; only an administrator's
+	// decision (here or on the portal) clears content.
+	return v.Verdict == Clean && v.Confidence >= ClearMinConfidence && ((v.Source == "fleet" && v.Model == "admin") || v.Source == SourceAdmin || v.Source == SourceAIKept)
+}
+
+const kvAIKept = "ai.kept_restored"
+
+// keepAIRestored marks once the files the AI put back before it only
+// advised (status ai_restored, verdict unchanged since) as SourceAIKept.
+func keepAIRestored(db *sql.DB) {
+	var done string
+	if db.QueryRow(`SELECT value FROM kv WHERE key = ?`, kvAIKept).Scan(&done); done == "1" {
+		return
+	}
+	if _, err := db.Exec(`UPDATE ai_verdicts SET source = ? WHERE source = 'ai' AND verdict = 'clean' AND confidence >= ?
+		AND sha256 IN (SELECT sha256 FROM findings WHERE status = 'ai_restored' AND sha256 != '')`, SourceAIKept, ClearMinConfidence); err != nil {
+		return
+	}
+	_, _ = db.Exec(`INSERT INTO kv(key, value) VALUES(?, '1') ON CONFLICT(key) DO UPDATE SET value = '1'`, kvAIKept)
 }
 
 func loadCleared(db *sql.DB) {
+	keepAIRestored(db)
 	set, admin := map[string]bool{}, map[string]bool{}
 	// Content one of the untrusted signatures caught stays flagged unless an
 	// administrator cleared it (the AI and the fleet were wrong about it).
-	rows, err := db.Query(`SELECT sha256, source FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND (source IN ('ai','admin') OR (source = 'fleet' AND model = 'admin'))
+	rows, err := db.Query(`SELECT sha256, source FROM ai_verdicts WHERE verdict = 'clean' AND confidence >= ? AND (source IN ('admin','`+SourceAIKept+`') OR (source = 'fleet' AND model = 'admin'))
 		AND (source = 'admin' OR sha256 NOT IN (SELECT sha256 FROM findings WHERE sha256 != '' AND signature IN (`+untrustedSigList()+`)))`, ClearMinConfidence)
 	if err == nil {
 		for rows.Next() {
@@ -431,6 +465,14 @@ func loadCleared(db *sql.DB) {
 		rows.Close()
 	}
 	cleared.db, cleared.set, cleared.admin = db, set, admin
+}
+
+// ReloadCleared reads the cleared content again (after the database was
+// changed without Save).
+func ReloadCleared(db *sql.DB) {
+	cleared.mu.Lock()
+	defer cleared.mu.Unlock()
+	loadCleared(db)
 }
 
 // AdminCleared reports content an administrator restored or marked clean.

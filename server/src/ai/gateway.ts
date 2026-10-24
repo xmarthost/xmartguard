@@ -284,18 +284,21 @@ export class AIGateway {
 
   /**
    * Trains the update every agent adds to its built-in model: logistic
-   * regression on top of the base model's logit (z), from the verdicts the
-   * AI APIs gave on all servers. It only adjusts what the base model got
-   * wrong or was unsure about; weights are kept small (L2 + clamp) so one
-   * mistaken verdict cannot swing the model.
+   * regression on top of the base model's logit (z), from files an
+   * administrator reviewed (AI Scanner » Shared knowledge: the verdict set
+   * by hand). The AI's own verdicts are kept with the samples as comments
+   * for that review but teach nothing: it called the fake-plugin campaign's
+   * files "backup plugins" more than a hundred times. It only adjusts what
+   * the base model got wrong or was unsure about; weights are kept small
+   * (L2 + clamp) so one mistaken label cannot swing the model.
    */
   async train(base: string, minPerClass = TRAIN_MIN_PER_CLASS): Promise<{ version: number; samples: number; accuracy: number } | { waiting: string } | null> {
     this.training = true;
     try {
       const { rows } = await this.pool.query<{ z: number; features: number[]; label: number; weight: number }>(
-        `SELECT s.z, s.features, CASE WHEN k.overridden THEN (k.verdict = 'malicious')::int ELSE s.label END AS label, s.weight
-         FROM ai_samples s LEFT JOIN ai_kb k ON k.sha256 = s.sha256
-         WHERE s.base_version = $1 AND (k.verdict IS NULL OR k.verdict <> 'suspicious')
+        `SELECT s.z, s.features, (k.verdict = 'malicious')::int AS label, s.weight
+         FROM ai_samples s JOIN ai_kb k ON k.sha256 = s.sha256
+         WHERE s.base_version = $1 AND k.overridden AND k.verdict <> 'suspicious'
          ORDER BY s.created_at DESC LIMIT 50000`,
         [base],
       );

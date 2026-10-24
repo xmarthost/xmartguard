@@ -431,3 +431,47 @@ func (s *Scanner) CloseVanished() (int, error) {
 	}
 	return len(gone), nil
 }
+
+// NoteSafeLink closes a link finding the scanner no longer flags.
+const NoteSafeLink = "Closed: the link is the system's or reaches only what its owner may read (no longer flagged)."
+
+// CloseSafeLinks closes open link findings the current rules do not flag
+// (root's /home -> /home2 links, ~/logs domlog links, links inside the
+// owner's own home: reported before 0.23.8) and those whose link is gone.
+func (s *Scanner) CloseSafeLinks() (int, error) {
+	rows, err := s.DB.Query(`SELECT id, path FROM findings WHERE status = 'detected' AND category = 'symlink'`)
+	if err != nil {
+		return 0, err
+	}
+	type row struct {
+		id   int64
+		path string
+	}
+	var open []row
+	for rows.Next() {
+		var r row
+		if rows.Scan(&r.id, &r.path) == nil {
+			open = append(open, r)
+		}
+	}
+	rows.Close()
+	if len(open) == 0 {
+		return 0, nil
+	}
+	homeMap := homes()
+	n := 0
+	for _, r := range open {
+		note := NoteSafeLink
+		status := "cleared"
+		if _, err := os.Lstat(r.path); errors.Is(err, fs.ErrNotExist) {
+			note, status = NoteGone, "deleted"
+		} else if _, bad := InsecureSymlink(r.path, homeMap); bad || err != nil {
+			continue
+		}
+		if _, err := s.DB.Exec(`UPDATE findings SET status = ?, note = ?, updated_at = ? WHERE id = ?`, status, note, store.Now(), r.id); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}

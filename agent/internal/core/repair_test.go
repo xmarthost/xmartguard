@@ -77,11 +77,15 @@ func TestInfectedCoreFileIsReplacedWithOfficial(t *testing.T) {
 	}
 }
 
-func TestAICleanVerdictRestoresFalsePositive(t *testing.T) {
-	a := newTestAgent(t, `{"scanner":{"virus_action":"quarantine","suspicious_action":"quarantine"},"firewall":{"enabled":false}}`)
+// The AI only advises: a 95% "clean" leaves the file in quarantine with
+// the verdict shown, and the same content is still flagged (the AI called
+// the fake-plugin campaign's files "backup plugins"); an administrator's
+// restore puts it back and clears it.
+func TestAICleanVerdictOnlyAdvises(t *testing.T) {
+	a := newTestAgent(t, `{"scanner":{"virus_action":"quarantine","suspicious_action":"quarantine"},"ai":{"act":true,"restore_clean":true},"firewall":{"enabled":false}}`)
 	dir := t.TempDir()
 	p := filepath.Join(dir, "legit.php")
-	// Legitimate code that trips a rule (request data passed to a callback name).
+	// Inert fixture: request data passed to a callback name.
 	body := "<?php\n$handler = $_GET['page'];\n$handler();\n"
 	os.WriteFile(p, []byte(body), 0o640)
 	a.Scanner.ScanFile(p)
@@ -97,23 +101,29 @@ func TestAICleanVerdictRestoresFalsePositive(t *testing.T) {
 	ai.Save(a.DB, v)
 	a.onAIVerdict(ai.Job{FindingID: id, Path: p, SHA256: sha}, v)
 	a.DB.QueryRow(`SELECT status FROM findings WHERE id = ?`, id).Scan(&status)
-	if status != scanner.StatusAIRestored {
-		t.Fatalf("status %q", status)
+	if status != "quarantined" {
+		t.Fatalf("status %q, want the file left in quarantine", status)
+	}
+	if got, ok := ai.Cached(a.DB, sha); !ok || got.Reason != "admin router" {
+		t.Fatalf("AI comment not kept: %+v", got)
+	}
+	if ai.IsCleared(a.DB, sha) {
+		t.Fatal("AI clean verdict cleared the content")
+	}
+	if err := a.restoreFinding(id); err != nil {
+		t.Fatal(err)
 	}
 	if st, err := os.Stat(p); err != nil || st.Mode().Perm() != 0o640 {
 		t.Fatalf("file not restored: %v", err)
 	}
-	// The same content is not flagged again.
 	info, _ := os.Lstat(p)
 	if d, _ := a.Scanner.CheckFile(p, info, a.Settings.Get().Scanner); d != nil {
-		t.Fatalf("flagged again: %+v", d)
+		t.Fatalf("restored by the administrator, flagged again: %+v", d)
 	}
-	// A less confident "clean" does not restore.
-	a.Scanner.ScanFile(p) // no new finding for cleared content
-	var n int
-	a.DB.QueryRow(`SELECT count(*) FROM findings WHERE path = ?`, p).Scan(&n)
-	if n != 1 || !strings.HasPrefix(sha, sha[:4]) {
-		t.Fatalf("findings %d", n)
+	// A later AI verdict does not undo the administrator's decision.
+	ai.Save(a.DB, ai.Verdict{SHA256: sha, Verdict: ai.Malicious, Confidence: 90, Reason: "x", Source: "ai", At: store.Now()})
+	if !ai.AdminCleared(a.DB, sha) {
+		t.Fatal("AI verdict replaced the administrator's decision")
 	}
 }
 

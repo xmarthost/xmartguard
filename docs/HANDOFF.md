@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.7** (see `VERSION`).
+- Current release: **0.23.8** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 and 0.23.7 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.8 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.7: `--branch backup-0.23.6`; see "Rollback" under 0.23.7 below);
+  0.23.8: `--branch backup-0.23.7`; see "Rollback" under 0.23.8 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,72 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.8: the AI only advises; scanner review of the fleet**
+  (2026-10-24). The owner asked for a review of the scanner on all
+  servers and then: "AI auto restore khatm kr do", the AI scans and
+  comments, the owner checks its comments against the files every night
+  and the scanner is trained from that review.
+  - **Why**: `ai_knowledge` (clean) held 146 recent verdicts, 118 of them
+    `PHP.Obfuscated.SplitFunctionName`: the fake-plugin campaign
+    (`mu-plugins/drift-optimizer.php`, `drift-runner-orb.php`, wp-content
+    `db.php`, `object-cache.php`, `advanced-cache.php`, `.sc_<hex>/`
+    folders, `<hex>.zip` copies; every copy a new hash, 12.5 KB, 21 KB,
+    45 KB, 140 KB and 1.8-2.5 MB) called "Datum Backup Ultra", "SiteCare",
+    "security plugin with obfuscation for anti-tamper" at 95-100 %, while
+    the same model called other copies malicious at 100 %. The agent's
+    untrusted list (0.22.x) kept those files from being restored, but every
+    such verdict became a "clean" training label in `ai_samples` (the fleet
+    model learned the campaign is clean), and AI restores of other
+    signatures stayed automatic.
+  - **Agent**: a clean AI verdict (this server's or the fleet's) never
+    restores a file and never clears content (`ai.isClearedVerdict`: only
+    an administrator, here or on the portal, clears; `clearFalsePositive`
+    removed; `restore_clean` and `--restore-clean` have no effect). Files the
+    AI put back before the update stay (status `ai_restored`, verdict
+    marked `ai_kept` once on start), so running sites are not broken; an
+    AI verdict never replaces an administrator's or a kept one (`ai.Save`).
+    "Act on confident verdicts" still applies the virus action at >= 80 %
+    malicious; "Only advise" turns that off too. Settings » AI text
+    changed. Tests: `TestAICleanVerdictOnlyAdvises`,
+    `TestAIRestoredBeforeStaysKept`, `TestFleetCleanDoesNotRestore`.
+  - **Portal training**: the fleet update trains only on files an
+    administrator reviewed (`ai_kb.overridden`, the label set by hand); the
+    AI's verdicts stay with the samples as comments for the review
+    (`gateway.train`; server test "shares verdicts and the trained model").
+    The poisoned labels are left in the table and no longer used. Nightly
+    review: the connector's `ai_knowledge` / `list_findings` show the AI's
+    verdict and reason; set the true verdict in AI Scanner » Shared
+    knowledge, then "Train fleet model now".
+  - **Symlink false positives** (open findings on business500, next to
+    its PHPLock files, business600 all 68, server1): root's links (cPanel
+    `/home/user -> /home2/user` and back, CageFS skeleton
+    `/var/cagefs/NN/user/home2/user`, `/opt/alt/redis/etc/*.conf`), links
+    to a file of the link owner's own group they may read anyway (cPanel's
+    `~/logs/<domain>.bkup -> /var/log/apache2/domlogs/...`, root:<account>
+    0640) and links inside the owner's own home (npm `node_modules/.bin`)
+    are no longer `Symlink.OtherAccount`; open findings of such links are
+    closed when the agent starts (`CloseSafeLinks`, status cleared). Kit
+    links to other accounts' wp-config.php stay flagged
+    (`TestFleetSystemSymlinks`, `TestFleetSymlinkTheftKit`).
+  - **Checked, no engine change**: the credential kits on business300
+    (jpmilk `configWDP/`, 1,983 links) and server100 (ecommupscale
+    `configEMQ/`, 1,627) were last scanned by 0.23.4 (21:08 on 10-23;
+    0.23.5 came at 22:01): the next daily scan removes them. business500
+    masfosur: 4,200+ PHPLock .htaccess files (the kit's
+    `py|exe|php|…|suspected` lock) listed, not quarantined, because one
+    account passed the spike limit (500 an hour) on its own; daily scans
+    skip unchanged files, so they wait for the owner's bulk quarantine
+    (open item 8). Reinfection: server100 aroojacademy
+    (hamdeerpremiums.store) gets a new drift-optimizer.php every few minutes
+    and websoul alhafeezenterpri / webnsofts / npcihorg have open findings
+    of the campaign: the account needs cleaning (cron, database, admin
+    users), not a rule.
+  - **Rollback**: `backup-0.23.7`. Portal: the update command with
+    `--branch backup-0.23.7`. Agents:
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
+    The old agent treats `ai_kept` rows as not cleared (those files may be
+    flagged again) and the symlink findings closed by 0.23.8 stay closed.
 
 - **Release 0.23.7: web server memory (IPDB list copies)** (2026-10-23).
   The owner had another assistant look at the RAM on cloud2.xmarthost.com
