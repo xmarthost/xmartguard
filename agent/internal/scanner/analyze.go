@@ -111,6 +111,13 @@ func AnalyzeScript(kind string, content []byte) *Detection {
 }
 
 func startsLikeScript(content []byte) bool {
-	head := bytes.TrimLeft(content[:min(len(content), 256)], " \t\r\n\ufeff")
+	head := bytes.TrimLeft(content[:min(len(content), 512)], " \t\r\n\ufeff")
+	// A comment line before the code (kits sign their files with
+	// "<!-- https://t.me/… -->" and hide them without an extension).
+	if bytes.HasPrefix(head, []byte("<!--")) {
+		if i := bytes.Index(head, []byte("-->")); i > 0 && i < 300 {
+			head = bytes.TrimLeft(head[i+3:], " \t\r\n")
+		}
+	}
 	return bytes.HasPrefix(head, []byte("<?")) || bytes.HasPrefix(head, []byte("#!"))
 }

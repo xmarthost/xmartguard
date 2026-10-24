@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.9** (see `VERSION`).
+- Current release: **0.23.10** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.9 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.10 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.9: `--branch backup-0.23.8`; see "Rollback" under 0.23.9 below);
+  0.23.10: `--branch backup-0.23.9`; see "Rollback" under 0.23.10 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,48 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.10: files another product quarantined that we did not**
+  (2026-10-24). The owner sent 51 files from a competitor's quarantine
+  (kept in the session's scratchpad only, never committed). Each was
+  compared with the official WordPress releases 6.0-7.1.3 (git mirror on
+  GitHub; wordpress.org is not reachable from the container) and read:
+  - **1 real malware, missed by our rules**: a hex-named file without an
+    extension in `wp-content/uploads/`, starting with
+    `<!-- https://t.me/… -->` then goto-flattened PHP with every string
+    escaped and no eval: it fetches a WSO shell, an uploader, a mailer and
+    a deface page from a web address into every site of the account and
+    creates mail accounts for spam in every domain (writes
+    `~/etc/<domain>/shadow` with `$6$` hashes and the dovecot mailbox
+    folders). New behaviour rules on the source and its decoded literals
+    (`kitBehaviour`, `escapedLiterals`): `PHP.Spam.MailAccountCreator`
+    (writes a per-domain `etc/<domain>/shadow` next to mailbox folders)
+    and `PHP.Dropper.RemoteSpreader` (escaped strings: a .txt/.php
+    payload URL fetched and written into site folders it walks). A file
+    without an extension is read as PHP when an HTML comment comes before
+    `<?php` (`startsLikeScript`). Test `TestFleetMassMailKit` (inert
+    fixtures, clean controls); 0 hits on WordPress 7.1.3, composer.phar
+    and wp-cli.phar (about 7,000 files).
+  - **31 corrupted WordPress core files** (`wp-includes/php-ai-client/…`,
+    REST controllers, interactivity processor): no risky code; each is a
+    block of another file's bytes or NUL bytes followed by the official
+    file (several exactly twice the official size): a broken disk write
+    or update. Not malware; WordPress's core check (CMS) and a core
+    reinstall repair them; quarantining does not.
+  - **13 translation files** (`classified-listing-*.l10n.php`): the PHP
+    translation format of WordPress 6.5+ (NUL separates plural forms;
+    "fsockopen" is a translated message): clean.
+  - **wp-admin/moderation.php**: identical to WordPress's: clean.
+  - **5 zip files of 79-115 bytes**: only the first bytes of an archive
+    (`<hex>.zip` with `flat-publisher-vox/flat-publisher-vox.php`,
+    `custom-headers-contact-lite.zip` holding `photo-video-editor.php`):
+    the fake-plugin campaign's copies caught while being written. Nothing
+    to run or judge; the complete copies are `Archive.*` detections.
+  - **Testing note**: `xpguard-agent check` skips files owned by root (the
+    system's); chown a sample folder to another user first.
+  - **Rollback**: `backup-0.23.9`. Portal: the update command with
+    `--branch backup-0.23.9`. Agents:
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.9: no offline AI model; fleet clean-up findings**
   (2026-10-24). The owner: "offline system khatm kro" (the AI is only a

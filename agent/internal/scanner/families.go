@@ -74,7 +74,93 @@ var (
 	reIncludePage = regexp.MustCompile(`(?i)\b(?:include|require|readfile)(?:_once)?\b\s*\(?\s*['"][^'"]+\.(?:html?|shtml|txt|tpl)['"]`)
 	reExit        = regexp.MustCompile(`(?i)\b(?:exit|die)\b`)
 	reFrontHook   = regexp.MustCompile(`(?i)add_action\s*\(\s*['"](?:template_redirect|init|wp|wp_loaded|parse_request|send_headers)['"]`)
+
+	// "\x2f\150…": string literals written as escapes.
+	reEscapedChar = regexp.MustCompile(`\\(?:x[0-9a-fA-F]{1,2}|[0-7]{1,3})`)
+	reDQLiteral   = regexp.MustCompile(`"((?:[^"\\]|\\.)+)"`)
+	// cPanel keeps a domain's mail passwords in ~/etc/<domain>/shadow.
+	reMailShadow = regexp.MustCompile(`(?i)/etc/[^/"'\n]{1,120}/shadow\b`)
+	reMailStore  = regexp.MustCompile(`(?i)dovecot|/mail/[^"'\n]{0,120}/(?:cur|new|tmp|\.trash|\.sent)\b`)
+	// A payload file fetched from a web address: https://host/x/wso.txt.
+	reRemotePayload = regexp.MustCompile(`(?i)https?://[a-z0-9.-]+/[^"'\s]*\.(?:txt|php\d?|phtml)\b`)
+	reSiteFolders   = regexp.MustCompile(`(?i)public_html|httpdocs|htdocs`)
+	reFetch         = regexp.MustCompile(`(?i)\b(?:file_get_contents|curl_exec|fopen|copy)\s*\(`)
 )
+
+// escapedLiterals decodes the double-quoted literals of a source that hides
+// its strings as escapes ("\x2f\x68…"); nil for ordinary sources.
+func escapedLiterals(s []byte) []byte {
+	if len(reEscapedChar.FindAllIndex(s, 40)) < 40 {
+		return nil
+	}
+	var out bytes.Buffer
+	for _, m := range reDQLiteral.FindAllSubmatch(s, 20000) {
+		lit := m[1]
+		for i := 0; i < len(lit); i++ {
+			if lit[i] != '\\' || i+1 >= len(lit) {
+				out.WriteByte(lit[i])
+				continue
+			}
+			j, base, max := i+1, 8, 3
+			if lit[j] == 'x' || lit[j] == 'X' {
+				j, base, max = j+1, 16, 2
+			}
+			v, k := 0, j
+			for ; k < len(lit) && k-j < max; k++ {
+				d := hexVal(lit[k])
+				if d < 0 || d >= base {
+					break
+				}
+				v = v*base + d
+			}
+			if k == j {
+				out.WriteByte(lit[i+1])
+				i++
+				continue
+			}
+			out.WriteByte(byte(v))
+			i = k - 1
+		}
+		out.WriteByte('\n')
+	}
+	return out.Bytes()
+}
+
+func hexVal(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
+
+// kitBehaviour: mass-infection kits (a sample from another product's
+// quarantine, 2026-10-24: a goto-flattened script with every string
+// escaped) that create mail accounts for spam in every domain of an account
+// (writing ~/etc/<domain>/shadow and the mailbox folders) and copy shells
+// fetched from a web address into every site. Judged on the source and on
+// its decoded literals.
+func kitBehaviour(s []byte) *verdict {
+	decoded := escapedLiterals(s)
+	view := s
+	if decoded != nil {
+		view = append(append(append([]byte{}, s...), '\n'), decoded...)
+	}
+	if !reWriteSink.Match(s) {
+		return nil
+	}
+	if reMailShadow.Match(view) && reMailStore.Match(view) {
+		return &verdict{CatVirus, "PHP.Spam.MailAccountCreator"}
+	}
+	if decoded != nil && reRemotePayload.Match(decoded) && reFetch.Match(s) && reSiteFolders.Match(decoded) && reDirWalk.Match(s) {
+		return &verdict{CatVirus, "PHP.Dropper.RemoteSpreader"}
+	}
+	return nil
+}
 
 // families runs the behavioural rules. s is the comment-stripped source,
 // n its length, library whether it looks like a legitimate library.
@@ -85,6 +171,9 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 			return 0
 		}
 		return len(re.FindAllIndex(s, -1))
+	}
+	if v := kitBehaviour(s); v != nil {
+		return v
 	}
 	// Tiny loaders whose only job is to pull in another file.
 	if m(reSilentLoader) && n < 4096 {

