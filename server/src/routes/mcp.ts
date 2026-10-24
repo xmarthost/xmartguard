@@ -258,7 +258,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
       name: 'captcha_events',
       description:
         "The CAPTCHA page's log (suspicious visitors of login pages sent to the portal's check), newest first, with a summary: " +
-        'results (passed, failed, rejected, offline) by check (turnstile, altcha), addresses that solved the page for other addresses ' +
+        'results (passed, failed, rejected, offline) by check (turnstile, altcha), why checks were refused (reasons), addresses that solved the page for other addresses ' +
         '(solver_ip; many targets from one solver is someone passing bots through), and the addresses that failed most. ' +
         'Filters: result, method, q (address, solver or site), hours.',
       inputSchema: obj({
@@ -278,9 +278,9 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
           where.push(`(e.ip ILIKE $${i} OR e.host ILIKE $${i} OR e.solver_ip ILIKE $${i})`);
         }
         const w = where.join(' AND ');
-        const [events, byResult, solvers, failing] = await Promise.all([
+        const [events, byResult, solvers, failing, reasons] = await Promise.all([
           pool.query(
-            `SELECT e.at, e.ip, e.host, e.result, e.method, e.solver_ip, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
+            `SELECT e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
               WHERE ${w} ORDER BY e.at DESC, e.id DESC LIMIT ${clamp(a.limit, 100, 500)}`,
             args,
           ),
@@ -295,8 +295,13 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
               WHERE ${w} AND e.result IN ('failed','rejected') GROUP BY 1 ORDER BY 2 DESC LIMIT 20`,
             args,
           ),
+          pool.query(
+            `SELECT e.result, e.reason, count(*)::int AS n FROM captcha_events e
+              WHERE ${w} AND e.result <> 'passed' GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20`,
+            args,
+          ),
         ]);
-        return { summary: byResult.rows, solvers_for_other_addresses: solvers.rows, most_failed: failing.rows, events: events.rows };
+        return { summary: byResult.rows, reasons: reasons.rows, solvers_for_other_addresses: solvers.rows, most_failed: failing.rows, events: events.rows };
       },
     },
     {

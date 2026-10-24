@@ -245,7 +245,7 @@ func TestTorRuleActiveState(t *testing.T) {
 // iCloud Private Relay and Cloudflare WARP: every address of the relays,
 // both families, is shared egress (never an IPDB POST block).
 func TestSharedEgressCoversRelays(t *testing.T) {
-	for _, ip := range []string{"17.58.1.2", "104.28.213.42", "104.29.202.184", "2606:54c1:1:2c0::3c0:2f", "2a09:bac5:a7b8:25a5::3c0:5e"} {
+	for _, ip := range []string{"17.58.1.2", "87.81.235.80", "104.28.213.42", "104.29.202.184", "2606:54c1:1:2c0::3c0:2f", "2a09:bac5:a7b8:25a5::3c0:5e"} {
 		in := false
 		for _, r := range SharedEgressRanges {
 			_, n, _ := net.ParseCIDR(r)

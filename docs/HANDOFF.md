@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.11** (see `VERSION`).
+- Current release: **0.23.12** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.11 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.12 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.11: `--branch backup-0.23.10`; see "Rollback" under 0.23.11 below);
+  0.23.12: `--branch backup-0.23.11`; see "Rollback" under 0.23.12 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,43 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.12: CAPTCHA report review (24 h of 2026-10-24)**.
+  `captcha_events`: 1,318 passed, 582 rejected, 75 failed.
+  - **iCloud Private Relay visitors refused**: on 14 websites (schooltrack.pk,
+    dubaiprofixer.com, mhsdigitals.com, primescopeusa.com, mus1i.com,
+    cartogeek.com, …) the website saw 87.81.x or 104.29.x and the ALTCHA
+    check was solved from Apple's 2606:54c1::/32; refused, then often
+    passed with Turnstile from the person's own address. The ALTCHA
+    fallback refused "hosting" addresses (AbuseIPDB calls the relays data
+    centres). Privacy relays (`egressNetwork`) skip that check now, and
+    87.81.0.0/16 joins the relay networks (portal `SHARED_EGRESS` and
+    agent `waf.SharedEgressRanges`, which exempts them from IPDB POST
+    blocks): an inference from this log (whois is not reachable from the
+    container).
+  - **CAPTCHA farm**: glasgowfitness.com's 23.82.99.148 (a proxy address)
+    passed Turnstile every few minutes, solved from DigitalOcean and
+    hosting addresses (134.199.132.123, 38.57.2.171, 23.80.89.36). A check
+    solved from a hosting network for another address is refused now (both
+    checks; relays excepted).
+  - **Why a check was refused**: new column `captcha_events.reason`
+    (migration 029): strict setting, too many other addresses, ALTCHA daily
+    limit / other network / hosting network, solved from a hosting network
+    for another address, wrong answer, website server offline, and "server
+    refused: <the agent's error>". Shown in Overview » CAPTCHA Page
+    (Recent checks) and in the connector's `captcha_events` (`reasons`).
+    algoking.pk (server1) refused 84.54.71.38's solved Turnstile check 16
+    times in an hour: the agent's error was not visible before; read the
+    reason after the update.
+  - **Correct refusals seen**: AWS addresses (52.34.76.65, 54.70.53.60,
+    54.71.187.124) on dozens of `030088xxx.xyz` sites; 198.23.158.93 and
+    146.70.186.158 solved by their /24 neighbours (hosting).
+  - Tests: server "lets privacy relays use ALTCHA, and refuses data
+    centres solving for other addresses", the hosting test records its
+    reason; agent `TestSharedEgressCoversRelays`.
+  - **Rollback**: `backup-0.23.11`. Portal: the update command with
+    `--branch backup-0.23.11` (the `reason` column stays, unused).
+    Agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.11: site-mode CAPTCHA out of reach; relay solvers**
   (2026-10-24). roxannebradley's owner (posts made by Meta's Muse agent)

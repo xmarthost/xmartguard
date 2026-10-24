@@ -757,4 +757,12 @@ CREATE INDEX ai_kb_match_idx ON ai_kb (match) WHERE match <> '';
 CREATE INDEX audit_login_failed_idx ON audit_events (lower(detail->>'email'), created_at) WHERE action = 'auth.login_failed';
 `,
   },
+  {
+    version: '029_captcha_event_reason',
+    sql: `
+-- Why a check was refused or failed: "rejected" had five causes that the
+-- reports could not tell apart.
+ALTER TABLE captcha_events ADD COLUMN reason text NOT NULL DEFAULT '';
+`,
+  },
 ];

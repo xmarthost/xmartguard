@@ -298,7 +298,9 @@ func (m *Manager) listFiles(cfg settings.WAF) map[string]string {
 // puts the address on the IPDB, so it never blocks their POSTs (the CRS
 // still inspects them). The same relays' 104.29.x and IPv6 addresses were
 // missing (the CAPTCHA log of 2026-10-23 shows customers on all of them).
-var SharedEgressRanges = []string{"17.0.0.0/8", "104.28.0.0/15", "2606:54c1::/32", "2a09:bac0::/29"}
+// 87.81.0.0/16: the website side of Private Relay visitors who solve the
+// CAPTCHA from 2606:54c1::/32 (14 websites in the log of 2026-10-24).
+var SharedEgressRanges = []string{"17.0.0.0/8", "87.81.0.0/16", "104.28.0.0/15", "2606:54c1::/32", "2a09:bac0::/29"}
 
 // ipdbMarks reports whether the IPDB list is read once into marks
 // (renderIPDBMarks) for the rules that need it: the IPDB POST block, and

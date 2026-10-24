@@ -317,6 +317,7 @@ interface Check {
   server: string;
   method?: string;
   solver_ip?: string;
+  reason?: string;
 }
 
 const PAGE_SIZES = [25, 50, 100, 200];
@@ -457,6 +458,7 @@ function RecentChecks({ admin }: { admin: boolean }) {
                     <td className="py-2 pr-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>{label}</span>
                       {r.method && <div className="mt-0.5 text-xs text-slate-400">{r.method === 'altcha' ? 'ALTCHA' : 'Turnstile'}</div>}
+                      {r.reason && r.result !== 'passed' && <div className="mt-0.5 max-w-[16rem] text-xs text-slate-500">{r.reason}</div>}
                     </td>
                   </tr>
                 );

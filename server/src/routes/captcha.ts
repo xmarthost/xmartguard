@@ -131,7 +131,9 @@ export function altchaAllowed(keys: string[], mode: 'auto' | 'altcha', now = Dat
  * Meta AI fetch pages from 57.141.0.0/16 and solve from 2a03:2880::/29).
  */
 const SHARED_EGRESS: Record<string, string[]> = {
-  relay: ['104.28.0.0/15', '2606:54c1::/32', '2a09:bac0::/29'],
+  // 87.81.0.0/16: the website side of iCloud Private Relay visitors who
+  // solve the check from Apple's 2606:54c1::/32 (14 websites, 2026-10-24).
+  relay: ['104.28.0.0/15', '87.81.0.0/16', '2606:54c1::/32', '2a09:bac0::/29'],
   meta: ['57.141.0.0/16', '2a03:2880::/29'],
 };
 const sharedEgress = Object.entries(SHARED_EGRESS).map(([name, cidrs]) => {
@@ -425,9 +427,10 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
 
   // method: the check solved (turnstile / altcha); solver: the address the
   // page was solved from when it is not the website's visitor itself.
-  async function record(accountId: string, serverId: string, ip: string, host: string, result: string, method = '', solver = '') {
+  // reason: why a check was refused or failed (shown in the reports).
+  async function record(accountId: string, serverId: string, ip: string, host: string, result: string, method = '', solver = '', reason = '') {
     await pool
-      .query('INSERT INTO captcha_events (account_id, server_id, ip, host, result, method, solver_ip) VALUES ($1, $2, $3, $4, $5, $6, $7)', [
+      .query('INSERT INTO captcha_events (account_id, server_id, ip, host, result, method, solver_ip, reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)', [
         accountId,
         serverId,
         ip,
@@ -435,6 +438,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         result,
         method,
         sameIP(solver, ip) ? '' : solver,
+        reason.slice(0, 200),
       ])
       .catch(() => undefined);
     // Kept 30 days (pruned hourly, see index.ts).
@@ -597,8 +601,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         // IPv4 addresses.
         const other = !sameIP(ip, p.ip);
         const sameFamily = isIP(ip) === isIP(p.ip);
-        if (other && ((config.strict_ip && sameFamily) || !allowOtherAddress(ip, p.ip, Date.now(), p.h))) {
-          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+        const strict = config.strict_ip && sameFamily;
+        if (other && (strict || !allowOtherAddress(ip, p.ip, Date.now(), p.h))) {
+          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, strict ? 'solved from another address (strict setting)' : 'solver passed too many other addresses this hour');
           return res(403, {
             error:
               config.strict_ip && sameFamily
@@ -611,17 +616,28 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         // day, for a shorter time.
         const altchaKeys = altchaKeysFor(ip, p.ip, p.h);
         if (method === 'altcha' && provider !== 'turnstile') {
-          if ((provider === 'auto' && other && sameFamily && !sameNetwork(ip, p.ip)) || !altchaAllowed(altchaKeys, provider === 'auto' ? 'auto' : 'altcha')) {
-            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+          const elsewhere = provider === 'auto' && other && sameFamily && !sameNetwork(ip, p.ip);
+          if (elsewhere || !altchaAllowed(altchaKeys, provider === 'auto' ? 'auto' : 'altcha')) {
+            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, elsewhere ? 'ALTCHA from another network' : 'ALTCHA daily limit');
             return res(403, { error: 'Too many checks from this address. Please try again later.' });
           }
-          if (provider === 'auto' && (await hostingAddress(pool, ip))) {
-            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+          // Not on a privacy relay (iCloud Private Relay, WARP, Meta's agent
+          // browsers): AbuseIPDB calls those data centres, but they are
+          // people (Private Relay visitors were refused on 14 websites).
+          if (provider === 'auto' && egressNetwork(ip) === '' && (await hostingAddress(pool, ip))) {
+            await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, 'ALTCHA from a hosting network');
             return res(403, { error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
           }
         }
+        // Solved from a data centre for another address: CAPTCHA farms solve
+        // for bots on proxy addresses (glasgowfitness.com: one proxy address
+        // passed every few minutes from DigitalOcean and hosting addresses).
+        if (other && egressNetwork(ip) === '' && (await hostingAddress(pool, ip))) {
+          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, 'solved from a hosting network for another address');
+          return res(403, { error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
+        }
         if (!(await solved())) {
-          await record(accountId, p.s, p.ip, p.h, 'failed', method, ip);
+          await record(accountId, p.s, p.ip, p.h, 'failed', method, ip, 'wrong answer');
           return res(403, { error: 'The check failed. Please try again.' });
         }
         // An agent reconnecting (update, WAF reload, network blip) is back
@@ -630,7 +646,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           await new Promise((r) => setTimeout(r, 500));
         }
         if (!hub.isOnline(p.s)) {
-          await record(accountId, p.s, p.ip, p.h, 'offline', method, ip);
+          await record(accountId, p.s, p.ip, p.h, 'offline', method, ip, 'website server offline');
           return res(503, { error: "The website's server cannot be reached right now. Please try again in a minute." });
         }
         try {
@@ -645,7 +661,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
             await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip, ...short }, 90_000);
           }
         } catch (e) {
-          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
+          await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip, 'server refused: ' + (e as Error).message);
           req.log.warn({ err: (e as Error).message, server: p.s, host: p.h }, 'captcha pass refused');
           return res(403, { error: 'This website could not confirm the check. Please try again later.' });
         }
@@ -765,7 +781,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const w = where.join(' AND ');
     const total = await pool.query(`SELECT count(*)::int AS n FROM captcha_events e WHERE ${w}`, args);
     const rows = await pool.query(
-      `SELECT e.id::text, e.at, e.ip, e.host, e.result, e.method, e.solver_ip, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
+      `SELECT e.id::text, e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
        WHERE ${w} ORDER BY e.at DESC, e.id DESC LIMIT ${f.data.limit} OFFSET ${f.data.offset}`,
       args,
     );

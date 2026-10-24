@@ -454,6 +454,31 @@ describe('CAPTCHA page: no passing bots through', () => {
       expect((await verify({ ...p('192.0.2.31'), token: 'good-token' }, '192.0.2.31')).status).toBe(200);
       expect((await verify({ ...p('192.0.2.32'), altcha: await solve() }, '192.0.2.32')).status).toBe(200);
       expect(passes).toHaveLength(2);
+      // Why it was refused is recorded.
+      const { rows } = await h.pool.query("SELECT reason FROM captcha_events WHERE ip = '192.0.2.31' AND result = 'rejected' ORDER BY id DESC LIMIT 1");
+      expect(rows[0].reason).toBe('ALTCHA from a hosting network');
+    } finally {
+      hostingCheck.lookup = old;
+      await h.pool.query("UPDATE ipdb_abuseipdb SET api_key = '' WHERE id = 1");
+    }
+  }, 60_000);
+
+  it('lets privacy relays use ALTCHA, and refuses data centres solving for other addresses', async () => {
+    const old = hostingCheck.lookup;
+    await h.pool.query("INSERT INTO ipdb_abuseipdb (id, api_key) VALUES (1, 'test-key') ON CONFLICT (id) DO UPDATE SET api_key = 'test-key'");
+    // AbuseIPDB calls both data centres: iCloud Private Relay (Apple's IPv6
+    // range, the website saw 87.81.x) and a CAPTCHA farm's server.
+    hostingCheck.lookup = async () => true;
+    try {
+      passes.length = 0;
+      const relay = await verify({ ...p('87.81.235.80'), altcha: await solve() }, '2606:54c1:1:eff::50c:3d');
+      expect(relay.status).toBe(200);
+      const farm = await verify({ ...p('198.51.100.148'), token: 'good-token' }, '203.0.113.123');
+      expect(farm.status).toBe(403);
+      expect(farm.body.error).toContain('hosting or cloud network');
+      const { rows } = await h.pool.query("SELECT reason FROM captcha_events WHERE ip = '198.51.100.148' ORDER BY id DESC LIMIT 1");
+      expect(rows[0].reason).toBe('solved from a hosting network for another address');
+      expect(passes).toHaveLength(1);
     } finally {
       hostingCheck.lookup = old;
       await h.pool.query("UPDATE ipdb_abuseipdb SET api_key = '' WHERE id = 1");
