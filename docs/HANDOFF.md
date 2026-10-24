@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.10** (see `VERSION`).
+- Current release: **0.23.11** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.10 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.11 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.10: `--branch backup-0.23.9`; see "Rollback" under 0.23.10 below);
+  0.23.11: `--branch backup-0.23.10`; see "Rollback" under 0.23.11 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,42 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.11: site-mode CAPTCHA out of reach; relay solvers**
+  (2026-10-24). roxannebradley's owner (posts made by Meta's Muse agent)
+  was blocked again: on roxannebradley.online the Muse browser was sent to
+  `https://roxannebradley.online:7743/.xpguard/gate` and got "refused to
+  connect"; on roxannebradley.org the ALTCHA check opened for 87.81.x was
+  solved from 104.29.x (Cloudflare relay: iCloud Private Relay / WARP) and
+  refused (2 on 10-24, 4 on 10-22).
+  - **CAPTCHA port out of reach**: site mode sent suspects straight to
+    the server's CAPTCHA port. A website behind Cloudflare (only 80/443
+    and a few ports are proxied), agents' cloud browsers and office
+    networks that only open 80 and 443 never reach it. The WAF now sends
+    them to the portal's page with `g=<port>` (`rules.go`); the page
+    (`probePage`) loads `https://<site>:<port>/.xpguard/ping.gif` (new on
+    the agent's CAPTCHA server) and goes on to the gate there within 3
+    seconds (pass cookie, no reload), or shows the check itself, which
+    lets the address in through the pass list like portal mode (site-mode
+    rules accept the pass list as well as the cookie). Only for a site the
+    server confirmed (captcha.host); CSP `img-src` is that address only.
+    Tests: `TestCentralSiteMode` (also on Apache: a pass-listed address
+    gets in without a cookie), `TestSiteMode` (ping), server "goes to the
+    CAPTCHA port only when the browser reaches it". Mixed versions: a new
+    agent with an old portal shows the check on the portal (works); an old
+    agent with a new portal is unchanged.
+  - **Relay solvers**: the "solved for another address" allowance (3 an
+    hour) was per solving address; on a shared relay address (104.28.0.0/15
+    and the IPv6 relay ranges, Meta) strangers used it up. Solving from a
+    shared egress network for an address outside it is now counted per
+    website (`allowOtherAddress(…, host)`).
+  - **Not verified from the container**: the owner of 87.81.0.0/16 (RIPE
+    RDAP, ipinfo and Apple's Private Relay egress list are not reachable
+    here). If the portal's CAPTCHA setting "strict" (`strict_ip`) is on, a
+    same-family other address is still refused by design.
+  - **Rollback**: `backup-0.23.10`. Portal: the update command with
+    `--branch backup-0.23.10`. Agents:
+    `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.10: files another product quarantined that we did not**
   (2026-10-24). The owner sent 51 files from a competitor's quarantine

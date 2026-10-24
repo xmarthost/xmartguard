@@ -77,7 +77,7 @@ export function effectiveProvider(c: CaptchaConfig): 'turnstile' | 'altcha' | 'a
 const MAX_OTHER_ADDRESSES = 3;
 const otherAddresses = new Map<string, Map<string, number>>();
 
-export function allowOtherAddress(visitor: string, target: string, now = Date.now()): boolean {
+export function allowOtherAddress(visitor: string, target: string, now = Date.now(), host = ''): boolean {
   // A shared egress network (iCloud Private Relay, WARP, Meta's agent
   // browsers) is many people: the same person's two addresses there are
   // not "another address", and strangers solving there must not use up
@@ -86,12 +86,18 @@ export function allowOtherAddress(visitor: string, target: string, now = Date.no
   // network full of bots) still counts.
   const ev = egressNetwork(visitor);
   if (ev !== '' && ev === egressNetwork(target)) return true;
+  // Solving from a shared egress address for an address outside it (iCloud
+  // Private Relay or WARP for the check, another network for the website):
+  // the allowance is per website there, so strangers on the same relay
+  // address do not use it up (roxannebradley.org, 2026-10-24: 104.29.x
+  // solving for 87.81.x, refused).
+  const key = ev !== '' && host !== '' ? `${visitor}|${host}` : visitor;
   const hour = now - 3600_000;
-  let m = otherAddresses.get(visitor);
+  let m = otherAddresses.get(key);
   if (!m) {
     if (otherAddresses.size > 50_000) otherAddresses.clear();
     m = new Map();
-    otherAddresses.set(visitor, m);
+    otherAddresses.set(key, m);
   }
   for (const [ip, at] of m) if (at < hour) m.delete(ip);
   if (!m.has(target) && m.size >= MAX_OTHER_ADDRESSES) return false;
@@ -321,6 +327,9 @@ export function parseParams(rawUrl: string) {
     // ticket number (the server trades the portal's word for a cookie).
     n: /^[a-f0-9]{32}$/.test(head.get('n') ?? '') ? (head.get('n') as string) : '',
     frame: head.get('frame') === '1',
+    // The server's CAPTCHA port (site mode): the page sends a browser that
+    // reaches it on to the website's own address (see probePage).
+    g: /^[0-9]{1,5}$/.test(head.get('g') ?? '') && Number(head.get('g')) > 0 && Number(head.get('g')) < 65536 ? Number(head.get('g')) : 0,
     // Previews may show another design than the saved one.
     design: (CAPTCHA_DESIGNS as readonly string[]).includes(d) ? (d as CaptchaDesign) : undefined,
   };
@@ -332,6 +341,26 @@ function validParams(p: { s: string; ip: string; h: string; u: string }): string
   if (!reHost.test(p.h)) return 'This check link is not valid.';
   if (!p.u.startsWith('/') || p.u.startsWith('//') || p.u.length > 2000 || /[\s<>"\\]/.test(p.u)) return 'This check link is not valid.';
   return null;
+}
+
+/**
+ * Site mode's first stop: loads a pixel from the server's CAPTCHA port on
+ * the website's address and goes on to the check there when it arrives
+ * within 3 seconds (pass cookie, no reload), or to the check on this page
+ * otherwise. The address and port come from a link the website's server
+ * confirmed (captcha.host).
+ */
+export function probePage(host: string, port: number, back: string, fallback: string): string {
+  const js = (v: string) => JSON.stringify(v).replace(/</g, '\\u003c');
+  const base = `https://${host}:${port}/.xpguard/`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>One moment…</title></head>
+<body style="font-family:system-ui,sans-serif;color:#334155;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>One moment…</p>
+<script>(function(){var done=false,gate=${js(base + 'gate?back=' + back)},fb=${js(fallback)};
+function go(u){if(done)return;done=true;location.replace(u)}
+var t=setTimeout(function(){go(fb)},3000),img=new Image();
+img.onload=function(){clearTimeout(t);go(gate)};img.onerror=function(){clearTimeout(t);go(fb)};
+img.src=${js(base + 'ping.gif?')}+Date.now();})();</script>
+<noscript><meta http-equiv="refresh" content="0;url=${fallback.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></noscript></body></html>`;
 }
 
 export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: AgentHub): void {
@@ -470,6 +499,24 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (site === 'no') {
       return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
     }
+    // Site mode: on to the CAPTCHA port on the website's address when the
+    // browser reaches it, otherwise the check here (the server lets the
+    // address in like portal mode). A website behind Cloudflare and agents'
+    // cloud browsers only reach 80 and 443 (roxannebradley.online, Meta's
+    // Muse agent: "refused to connect" on :7743).
+    if (p.g && !frame && !p.preview && site === 'yes') {
+      return reply
+        .code(200)
+        .type('text/html; charset=utf-8')
+        .header('Cache-Control', 'no-store')
+        .header('X-Robots-Tag', 'noindex, nofollow, noarchive')
+        .header('X-Frame-Options', 'DENY')
+        .header(
+          'Content-Security-Policy',
+          `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https://${p.h.replace(/\.$/, '')}:${p.g}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+        )
+        .send(probePage(p.h.replace(/\.$/, ''), p.g, p.u, `${pageUrl}?s=${p.s}&ip=${encodeURIComponent(p.ip)}&h=${p.h}&u=${p.u}`));
+    }
     // In a frame only on a website its server confirmed (the frame is on
     // the website's own address).
     if (frame && site === 'yes') (req as FastifyRequest & { xgFrame?: boolean }).xgFrame = true;
@@ -550,7 +597,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         // IPv4 addresses.
         const other = !sameIP(ip, p.ip);
         const sameFamily = isIP(ip) === isIP(p.ip);
-        if (other && ((config.strict_ip && sameFamily) || !allowOtherAddress(ip, p.ip))) {
+        if (other && ((config.strict_ip && sameFamily) || !allowOtherAddress(ip, p.ip, Date.now(), p.h))) {
           await record(accountId, p.s, p.ip, p.h, 'rejected', method, ip);
           return res(403, {
             error:

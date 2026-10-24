@@ -286,6 +286,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	if SiteWanted(s.Settings.Get()) {
 		switch {
+		case r.URL.Path == pathPrefix+"ping.gif":
+			// The portal's page loads it to learn whether the visitor reaches
+			// this port at all (a website behind Cloudflare, an agent's cloud
+			// browser or an office network that only opens 80 and 443): if
+			// not, the check is solved on the portal instead.
+			w.Header().Set("Content-Type", "image/gif")
+			_, _ = w.Write(pingGIF)
 		case r.Method == http.MethodPost && r.URL.Path == pathPrefix+"pass":
 			s.sitePass(w, r, ip)
 		case r.URL.Path == pathPrefix+"gate" || r.URL.Path == legacyPrefix+"gate":
@@ -539,6 +546,10 @@ func (s *Server) gatePassed(w http.ResponseWriter, r *http.Request, ip string, c
 	s.Log.Info("login page captcha solved", "ip", ip)
 	http.Redirect(w, r, siteURL(r, safeBack(r.PostForm.Get("back"))), http.StatusSeeOther)
 }
+
+// pingGIF is a transparent 1x1 GIF.
+var pingGIF = []byte{0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
+	0x21, 0xf9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3b}
 
 // pathPrefix holds the CAPTCHA server's own URLs; legacyPrefix is the one of
 // versions before the xPGuard name (pages still open in a browser).

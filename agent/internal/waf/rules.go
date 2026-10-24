@@ -865,10 +865,14 @@ func Render(c settings.WAF, o Options) string {
 		}
 		site := ct.Site && len(toks) > 0 && ct.HTTPSPort > 0 && ct.HTTPSPort < 65536
 		if site {
+			// Not passed: no pass cookie, and not on the pass list either (a
+			// visitor that cannot reach the CAPTCHA port solves on the portal,
+			// which lets the address in like portal mode).
 			pass := fmt.Sprintf(`(?:^|;)\s*%s=(?:%s)\s*(?:;|$)`, GateCookie, strings.Join(toks, "|"))
+			listed := fmt.Sprintf(`SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none`, o.Dir, FileCaptchaPass)
 			pending = []notPassed{
-				{IDCentralGate, IDCentralNoBrowser, `SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none`},
-				{IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, fmt.Sprintf(`SecRule REQUEST_HEADERS:Cookie "!@rx %s" "t:none`, pass)},
+				{IDCentralGate, IDCentralNoBrowser, `SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none,chain"` + "\n  " + listed},
+				{IDCentralGateBadCookie, IDCentralNoBrowserBadCookie, fmt.Sprintf(`SecRule REQUEST_HEADERS:Cookie "!@rx %s" "t:none,chain"`, pass) + "\n  " + listed},
 			}
 		} else {
 			pending = []notPassed{{IDCentralGate, IDCentralNoBrowser, fmt.Sprintf(`SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none`, o.Dir, FileCaptchaPass)}}
@@ -899,9 +903,13 @@ func Render(c settings.WAF, o Options) string {
 		}
 		redirect := fmt.Sprintf("redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI}", ct.URL, ct.ServerID)
 		if site {
-			// This server's CAPTCHA port on the same address: the page there
-			// shows the portal's check and sets the pass cookie.
-			redirect = fmt.Sprintf("redirect:https://%%{REQUEST_HEADERS.Host}:%d/.xpguard/gate?back=%%{REQUEST_URI}", ct.HTTPSPort)
+			// Through the portal's page, which sends the visitor on to this
+			// server's CAPTCHA port on the website's address (the page there
+			// sets the pass cookie) when the browser reaches that port, and
+			// otherwise shows the check itself: a website behind Cloudflare
+			// and agents' cloud browsers only reach 80 and 443
+			// (roxannebradley.online: "refused to connect" on :7743).
+			redirect = fmt.Sprintf("redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&g=%d&u=%%{REQUEST_URI}", ct.URL, ct.ServerID, ct.HTTPSPort)
 		}
 		for _, p := range pending {
 			gateRule(p.gate, p.cond, redirect, "xPGuard - suspicious visitor sent to the CAPTCHA", "@contains text/html")

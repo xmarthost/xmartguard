@@ -151,7 +151,10 @@ func TestCentralSiteMode(t *testing.T) {
 	out := Render(c, Options{Dir: "/etc/xpguard/waf", Central: ct})
 	for _, want := range []string{
 		"id:7700904", "id:7700907", "id:7700906", "id:7700908",
-		"redirect:https://%{REQUEST_HEADERS.Host}:7743/.xpguard/gate?back=%{REQUEST_URI}",
+		// Through the portal's page, which sends a browser that reaches the
+		// CAPTCHA port on to it (roxannebradley.online: refused on :7743).
+		"redirect:https://captcha.xpguard.org/v?s=15d69a72-653a-47b6-90f6-fde737bce061&ip=%{REMOTE_ADDR}&h=%{REQUEST_HEADERS.Host}&g=7743&u=%{REQUEST_URI}",
+		`  SecRule REMOTE_ADDR "!@ipMatchFromFile /etc/xpguard/waf/captcha-pass.txt" "t:none,chain"`,
 		`SecRule &REQUEST_HEADERS:Cookie "@eq 0" "t:none,chain"`, `SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*xg_gate=(?:` + tok + `|fedcba9876543210fedcba9876543210)\s*(?:;|$)" "t:none,chain"`,
 		// Which value a suspect sends, one rule per slot (shared passes).
 		"id:7700910,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,pass,log,msg:'xPGuard - CAPTCHA pass cookie used'", "id:7700911,",
@@ -161,11 +164,11 @@ func TestCentralSiteMode(t *testing.T) {
 			t.Errorf("missing %q", want)
 		}
 	}
-	if strings.Contains(out, "captcha.xpguard.org/v?s=") || strings.Contains(out, "!@ipMatchFromFile /etc/xpguard/waf/captcha-pass.txt") {
-		t.Error("site mode still sends to the portal's domain or reads the pass list")
+	if strings.Contains(out, "/.xpguard/gate?back=") {
+		t.Error("site mode still sends to the CAPTCHA port directly")
 	}
-	// No valid token or port: back to the portal's domain.
-	if out := Render(c, Options{Dir: "/x", Central: &Central{URL: ct.URL, ServerID: ct.ServerID, Site: true, Slots: [][]string{{"bad token"}}, HTTPSPort: 7743}}); !strings.Contains(out, "captcha.xpguard.org/v?s=") {
+	// No valid token or port: portal mode.
+	if out := Render(c, Options{Dir: "/x", Central: &Central{URL: ct.URL, ServerID: ct.ServerID, Site: true, Slots: [][]string{{"bad token"}}, HTTPSPort: 7743}}); !strings.Contains(out, "captcha.xpguard.org/v?s=") || strings.Contains(out, "&g=") {
 		t.Error("site mode without a token")
 	}
 
@@ -221,11 +224,11 @@ func TestCentralSiteMode(t *testing.T) {
 	get := func(cookie string) (int, string) {
 		return getPath("/wp-login.php?redirect_to=/wp-admin/&reauth=1", cookie)
 	}
-	want := "https://shop.example.com:7743/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1"
+	want := "https://captcha.xpguard.org/v?s=15d69a72-653a-47b6-90f6-fde737bce061&ip=127.0.0.1&h=shop.example.com&g=7743&u=/wp-login.php?redirect_to=/wp-admin/&reauth=1"
 	// The login page reached through PATH_INFO or an encoded name is the
 	// same login page (PHP runs wp-login.php for /wp-login.php/x).
 	for _, p := range []string{"/wp-login.php/x", "/wp-login.php/", "/wp%2dlogin.php", "//WP-LOGIN.php"} {
-		if code, loc := getPath(p, ""); code != 302 || !strings.HasPrefix(loc, "https://shop.example.com:7743/.xpguard/gate?back=") {
+		if code, loc := getPath(p, ""); code != 302 || !strings.HasPrefix(loc, "https://captcha.xpguard.org/v?s=") || !strings.Contains(loc, "&g=7743&u=") {
 			t.Fatalf("suspect on %s: %d %q", p, code, loc)
 		}
 	}
@@ -259,6 +262,16 @@ func TestCentralSiteMode(t *testing.T) {
 	}
 	if !seen {
 		t.Fatal("no pass-cookie event in the web server's log")
+	}
+	// Solved on the portal (the CAPTCHA port was out of reach): the address
+	// is let in without a cookie, as in portal mode.
+	ct.Pass = []string{"127.0.0.1"}
+	if err := m.Apply(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	if code, _ := get(""); code != 200 {
+		t.Fatalf("address passed on the portal still sent to the CAPTCHA: %d", code)
 	}
 }
 

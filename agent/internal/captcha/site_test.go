@@ -38,6 +38,11 @@ func TestSiteMode(t *testing.T) {
 		s.ServeHTTP(w, r)
 		return w
 	}
+	// The portal's page loads this pixel to learn whether the browser
+	// reaches the port (roxannebradley.online: refused on :7743).
+	if w := req("GET", "/.xpguard/ping.gif?123", "", "203.0.113.5"); w.Code != 200 || w.Header().Get("Content-Type") != "image/gif" || !strings.HasPrefix(w.Body.String(), "GIF89a") {
+		t.Fatalf("ping: %d %q", w.Code, w.Header().Get("Content-Type"))
+	}
 	w := req("GET", "/.xpguard/gate?back=/wp-login.php?redirect_to=/wp-admin/&reauth=1", "", "203.0.113.5")
 	body := w.Body.String()
 	if w.Code != 200 || w.Header().Get("Location") != "" {

@@ -60,7 +60,7 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, g: 0 });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
@@ -433,6 +433,12 @@ describe('CAPTCHA page: no passing bots through', () => {
     // A shared egress solver passing addresses outside its network still counts.
     for (let i = 1; i <= 3; i++) expect(allowOtherAddress('2a03:2880:16ff:77::', `203.0.113.${20 + i}`)).toBe(true);
     expect(allowOtherAddress('2a03:2880:16ff:77::', '203.0.113.99')).toBe(false);
+    // Per website there (roxannebradley.org: 104.29.x solving for 87.81.x,
+    // its allowance used up by strangers on the same relay address), and
+    // still 3 an hour for one website.
+    for (let i = 1; i <= 3; i++) expect(allowOtherAddress('104.29.193.195', `198.51.100.${40 + i}`, Date.now(), 'busy.example')).toBe(true);
+    expect(allowOtherAddress('104.29.193.195', '87.81.235.109', Date.now(), 'roxannebradley.org')).toBe(true);
+    expect(allowOtherAddress('104.29.193.195', '198.51.100.99', Date.now(), 'busy.example')).toBe(false);
   });
 
   it('refuses the ALTCHA fallback from hosting and cloud networks (AbuseIPDB usage type)', async () => {
@@ -493,6 +499,27 @@ describe('CAPTCHA on the website’s own address', () => {
     } finally {
       h.hub.command = before;
     }
+  });
+
+  it('goes to the CAPTCHA port only when the browser reaches it (site mode)', async () => {
+    const url = `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&g=7743&u=/wp-admin/?x=1`;
+    const page = await h.app.inject({ method: 'GET', url, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.88' } });
+    expect(page.statusCode).toBe(200);
+    // A pixel from the port, on to the gate there, or the check here.
+    expect(page.body).toContain('"https://shop.example.com:7743/.xpguard/ping.gif?"');
+    expect(page.body).toContain('"https://shop.example.com:7743/.xpguard/gate?back=/wp-admin/?x=1"');
+    expect(page.body).toContain(`"https://captcha.example.org/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-admin/?x=1"`);
+    expect(page.headers['content-security-policy']).toContain('img-src https://shop.example.com:7743;');
+    expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    // The fallback is the check itself.
+    const check = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-admin/?x=1`, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.88' } });
+    expect(check.body).not.toContain('ping.gif');
+    // A website its server does not confirm gets no redirect to any port.
+    const evil = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.88&h=paypal.com&g=443&u=/`, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.88' } });
+    expect(evil.statusCode).toBe(404);
+    expect(evil.body).not.toContain('paypal.com:443');
+    expect(parseParams(`/v?s=x&g=99999&u=/`).g).toBe(0);
+    expect(parseParams(`/v?s=x&g=7743&u=/`).g).toBe(7743);
   });
 
   it('may be framed by that website only, and gives the server a ticket instead of a reload', async () => {
