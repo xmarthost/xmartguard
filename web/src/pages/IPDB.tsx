@@ -685,6 +685,12 @@ function CheckIP() {
             </div>
           ))}
           {res.whitelisted.length > 0 && <div>Whitelisted by {res.whitelisted.map((w: { cidr: string }) => w.cidr).join(', ')}</div>}
+          {res.shared && (
+            <div>
+              Shared network (iCloud Private Relay or Meta): thousands of people use this address, so it is not sent to the servers
+              unless you list it by hand. Bans on a server still apply there.
+            </div>
+          )}
         </div>
       )}
     </div>

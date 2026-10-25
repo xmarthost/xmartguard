@@ -782,4 +782,12 @@ ALTER TABLE captcha_events ADD COLUMN source text NOT NULL DEFAULT '';
 ALTER TABLE captcha_events ADD COLUMN via text NOT NULL DEFAULT '';
 `,
   },
+  {
+    version: '032_ipdb_relay',
+    sql: `
+-- Apple's iCloud Private Relay egress ranges (ipdb/shared.ts): kept off
+-- the fleet's list. Downloaded daily, kept here across restarts.
+CREATE TABLE ipdb_relay (cidr cidr NOT NULL);
+`,
+  },
 ];

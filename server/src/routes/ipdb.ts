@@ -194,7 +194,10 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
         [ip],
       ),
     ]);
-    const listed = entries.rows.length > 0 && white.rows.length === 0;
+    // A shared egress network (iCloud Private Relay, Meta) is not sent to
+    // the servers unless the operator listed it.
+    const shared = ipdb.shared.has(ip);
+    const listed = entries.rows.length > 0 && white.rows.length === 0 && (!shared || entries.rows.some((r) => r.source === 'manual'));
     if (!req.user!.platform) {
       // A customer learns whether the address is dropped (their servers hold
       // the list), not the operator's reasons, notes or the fleet's reports.
@@ -202,6 +205,7 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
         ip,
         country: ipdb.geo.lookup(ip),
         listed,
+        shared,
         entries: entries.rows.map((r) => ({ cidr: entryText(r.cidr), source: r.source, country: r.country })),
         whitelisted: white.rows.map((r) => ({ cidr: entryText(r.cidr) })),
       };
@@ -210,6 +214,7 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
       ip,
       country: ipdb.geo.lookup(ip),
       listed,
+      shared,
       entries: entries.rows.map((r) => ({ ...r, cidr: entryText(r.cidr) })),
       whitelisted: white.rows.map((r) => ({ ...r, cidr: entryText(r.cidr) })),
       ...reports.rows[0],

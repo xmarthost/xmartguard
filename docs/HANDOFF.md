@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.24** (see `VERSION`).
+- Current release: **0.23.25** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.24 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.25 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.24: `--branch backup-0.23.23`; see "Rollback" under 0.23.24 below);
+  0.23.25: `--branch backup-0.23.24`; see "Rollback" under 0.23.25 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,27 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.23.25: shared egress networks stay off the fleet IPDB**
+  (2026-10-25, owner's decision). One iCloud Private Relay or Meta address
+  carries thousands of people; one person's mistakes (0.23.24's false
+  bans of 104.29.x) put it on every server's list, and every Safari
+  visitor met the CAPTCHA everywhere.
+  - `ipdb/shared.ts` (`SharedEgress`): Apple's published relay ranges
+    (`mask-api.icloud.com/egress-ip-ranges.csv`, downloaded daily by
+    `refreshRelay`, kept in table `ipdb_relay`, migration 032; a download
+    under 1,000 ranges or a failed one keeps the saved list) and Meta's
+    networks (`META_RANGES`: 57.141.0.0/16, 2a03:2880::/29). `doRebuild`
+    leaves entries inside them out of the distributed list unless the
+    operator listed them by hand. Cloudflare's own ranges are not taken
+    whole: WARP, a free VPN, shares them and stays listable. Check IP shows
+    `shared`. Bans on the server itself are unchanged.
+  - The CAPTCHA's `SHARED_EGRESS` (allowances, same network) is unchanged.
+  - The portal must reach mask-api.icloud.com (until then only Meta's
+    ranges are left out; the log says "private relay list download failed").
+  - Tests: `ipdb-shared.test.ts`.
+  - **Rollback**: `backup-0.23.24` (the `ipdb_relay` table stays, unused);
+    agents unchanged.
+
 - **Release 0.23.24: the WordPress admin folder is no login page; login
   attack mode from 2 addresses** (2026-10-25).
   - Owner's test 07:58-08:02 PKT on primescopeusa.com (business200
@@ -107,9 +128,7 @@ project. It holds the rules, the current state and what is still open.
     exemption) and `siteLoginURLs` uses it. wp-login.php keeps its own rule.
   - Tests: waf `TestWPAdminIsNoLoginPage`, core `TestLoginAttackSites`
     (two VPN addresses).
-  - Open: relay addresses listed on the IPDB from those false bans age out
-    on their own; whether shared egress (relay, meta) should be kept off
-    the fleet list is for the owner.
+  - Relay addresses listed on the IPDB from those false bans: see 0.23.25.
   - **Rollback**: `backup-0.23.23`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.23: VPN and cloud visitors can solve the CAPTCHA**

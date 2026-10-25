@@ -19,6 +19,7 @@ import {
 import { MAIL_MIN_AGENT, syncMail } from '../routes/mail.js';
 import { eachLimit, single } from '../agents/limit.js';
 import { platformAccount } from '../tenancy.js';
+import { RELAY_MIN_RANGES, RELAY_URL, SharedEgress, parseRelayCSV } from './shared.js';
 
 /** Agents older than this do not implement the ipdb.* commands. */
 export const IPDB_MIN_AGENT = '0.3.0';
@@ -123,6 +124,11 @@ export class IPDBService {
   private once = new Set<NodeJS.Timeout>();
   private syncing = new Set<string>();
   private building: Promise<void> | null = null;
+  /** Shared egress networks kept off the fleet's list (see shared.ts). */
+  readonly shared = new SharedEgress();
+  private relayLoaded = false;
+  /** Where Apple's relay list is downloaded from (tests change it). */
+  relayURL = RELAY_URL;
 
   constructor(
     private pool: Pool,
@@ -169,6 +175,10 @@ export class IPDBService {
     });
     this.timers.push(setTimeout(abuse, 45_000));
     this.timers.push(setInterval(abuse, 15 * 60_000));
+    // Apple's Private Relay ranges: once a day.
+    const relay = () => this.refreshRelay().catch((err) => this.log.warn({ err: (err as Error).message }, 'private relay list download failed'));
+    this.timers.push(setTimeout(relay, 60_000));
+    this.timers.push(setInterval(relay, 24 * 3600_000));
   }
 
   stop(): void {
@@ -287,7 +297,7 @@ export class IPDBService {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT e.cidr::text AS cidr, e.country FROM ipdb_entries e
+      `SELECT e.cidr::text AS cidr, e.country, e.source FROM ipdb_entries e
         WHERE NOT EXISTS (SELECT 1 FROM ipdb_whitelist w WHERE w.cidr >>= e.cidr OR e.cidr >>= w.cidr)
           AND NOT (e.cidr >>= ANY($1::inet[]))
           -- Solved the CAPTCHA (single addresses; manual entries stay): off
@@ -299,7 +309,12 @@ export class IPDBService {
         LIMIT $2`,
       [await this.protectedIPs(), c.ipdbMaxEntries],
     );
-    const lines = rows.map((r) => `${entryText(r.cidr)} ${r.country || ''}`.trim()).sort();
+    if (!this.relayLoaded) await this.loadRelay();
+    const lines = rows
+      // Shared egress networks only by the operator's own hand.
+      .filter((r) => r.source === 'manual' || !this.shared.has(r.cidr))
+      .map((r) => `${entryText(r.cidr)} ${r.country || ''}`.trim())
+      .sort();
     this.entries = lines;
     const version = crypto.createHash('sha256').update(lines.join('\n')).digest('hex').slice(0, 16);
     if (version !== this.version) this.prevVersion = this.version;
@@ -613,6 +628,43 @@ export class IPDBService {
   }
 
   /** Downloads the configured public feeds and merges them as 'feed' entries. */
+  /** The relay ranges saved by the last download. */
+  private async loadRelay(): Promise<void> {
+    const { rows } = await this.pool.query('SELECT cidr::text AS cidr FROM ipdb_relay');
+    this.shared.set(rows.map((r) => r.cidr as string));
+    this.relayLoaded = true;
+  }
+
+  /**
+   * Downloads Apple's Private Relay ranges, saves them and rebuilds the list
+   * when they changed. A failed or short download keeps the saved ones.
+   */
+  async refreshRelay(): Promise<number> {
+    const res = await fetch(this.relayURL, { signal: AbortSignal.timeout(120_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const ranges = [...new Set(parseRelayCSV((await res.text()).slice(0, 64 << 20)))];
+    if (ranges.length < RELAY_MIN_RANGES) throw new Error(`only ${ranges.length} ranges`);
+    if (!this.relayLoaded) await this.loadRelay();
+    const before = this.shared.relayRanges;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM ipdb_relay');
+      for (let i = 0; i < ranges.length; i += 50_000) {
+        await client.query('INSERT INTO ipdb_relay (cidr) SELECT unnest($1::cidr[])', [ranges.slice(i, i + 50_000)]);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+    this.shared.set(ranges);
+    if (before !== ranges.length) await this.rebuild();
+    return ranges.length;
+  }
+
   async refreshFeeds(): Promise<Record<string, number>> {
     const result: Record<string, number> = {};
     for (const url of this.cfg.ipdbFeeds) {
