@@ -33,6 +33,12 @@ func TestCaptchaPassRendersIPDBOnly(t *testing.T) {
 			t.Errorf("nft script missing %q", want)
 		}
 	}
+	// Open web connections of listed or banned addresses are reset before
+	// the drop (see TestListedVisitorKeepAliveIsReset).
+	reset := strings.Index(script, "tcp dport { 80, 443 } ip saddr != @cpass4 ip saddr @ipdb4 counter reject with tcp reset")
+	if reset < 0 || !strings.Contains(script, "tcp dport { 80, 443 } ip saddr @tempban4 counter reject with tcp reset") || reset > strings.Index(script, "jump drop_ipdb") {
+		t.Errorf("nft: no reset of open web connections before the IPDB drop:\n%s", script)
+	}
 	if strings.Contains(script, "@cpass4 accept") || strings.Contains(script, "@cpass6 accept") {
 		t.Error("a CAPTCHA pass is accepted like a whitelist entry")
 	}
@@ -62,6 +68,9 @@ func TestCaptchaPassRendersIPDBOnly(t *testing.T) {
 		}
 		if strings.Contains(rules, "xg_cpass"+sfx+" src -j RETURN") || strings.Contains(rules, "xg_cpass"+sfx+" src -j ACCEPT") {
 			t.Errorf("iptables %s: a CAPTCHA pass is let through like a whitelist entry", sfx)
+		}
+		if !strings.Contains(rules, "-p tcp -m multiport --dports 80,443 -m set ! --match-set xg_cpass"+sfx+" src -m set --match-set xg_ipdb"+sfx+" src -m comment --comment \"xg-ipdb\" -j REJECT --reject-with tcp-reset") {
+			t.Errorf("iptables %s: no reset of open web connections:\n%s", sfx, rules)
 		}
 		nat := renderNAT(rs, v6)
 		ban := strings.Index(nat, "--match-set xg_tban"+sfx+" src -j REDIRECT")

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.15** (see `VERSION`).
+- Current release: **0.23.16** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.15 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.16 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.15: `--branch backup-0.23.14`; see "Rollback" under 0.23.15 below);
+  0.23.16: `--branch backup-0.23.15`; see "Rollback" under 0.23.16 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,35 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.16: the CAPTCHA at once when an address is listed
+  during a visit** (2026-10-25). The owner tested from a Browsec VPN
+  address (37.203.35.18) on yamalcustompackaging.co.uk (business200):
+  `/wp-admin.php` 7 times got WAF 403s (7700311 fake core file, a
+  scanner-only rule: right; the real path is `/wp-admin/`), those 403s
+  went to the portal as probe reports (`IPDBProbeReports`, 3 list an
+  address), the portal listed it and pushed the list (minutes later),
+  and then the page would not load for a while before the CAPTCHA came.
+  - **Cause**: the browser's keep-alive connection to 443 was opened
+    before the listing. The nat redirect only sees new connections, and
+    the input chain dropped that connection's packets silently: the page
+    hung until the browser gave up on it.
+  - **Fix**: before the IPDB and ban drops, web connections (80, 443) of
+    listed (not passed) or banned addresses are reset when the CAPTCHA
+    redirect is on (`reject with tcp reset` / `REJECT --reject-with
+    tcp-reset`, comments xg-ipdb / xg-tempban). The browser reconnects at
+    once and the new connection is redirected to the CAPTCHA. New
+    connections never reach these rules (their port is the CAPTCHA port
+    after the redirect).
+  - Test: `TestListedVisitorKeepAliveIsReset` (both kernels, a network
+    namespace, `XG_DESTRUCTIVE_TESTS=1`): an open connection after the
+    listing was "hung" before the fix, now reset within the second and
+    the next connection gets the CAPTCHA; render checks in
+    `TestCaptchaPassRendersIPDBOnly`.
+  - The listing delay itself (WAF reports → portal sync → list push,
+    up to ~10-15 minutes) stays: until then the address is not blocked
+    (only the probed URL got 403).
+  - **Rollback**: `backup-0.23.15`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.15: a solved CAPTCHA is no longer a whitelist**
   (2026-10-25). The owner asked whether one solved check gives an

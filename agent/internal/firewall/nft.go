@@ -278,6 +278,22 @@ func (r Ruleset) Render() string {
 	jump := func(match, chain, comment string) {
 		fmt.Fprintf(&b, "\t\t%s counter jump %s comment \"%s\"\n", match, chain, comment)
 	}
+	// Web connections opened before the address was listed or banned are
+	// reset, not dropped: a dropped keep-alive connection hangs the
+	// browser until it gives up (seen: 403s, then a page that would not
+	// load, then the check). A reset makes it reconnect at once, and the
+	// new connection is sent to the CAPTCHA. New connections never get
+	// here: they were redirected to the CAPTCHA ports.
+	if cp := r.Captcha; cp != nil {
+		for _, fam := range [][2]string{{"ip", "4"}, {"ip6", "6"}} {
+			if cp.TempBan {
+				fmt.Fprintf(&b, "\t\ttcp dport { 80, 443 } %s saddr @tempban%s counter reject with tcp reset comment \"xg-tempban\"\n", fam[0], fam[1])
+			}
+			if cp.IPDB {
+				fmt.Fprintf(&b, "\t\ttcp dport { 80, 443 } %s saddr != @cpass%s %s saddr @ipdb%s counter reject with tcp reset comment \"xg-ipdb\"\n", fam[0], fam[1], fam[0], fam[1])
+			}
+		}
+	}
 	// A solved CAPTCHA (cpass) lets the address past the IPDB only; that
 	// test first, as an IPDB lookup counts on the matched element.
 	jump("ip saddr != @cpass4 ip saddr @ipdb4", "drop_ipdb", "xg-ipdb")

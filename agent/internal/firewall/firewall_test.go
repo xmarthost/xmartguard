@@ -374,7 +374,8 @@ func TestRenderIPTables(t *testing.T) {
 	}
 	rs.Captcha.IPDB = false
 	// 14 items with 5 ranges = 19 multiport slots: split into two rules.
-	if n := strings.Count(out, "-A XPGUARD -p tcp -m multiport --dports"); n != 3 { // 2 + captcha rule
+	// (+ the CAPTCHA ports' rule and the reset of banned visitors' open web connections)
+	if n := strings.Count(out, "-A XPGUARD -p tcp -m multiport --dports"); n != 4 {
 		t.Errorf("multiport chunks: %d\n%s", n, out)
 	}
 	nat := renderNAT(rs, false)

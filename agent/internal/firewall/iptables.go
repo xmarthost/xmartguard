@@ -412,6 +412,17 @@ func renderRules(r Ruleset, v6 bool) string {
 	}
 	add("-m set --match-set xg_exempt" + sfx + " src -j " + ChainExempt)
 	add("-m set --match-set xg_exempt" + sfx + " src -j RETURN")
+	// Web connections opened before the address was listed or banned are
+	// reset, not dropped, so the browser reconnects at once and is sent to
+	// the CAPTCHA (see the nftables rules).
+	if cp := r.Captcha; cp != nil {
+		if cp.TempBan {
+			jump("-p tcp -m multiport --dports 80,443 -m set --match-set xg_tban"+sfx+" src", "xg-tempban", "REJECT --reject-with tcp-reset")
+		}
+		if cp.IPDB && len(r.IPDB) > 0 {
+			jump("-p tcp -m multiport --dports 80,443 -m set ! --match-set xg_cpass"+sfx+" src -m set --match-set xg_ipdb"+sfx+" src", "xg-ipdb", "REJECT --reject-with tcp-reset")
+		}
+	}
 	if len(r.IPDB) > 0 {
 		// A solved CAPTCHA (xg_cpass) lets the address past the IPDB only;
 		// that test first, as the IPDB set counts its matched entries.
