@@ -331,7 +331,15 @@ interface Check {
   solver_ip?: string;
   reason?: string;
   source?: string;
+  via?: string;
 }
+
+// Site mode: where the check was solved.
+const VIA: Record<string, string> = {
+  site: "On the website's own address",
+  'port-timeout': "Here: the website's CAPTCHA port did not answer in time",
+  'port-refused': "Here: the website's CAPTCHA port refused (blocked network, VPN or Cloudflare)",
+};
 
 const PAGE_SIZES = [25, 50, 100, 200];
 
@@ -475,6 +483,7 @@ function RecentChecks({ admin }: { admin: boolean }) {
                     <td className="py-2 pr-3 break-all">
                       {r.host}
                       <div className="text-xs text-slate-400">{r.source === 'firewall' ? 'IPDB / firewall' : 'Login page'}</div>
+                      {r.via && VIA[r.via] && <div className="text-xs text-slate-400">{VIA[r.via]}</div>}
                     </td>
                     <td className="py-2 pr-3">{r.server}</td>
                     <td className="py-2 pr-3">

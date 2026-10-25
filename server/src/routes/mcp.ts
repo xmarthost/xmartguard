@@ -267,6 +267,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         'results (passed, failed, rejected, offline) by check (turnstile, altcha), why checks were refused (reasons), addresses that solved the page for other addresses ' +
         '(solver_ip; many targets from one solver is someone passing bots through), and the addresses that failed most. ' +
         'source "firewall" is a visitor a server\'s firewall sent (IPDB, ban), "" a login page\'s suspect. ' +
+        'via (site mode): "site" solved on the website\'s own address, "port-timeout" / "port-refused" solved here because the website\'s CAPTCHA port did not answer; where_solved counts them per server. ' +
         'Filters: result, method, source (firewall or login), q (address, solver or site), hours.',
       inputSchema: obj({
         result: { type: 'string', enum: ['passed', 'failed', 'rejected', 'offline'] },
@@ -288,9 +289,9 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
           where.push(`(e.ip ILIKE $${i} OR e.host ILIKE $${i} OR e.solver_ip ILIKE $${i})`);
         }
         const w = where.join(' AND ');
-        const [events, byResult, solvers, failing, reasons] = await Promise.all([
+        const [events, byResult, solvers, failing, reasons, where_solved] = await Promise.all([
           pool.query(
-            `SELECT e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, e.source, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
+            `SELECT e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, e.source, e.via, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
               WHERE ${w} ORDER BY e.at DESC, e.id DESC LIMIT ${clamp(a.limit, 100, 500)}`,
             args,
           ),
@@ -310,8 +311,15 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
               WHERE ${w} AND e.result <> 'passed' GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20`,
             args,
           ),
+          // Site mode: solved on the website's address, or here because its
+          // CAPTCHA port did not answer (port-timeout / port-refused).
+          pool.query(
+            `SELECT s.hostname AS server, e.via, count(*)::int AS n FROM captcha_events e JOIN servers s ON s.id = e.server_id
+              WHERE ${w} AND e.via <> '' GROUP BY 1, 2 ORDER BY 1, 3 DESC`,
+            args,
+          ),
         ]);
-        return { summary: byResult.rows, reasons: reasons.rows, solvers_for_other_addresses: solvers.rows, most_failed: failing.rows, events: events.rows };
+        return { summary: byResult.rows, reasons: reasons.rows, where_solved: where_solved.rows, solvers_for_other_addresses: solvers.rows, most_failed: failing.rows, events: events.rows };
       },
     },
     {

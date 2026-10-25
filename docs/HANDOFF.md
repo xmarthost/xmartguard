@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.17** (see `VERSION`).
+- Current release: **0.23.18** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.17 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.18 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.17: `--branch backup-0.23.16`; see "Rollback" under 0.23.17 below);
+  0.23.18: `--branch backup-0.23.17`; see "Rollback" under 0.23.18 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,32 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.18: where a site-mode check was solved** (2026-10-25).
+  The owner saw the servers set to "the website's own address" send
+  visitors to the CAPTCHA domain (recaptcha.world). That is the 0.23.11
+  design: the WAF sends a site-mode suspect to the portal's page with
+  `g=<port>`, which loads `https://<site>:7743/.xpguard/ping.gif` and goes
+  on to the gate on the website within 3 seconds, or shows the check on
+  the portal when the port does not answer (a website behind Cloudflare, a
+  VPN or office network that only opens 80 and 443: the owner tested
+  through Browsec all day). The first hop is always the portal ("One
+  moment…"). Nothing recorded which way visitors went (gate events are
+  not stored, the portal did not tell), so it could not be checked.
+  - Now `probePage` adds `pf=t` (no answer in 3 s) or `pf=e` (refused or a
+    certificate error) to the fallback; `captcha_events.via` (migration
+    031) records `site` (solved in the frame on the website),
+    `port-timeout`, `port-refused`, or '' (portal mode). Shown under each
+    row of CAPTCHA page » Recent checks; the connector's `captcha_events`
+    returns `via` and `where_solved` (per server).
+  - Read `where_solved` after a day: mostly `site` = working, the owner's
+    fallbacks were the VPN; mostly `port-refused` on a server = its port
+    7743 is blocked (host firewall, provider firewall) or the sites are
+    behind Cloudflare; `port-timeout` = dropped packets or a slow handshake
+    (consider a longer probe).
+  - Tests: server captcha (pf links, via recorded), browser "site mode goes
+    to the website when its port answers, and records why it did not".
+  - **Rollback**: `backup-0.23.17` (the `via` column stays, unused).
 
 - **Release 0.23.17: login attacks from many addresses** (2026-10-25).
   The owner tried 10+ fake WordPress logins on websoulhost.com

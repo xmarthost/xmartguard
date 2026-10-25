@@ -773,4 +773,13 @@ ALTER TABLE captcha_events ADD COLUMN reason text NOT NULL DEFAULT '';
 ALTER TABLE captcha_events ADD COLUMN source text NOT NULL DEFAULT '';
 `,
   },
+  {
+    version: '031_captcha_event_via',
+    sql: `
+-- Site mode: where the check was solved. 'site' on the website's own
+-- address, 'port-timeout' / 'port-refused' on the portal because the
+-- browser did not reach the website's CAPTCHA port; '' portal mode.
+ALTER TABLE captcha_events ADD COLUMN via text NOT NULL DEFAULT '';
+`,
+  },
 ];

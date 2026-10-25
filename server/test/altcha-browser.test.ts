@@ -114,3 +114,45 @@ browserTest('ALTCHA waits for a real tick inside the frame on the website (site 
   expect(rows[0]).toEqual({ result: 'passed', method: 'altcha', source: 'firewall' });
   await b.close();
 }, 60_000);
+
+// Site mode: the portal's page first checks that the browser reaches the
+// website's CAPTCHA port. Reached: on to the check on the website's own
+// address. Not (a VPN or network that only opens 80 and 443, Cloudflare):
+// the check here, and the report says why.
+browserTest('site mode goes to the website when its port answers, and records why it did not', async () => {
+  const { chromium } = createRequire(import.meta.url)(PW);
+  const b = await chromium.launch();
+  const ctx = await b.newContext({ ignoreHTTPSErrors: true });
+  await ctx.route('https://captcha.test/**', async (r: any) => {
+    const u = new URL(r.request().url());
+    const res = await r.fetch({ url: h.url + u.pathname + u.search, headers: { ...r.request().headers(), host: 'captcha.test' } });
+    await r.fulfill({ response: res });
+  });
+  let reachable = true;
+  const gif = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+  await ctx.route('https://shop.example.com:7743/**', (r: any) => {
+    const u = new URL(r.request().url());
+    if (!reachable) return r.abort('connectionrefused');
+    if (u.pathname === '/.xpguard/ping.gif') return r.fulfill({ contentType: 'image/gif', body: gif });
+    return r.fulfill({ contentType: 'text/html', body: '<p id="gate">gate on the website</p>' });
+  });
+  const link = `https://captcha.test/v?s=${serverId}&ip=127.0.0.1&h=shop.example.com&g=7743&u=/wp-login.php`;
+  const page = await ctx.newPage();
+  await page.goto(link);
+  await page.waitForURL((u: URL) => u.href.startsWith('https://shop.example.com:7743/.xpguard/gate'), { timeout: 10000 });
+  expect(page.url()).toBe('https://shop.example.com:7743/.xpguard/gate?back=/wp-login.php');
+  // The port does not answer: the check here.
+  reachable = false;
+  await page.goto(link);
+  await page.waitForURL((u: URL) => u.searchParams.get('pf') === 'e', { timeout: 10000 });
+  await page.locator('altcha-widget label').waitFor();
+  await page.waitForTimeout(800);
+  await page.mouse.move(100, 100);
+  await page.mouse.move(300, 300, { steps: 5 });
+  await page.locator('altcha-widget label').click();
+  await page.waitForFunction(() => /ok|err/.test(document.getElementById('status')?.className ?? ''), null, { timeout: 20000 });
+  expect(await page.textContent('#status')).toContain('Verified');
+  const { rows } = await h.pool.query("SELECT result, via FROM captcha_events WHERE host = 'shop.example.com' ORDER BY id DESC LIMIT 1");
+  expect(rows[0]).toEqual({ result: 'passed', via: 'port-refused' });
+  await b.close();
+}, 60_000);

@@ -349,6 +349,9 @@ export function parseParams(rawUrl: string) {
     frame: head.get('frame') === '1',
     // k=fw: a visitor the server's firewall sent (IPDB, ban).
     k: head.get('k') === 'fw' ? 'fw' : '',
+    // pf: site mode, the browser did not reach the website's CAPTCHA port
+    // (t: no answer in time, e: refused or a certificate error).
+    pf: head.get('pf') === 't' || head.get('pf') === 'e' ? (head.get('pf') as string) : '',
     // The server's CAPTCHA port (site mode): the page sends a browser that
     // reaches it on to the website's own address (see probePage).
     g: /^[0-9]{1,5}$/.test(head.get('g') ?? '') && Number(head.get('g')) > 0 && Number(head.get('g')) < 65536 ? Number(head.get('g')) : 0,
@@ -407,12 +410,16 @@ export function tickReason(raw: string | undefined): string {
 export function probePage(host: string, port: number, back: string, fallback: string): string {
   const js = (v: string) => JSON.stringify(v).replace(/</g, '\\u003c');
   const base = `https://${host}:${port}/.xpguard/`;
+  // The check here then says why (pf: t no answer in time, e refused or a
+  // certificate error), for the reports. The page ("u") stays last.
+  const i = fallback.indexOf('&u=');
+  const fbFor = (why: string) => (i < 0 ? fallback : `${fallback.slice(0, i)}&pf=${why}${fallback.slice(i)}`);
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>One moment…</title></head>
 <body style="font-family:system-ui,sans-serif;color:#334155;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>One moment…</p>
-<script>(function(){var done=false,gate=${js(base + 'gate?back=' + back)},fb=${js(fallback)};
+<script>(function(){var done=false,gate=${js(base + 'gate?back=' + back)},fbT=${js(fbFor('t'))},fbE=${js(fbFor('e'))};
 function go(u){if(done)return;done=true;location.replace(u)}
-var t=setTimeout(function(){go(fb)},3000),img=new Image();
-img.onload=function(){clearTimeout(t);go(gate)};img.onerror=function(){clearTimeout(t);go(fb)};
+var t=setTimeout(function(){go(fbT)},3000),img=new Image();
+img.onload=function(){clearTimeout(t);go(gate)};img.onerror=function(){clearTimeout(t);go(fbE)};
 img.src=${js(base + 'ping.gif?')}+Date.now();})();</script>
 <noscript><meta http-equiv="refresh" content="0;url=${fallback.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></noscript></body></html>`;
 }
@@ -480,9 +487,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
   // method: the check solved (turnstile / altcha); solver: the address the
   // page was solved from when it is not the website's visitor itself.
   // reason: why a check was refused or failed (shown in the reports).
-  async function record(accountId: string, serverId: string, ip: string, host: string, result: string, method = '', solver = '', reason = '', source = '') {
+  async function record(accountId: string, serverId: string, ip: string, host: string, result: string, method = '', solver = '', reason = '', source = '', via = '') {
     await pool
-      .query('INSERT INTO captcha_events (account_id, server_id, ip, host, result, method, solver_ip, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)', [
+      .query('INSERT INTO captcha_events (account_id, server_id, ip, host, result, method, solver_ip, reason, source, via) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)', [
         accountId,
         serverId,
         ip,
@@ -492,6 +499,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         sameIP(solver, ip) ? '' : solver,
         reason.slice(0, 200),
         source,
+        via,
       ])
       .catch(() => undefined);
     // Kept 30 days (pruned hourly, see index.ts).
@@ -547,7 +555,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // never frame a page of the portal's own origin (audit A7 F4).
     const onPortal = !!captchaHost && captchaHost !== new URL(cfg.publicUrl).host.toLowerCase() && (req.headers.host ?? '').toLowerCase() !== captchaHost;
     const frame = !p.preview && p.frame && p.n !== '' && !onPortal;
-    const kind = p.k ? { k: p.k } : {};
+    const kind = { ...(p.k ? { k: p.k } : {}), ...(p.pf ? { pf: p.pf } : {}) };
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : frame ? { s: p.s, ip: p.ip, h: p.h, n: p.n, ...kind, u: p.u } : { s: p.s, ip: p.ip, h: p.h, ...kind, u: p.u };
     const design = (p.preview && p.design) || config.design;
     // The page names the website only when its server confirms the site is
@@ -606,6 +614,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // Opened in a frame on the website's own address (see /v).
     n: z.string().regex(/^[a-f0-9]{32}$/).optional(),
     k: z.enum(['fw']).optional(),
+    pf: z.enum(['t', 'e']).optional(),
     preview: z.boolean().optional(),
   });
   app.post(
@@ -637,7 +646,11 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       }
       // A visitor the server's firewall sent (IPDB, ban): told apart in the reports.
       const source = b.data.k === 'fw' ? 'firewall' : '';
-      const rec = (result: string, method: string, solver: string, reason = '') => record(accountId, p.s, p.ip, p.h, result, method, solver, reason, source);
+      // Where it was solved: on the website's own address (site mode), on
+      // this page because the website's CAPTCHA port did not answer, or
+      // here in portal mode ('').
+      const via = b.data.n ? 'site' : b.data.pf === 't' ? 'port-timeout' : b.data.pf === 'e' ? 'port-refused' : '';
+      const rec = (result: string, method: string, solver: string, reason = '') => record(accountId, p.s, p.ip, p.h, result, method, solver, reason, source, via);
       const run = async (): Promise<{ code: number; body: unknown }> => {
         const ip = visitorIP(req, cfg.trustProxy);
         const method = b.data.altcha ? 'altcha' : 'turnstile';
@@ -854,7 +867,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const w = where.join(' AND ');
     const total = await pool.query(`SELECT count(*)::int AS n FROM captcha_events e WHERE ${w}`, args);
     const rows = await pool.query(
-      `SELECT e.id::text, e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, e.source, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
+      `SELECT e.id::text, e.at, e.ip, e.host, e.result, e.method, e.solver_ip, e.reason, e.source, e.via, s.hostname AS server FROM captcha_events e JOIN servers s ON s.id = e.server_id
        WHERE ${w} ORDER BY e.at DESC, e.id DESC LIMIT ${f.data.limit} OFFSET ${f.data.offset}`,
       args,
     );

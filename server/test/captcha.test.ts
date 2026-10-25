@@ -63,7 +63,7 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', g: 0, design: undefined });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', pf: '', g: 0, design: undefined });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
@@ -567,7 +567,17 @@ describe('CAPTCHA on the website’s own address', () => {
     // A pixel from the port, on to the gate there, or the check here.
     expect(page.body).toContain('"https://shop.example.com:7743/.xpguard/ping.gif?"');
     expect(page.body).toContain('"https://shop.example.com:7743/.xpguard/gate?back=/wp-admin/?x=1"');
-    expect(page.body).toContain(`"https://captcha.example.org/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-admin/?x=1"`);
+    // The check here, with why the port was not reached (for the reports).
+    expect(page.body).toContain(`"https://captcha.example.org/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&pf=t&u=/wp-admin/?x=1"`);
+    expect(page.body).toContain(`"https://captcha.example.org/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&pf=e&u=/wp-admin/?x=1"`);
+    expect(parseParams('/v?s=x&pf=e&u=/').pf).toBe('e');
+    expect(parseParams('/v?s=x&pf=zz&u=/').pf).toBe('');
+    const fb = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&pf=e&u=/wp-admin/?x=1`, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.88' } });
+    expect(fb.body).toContain('"pf":"e"');
+    expect((await verify({ s: serverId, ip: '198.51.100.91', h: 'shop.example.com', u: '/', pf: 't', token: 'good-token' }, '198.51.100.91')).status).toBe(200);
+    expect((await verify({ s: serverId, ip: '198.51.100.92', h: 'shop.example.com', u: '/', pf: 'x', token: 'good-token' }, '198.51.100.92')).status).toBe(400);
+    const { rows: via } = await h.pool.query("SELECT via FROM captcha_events WHERE ip = '198.51.100.91'");
+    expect(via[0].via).toBe('port-timeout');
     expect(page.headers['content-security-policy']).toContain('img-src https://shop.example.com:7743;');
     expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'");
     // The fallback is the check itself.
@@ -623,7 +633,7 @@ describe('CAPTCHA on the website’s own address', () => {
       expect(commands[0].params).toEqual({ ip: '203.0.113.88', host: 'shop.example.com', nonce });
       // Recorded like any other check.
       const ev = await admin.req('GET', '/api/captcha/events?q=203.0.113.88');
-      expect(ev.body.events[0]).toMatchObject({ ip: '203.0.113.88', result: 'passed', method: 'turnstile' });
+      expect(ev.body.events[0]).toMatchObject({ ip: '203.0.113.88', result: 'passed', method: 'turnstile', via: 'site' });
     } finally {
       h.hub.command = before;
     }
