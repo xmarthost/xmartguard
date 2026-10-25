@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.18** (see `VERSION`).
+- Current release: **0.23.19** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.18 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.19 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.18: `--branch backup-0.23.17`; see "Rollback" under 0.23.18 below);
+  0.23.19: `--branch backup-0.23.18`; see "Rollback" under 0.23.19 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,53 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.19: the CAPTCHA on the server hostname (no port)**
+  (2026-10-25). The owner finds site mode's port 7743 useless (networks,
+  VPNs and Cloudflare refuse it) and websites' own addresses unreliable
+  (caches, proxies). Third place for the check, per server (CAPTCHA page »
+  Where the check opens » "Server hostname (no port)", config
+  `hostname_servers`, mode `hostname`):
+  - The agent writes a static page to the hostname's document root
+    (`/var/www/html/xpguard-check/index.html`, captcha/hostpage.go). The
+    WAF sends suspects to `https://<hostname>/xpguard-check/?s=…&ip=…&h=…&u=…`
+    (rule redirect when `Central.HostPage` is set; rule 7700068 turns the
+    engine off for that path on the hostname); the firewall's own redirect
+    (IPDB, bans) too, and the agent's CAPTCHA server serves the page itself
+    for those visitors (their connections to the hostname come to it).
+  - The page frames the portal's check with the link's parameters plus
+    `fh=1`. The portal allows only `https://<hostname from the server's
+    record>` to frame it (frame-ancestors), passes the address through the
+    pass list (`captcha.pass`, like the portal address), records via
+    `hostname`, and tells the page (`postMessage({xg:'passed'})` to that
+    origin only, `leave()` in page.ts); the page sends the visitor to
+    `https://<site><page>` built from its own link (site name and path
+    checked), never from the message.
+  - **Self-test** (`CheckHostPage`): the hostname resolves to this server,
+    port 443 of this machine answers with a certificate valid for the
+    hostname, and the page is ours. Every 10 minutes and when the portal
+    pushes the setting (`syncHostPage`); only while it passes does the WAF
+    use the hostname page, otherwise the portal address (never a broken
+    page). Another place chosen removes the page.
+  - **Test button** (owner's request): CAPTCHA page » each server » "Test
+    hostname" (`POST /api/captcha/hostname-test` → agent
+    `captcha.hostcheck`) sets the page up and tests it, shows the error or
+    a "Preview the check there" link (`preview=1` framed by the hostname:
+    the check works, no one passes).
+  - Tests: agent `TestHostPage`, `TestCheckHostPage` (TLS, wrong name,
+    wrong page, DNS elsewhere, 404), `TestHostPageForFirewallVisitors`,
+    `TestHostPageFixture` (server/test/fixtures/hostpage.html must equal
+    the agent's page; `XG_UPDATE_FIXTURES=1` rewrites it),
+    `TestHostPageRedirect`, `TestHostPageOnApache`,
+    `TestHostnameModeFallsBack`; server captcha "opens on the server
+    hostname…", browser "hostname mode: the check on the server hostname,
+    then back to the website" (preview and a real pass with the fixture).
+  - Not tested here: LiteSpeed and a real cPanel hostname certificate
+    (no LiteSpeed or public certificate in the container). Use "Test
+    hostname" on one server first.
+  - **Rollback**: `backup-0.23.18`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`
+    (choose the portal address again first; the static page is removed by
+    0.23.19 agents when another place is chosen).
 
 - **Release 0.23.18: where a site-mode check was solved** (2026-10-25).
   The owner saw the servers set to "the website's own address" send

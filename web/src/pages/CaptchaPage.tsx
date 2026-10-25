@@ -7,7 +7,7 @@ import { Card, Pager, SettingRow, Toggle, useAction } from '../components/contro
 import { useApi } from '../hooks';
 
 interface Resp {
-  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean; design?: Design; countdown?: number; site_servers?: string[]; ipdb_captcha?: IPDBCaptcha };
+  config: { enabled: boolean; site_key: string; secret_set: boolean; minutes: number; provider: Provider; strict_ip: boolean; design?: Design; countdown?: number; site_servers?: string[]; hostname_servers?: string[]; ipdb_captcha?: IPDBCaptcha };
   version: number;
   updated_at: string | null;
   url: string;
@@ -18,6 +18,14 @@ interface Resp {
 type Provider = 'auto' | 'turnstile' | 'altcha';
 type Design = 'classic' | 'minimal' | 'midnight';
 type IPDBCaptcha = '' | 'on' | 'off';
+interface HostTest {
+  ok: boolean;
+  hostname: string;
+  url: string;
+  in_use: boolean;
+  error: string;
+  preview: string;
+}
 
 /** The page's looks: name, description and a small sketch of it. */
 const DESIGNS: { id: Design; name: string; desc: string; bg: string; card: string; text: string }[] = [
@@ -69,6 +77,8 @@ export default function CaptchaPage() {
   const [design, setDesign] = useState<Design>('classic');
   const [countdown, setCountdown] = useState(5);
   const [siteServers, setSiteServers] = useState<string[]>([]);
+  const [hostServers, setHostServers] = useState<string[]>([]);
+  const [hostTests, setHostTests] = useState<Record<string, HostTest | 'busy'>>({});
   const [ipdbCaptcha, setIPDBCaptcha] = useState<IPDBCaptcha>('');
   const [filter, setFilter] = useState('');
 
@@ -82,6 +92,7 @@ export default function CaptchaPage() {
     setDesign(res.data.config.design ?? 'classic');
     setCountdown(res.data.config.countdown ?? 5);
     setSiteServers(res.data.config.site_servers ?? []);
+    setHostServers(res.data.config.hostname_servers ?? []);
     setIPDBCaptcha(res.data.config.ipdb_captcha ?? '');
     setSecret('');
   }, [res.data]);
@@ -99,12 +110,23 @@ export default function CaptchaPage() {
     design !== (d.config.design ?? 'classic') ||
     countdown !== (d.config.countdown ?? 5) ||
     ipdbCaptcha !== (d.config.ipdb_captcha ?? '') ||
-    [...siteServers].sort().join() !== [...(d.config.site_servers ?? [])].sort().join();
+    [...siteServers].sort().join() !== [...(d.config.site_servers ?? [])].sort().join() ||
+    [...hostServers].sort().join() !== [...(d.config.hostname_servers ?? [])].sort().join();
   const online = d.servers.filter((s) => s.online).length;
+  // The server sets up its hostname page and tests it as a visitor's browser would.
+  const testHostname = async (id: string) => {
+    setHostTests((t) => ({ ...t, [id]: 'busy' }));
+    try {
+      const r = await api<HostTest>('POST', '/api/captcha/hostname-test', { server_id: id });
+      setHostTests((t) => ({ ...t, [id]: r }));
+    } catch (e: any) {
+      setHostTests((t) => ({ ...t, [id]: { ok: false, hostname: '', url: '', in_use: false, error: e.message || 'The test failed', preview: '' } }));
+    }
+  };
   const preview = d.servers[0] ? `${d.url}?s=${d.servers[0].id}&preview=1` : '';
   const save = () =>
     run(
-      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP, design, countdown, site_servers: siteServers, ipdb_captcha: ipdbCaptcha }).then((r) => (res.reload(), r)),
+      () => api<{ version: number; pushed: number; offline: number }>('PUT', '/api/captcha', { enabled, site_key: siteKey.trim(), secret_key: secret.trim(), minutes, provider, strict_ip: strictIP, design, countdown, site_servers: siteServers, hostname_servers: hostServers, ipdb_captcha: ipdbCaptcha }).then((r) => (res.reload(), r)),
       (r) => `Saved: applied on ${r.pushed} online server${r.pushed === 1 ? '' : 's'}${r.offline ? `; ${r.offline} offline will follow when they reconnect` : ''}`,
     );
 
@@ -227,7 +249,7 @@ export default function CaptchaPage() {
 
       <Card
         title="Where the check opens"
-        desc="Per server. Portal address: the visitor goes to the page address above and comes back after the check. Website's own address: the visitor stays on the website's own address (on the server's CAPTCHA port) and the same check shows there, full window, with no frame or border to see; the pass is a cookie, so the web server is not reloaded and the visitor is back at once. Passed and failed checks are listed below either way."
+        desc="Per server. Portal address: the visitor goes to the page address above and comes back after the check. Server hostname: the same check opens on the server's own hostname (https://server-hostname/xpguard-check/, the usual port 443 and the hostname's own certificate): no extra port, and no website cache or Cloudflare in the way. Website's own address: on the website's address, on the server's CAPTCHA port (7743), which many networks, VPNs and Cloudflare do not reach. Passed and failed checks are listed below either way."
       >
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div className="relative">
@@ -235,37 +257,70 @@ export default function CaptchaPage() {
             <input className="input w-64 pl-8" placeholder="Find a server" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Find a server" />
           </div>
           <span className="text-xs text-slate-500">
-            On the website's own address: <b className="text-navy-900">{siteServers.length}</b> of {d.servers.length}
+            Server hostname: <b className="text-navy-900">{hostServers.length}</b> · website's own address: <b className="text-navy-900">{siteServers.length}</b> of {d.servers.length}
           </span>
         </div>
         <div className="mt-3 max-h-80 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
           {d.servers
             .filter((x) => x.hostname.toLowerCase().includes(filter.trim().toLowerCase()))
             .map((x) => {
-              const site = siteServers.includes(x.id);
+              const where = hostServers.includes(x.id) ? 'hostname' : siteServers.includes(x.id) ? 'site' : 'portal';
+              const test = hostTests[x.id];
               return (
-                <div key={x.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm">
+                <div key={x.id} className="px-3 py-2 text-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="flex min-w-0 items-center gap-2">
                     <span className={`h-2 w-2 shrink-0 rounded-full ${x.online ? 'bg-emerald-500' : 'bg-slate-300'}`} title={x.online ? 'Online' : 'Offline'} />
                     <span className="truncate font-medium text-navy-900">{x.hostname}</span>
                   </span>
                   <select
                     className="input w-60"
-                    value={site ? 'site' : 'portal'}
+                    value={where}
                     disabled={!admin || busy}
                     aria-label={`Where the check opens on ${x.hostname}`}
-                    onChange={(e) => setSiteServers((v) => (e.target.value === 'site' ? [...v.filter((y) => y !== x.id), x.id] : v.filter((y) => y !== x.id)))}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSiteServers((l) => (v === 'site' ? [...l.filter((y) => y !== x.id), x.id] : l.filter((y) => y !== x.id)));
+                      setHostServers((l) => (v === 'hostname' ? [...l.filter((y) => y !== x.id), x.id] : l.filter((y) => y !== x.id)));
+                    }}
                   >
                     <option value="portal">Portal address</option>
-                    <option value="site">Website's own address</option>
+                    <option value="hostname">Server hostname (no port)</option>
+                    <option value="site">Website's own address (port 7743)</option>
                   </select>
+                  {admin && (
+                    <button className="btn-outline" disabled={!x.online || test === 'busy'} onClick={() => testHostname(x.id)} title="The server sets up its hostname page and tests it as a visitor's browser reaches it">
+                      {test === 'busy' ? 'Testing…' : 'Test hostname'}
+                    </button>
+                  )}
+                </div>
+                {test && test !== 'busy' && (
+                  <div className={`mt-2 rounded-md px-3 py-2 text-xs ${test.ok ? 'bg-emerald-50 text-emerald-800' : 'bg-red-50 text-red-700'}`}>
+                    {test.ok ? (
+                      <>
+                        Works: <span className="font-mono">{test.url}</span> opens with a valid certificate.{' '}
+                        {test.preview && (
+                          <a className="font-semibold underline" href={test.preview} target="_blank" rel="noreferrer">
+                            Preview the check there
+                          </a>
+                        )}
+                        {!test.in_use && where !== 'hostname' && ' Choose "Server hostname" and save to use it.'}
+                      </>
+                    ) : (
+                      <>
+                        Does not work{test.hostname ? ` on ${test.hostname}` : ''}: {test.error}. While it does not, visitors of this server go to the portal address.
+                      </>
+                    )}
+                  </div>
+                )}
                 </div>
               );
             })}
         </div>
         <p className="mt-2 text-xs text-slate-500">
-          Website's own address needs the server's WAF on and its CAPTCHA HTTPS port (shown in Firewall » CAPTCHA, 7743 by default) reachable. Websites behind the Cloudflare
-          proxy cannot reach that port, so keep the portal address on servers whose websites use the Cloudflare proxy.
+          Server hostname needs the server's WAF on and a valid certificate on its hostname (cPanel issues one). The server checks its hostname page every 10 minutes; while
+          it does not work, visitors go to the portal address instead. Website's own address needs the CAPTCHA HTTPS port (7743 by default) reachable: websites behind the
+          Cloudflare proxy, VPNs and many office networks cannot reach it.
         </p>
       </Card>
 
@@ -337,6 +392,7 @@ interface Check {
 // Site mode: where the check was solved.
 const VIA: Record<string, string> = {
   site: "On the website's own address",
+  hostname: "On the server's hostname",
   'port-timeout': "Here: the website's CAPTCHA port did not answer in time",
   'port-refused': "Here: the website's CAPTCHA port refused (blocked network, VPN or Cloudflare)",
 };

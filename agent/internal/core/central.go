@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/captcha"
@@ -18,6 +19,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
+	"github.com/xmarthost/xmartguard/agent/internal/sysinfo"
 	"github.com/xmarthost/xmartguard/agent/internal/waf"
 )
 
@@ -55,6 +57,52 @@ type central struct {
 	applyMu sync.Mutex // one WAF reload at a time
 	gen     int64      // pass list changes
 	applied int64      // last change a reload included
+	// hostPage is the check's page on this server's hostname while its
+	// self-test passes (hostname mode), "" otherwise; hostErr why not.
+	hostPage atomic.Value // string
+	hostErr  atomic.Value // string
+}
+
+// hostPageURL is the working hostname page ("" when not in use).
+func (a *Agent) hostPageURL() string {
+	v, _ := a.central.hostPage.Load().(string)
+	if v == "" || !captcha.HostnameWanted(a.Settings.Get()) {
+		return ""
+	}
+	return v
+}
+
+// syncHostPage installs (or removes) the hostname page and tests it as a
+// visitor's browser would reach it. It reports whether the page came into
+// or went out of use (the WAF's redirect then changes). While it does not
+// work, suspects go to the portal address: never to a broken page.
+func (a *Agent) syncHostPage(ctx context.Context) bool {
+	before, _ := a.central.hostPage.Load().(string)
+	cur := a.Settings.Get()
+	next, why := "", ""
+	if captcha.HostnameWanted(cur) {
+		host := captcha.ServerHostname()
+		switch {
+		case host == "":
+			why = "the server hostname is not a full domain name"
+		default:
+			if err := captcha.InstallHostPage(cur.Captcha.CentralURL); err != nil {
+				why = err.Error()
+			} else if err := captcha.CheckHostPage(ctx, host, cur.Captcha.CentralURL, sysinfo.IPs()); err != nil {
+				why = err.Error()
+			} else {
+				next = captcha.HostPageURL(host)
+			}
+		}
+		if why != "" {
+			a.Log.Warn("the CAPTCHA page on the server hostname does not work; visitors go to the portal address", "err", why)
+		}
+	} else {
+		captcha.RemoveHostPage()
+	}
+	a.central.hostPage.Store(next)
+	a.central.hostErr.Store(why)
+	return before != next
 }
 
 // centralWAF is the waf.Manager hook: nil when the central CAPTCHA is off
@@ -75,6 +123,9 @@ func (a *Agent) centralWAF() *waf.Central {
 		w.Suspects = a.centralSuspects()
 		w.Sites = a.loginAttackSites()
 		w.SiteLoginURLs = siteLoginURLs(cur.WAF.LoginURLs)
+	}
+	if !w.Site {
+		w.HostPage = a.hostPageURL()
 	}
 	return w
 }
@@ -422,8 +473,8 @@ func (a *Agent) applyCentralConfig(ctx context.Context, c centralConfig) error {
 		return fmt.Errorf("invalid CAPTCHA page address %q", c.URL)
 	}
 	mode := ""
-	if c.Mode == "site" {
-		mode = "site"
+	if c.Mode == "site" || c.Mode == "hostname" {
+		mode = c.Mode
 	}
 	p := map[string]any{"captcha": map[string]any{
 		"central": c.Enabled, "central_url": c.URL, "central_minutes": c.Minutes, "central_mode": mode}}
@@ -478,7 +529,8 @@ func (a *Agent) centralLoop(ctx context.Context) {
 		if time.Since(last) >= 10*time.Minute {
 			last = time.Now()
 			a.pullCentralConfig(ctx)
-			if a.WAF.CentralChanged() {
+			// The hostname page (hostname mode): tested every 10 minutes.
+			if a.syncHostPage(ctx) || a.WAF.CentralChanged() {
 				refresh("CAPTCHA list refresh")
 			}
 		} else if cur := a.Settings.Get(); cur.Captcha.Central && cur.Captcha.CentralURL != "" && !captcha.GateWanted(cur) {
@@ -505,7 +557,48 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if err := a.applyCentralConfig(ctx, in); err != nil {
 			return nil, err
 		}
-		return map[string]any{"ok": true}, nil
+		// Hostname mode: the page is set up and tested now, not at the next
+		// 10-minute check; the WAF follows when its use changed.
+		if a.syncHostPage(ctx) && a.WAF != nil {
+			go func() {
+				a.central.applyMu.Lock()
+				defer a.central.applyMu.Unlock()
+				if err := a.WAF.ApplyBackground(); err != nil {
+					a.Log.Warn("CAPTCHA hostname page: WAF reload failed", "err", err)
+				}
+			}()
+		}
+		why, _ := a.central.hostErr.Load().(string)
+		return map[string]any{"ok": true, "hostname_page": a.hostPageURL(), "hostname_error": why}, nil
+	}
+	// captcha.hostcheck: the portal's "Test" for the hostname page (CAPTCHA
+	// page » Where the check opens): sets the page up and tests it as a
+	// visitor's browser reaches it, in any mode. Outside hostname mode the
+	// next 10-minute check removes the page again.
+	h["captcha.hostcheck"] = func(ctx context.Context, _ json.RawMessage) (any, error) {
+		cur := a.Settings.Get()
+		if !cur.Captcha.Central || cur.Captcha.CentralURL == "" {
+			return nil, errors.New("the portal's CAPTCHA page is not on for this server yet: save the CAPTCHA page first")
+		}
+		host := captcha.ServerHostname()
+		res := map[string]any{"hostname": host, "ok": false, "in_use": a.hostPageURL() != "", "waf": cur.WAF.Enabled}
+		if host == "" {
+			res["error"] = "the server hostname is not a full domain name"
+			return res, nil
+		}
+		res["url"] = captcha.HostPageURL(host)
+		if err := captcha.InstallHostPage(cur.Captcha.CentralURL); err != nil {
+			res["error"] = err.Error()
+			return res, nil
+		}
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := captcha.CheckHostPage(cctx, host, cur.Captcha.CentralURL, sysinfo.IPs()); err != nil {
+			res["error"] = err.Error()
+			return res, nil
+		}
+		res["ok"] = true
+		return res, nil
 	}
 	// captcha.host: may the CAPTCHA page name host (a website here that sent
 	// ip to it)? Asked before the page shows a site's name.

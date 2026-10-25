@@ -63,13 +63,13 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', pf: '', g: 0, design: undefined });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', fh: false, pf: '', g: 0, design: undefined });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
   it('is off until the Turnstile keys are saved', async () => {
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], ipdb_captcha: '' });
+    expect(g.body.config).toEqual({ enabled: false, site_key: '', secret_set: false, minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], hostname_servers: [], ipdb_captcha: '' });
     expect(g.body.url).toBe('https://captcha.example.org/v');
     const page = await h.app.inject({ method: 'GET', url: link() });
     expect(page.statusCode).toBe(503);
@@ -84,7 +84,7 @@ describe('CAPTCHA page for suspicious visitors', () => {
     expect(put.status).toBe(200);
     expect(put.body.version).toBe(1);
     const g = await admin.req('GET', '/api/captcha');
-    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], ipdb_captcha: '' });
+    expect(g.body.config).toEqual({ enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_set: true, minutes: 60, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], hostname_servers: [], ipdb_captcha: '' });
     expect(JSON.stringify(g.body)).not.toContain('0x4AAAAAAAsecret');
     // Saving without a secret keeps the saved one.
     expect((await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60 })).status).toBe(200);
@@ -704,6 +704,79 @@ describe('CAPTCHA on the website’s own address', () => {
     const l = await admin.req('GET', '/api/captcha/events?source=login&q=198.51.100.78');
     expect(l.body.events.map((e: any) => [e.ip, e.source])).toEqual([['198.51.100.78', '']]);
     expect((await admin.req('GET', '/api/captcha/events?source=other')).status).toBe(400);
+  });
+
+  it('opens on the server hostname (no port): per server, framed by that hostname only, passed by the pass list', async () => {
+    const commands: { action: string; params: any }[] = [];
+    const before = h.hub.command;
+    h.hub.command = async (id: string, action: string, params: unknown) => {
+      commands.push({ action, params });
+      return before(id, action, params);
+    };
+    await h.pool.query("UPDATE servers SET hostname = 'server1.example.net' WHERE id = $1", [serverId]);
+    try {
+      // One place per server: the hostname wins over the website's address.
+      const put = await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, site_servers: [serverId], hostname_servers: [serverId] });
+      expect(put.status).toBe(200);
+      const g = await admin.req('GET', '/api/captcha');
+      expect(g.body.config.hostname_servers).toEqual([serverId]);
+      expect(g.body.config.site_servers).toEqual([]);
+      expect(commands.find((c) => c.action === 'captcha.central')?.params.mode).toBe('hostname');
+      expect((await agent('/api/agent/captcha/config', { version: 0 })).body.config.mode).toBe('hostname');
+      // The hostname page frames the check: only that hostname may, taken
+      // from the server's record (not from the link).
+      const url = `/v?s=${serverId}&ip=203.0.113.95&h=shop.example.com&fh=1&u=/wp-login.php`;
+      const page = await h.app.inject({ method: 'GET', url, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.95' } });
+      expect(page.statusCode).toBe(200);
+      expect(page.headers['x-frame-options']).toBeUndefined();
+      expect(page.headers['content-security-policy']).toContain('frame-ancestors https://server1.example.net:* https://server1.example.net');
+      expect(page.body).toContain('PARENT="https://server1.example.net"');
+      expect(page.body).toContain('"fh":"1"');
+      // Not on the portal's own host, and not for a site its server denies.
+      const onPortal = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.95' } });
+      expect(onPortal.headers.get('x-frame-options')).toBe('DENY');
+      expect(await onPortal.text()).toContain('PARENT=""');
+      const evil = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.95&h=paypal.com&fh=1&u=/`, headers: { host: 'captcha.example.org' } });
+      expect(evil.statusCode).toBe(404);
+      expect(evil.headers['x-frame-options']).toBe('DENY');
+      // Solved: the pass list, like the portal address; recorded as hostname.
+      commands.length = 0;
+      const r = await verify({ s: serverId, ip: '203.0.113.95', h: 'shop.example.com', u: '/wp-login.php', fh: '1', token: 'good-token' }, '203.0.113.95');
+      expect(r.status).toBe(200);
+      expect(r.body.frame).toBeUndefined();
+      expect(commands.map((c) => c.action)).toContain('captcha.pass');
+      expect(commands.map((c) => c.action)).not.toContain('captcha.ticket');
+      const { rows } = await h.pool.query("SELECT via FROM captcha_events WHERE ip = '203.0.113.95' ORDER BY id DESC LIMIT 1");
+      expect(rows[0].via).toBe('hostname');
+      // CAPTCHA page » Test: the server's answer, with a preview link.
+      h.hub.command = async (id: string, action: string, params: unknown) => {
+        if (action === 'captcha.hostcheck') return { ok: true, hostname: 'server1.example.net', url: 'https://server1.example.net/xpguard-check/', in_use: true };
+        return before(id, action, params);
+      };
+      const t = await admin.req('POST', '/api/captcha/hostname-test', { server_id: serverId });
+      expect(t.body).toMatchObject({ ok: true, url: 'https://server1.example.net/xpguard-check/', error: '' });
+      expect(t.body.preview).toBe(`https://server1.example.net/xpguard-check/?s=${serverId}&ip=127.0.0.1&h=example.com&preview=1&u=/`);
+      // The preview opens framed by the hostname and lets no one in.
+      const pv = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=127.0.0.1&h=example.com&preview=1&fh=1&u=/`, headers: { host: 'captcha.example.org' } });
+      expect(pv.headers['content-security-policy']).toContain('frame-ancestors https://server1.example.net');
+      expect(pv.body).toContain('"preview":true');
+      h.hub.command = async (id: string, action: string, params: unknown) => {
+        if (action === 'captcha.hostcheck') return { ok: false, hostname: 'server1.example.net', url: 'https://server1.example.net/xpguard-check/', error: 'certificate is not valid for server1.example.net' };
+        if (action === 'captcha.central') return before(id, action, params);
+        return before(id, action, params);
+      };
+      const bad = await admin.req('POST', '/api/captcha/hostname-test', { server_id: serverId });
+      expect(bad.body).toMatchObject({ ok: false, preview: '', error: 'certificate is not valid for server1.example.net' });
+      expect((await admin.req('POST', '/api/captcha/hostname-test', { server_id: '00000000-0000-4000-8000-000000000009' })).status).toBe(404);
+      // A hostname that is no full name: no framing.
+      await h.pool.query("UPDATE servers SET hostname = 'localhost' WHERE id = $1", [serverId]);
+      const bare = await h.app.inject({ method: 'GET', url, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.95' } });
+      expect(bare.headers['x-frame-options']).toBe('DENY');
+    } finally {
+      h.hub.command = before;
+      await h.pool.query("UPDATE servers SET hostname = 'web-captcha' WHERE id = $1", [serverId]);
+      await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, site_servers: [serverId] });
+    }
   });
 
   it('shows the checks of customers’ servers to the master account', async () => {

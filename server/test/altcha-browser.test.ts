@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 // A real browser (Playwright's Chromium, where installed): the ALTCHA box
@@ -156,3 +156,56 @@ browserTest('site mode goes to the website when its port answers, and records wh
   expect(rows[0]).toEqual({ result: 'passed', via: 'port-refused' });
   await b.close();
 }, 60_000);
+
+// Hostname mode: the agent's static page on the server's hostname
+// (fixtures/hostpage.html, the agent's own page: its test keeps the copy
+// equal) frames the check; once passed, that page sends the visitor back to
+// the website. Port 443 only.
+browserTest('hostname mode: the check on the server hostname, then back to the website', async () => {
+  const { chromium } = createRequire(import.meta.url)(PW);
+  const page0 = readFileSync(new URL('./fixtures/hostpage.html', import.meta.url), 'utf8');
+  await h.pool.query("UPDATE servers SET hostname = 'host.example.test' WHERE id = $1", [serverId]);
+  const b = await chromium.launch();
+  try {
+    const ctx = await b.newContext({ ignoreHTTPSErrors: true });
+    await ctx.route('https://host.example.test/**', (r: any) => r.fulfill({ contentType: 'text/html', body: page0 }));
+    await ctx.route('https://captcha.test/**', async (r: any) => {
+      const u = new URL(r.request().url());
+      const res = await r.fetch({ url: h.url + u.pathname + u.search, headers: { ...r.request().headers(), host: 'captcha.test' } });
+      await r.fulfill({ response: res });
+    });
+    await ctx.route('https://shop.example.com/**', (r: any) => r.fulfill({ contentType: 'text/html', body: '<p id="site">the website</p>' }));
+    const page = await ctx.newPage();
+    // The preview (CAPTCHA page » Test): the check works there, no one passes.
+    const before = passes.length;
+    await page.goto(`https://host.example.test/xpguard-check/?s=${serverId}&ip=127.0.0.1&h=example.com&preview=1&u=/`);
+    let frame = page.frameLocator('iframe');
+    await frame.locator('altcha-widget label').waitFor();
+    await page.waitForTimeout(800);
+    await page.mouse.move(100, 100);
+    await page.mouse.move(400, 300, { steps: 5 });
+    await frame.locator('altcha-widget label').click();
+    await expect.poll(async () => (await frame.locator('#status').textContent()) ?? '', { timeout: 20000 }).toContain('Preview: the check works');
+    expect(passes.length).toBe(before);
+    expect(page.url()).toContain('https://host.example.test/xpguard-check/');
+    // A visitor sent by the WAF: tick, then back to the page it wanted.
+    await page.goto(`https://host.example.test/xpguard-check/?s=${serverId}&ip=127.0.0.1&h=shop.example.com&u=/wp-login.php?redirect_to=/wp-admin/`);
+    frame = page.frameLocator('iframe');
+    await frame.locator('altcha-widget label').waitFor();
+    await page.waitForTimeout(800);
+    await page.mouse.move(120, 100);
+    await page.mouse.move(420, 320, { steps: 5 });
+    await frame.locator('altcha-widget label').click();
+    await page.waitForURL((u: URL) => u.host === 'shop.example.com', { timeout: 30000 });
+    expect(page.url()).toBe('https://shop.example.com/wp-login.php?redirect_to=/wp-admin/');
+    expect(passes.length).toBe(before + 1);
+    const { rows } = await h.pool.query("SELECT result, via FROM captcha_events WHERE host = 'shop.example.com' ORDER BY id DESC LIMIT 1");
+    expect(rows[0]).toEqual({ result: 'passed', via: 'hostname' });
+    // A bad link on the hostname page goes nowhere.
+    await page.goto('https://host.example.test/xpguard-check/?s=x&h=evil.com&u=//evil.com/');
+    expect(await page.textContent('body')).toContain('This check link is not valid.');
+  } finally {
+    await b.close();
+    await h.pool.query("UPDATE servers SET hostname = 'web-e2e' WHERE id = $1", [serverId]);
+  }
+}, 90_000);

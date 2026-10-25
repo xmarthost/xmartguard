@@ -16,7 +16,7 @@ export interface PageData {
   /** Address the visitor is seen with here. */
   visitorIp: string;
   /** Request parameters, sent back with the solved check. */
-  params: { s: string; ip: string; h: string; u: string; preview?: boolean; n?: string } | null;
+  params: { s: string; ip: string; h: string; u: string; preview?: boolean; n?: string; fh?: string } | null;
   /** Cloudflare Turnstile site key ('' = not set up). */
   siteKey: string;
   /** The check: Turnstile, ALTCHA, or Turnstile with ALTCHA when it cannot load. */
@@ -32,6 +32,12 @@ export interface PageData {
    * tells that page (postMessage), which sets the pass and goes back.
    */
   frame?: boolean;
+  /**
+   * Shown in a frame on the server's hostname page (hostname mode): once
+   * verified, the page tells that page (this origin only), which sends the
+   * visitor back to the website.
+   */
+  parentOrigin?: string;
 }
 
 /**
@@ -148,7 +154,7 @@ export function renderPage(d: PageData): string {
     d.error || !d.params
       ? ''
       : `<script>
-var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},FRAME=${d.frame ? 'true' : 'false'},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
+var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},FRAME=${d.frame ? 'true' : 'false'},PARENT=${JSON.stringify(d.parentOrigin ?? '').replace(/</g, '\\u003c')},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
 // Messages are text: an error from the server or the framing page can not
 // add markup (audit A7 F4). Only the spinner is markup.
 function show(t,c,spin){st.className='status'+(c?' '+c:'');st.textContent=t;if(spin){var s=document.createElement('span');s.className='spin';st.prepend(s)}}
@@ -156,18 +162,21 @@ function show(t,c,spin){st.className='status'+(c?' '+c:'');st.textContent=t;if(s
 // and repeat the same error): the visitor chooses to try again.
 function fail(t){show(t,'err');ag.hidden=false;bd.className='badge err'}
 function stopClock(){clearInterval(tick);el.textContent=''}
+// Back to the website: in the hostname page's frame that page goes (only
+// it may move the whole window), otherwise this page.
+function leave(url){if(PARENT&&window.parent!==window){window.parent.postMessage({xg:'passed'},PARENT);return}location.replace(url)}
 // Verified: the badge turns green and the seconds count down to the return.
 function back(url){
   stopClock();bd.className='badge done';
-  if(WAIT<=0){show('Verified. Taking you back to '+HOST+'…','ok');location.replace(url);return}
+  if(WAIT<=0){show('Verified. Taking you back to '+HOST+'…','ok');leave(url);return}
   show('Verified: you are human.','ok');
   var left=WAIT;cn.hidden=false;
   cn.innerHTML='<p>You will be taken back to <b>'+HOST+'</b> in <span class="nw"><span class="n" id="n">'+left+'</span> second'+(left===1?'':'s')+'</span></p><div class="bar"><span id="bar"></span></div><a href="#" id="go">Go now</a>';
   var nEl=document.getElementById('n'),bar=document.getElementById('bar');
-  document.getElementById('go').onclick=function(e){e.preventDefault();location.replace(url)};
+  document.getElementById('go').onclick=function(e){e.preventDefault();leave(url)};
   requestAnimationFrame(function(){bar.style.width=((left-1)/WAIT*100)+'%'});
   var iv=setInterval(function(){left--;nEl.textContent=Math.max(left,0);bar.style.width=(Math.max(left-1,0)/WAIT*100)+'%';
-    if(left<=0){clearInterval(iv);location.replace(url)}},1000);
+    if(left<=0){clearInterval(iv);leave(url)}},1000);
 }
 // In a frame: the website's page reports when the pass could not be set.
 // Its text is not shown: the framing page is not trusted with this page.

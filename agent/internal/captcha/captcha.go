@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"log/slog"
 	"net"
@@ -59,6 +60,9 @@ type Server struct {
 	Passed func(ip string)
 	// Passes gives out and records the pass cookies of that check.
 	Passes *SitePasses
+	// HostPage is the check's page on this server's hostname while that
+	// works (hostname mode, see hostpage.go), "" otherwise.
+	HostPage func() string
 
 	key      []byte
 	tickets  map[string]ticket
@@ -284,6 +288,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")
+	// The hostname page, for a visitor the firewall sends here (its
+	// connections to the hostname come here too, like to any website).
+	if strings.HasPrefix(r.URL.Path, HostPagePath) && s.HostPage != nil {
+		if hp := s.HostPage(); hp != "" && strings.HasPrefix(hp, "https://"+hostOf(r.Host)+"/") {
+			if body := HostPageHTML(s.Settings.Get().Captcha.CentralURL); body != "" {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = io.WriteString(w, body)
+				return
+			}
+		}
+	}
 	if SiteWanted(s.Settings.Get()) {
 		switch {
 		case r.URL.Path == pathPrefix+"ping.gif":
@@ -351,17 +366,20 @@ func (s *Server) centralURL(r *http.Request, ip string) string {
 		}
 	}
 	back = safeBack(back)
-	host := r.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.ToLower(strings.Trim(host, "[]"))
+	host := hostOf(r.Host)
 	if host == "" || strings.ContainsAny(host, "/?#@&= ") {
 		return ""
 	}
+	// On the hostname's page while it works (hostname mode).
+	base := c.CentralURL
+	if s.HostPage != nil {
+		if hp := s.HostPage(); hp != "" {
+			base = hp
+		}
+	}
 	// The page ("u") goes last and as it is: the portal reads everything
 	// after "&u=".
-	return fmt.Sprintf("%s?s=%s&ip=%s&h=%s%s&u=%s", c.CentralURL, url.QueryEscape(s.ServerID), url.QueryEscape(ip), url.QueryEscape(host), kind, back)
+	return fmt.Sprintf("%s?s=%s&ip=%s&h=%s%s&u=%s", base, url.QueryEscape(s.ServerID), url.QueryEscape(ip), url.QueryEscape(host), kind, back)
 }
 
 // token binds a challenge answer to an address and an expiry.
@@ -708,3 +726,11 @@ var doneTmpl = template.Must(template.New("d").Parse(`<!doctype html>
 .c{background:#fff;border-radius:14px;padding:28px;max-width:420px;box-shadow:0 10px 30px #0f172a1a}</style></head>
 <body><div class="c"><h2>Thank you</h2><p>Your address is allowed for the next {{.For}}. Taking you back…</p>
 <p><a href="{{.Back}}">Continue</a></p></div></body></html>`))
+
+// hostOf is the lowercase name of a Host header, without the port.
+func hostOf(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.ToLower(strings.Trim(host, "[]"))
+}

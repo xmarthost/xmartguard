@@ -55,6 +55,11 @@ export const CaptchaConfig = z.object({
   // server's CAPTCHA port, this page in a full-window frame, a pass cookie:
   // no web server reload). The others send visitors to this domain.
   site_servers: z.array(z.string().uuid()).max(5000).default([]),
+  // hostname_servers show the check on the server's own hostname
+  // (https://<hostname>/xpguard-check/, port 443, the hostname's own
+  // certificate): no CAPTCHA port, no website cache or Cloudflare in the
+  // way. The pass is the pass list, like the portal address.
+  hostname_servers: z.array(z.string().uuid()).max(5000).default([]),
   // Visitors on the IPDB get this check on websites instead of a dropped
   // connection (each server's ipdb.captcha): 'on' / 'off' for the whole
   // fleet, '' each server keeps its own setting.
@@ -62,7 +67,7 @@ export const CaptchaConfig = z.object({
 });
 export type CaptchaConfig = z.infer<typeof CaptchaConfig>;
 
-const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], ipdb_captcha: '' };
+const DEFAULT: CaptchaConfig = { enabled: false, site_key: '', secret_key: '', minutes: 720, provider: 'auto', strict_ip: false, design: 'classic', countdown: 5, site_servers: [], hostname_servers: [], ipdb_captcha: '' };
 
 /** The setting a server applies (captcha.central, also when it asks). */
 export function centralParams(version: number, c: CaptchaConfig, url: string, serverId: string) {
@@ -70,7 +75,8 @@ export function centralParams(version: number, c: CaptchaConfig, url: string, se
 }
 
 /** Where a server's websites show the check: 'site' on their own address, '' here. */
-export function modeFor(c: CaptchaConfig, serverId: string): 'site' | '' {
+export function modeFor(c: CaptchaConfig, serverId: string): 'site' | 'hostname' | '' {
+  if (c.hostname_servers.includes(serverId)) return 'hostname';
   return c.site_servers.includes(serverId) ? 'site' : '';
 }
 
@@ -349,6 +355,8 @@ export function parseParams(rawUrl: string) {
     frame: head.get('frame') === '1',
     // k=fw: a visitor the server's firewall sent (IPDB, ban).
     k: head.get('k') === 'fw' ? 'fw' : '',
+    // fh=1: shown in a frame on this server's hostname page (hostname mode).
+    fh: head.get('fh') === '1',
     // pf: site mode, the browser did not reach the website's CAPTCHA port
     // (t: no answer in time, e: refused or a certificate error).
     pf: head.get('pf') === 't' || head.get('pf') === 'e' ? (head.get('pf') as string) : '',
@@ -544,9 +552,12 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (p.preview) Object.assign(p, { ip, h: 'example.com', u: '/wp-login.php' });
     const bad = validParams(p);
     if (bad) return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: bad }), 400);
-    const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
+    const { rows } = await pool.query("SELECT account_id, hostname FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
     if (!rows[0]) return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
     const { config } = await load(pool, rows[0].account_id);
+    // Hostname mode: the server's own hostname page frames this page. The
+    // name comes from the server's record, never from the link.
+    const serverHost = String(rows[0].hostname ?? '').toLowerCase();
     const provider = effectiveProvider(config);
     if (!config.enabled || !provider) {
       return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'The check is not available right now. Please try again later.' }), 503);
@@ -555,8 +566,10 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // never frame a page of the portal's own origin (audit A7 F4).
     const onPortal = !!captchaHost && captchaHost !== new URL(cfg.publicUrl).host.toLowerCase() && (req.headers.host ?? '').toLowerCase() !== captchaHost;
     const frame = !p.preview && p.frame && p.n !== '' && !onPortal;
-    const kind = { ...(p.k ? { k: p.k } : {}), ...(p.pf ? { pf: p.pf } : {}) };
-    const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true } : frame ? { s: p.s, ip: p.ip, h: p.h, n: p.n, ...kind, u: p.u } : { s: p.s, ip: p.ip, h: p.h, ...kind, u: p.u };
+    // (Also for a preview: CAPTCHA page » Test, on the hostname.)
+    const hostFrame = !frame && p.fh && !onPortal && reHost.test(serverHost) && serverHost.includes('.');
+    const kind = { ...(p.k ? { k: p.k } : {}), ...(p.pf ? { pf: p.pf } : {}), ...(hostFrame ? { fh: '1' } : {}) };
+    const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true, ...(hostFrame ? { fh: '1' } : {}) } : frame ? { s: p.s, ip: p.ip, h: p.h, n: p.n, ...kind, u: p.u } : { s: p.s, ip: p.ip, h: p.h, ...kind, u: p.u };
     const design = (p.preview && p.design) || config.design;
     // The page names the website only when its server confirms the site is
     // one of its own: a made-up link can not make this domain show another
@@ -585,12 +598,23 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     }
     // In a frame only on a website its server confirmed (the frame is on
     // the website's own address).
-    if (frame && site === 'yes') (req as FastifyRequest & { xgFrame?: boolean }).xgFrame = true;
+    const framedBy = frame && site === 'yes' ? p.h.replace(/\.$/, '') : hostFrame && site === 'yes' ? serverHost : '';
+    if (framedBy) (req as FastifyRequest & { xgFrame?: boolean }).xgFrame = true;
     return html(
       reply,
-      renderPage({ host: site === 'yes' ? p.h : '', visitorIp: shownIP(ip, p.ip), params, siteKey: provider === 'altcha' ? '' : config.site_key, provider, design, countdown: config.countdown, frame: frame && site === 'yes' }),
+      renderPage({
+        host: site === 'yes' ? p.h : '',
+        visitorIp: shownIP(ip, p.ip),
+        params,
+        siteKey: provider === 'altcha' ? '' : config.site_key,
+        provider,
+        design,
+        countdown: config.countdown,
+        frame: frame && site === 'yes',
+        parentOrigin: hostFrame && site === 'yes' ? `https://${serverHost}` : '',
+      }),
       200,
-      frame && site === 'yes' ? p.h.replace(/\.$/, '') : '',
+      framedBy,
     );
   });
 
@@ -615,6 +639,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     n: z.string().regex(/^[a-f0-9]{32}$/).optional(),
     k: z.enum(['fw']).optional(),
     pf: z.enum(['t', 'e']).optional(),
+    fh: z.literal('1').optional(),
     preview: z.boolean().optional(),
   });
   app.post(
@@ -649,7 +674,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       // Where it was solved: on the website's own address (site mode), on
       // this page because the website's CAPTCHA port did not answer, or
       // here in portal mode ('').
-      const via = b.data.n ? 'site' : b.data.pf === 't' ? 'port-timeout' : b.data.pf === 'e' ? 'port-refused' : '';
+      const via = b.data.n ? 'site' : b.data.fh ? 'hostname' : b.data.pf === 't' ? 'port-timeout' : b.data.pf === 'e' ? 'port-refused' : '';
       const rec = (result: string, method: string, solver: string, reason = '') => record(accountId, p.s, p.ip, p.h, result, method, solver, reason, source, via);
       const run = async (): Promise<{ code: number; body: unknown }> => {
         const ip = visitorIP(req, cfg.trustProxy);
@@ -780,6 +805,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         design: cur.config.design,
         countdown: cur.config.countdown,
         site_servers: cur.config.site_servers,
+        hostname_servers: cur.config.hostname_servers,
         ipdb_captcha: cur.config.ipdb_captcha,
       },
       version: cur.version,
@@ -801,8 +827,36 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     design: z.enum(CAPTCHA_DESIGNS).default('classic'),
     countdown: z.number().int().min(0).max(15).default(5),
     site_servers: z.array(z.string().uuid()).max(5000).default([]),
+    hostname_servers: z.array(z.string().uuid()).max(5000).default([]),
     ipdb_captcha: z.enum(['', 'on', 'off']).default(''),
   });
+  // CAPTCHA page » Where the check opens » Test: the server sets up its
+  // hostname page and tests it the way a visitor's browser reaches it
+  // (DNS, the hostname's certificate, the page); the preview link opens
+  // the check there without letting anyone in.
+  app.post('/api/captcha/hostname-test', admin, async (req, reply) => {
+    const b = z.object({ server_id: z.string().uuid() }).safeParse(req.body);
+    if (!b.success) return reply.code(400).send({ error: 'invalid server' });
+    const srv = (await servers(req.user!.accountId)).find((s) => s.id === b.data.server_id);
+    if (!srv) return reply.code(404).send({ error: 'server not found' });
+    if (!srv.online) return reply.code(409).send({ error: `${srv.hostname} is offline` });
+    try {
+      const r = (await hub.command(srv.id, 'captcha.hostcheck', {}, 60_000)) as { ok?: boolean; url?: string; error?: string; hostname?: string; in_use?: boolean };
+      const url = typeof r?.url === 'string' && /^https:\/\/[a-z0-9.-]+\/xpguard-check\/$/.test(r.url) ? r.url : '';
+      return {
+        ok: r?.ok === true,
+        hostname: String(r?.hostname ?? ''),
+        url,
+        in_use: r?.in_use === true,
+        error: String(r?.error ?? ''),
+        preview: r?.ok === true && url ? `${url}?s=${srv.id}&ip=127.0.0.1&h=example.com&preview=1&u=/` : '',
+      };
+    } catch (e) {
+      const msg = (e as Error).message;
+      return reply.code(502).send({ error: msg.startsWith('unsupported action') ? 'Update the agent on this server first.' : msg });
+    }
+  });
+
   app.put('/api/captcha', admin, async (req, reply) => {
     const b = Save.safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid configuration' });
@@ -811,7 +865,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const c: CaptchaConfig = { ...b.data, secret_key: b.data.secret_key || cur.config.secret_key };
     // Only servers this account reaches.
     const reach = new Set((await servers(acc)).map((s) => s.id));
-    c.site_servers = [...new Set(c.site_servers)].filter((id) => reach.has(id));
+    c.hostname_servers = [...new Set(c.hostname_servers)].filter((id) => reach.has(id));
+    // One place per server: the hostname wins.
+    c.site_servers = [...new Set(c.site_servers)].filter((id) => reach.has(id) && !c.hostname_servers.includes(id));
     if (c.enabled && c.provider === 'turnstile' && (!c.site_key || !c.secret_key)) {
       return reply.code(400).send({ error: 'Add the Cloudflare Turnstile site key and secret key, or choose ALTCHA, before turning the CAPTCHA page on.' });
     }
@@ -823,7 +879,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       [acc, JSON.stringify(c)],
     );
     const version = Number(rows[0].version);
-    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes, provider: c.provider, strict_ip: c.strict_ip, design: c.design, countdown: c.countdown, site_servers: c.site_servers.length }, ip: req.ip });
+    await audit(pool, { accountId: acc, userId: req.user!.id, action: 'captcha.saved', detail: { version, enabled: c.enabled, minutes: c.minutes, provider: c.provider, strict_ip: c.strict_ip, design: c.design, countdown: c.countdown, site_servers: c.site_servers.length, hostname_servers: c.hostname_servers.length }, ip: req.ip });
     let pushed = 0;
     let offline = 0;
     for (const s of await servers(acc)) {

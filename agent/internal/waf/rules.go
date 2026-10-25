@@ -374,6 +374,10 @@ const (
 	// under a password-guessing attack from many addresses (Central.Sites):
 	// each one must solve the CAPTCHA, whatever its address.
 	IDMarkSiteAttack = 7700067
+	// IDHostPage: the CAPTCHA page on this server's hostname (hostname
+	// mode) is not inspected (a static page; its link holds the page the
+	// visitor wanted, which may look like an attack).
+	IDHostPage = 7700068
 )
 
 // ipdbMarkVars are the variables of renderIPDBMarks: the visitor's own
@@ -464,7 +468,14 @@ type Central struct {
 	// SiteLoginURLs are the login pages gated on those websites (not
 	// xmlrpc.php or admin panels: apps and logged-in admins use them).
 	SiteLoginURLs []string
+	// HostPage is the check's page on this server's hostname
+	// (https://<hostname>/xpguard-check/, hostname mode): suspects are sent
+	// there instead of URL, and pass through the pass list.
+	HostPage string
 }
+
+// reHostPage is a hostname page address the rules may hold.
+var reHostPage = regexp.MustCompile(`^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+/xpguard-check/$`)
 
 // Files the central CAPTCHA rule reads.
 const (
@@ -960,6 +971,13 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule REQUEST_HEADERS:Accept "%s" "t:none,t:lowercase"`, browser)
 		}
 		redirect := fmt.Sprintf("redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI}", ct.URL, ct.ServerID)
+		if !site && reHostPage.MatchString(ct.HostPage) {
+			// On this server's hostname: port 443, no website in between.
+			redirect = fmt.Sprintf("redirect:%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI}", ct.HostPage, ct.ServerID)
+			host := strings.TrimSuffix(strings.TrimPrefix(ct.HostPage, "https://"), "/xpguard-check/")
+			w(`SecRule REQUEST_FILENAME "@beginsWith /xpguard-check/" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleEngine=Off,chain"`, IDHostPage)
+			w(`  SecRule SERVER_NAME "@streq %s" "t:none,t:lowercase"`, host)
+		}
 		if site {
 			// Through the portal's page, which sends the visitor on to this
 			// server's CAPTCHA port on the website's address (the page there

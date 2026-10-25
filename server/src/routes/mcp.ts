@@ -267,7 +267,7 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         'results (passed, failed, rejected, offline) by check (turnstile, altcha), why checks were refused (reasons), addresses that solved the page for other addresses ' +
         '(solver_ip; many targets from one solver is someone passing bots through), and the addresses that failed most. ' +
         'source "firewall" is a visitor a server\'s firewall sent (IPDB, ban), "" a login page\'s suspect. ' +
-        'via (site mode): "site" solved on the website\'s own address, "port-timeout" / "port-refused" solved here because the website\'s CAPTCHA port did not answer; where_solved counts them per server. ' +
+        'via: "hostname" solved on the server hostname page, "site" on the website\'s own address (port), "port-timeout" / "port-refused" solved here because the website\'s CAPTCHA port did not answer; where_solved counts them per server. ' +
         'Filters: result, method, source (firewall or login), q (address, solver or site), hours.',
       inputSchema: obj({
         result: { type: 'string', enum: ['passed', 'failed', 'rejected', 'offline'] },
