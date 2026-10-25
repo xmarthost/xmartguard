@@ -235,7 +235,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Captcha = &captcha.Server{Settings: st, Log: log, GateSecret: gateSecret, ServerID: cfg.ServerID, Solved: func(ip string) error {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
-	a.Captcha.HostPage = a.hostPageURL
+	a.Captcha.HostPage = a.hostPageFWURL
 	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
 		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, ExemptIPs: a.wafExemptIPs, VerifiedBots: a.wafVerifiedBots,
 		IPDBIPs: a.Firewall.WebIPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, TrustedCountryIPs: a.trustedCountryCIDRs, Intel: a.wafIntel,
@@ -1563,7 +1563,8 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 			"login_attack_sites": a.loginAttackSites(),
 			// The CAPTCHA page on the server hostname (hostname mode): in use
 			// or why not.
-			"captcha_hostname": map[string]any{"wanted": captcha.HostnameWanted(a.Settings.Get()), "url": a.hostPageURL(), "error": hostErr(a)}}, nil
+			"captcha_hostname": map[string]any{"wanted": captcha.HostnameWanted(a.Settings.Get()), "url": a.hostPageURL(), "error": hostErr(a),
+				"firewall_url": a.hostPageFWURL(), "firewall_error": loadStr(&a.central.hostFWErr)}}, nil
 	}
 	// waf.auto_exclusion accepts, rejects or forgets a learned false positive.
 	h["waf.auto_exclusion"] = func(_ context.Context, p json.RawMessage) (any, error) {
@@ -2133,4 +2134,9 @@ func (a *Agent) trimFinding(id int64) error {
 func hostErr(a *Agent) string {
 	v, _ := a.central.hostErr.Load().(string)
 	return v
+}
+
+func loadStr(v *atomic.Value) string {
+	s, _ := v.Load().(string)
+	return s
 }

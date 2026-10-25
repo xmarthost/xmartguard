@@ -61,7 +61,9 @@ type Server struct {
 	// Passes gives out and records the pass cookies of that check.
 	Passes *SitePasses
 	// HostPage is the check's page on this server's hostname while that
-	// works (hostname mode, see hostpage.go), "" otherwise.
+	// works for a visitor the firewall sends here (hostname mode, see
+	// hostpage.go: this server then serves the page with the hostname's
+	// certificate), "" otherwise (the portal address).
 	HostPage func() string
 
 	key      []byte

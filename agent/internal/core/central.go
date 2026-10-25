@@ -61,6 +61,12 @@ type central struct {
 	// self-test passes (hostname mode), "" otherwise; hostErr why not.
 	hostPage atomic.Value // string
 	hostErr  atomic.Value // string
+	// hostFW is the hostname page for visitors the firewall sends to this
+	// server (IPDB, bans): only while this server's CAPTCHA port presents a
+	// valid certificate for the hostname (a self-signed one showed Firefox's
+	// "Not Secure" warning); hostFWErr why not.
+	hostFW    atomic.Value // string
+	hostFWErr atomic.Value // string
 	// Login attacks: when each website last met the threshold (it stays
 	// guarded loginAttackHold after), and a nudge for centralLoop after a
 	// failed login (checked at once, not at the next minute).
@@ -75,6 +81,15 @@ func (a *Agent) hostPageURL() string {
 	if v == "" || !captcha.HostnameWanted(a.Settings.Get()) {
 		return ""
 	}
+	return v
+}
+
+// hostPageFWURL is the hostname page for visitors the firewall sends here.
+func (a *Agent) hostPageFWURL() string {
+	if a.hostPageURL() == "" {
+		return ""
+	}
+	v, _ := a.central.hostFW.Load().(string)
 	return v
 }
 
@@ -106,6 +121,17 @@ func (a *Agent) syncHostPage(ctx context.Context) bool {
 	} else {
 		captcha.RemoveHostPage()
 	}
+	fw, fwWhy := "", ""
+	if next != "" {
+		if err := captcha.CheckOwnTLS(ctx, captcha.ServerHostname(), cur.Captcha.HTTPSPort); err != nil {
+			fwWhy = err.Error()
+			a.Log.Info("visitors the firewall sends to the CAPTCHA go to the portal address", "err", fwWhy)
+		} else {
+			fw = next
+		}
+	}
+	a.central.hostFW.Store(fw)
+	a.central.hostFWErr.Store(fwWhy)
 	a.central.hostPage.Store(next)
 	a.central.hostErr.Store(why)
 	return before != next
@@ -647,6 +673,13 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 			return res, nil
 		}
 		res["ok"] = true
+		// Visitors the firewall sends here (IPDB, bans) reach the page on this
+		// server's CAPTCHA port: its certificate for the hostname.
+		if err := captcha.CheckOwnTLS(cctx, host, cur.Captcha.HTTPSPort); err != nil {
+			res["firewall_error"] = err.Error()
+		} else {
+			res["firewall_ok"] = true
+		}
 		return res, nil
 	}
 	// captcha.host: may the CAPTCHA page name host (a website here that sent

@@ -48,6 +48,13 @@ func TestHostnameModeFallsBack(t *testing.T) {
 	if w := a.centralWAF(); w == nil || w.HostPage != "https://server1.example.net/xpguard-check/" {
 		t.Fatalf("central %+v", w)
 	}
+	// Visitors the firewall sends to this server reach the page here: only
+	// with a valid certificate for the hostname on the CAPTCHA port (Firefox
+	// showed "Not Secure" for the self-signed one), else the portal address.
+	if a.Captcha.HostPage() != "" {
+		t.Fatal("firewall redirect to the hostname without a valid certificate on the CAPTCHA port")
+	}
+	a.central.hostFW.Store("https://server1.example.net/xpguard-check/")
 	if a.Captcha.HostPage() != "https://server1.example.net/xpguard-check/" {
 		t.Fatal("firewall redirect does not use the hostname page")
 	}

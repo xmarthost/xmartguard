@@ -66,6 +66,13 @@ func (c *CertStore) Get(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 				// www.example.com is usually covered by example.com's certificate.
 				cert = c.load(strings.TrimPrefix(name, "www."))
 			}
+			if cert == nil {
+				// The server's hostname: cPanel keeps its certificate with the
+				// service certificates, not with the websites' (a banned
+				// visitor sent to the hostname CAPTCHA page reaches this
+				// server, not the web server).
+				cert = serviceCert(name)
+			}
 			c.mu.Lock()
 			if len(c.cache) > 5000 {
 				c.cache, c.loaded = map[string]*tls.Certificate{}, map[string]time.Time{}
@@ -228,4 +235,60 @@ func (c *CertStore) selfSigned() (*tls.Certificate, error) {
 	}
 	c.fallback = &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 	return c.fallback, nil
+}
+
+// ServiceCerts are files that may hold the server hostname's certificate
+// with its key (cPanel's service certificates: cpsrvd, Exim, Dovecot,
+// Pure-FTPd), tried in order. A file with the certificate only is paired
+// with the key file next to it (.key). Tests change them.
+var ServiceCerts = []string{
+	"/var/cpanel/ssl/cpanel/cpanel.pem",
+	"/var/cpanel/ssl/cpanel/mycpanel.pem",
+	"/var/cpanel/ssl/exim/exim.pem",
+	"/var/cpanel/ssl/dovecot/dovecot.pem",
+	"/var/cpanel/ssl/ftp/pure-ftpd.pem",
+}
+
+// serviceCert is the first service certificate valid now for name.
+func serviceCert(name string) *tls.Certificate {
+	if !reHostname.MatchString(name) {
+		return nil
+	}
+	for _, f := range ServiceCerts {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		cert, err := tls.X509KeyPair(raw, raw)
+		if err != nil {
+			key, kerr := os.ReadFile(strings.TrimSuffix(f, filepath.Ext(f)) + ".key")
+			if kerr != nil {
+				continue
+			}
+			if cert, err = tls.X509KeyPair(raw, key); err != nil {
+				continue
+			}
+		}
+		leaf, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil || time.Now().After(leaf.NotAfter) || time.Now().Before(leaf.NotBefore) || leaf.VerifyHostname(name) != nil {
+			continue
+		}
+		// The issuers when the file holds only the certificate (cPanel keeps
+		// them in a .cabundle next to it).
+		if len(cert.Certificate) == 1 {
+			if bundle, err := os.ReadFile(strings.TrimSuffix(f, filepath.Ext(f)) + ".cabundle"); err == nil {
+				for {
+					var b *pem.Block
+					if b, bundle = pem.Decode(bundle); b == nil {
+						break
+					}
+					if b.Type == "CERTIFICATE" {
+						cert.Certificate = append(cert.Certificate, b.Bytes)
+					}
+				}
+			}
+		}
+		return &cert
+	}
+	return nil
 }

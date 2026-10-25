@@ -196,3 +196,28 @@ func CheckHostPage(ctx context.Context, hostname, portalURL string, serverIPs []
 	}
 	return nil
 }
+
+// CheckOwnTLS confirms that this server's CAPTCHA HTTPS port presents a
+// certificate valid for hostname: a visitor the firewall sends here (IPDB,
+// ban) reaches the hostname page there, not at the web server. Without it
+// those visitors go to the portal address instead.
+func CheckOwnTLS(ctx context.Context, hostname string, port int) error {
+	if port <= 0 || port > 65535 {
+		return errors.New("no CAPTCHA HTTPS port")
+	}
+	addr := ownTLSAddr
+	if addr == "" {
+		addr = net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
+	}
+	d := &tls.Dialer{Config: &tls.Config{ServerName: hostname, RootCAs: hostCheckRoots}}
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c, err := d.DialContext(cctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("the CAPTCHA port has no valid certificate for %s: %v", hostname, err)
+	}
+	return c.Close()
+}
+
+// ownTLSAddr replaces the CAPTCHA port's address in tests.
+var ownTLSAddr = ""

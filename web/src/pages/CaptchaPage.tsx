@@ -25,6 +25,8 @@ interface HostTest {
   in_use: boolean;
   error: string;
   preview: string;
+  firewall_ok?: boolean;
+  firewall_error?: string;
 }
 
 /** The page's looks: name, description and a small sketch of it. */
@@ -305,6 +307,11 @@ export default function CaptchaPage() {
                           </a>
                         )}
                         {test.in_use ? ' In use now: visitors of this server go there.' : where !== 'hostname' ? ' Choose "Server hostname" and save to use it.' : ' Saved: the server switches to it within a minute (save again if it does not).'}
+                        <div className="mt-1">
+                          {test.firewall_ok
+                            ? 'Visitors the firewall blocks (IPDB, bans) get it with a valid certificate too.'
+                            : `Visitors the firewall blocks (IPDB, bans) go to the portal address instead: ${test.firewall_error || 'the server has no valid certificate for its hostname on its CAPTCHA port'}.`}
+                        </div>
                       </>
                     ) : (
                       <>

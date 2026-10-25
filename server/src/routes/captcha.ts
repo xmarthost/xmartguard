@@ -841,7 +841,15 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (!srv) return reply.code(404).send({ error: 'server not found' });
     if (!srv.online) return reply.code(409).send({ error: `${srv.hostname} is offline` });
     try {
-      const r = (await hub.command(srv.id, 'captcha.hostcheck', {}, 60_000)) as { ok?: boolean; url?: string; error?: string; hostname?: string; in_use?: boolean };
+      const r = (await hub.command(srv.id, 'captcha.hostcheck', {}, 60_000)) as {
+        ok?: boolean;
+        url?: string;
+        error?: string;
+        hostname?: string;
+        in_use?: boolean;
+        firewall_ok?: boolean;
+        firewall_error?: string;
+      };
       const url = typeof r?.url === 'string' && /^https:\/\/[a-z0-9.-]+\/xpguard-check\/$/.test(r.url) ? r.url : '';
       return {
         ok: r?.ok === true,
@@ -849,6 +857,11 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         url,
         in_use: r?.in_use === true,
         error: String(r?.error ?? ''),
+        // Visitors the firewall sends to the server (IPDB, bans) get the page
+        // from the server's CAPTCHA port: with the hostname's certificate,
+        // or they go to the portal address.
+        firewall_ok: r?.firewall_ok === true,
+        firewall_error: String(r?.firewall_error ?? ''),
         preview: r?.ok === true && url ? `${url}?s=${srv.id}&ip=127.0.0.1&h=example.com&preview=1&u=/` : '',
       };
     } catch (e) {

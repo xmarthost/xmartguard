@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.21** (see `VERSION`).
+- Current release: **0.23.22** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.21 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.22 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.21: `--branch backup-0.23.20`; see "Rollback" under 0.23.21 below);
+  0.23.22: `--branch backup-0.23.21`; see "Rollback" under 0.23.22 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,35 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.22: hostname CAPTCHA "Not Secure" for banned visitors**
+  (2026-10-25). After ~10 fake logins through Firefox's VPN the owner was
+  banned (WAF ban, threshold 10) and sent to
+  `https://business200.websoulhostservers.com/xpguard-check/…&k=fw…`;
+  Firefox warned "Not Secure". In Chrome, from the owner's own (not
+  banned) address, the same page was fine. A banned address's 80/443
+  traffic is redirected by the firewall to the agent's CAPTCHA server,
+  and the hostname is on the same address: the agent served the page
+  with its self-signed fallback (cPanel keeps the hostname's certificate
+  with the service certificates, not in apache_tls). The self-test only
+  checked the web server.
+  - `CertStore` now tries cPanel's service certificates for a name it has
+    no website certificate for (`ServiceCerts`: cpanel.pem, mycpanel.pem
+    (+ .key, + .cabundle), exim, dovecot, pure-ftpd; valid now and for the
+    name).
+  - `CheckOwnTLS` tests the agent's CAPTCHA HTTPS port for the hostname;
+    only when it passes does the firewall's redirect (IPDB, bans) use the
+    hostname page (`central.hostFW`, `Captcha.HostPage` =
+    `hostPageFWURL`); otherwise those visitors go to the portal address.
+    Login-page suspects (WAF) are unaffected: their traffic reaches the
+    web server.
+  - Test button and waf.status show the firewall part (`firewall_ok` /
+    `firewall_error`).
+  - Tests: captcha `TestHostnameServiceCertificate` (cert + key file,
+    combined file, other names, own-port check, self-signed refused); core
+    `TestHostnameModeFallsBack` (no firewall redirect to the hostname
+    without a valid certificate).
+  - **Rollback**: `backup-0.23.21`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.21: login attack mode holds, and starts within seconds**
   (2026-10-25). The owner set business200 to the hostname CAPTCHA (its

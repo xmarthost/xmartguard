@@ -1,14 +1,23 @@
 package captcha
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The check on the server's own hostname (hostname mode): no CAPTCHA port
@@ -161,5 +170,64 @@ func TestHostPageFixture(t *testing.T) {
 	}
 	if string(got) != want {
 		t.Fatal("server/test/fixtures/hostpage.html differs from the page: run with XG_UPDATE_FIXTURES=1")
+	}
+}
+
+// A visitor the firewall sends to this server (IPDB, ban) reaches the
+// hostname page here, not at the web server: this server must present the
+// hostname's certificate, which cPanel keeps with the service certificates
+// (Firefox showed "Not Secure" for the self-signed one).
+func TestHostnameServiceCertificate(t *testing.T) {
+	dir := t.TempDir()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tpl := &x509.Certificate{SerialNumber: big.NewInt(9), Subject: pkix.Name{CommonName: "server1.example.net"},
+		DNSNames: []string{"server1.example.net"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour)}
+	der, _ := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	kb, _ := x509.MarshalECPrivateKey(key)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb})
+	// mycpanel.pem: the certificate, its key next to it.
+	os.WriteFile(filepath.Join(dir, "mycpanel.pem"), certPEM, 0o600)
+	os.WriteFile(filepath.Join(dir, "mycpanel.key"), keyPEM, 0o600)
+	saved := ServiceCerts
+	defer func() { ServiceCerts = saved }()
+	ServiceCerts = []string{filepath.Join(dir, "missing.pem"), filepath.Join(dir, "mycpanel.pem")}
+	c := &CertStore{Dirs: []string{filepath.Join(dir, "sites")}}
+	cert, err := c.Get(&tls.ClientHelloInfo{ServerName: "server1.example.net"})
+	if err != nil || !bytes.Equal(cert.Certificate[0], der) {
+		t.Fatal("hostname did not get the service certificate")
+	}
+	if cert, _ := c.Get(&tls.ClientHelloInfo{ServerName: "shop.example.com"}); bytes.Equal(cert.Certificate[0], der) {
+		t.Fatal("another name got the hostname's certificate")
+	}
+	// A combined file (key and certificate) works too.
+	os.WriteFile(filepath.Join(dir, "cpanel.pem"), append(keyPEM, certPEM...), 0o600)
+	ServiceCerts = []string{filepath.Join(dir, "cpanel.pem")}
+	if got := serviceCert("server1.example.net"); got == nil || !bytes.Equal(got.Certificate[0], der) {
+		t.Fatal("combined service certificate not used")
+	}
+
+	// The check of this server's own CAPTCHA port: a certificate the
+	// browser trusts for the hostname, or the portal address for those
+	// visitors.
+	ts := httptest.NewUnstartedServer(http.NotFoundHandler())
+	ts.TLS = &tls.Config{GetCertificate: c.Get}
+	ts.StartTLS()
+	defer ts.Close()
+	savedAddr, savedRoots := ownTLSAddr, hostCheckRoots
+	defer func() { ownTLSAddr, hostCheckRoots = savedAddr, savedRoots }()
+	ownTLSAddr = strings.TrimPrefix(ts.URL, "https://")
+	hostCheckRoots = x509.NewCertPool()
+	leaf, _ := x509.ParseCertificate(der)
+	hostCheckRoots.AddCert(leaf)
+	if err := CheckOwnTLS(context.Background(), "server1.example.net", 7743); err != nil {
+		t.Fatal(err)
+	}
+	// The self-signed fallback (no service certificate): refused.
+	ServiceCerts = nil
+	c2 := &CertStore{Dirs: []string{filepath.Join(dir, "sites")}}
+	ts.TLS.GetCertificate = c2.Get
+	if err := CheckOwnTLS(context.Background(), "server1.example.net", 7743); err == nil {
+		t.Fatal("self-signed certificate passed")
 	}
 }
