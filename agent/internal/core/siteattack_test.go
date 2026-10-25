@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
@@ -28,9 +29,9 @@ func TestLoginAttackSites(t *testing.T) {
 	// threshold deals with it, the site stays open.
 	add("solo.example.com", "198.51.100.5", 7700401, 20)
 	// A few people mistyping.
-	add("quiet.example.com", "198.51.100.6", 7700401, 4)
-	add("quiet.example.com", "198.51.100.7", 7700401, 4)
-	add("quiet.example.com", "198.51.100.8", 7700401, 4)
+	add("quiet.example.com", "198.51.100.6", 7700401, 3)
+	add("quiet.example.com", "198.51.100.7", 7700401, 3)
+	add("quiet.example.com", "198.51.100.8", 7700401, 3)
 	// A protected login URL under attack, written with www and a port.
 	for _, ip := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
 		add("WWW.Panel.Example.com:443", ip, 7700405, 6)
@@ -44,10 +45,6 @@ func TestLoginAttackSites(t *testing.T) {
 	if strings.Join(got, ",") != "panel.example.com,websoulhost.com" {
 		t.Fatalf("sites under attack: %v", got)
 	}
-	// Gated pages: not xmlrpc.php or the admin scripts of Joomla and OpenCart.
-	if l := siteLoginURLs([]string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php", "/client-area/login"}); strings.Join(l, ",") != "/wp-login.php,/client-area/login" {
-		t.Fatalf("gated pages: %v", l)
-	}
 	// Three failed logins: a suspect (CAPTCHA on the next login page visit).
 	sus := a.centralSuspects()
 	for _, ip := range []string{"45.58.242.100", "45.58.242.10", "45.58.238.19", "149.143.161.99", "198.51.100.5", "198.51.100.6"} {
@@ -59,5 +56,50 @@ func TestLoginAttackSites(t *testing.T) {
 		if slices.Contains(sus, ip) {
 			t.Errorf("%s is a suspect", ip)
 		}
+	}
+	// The attack slows down (the failed logins fall out of the window): the
+	// site stays guarded for an hour after the threshold was last met, then
+	// opens again.
+	a.DB.Exec(`UPDATE waf_events SET at = at - 3600 WHERE host = 'websoulhost.com'`)
+	if got := a.loginAttackSites(); strings.Join(got, ",") != "panel.example.com,websoulhost.com" {
+		t.Fatalf("held: %v", got)
+	}
+	a.central.attackMu.Lock()
+	a.central.attackLast["websoulhost.com"] = time.Now().Add(-loginAttackHold - time.Minute)
+	a.central.attackMu.Unlock()
+	if got := a.loginAttackSites(); strings.Join(got, ",") != "panel.example.com" {
+		t.Fatalf("after the hold: %v", got)
+	}
+	// Firefox's VPN: 16 attempts from 4 addresses in 73 seconds.
+	for ip, n := range map[string]int{"45.58.241.5": 4, "45.58.241.105": 8, "45.58.241.94": 1, "45.58.241.104": 3} {
+		add("burst.example.com", ip, 7700401, n)
+	}
+	if got := a.loginAttackSites(); !slices.Contains(got, "burst.example.com") {
+		t.Fatalf("burst not caught: %v", got)
+	}
+	// Gated pages: not xmlrpc.php or the admin scripts of Joomla and OpenCart.
+	if l := siteLoginURLs([]string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php", "/client-area/login", "/wp-admin", "/wp-admin/"}); strings.Join(l, ",") != "/wp-login.php,/client-area/login" {
+		t.Fatalf("gated pages: %v", l)
+	}
+}
+
+// A failed login nudges the check (never blocks the log reader).
+func TestFailedLoginKicksCheck(t *testing.T) {
+	a := newTestAgent(t, `{}`)
+	if a.central.kick == nil {
+		a.central.kick = make(chan struct{}, 1)
+	}
+	for i := 0; i < 5; i++ {
+		a.onLoginFailed("websoulhost.com", "45.58.241.5")
+	}
+	select {
+	case <-a.central.kick:
+	default:
+		t.Fatal("no nudge")
+	}
+	select {
+	case <-a.central.kick:
+		t.Fatal("nudges pile up")
+	default:
 	}
 }

@@ -67,6 +67,9 @@ type Manager struct {
 	// (IDCentralPassUsed): the agent withdraws a value used by an address
 	// it was not given to.
 	OnPassCookie func(ip string, slot int)
+	// OnLoginFailed is told every failed login read from the logs (the
+	// agent checks at once whether a website is under a login attack).
+	OnLoginFailed func(host, ip string)
 	// Owner names the cPanel account of a website (Host without port), so
 	// the account's own panel lists its sites' events (nil = none).
 	Owner func(host string) string
@@ -1435,6 +1438,9 @@ func (m *Manager) handleEvent(ev Event, t *tailState) {
 		m.OnBotBlocked(ev.IP, ev.Detail)
 	}
 	if ev.Category == "login" {
+		if m.OnLoginFailed != nil {
+			m.OnLoginFailed(ev.Host, ev.IP)
+		}
 		m.maybeBan(ev, t.logins)
 	} else if strings.HasPrefix(ev.Action, "Access denied") && !noBanRules[ev.RuleID] && !policyOnly(ev) {
 		m.maybeBanBlocked(ev, t.blocks)

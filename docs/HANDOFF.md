@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.20** (see `VERSION`).
+- Current release: **0.23.21** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.20 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.21 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.20: `--branch backup-0.23.19`; see "Rollback" under 0.23.20 below);
+  0.23.21: `--branch backup-0.23.20`; see "Rollback" under 0.23.21 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,33 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.21: login attack mode holds, and starts within seconds**
+  (2026-10-25). The owner set business200 to the hostname CAPTCHA (its
+  setting arrived: `central_mode` "hostname") and tried fake logins on
+  websoulhost.com through Firefox's built-in VPN: 16 attempts from 4
+  addresses (45.58.241.5/.105/.94/.104) in 73 seconds, no CAPTCHA. The
+  site had been in login attack mode minutes before, but the mode only
+  counted the last 30 minutes (15 failures, 3 addresses): it dropped as
+  the earlier attempts aged out, and coming back took the minute check
+  plus a reload, after the burst was over. So the hostname page was never
+  reached (no gate), which looked like "hostname mode does not work".
+  - Now: 10 failed logins from 3 addresses in 15 minutes start it, and it
+    holds for an hour after the threshold was last met (`loginAttackHold`,
+    `central.attackLast`, in memory). Every failed login read from the
+    logs nudges `centralLoop` (`WAF.OnLoginFailed` → `onLoginFailed` →
+    `central.kick`), which checks within seconds (at most every 10 s)
+    and reloads at once when a site comes under attack.
+  - Attack mode never gates `/wp-admin` (business200 lists it in
+    `waf.login_urls`): admin-ajax.php and admin-post.php serve every
+    visitor's carts, forms and searches.
+  - Visibility: waf.status `captcha_hostname` {wanted, url in use, error};
+    connector action `captcha.hostcheck` (operator); the CAPTCHA page's
+    Test says whether the hostname page is in use now.
+  - Tests: core `TestLoginAttackSites` (hold, end of hold, the Firefox
+    burst, /wp-admin), `TestFailedLoginKicksCheck`; waf
+    `TestFailedLoginNotifies`; race detector on core and waf.
+  - **Rollback**: `backup-0.23.20`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.20: failed logins and CAPTCHA redirects findable in the
   WAF log** (2026-10-25). The owner made 10+ fake logins on

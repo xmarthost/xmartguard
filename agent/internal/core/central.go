@@ -61,6 +61,12 @@ type central struct {
 	// self-test passes (hostname mode), "" otherwise; hostErr why not.
 	hostPage atomic.Value // string
 	hostErr  atomic.Value // string
+	// Login attacks: when each website last met the threshold (it stays
+	// guarded loginAttackHold after), and a nudge for centralLoop after a
+	// failed login (checked at once, not at the next minute).
+	attackMu   sync.Mutex
+	attackLast map[string]time.Time
+	kick       chan struct{}
 }
 
 // hostPageURL is the working hostname page ("" when not in use).
@@ -135,12 +141,16 @@ func (a *Agent) centralWAF() *waf.Central {
 // addresses or more in loginAttackWindow: botnets and VPNs change address
 // every few attempts, so no address reaches the ban threshold (seen: 22
 // attempts from 6 addresses of one VPN in 3 minutes on websoulhost.com,
-// none banned). Its login page then asks every visitor for the CAPTCHA
-// until the attack has stopped for the window.
+// none banned). Its login page then asks every visitor for the CAPTCHA,
+// and keeps asking loginAttackHold after the threshold was last met: a
+// window that only counted the last 30 minutes let the guard drop while
+// the attack went on more slowly, and a new burst (16 attempts from 4
+// addresses of Firefox's VPN in 73 seconds) was over before it came back.
 const (
-	loginAttackWindow = 30 * 60 // seconds
-	loginAttackFails  = 15
+	loginAttackWindow = 15 * 60 // seconds
+	loginAttackFails  = 10
 	loginAttackAddrs  = 3
+	loginAttackHold   = time.Hour
 )
 
 // failedLoginRules are the WAF rules that count failed logins on login
@@ -171,13 +181,37 @@ func (a *Agent) loginAttackSites() []string {
 		}
 		addrs[h][ip] = true
 	}
-	var out []string
+	now := time.Now()
+	a.central.attackMu.Lock()
+	defer a.central.attackMu.Unlock()
+	if a.central.attackLast == nil {
+		a.central.attackLast = map[string]time.Time{}
+	}
 	for h, n := range fails {
 		if n >= loginAttackFails && len(addrs[h]) >= loginAttackAddrs {
+			a.central.attackLast[h] = now
+		}
+	}
+	var out []string
+	for h, t := range a.central.attackLast {
+		if now.Sub(t) < loginAttackHold {
 			out = append(out, h)
+		} else {
+			delete(a.central.attackLast, h)
 		}
 	}
 	return waf.AttackSites(out)
+}
+
+// onLoginFailed nudges centralLoop to check for a login attack now.
+func (a *Agent) onLoginFailed(_, _ string) {
+	if a.central.kick == nil {
+		return
+	}
+	select {
+	case a.central.kick <- struct{}{}:
+	default:
+	}
 }
 
 // siteLoginURLs are the login pages gated on a website under attack: the
@@ -188,9 +222,14 @@ func siteLoginURLs(urls []string) []string {
 	skip := map[string]bool{"/xmlrpc.php": true, "/administrator/index.php": true, "/admin/index.php": true}
 	var out []string
 	for _, u := range urls {
-		if !skip[strings.ToLower(u)] {
-			out = append(out, u)
+		l := strings.TrimSuffix(strings.ToLower(u), "/")
+		// Not the WordPress admin folder (business200 lists /wp-admin): its
+		// admin-ajax.php and admin-post.php serve every visitor's carts,
+		// forms and searches, which the CAPTCHA would break for everyone.
+		if skip[l] || l == "/wp-admin" || strings.HasPrefix(l, "/wp-admin/") {
+			continue
 		}
+		out = append(out, u)
 	}
 	return out
 }
@@ -524,7 +563,7 @@ func (a *Agent) centralLoop(ctx context.Context) {
 		}
 		a.central.applyMu.Unlock()
 	}
-	last := time.Time{}
+	last, lastSites := time.Time{}, time.Time{}
 	for {
 		if time.Since(last) >= 10*time.Minute {
 			last = time.Now()
@@ -534,6 +573,7 @@ func (a *Agent) centralLoop(ctx context.Context) {
 				refresh("CAPTCHA list refresh")
 			}
 		} else if cur := a.Settings.Get(); cur.Captcha.Central && cur.Captcha.CentralURL != "" && !captcha.GateWanted(cur) {
+			lastSites = time.Now()
 			if sites := a.loginAttackSites(); a.WAF.CentralSitesAdded(sites) {
 				a.Log.Info("login attack from many addresses: the CAPTCHA guards the website's login page", "sites", sites)
 				refresh("CAPTCHA for a website under a login attack")
@@ -543,6 +583,15 @@ func (a *Agent) centralLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(time.Minute):
+		case <-a.central.kick:
+			// A failed login: checked within seconds (at most every 10).
+			if wait := 10*time.Second - time.Since(lastSites); wait > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+			}
 		}
 	}
 }

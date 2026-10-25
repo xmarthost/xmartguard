@@ -20,6 +20,8 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'settings.get': { role: 'viewer', mutates: false },
   'settings.apply_status': { role: 'viewer', mutates: false },
   'fw.list': { role: 'viewer', mutates: false },
+  // Sets up the CAPTCHA page on the server hostname and tests it.
+  'captcha.hostcheck': { role: 'operator', mutates: true, timeoutMs: 60_000 },
   'fw.check': { role: 'viewer', mutates: false },
   'fw.events': { role: 'viewer', mutates: false },
   'fw.meta': { role: 'viewer', mutates: false },

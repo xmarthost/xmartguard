@@ -304,7 +304,7 @@ export default function CaptchaPage() {
                             Preview the check there
                           </a>
                         )}
-                        {!test.in_use && where !== 'hostname' && ' Choose "Server hostname" and save to use it.'}
+                        {test.in_use ? ' In use now: visitors of this server go there.' : where !== 'hostname' ? ' Choose "Server hostname" and save to use it.' : ' Saved: the server switches to it within a minute (save again if it does not).'}
                       </>
                     ) : (
                       <>

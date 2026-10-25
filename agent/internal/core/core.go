@@ -252,6 +252,8 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Captcha.Passed = a.centralLiftBan
 	a.Captcha.Passes = a.sitePasses
 	a.WAF.OnPassCookie = a.onPassCookie
+	a.central.kick = make(chan struct{}, 1)
+	a.WAF.OnLoginFailed = a.onLoginFailed
 	a.WAF.OnBotBlocked = a.onBotBlocked
 	a.WAF.Owner = siteOwner
 	a.CMS = &cms.Manager{Zone: func() *time.Location { return scanner.ScheduleZone(st.Get().Scanner.ScheduleTZ) }, DB: db, Settings: st, Log: log, Versions: cms.NewVersions(db),
@@ -1558,7 +1560,10 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 			"auto_exclusions": a.WAF.AutoExclusions(), "cpanel_off": waf.CPanelModsecOff(),
 			// Websites whose login page asks every visitor for the CAPTCHA
 			// (a login attack from many addresses, see loginAttackSites).
-			"login_attack_sites": a.loginAttackSites()}, nil
+			"login_attack_sites": a.loginAttackSites(),
+			// The CAPTCHA page on the server hostname (hostname mode): in use
+			// or why not.
+			"captcha_hostname": map[string]any{"wanted": captcha.HostnameWanted(a.Settings.Get()), "url": a.hostPageURL(), "error": hostErr(a)}}, nil
 	}
 	// waf.auto_exclusion accepts, rejects or forgets a learned false positive.
 	h["waf.auto_exclusion"] = func(_ context.Context, p json.RawMessage) (any, error) {
@@ -2123,4 +2128,9 @@ func (a *Agent) trimFinding(id int64) error {
 		return errors.New("the AI has not located injected code in this file (check it with the AI first)")
 	}
 	return a.Scanner.Trim(id, v.Cut, a.Settings.Get().Scanner.TrimMaxPercent)
+}
+
+func hostErr(a *Agent) string {
+	v, _ := a.central.hostErr.Load().(string)
+	return v
 }

@@ -57,3 +57,18 @@ func TestCaptchaRedirectLogged(t *testing.T) {
 		t.Fatalf("stats %+v", s)
 	}
 }
+
+// Every failed login tells the agent at once (it checks for a login attack
+// within seconds, not at the next minute).
+func TestFailedLoginNotifies(t *testing.T) {
+	m := learnManager(t)
+	m.Firewall = &banRecorder{}
+	var got []string
+	m.OnLoginFailed = func(host, ip string) { got = append(got, host+"|"+ip) }
+	st := newTailState()
+	e, _ := ParseLine(`[Sat Oct 25 06:01:00.471444 2026] [security2:error] [pid 1:tid 1] [client 45.58.241.5:45142] [client 45.58.241.5] ModSecurity: Warning. String match "200" at RESPONSE_STATUS. [file "/x/rules.conf"] [line "9"] [id "7700401"] [msg "xPGuard - Failed login: WordPress"] [tag "xpguard/login"] [hostname "websoulhost.com"] [uri "/wp-login.php"] [unique_id "N1"]`)
+	m.handleEvent(e, st)
+	if len(got) != 1 || got[0] != "websoulhost.com|45.58.241.5" {
+		t.Fatalf("told: %v", got)
+	}
+}
