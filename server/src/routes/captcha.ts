@@ -258,6 +258,29 @@ async function hostingAddress(pool: Pool, ip: string): Promise<boolean> {
   return hosting;
 }
 
+/**
+ * Checks solved from a hosting or cloud network (VPNs: Firefox's, Browsec;
+ * agent browsers like Meta's Muse) are allowed, for a short pass and at
+ * most HOSTING_PASSES_PER_DAY times a day for one address. They were
+ * refused (CAPTCHA farms solve for bots on proxy addresses), which also
+ * shut out every VPN visitor; a farm now buys little: the pass is no
+ * whitelist, the next attack bans the address and solving again does not
+ * lift that ban.
+ */
+export const HOSTING_PASSES_PER_DAY = 4;
+const hostingPasses = new Map<string, number[]>();
+
+export function hostingPassAllowed(target: string, now = Date.now()): boolean {
+  const day = now - 86_400_000;
+  if (hostingPasses.size > 100_000) hostingPasses.clear();
+  return (hostingPasses.get(target) ?? []).filter((t) => t > day).length < HOSTING_PASSES_PER_DAY;
+}
+
+export function noteHostingPass(target: string, now = Date.now()): void {
+  const day = now - 86_400_000;
+  hostingPasses.set(target, [...(hostingPasses.get(target) ?? []).filter((t) => t > day), now]);
+}
+
 export function noteAltchaPass(keys: string[], now = Date.now()): void {
   const day = now - 86_400_000;
   for (const k of keys) altchaPasses.set(k, [...(altchaPasses.get(k) ?? []).filter((t) => t > day), now]);
@@ -710,21 +733,13 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           });
         }
         // ALTCHA where Turnstile is the check: only the visitor's own network
-        // (or its other family), not from a hosting network, a few times a
-        // day, for a shorter time.
+        // (or its other family), a few times a day, for a shorter time.
         const altchaKeys = altchaKeysFor(ip, p.ip, p.h);
         if (method === 'altcha' && provider !== 'turnstile') {
           const elsewhere = provider === 'auto' && other && sameFamily && !sameNetwork(ip, p.ip);
           if (elsewhere || !altchaAllowed(altchaKeys, provider === 'auto' ? 'auto' : 'altcha')) {
             await rec('rejected', method, ip, elsewhere ? 'ALTCHA from another network' : 'ALTCHA daily limit');
             return res(403, { error: 'Too many checks from this address. Please try again later.' });
-          }
-          // Not on a privacy relay (iCloud Private Relay, WARP, Meta's agent
-          // browsers): AbuseIPDB calls those data centres, but they are
-          // people (Private Relay visitors were refused on 14 websites).
-          if (provider === 'auto' && egressNetwork(ip) === '' && (await hostingAddress(pool, ip))) {
-            await rec('rejected', method, ip, 'ALTCHA from a hosting network');
-            return res(403, { error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
           }
         }
         // ALTCHA is proof of work a script solves as well as a browser: the
@@ -734,12 +749,15 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           await rec('failed', method, ip, tickReason(b.data.hu));
           return res(403, { error: 'Please tick the box yourself to confirm you are human.' });
         }
-        // Solved from a data centre for another address: CAPTCHA farms solve
-        // for bots on proxy addresses (glasgowfitness.com: one proxy address
-        // passed every few minutes from DigitalOcean and hosting addresses).
-        if (other && egressNetwork(ip) === '' && (await hostingAddress(pool, ip))) {
-          await rec('rejected', method, ip, 'solved from a hosting network for another address');
-          return res(403, { error: 'This check cannot be completed from a hosting or cloud network. Please open the website from your own connection.' });
+        // Solved from a hosting or cloud network (a VPN, an agent's browser):
+        // allowed, a few times a day per address and for a short pass (see
+        // HOSTING_PASSES_PER_DAY). Firefox's VPN reaches the website over
+        // IPv4 and this page over IPv6, both cloud addresses. Privacy relays
+        // (iCloud Private Relay, WARP, Meta) count as people.
+        const hosting = (other || method === 'altcha') && egressNetwork(ip) === '' && (await hostingAddress(pool, ip));
+        if (hosting && !hostingPassAllowed(p.ip)) {
+          await rec('rejected', method, ip, 'hosting-network passes for this address used up today');
+          return res(403, { error: 'Too many checks for this address today. Please open the website from your own connection, or try again tomorrow.' });
         }
         if (!(await solved())) {
           await rec('failed', method, ip, 'wrong answer');
@@ -757,7 +775,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         try {
           // Also the address the visitor solved it from: on mobile networks
           // (CGNAT) the next request to the site may come from that one.
-          const short = method === 'altcha' && provider === 'auto' ? { minutes: Math.min(config.minutes, ALTCHA_FALLBACK_MINUTES) } : {};
+          const short = (method === 'altcha' && provider === 'auto') || hosting ? { minutes: Math.min(config.minutes, ALTCHA_FALLBACK_MINUTES) } : {};
           if (b.data.n) {
             // On the website's own address the server gives a ticket the
             // page there trades for a pass cookie: no reload, no wait.
@@ -771,7 +789,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           return res(403, { error: 'This website could not confirm the check. Please try again later.' });
         }
         if (method === 'altcha') noteAltchaPass(altchaKeys);
-        await rec('passed', method, ip);
+        if (hosting) noteHostingPass(p.ip);
+        await rec('passed', method, ip, hosting ? 'from a hosting network (VPN or cloud): a pass for an hour' : '');
         return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}`, ...(b.data.n ? { frame: true } : {}) });
       };
       const pending = run();

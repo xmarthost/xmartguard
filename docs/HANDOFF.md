@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.22** (see `VERSION`).
+- Current release: **0.23.23** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.22 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.23 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.22: `--branch backup-0.23.21`; see "Rollback" under 0.23.22 below);
+  0.23.23: `--branch backup-0.23.22`; see "Rollback" under 0.23.23 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,29 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.23: VPN and cloud visitors can solve the CAPTCHA**
+  (2026-10-25). Through Firefox's built-in VPN the owner reached the
+  hostname page and got "This check cannot be completed from a hosting or
+  cloud network". The VPN reaches the website over IPv4 (45.58.241.39)
+  and the portal over IPv6, both cloud addresses (AbuseIPDB usage type),
+  so the 0.23.12 farm rule refused it ("solved from a hosting network for
+  another address"); ALTCHA from a hosting address was refused too. Every
+  VPN and agent-browser visitor (Muse and the like) was shut out.
+  - Both refusals are gone. A check solved from a hosting network (for
+    another address, or by ALTCHA; privacy relays still count as people)
+    gives a pass of at most `ALTCHA_FALLBACK_MINUTES` (60), recorded as
+    "from a hosting network (VPN or cloud): a pass for an hour", and at
+    most `HOSTING_PASSES_PER_DAY` (4) such passes per target address a
+    day ("hosting-network passes for this address used up today" after
+    that). Turnstile solved for its own address is unchanged.
+  - What still stops abuse: a pass only lifts the IPDB/redirect (0.23.15,
+    no whitelist), the next attack bans the address and ends the pass,
+    solving again does not lift that ban (`PassRefused`), the human tick
+    for ALTCHA, 3 other addresses an hour per solver, ALTCHA daily limits.
+  - Tests: server `captcha.test.ts` "lets VPN and cloud visitors pass for
+    a short time…" and "lets a VPN solve for its other address…".
+  - **Rollback**: `backup-0.23.22`; agents unchanged (portal only).
 
 - **Release 0.23.22: hostname CAPTCHA "Not Secure" for banned visitors**
   (2026-10-25). After ~10 fake logins through Firefox's VPN the owner was
@@ -437,7 +460,8 @@ project. It holds the rules, the current state and what is still open.
     passed Turnstile every few minutes, solved from DigitalOcean and
     hosting addresses (134.199.132.123, 38.57.2.171, 23.80.89.36). A check
     solved from a hosting network for another address is refused now (both
-    checks; relays excepted).
+    checks; relays excepted). (0.23.23: allowed again, for a 1-hour pass
+    and 4 a day per address; the refusal shut out VPN visitors.)
   - **Why a check was refused**: new column `captcha_events.reason`
     (migration 029): strict setting, too many other addresses, ALTCHA daily
     limit / other network / hosting network, solved from a hosting network
