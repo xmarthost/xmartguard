@@ -44,10 +44,16 @@ func sentKey(ip, host string) string {
 	return ip + "|" + strings.TrimPrefix(NormHost(host), "www.")
 }
 
-// NoteCaptchaSent records a CAPTCHA redirect read from the logs.
-func NoteCaptchaSent(ip, host string, now time.Time) {
+// captchaLogGap: a visitor sent to the CAPTCHA again within it is not
+// logged again (each page it opens is a redirect).
+const captchaLogGap = 30 * time.Minute
+
+// NoteCaptchaSent records a CAPTCHA redirect read from the logs. It reports
+// whether this is the first one for ip and host in captchaLogGap (worth a
+// line in the WAF log).
+func NoteCaptchaSent(ip, host string, now time.Time) (first bool) {
 	if ip == "" || NormHost(host) == "" {
-		return
+		return false
 	}
 	s := &sentToCaptcha
 	s.mu.Lock()
@@ -62,7 +68,10 @@ func NoteCaptchaSent(ip, host string, now time.Time) {
 			}
 		}
 	}
-	s.at[sentKey(ip, host)] = now
+	k := sentKey(ip, host)
+	prev, seen := s.at[k]
+	s.at[k] = now
+	return !seen || now.Sub(prev) > captchaLogGap
 }
 
 // SentToCaptcha reports whether this server sent ip to the CAPTCHA page

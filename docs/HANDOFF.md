@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.19** (see `VERSION`).
+- Current release: **0.23.20** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.19 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.20 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.19: `--branch backup-0.23.18`; see "Rollback" under 0.23.19 below);
+  0.23.20: `--branch backup-0.23.19`; see "Rollback" under 0.23.20 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,27 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.20: failed logins and CAPTCHA redirects findable in the
+  WAF log** (2026-10-25). The owner made 10+ fake logins on
+  websoulhost.com, was sent to the CAPTCHA (the site was in login attack
+  mode), and found none of it in the WAF log. All 28 attempts were
+  recorded (7700401, 45.58.238.97 ×10, 149.143.161.47 ×8, 46.229.243.220
+  ×10, category `login`), but the WAF Logs page opens on "Blocked attacks"
+  (category `waf`) and searched only there; the CAPTCHA redirect itself
+  was never stored (gate rules 7700900-7700919 were skipped).
+  - WAF page: a search now looks through all entries ("All events") with a
+    label per row (blocked attack, failed login, sent to the CAPTCHA, bot);
+    failed logins show "failed login", not "logged"; new view "Sent to the
+    CAPTCHA".
+  - Agent: a gate redirect is recorded once per address and site in 30
+    minutes (`NoteCaptchaSent` returns whether it is the first,
+    `captchaLogGap`), category `captcha`, action "Sent to the CAPTCHA"
+    (the non-browser 403 keeps its action). Not in the blocked counts,
+    never toward a ban. The log handling moved out of the tailLogs closure
+    into `Manager.handleEvent` (state in `tailState`) so it can be tested.
+  - Test: waf `TestCaptchaRedirectLogged`.
+  - **Rollback**: `backup-0.23.19`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.19: the CAPTCHA on the server hostname (no port)**
   (2026-10-25). The owner finds site mode's port 7743 useless (networks,

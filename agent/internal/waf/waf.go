@@ -1053,45 +1053,8 @@ func (m *Manager) tailLogs(ctx context.Context) {
 	// Periodically discover new log files (cPanel writes per-domain logs).
 	rescan := time.NewTicker(2 * time.Minute)
 	defer rescan.Stop()
-	counter, blocks := newCounter(), newCounter()
-	dedupe := newSeenIDs(4096)
-	reasons := newReasons(2048)
-	handle := func(ev Event) {
-		ev = reasons.apply(ev)
-		// Third-party rule sets (OWASP CRS scoring) log a warning for every
-		// matched rule; only the request they block is an attack to record.
-		// (The warnings share the request's unique id, so this comes first.)
-		if !strings.HasPrefix(ev.Action, "Access denied") && (ev.RuleID < 7700000 || ev.RuleID > 7709999) {
-			return
-		}
-		// A suspect sent a pass cookie of the check on the website's address.
-		if slot := CentralPassSlot(ev.RuleID); slot >= 0 {
-			if m.OnPassCookie != nil && !isSelfTest(ev) {
-				m.OnPassCookie(ev.IP, slot)
-			}
-			return
-		}
-		// Visitors sent to the login-page CAPTCHA are not attacks.
-		if isGateRule(ev.RuleID) && !isSelfTest(ev) {
-			NoteCaptchaSent(ev.IP, ev.Host, time.Now())
-		}
-		if isSelfTest(ev) || isGateRule(ev.RuleID) || !dedupe.add(ev.UID) {
-			return
-		}
-		// Summary lines without the request or reason duplicate a full entry.
-		if ev.URI == "" && ev.Msg == "" {
-			return
-		}
-		m.record(ev)
-		if m.OnBotBlocked != nil && (ev.RuleID == IDBadBots || ev.RuleID == IDSEOBots || ev.RuleID == IDAIBots || ev.RuleID == IDCustomBots) {
-			m.OnBotBlocked(ev.IP, ev.Detail)
-		}
-		if ev.Category == "login" {
-			m.maybeBan(ev, counter)
-		} else if strings.HasPrefix(ev.Action, "Access denied") && !noBanRules[ev.RuleID] && !policyOnly(ev) {
-			m.maybeBanBlocked(ev, blocks)
-		}
-	}
+	t := newTailState()
+	handle := func(ev Event) { m.handleEvent(ev, t) }
 	for {
 		select {
 		case <-ctx.Done():
@@ -1164,6 +1127,10 @@ func (m *Manager) maybeBan(e Event, c *counter) {
 		m.Firewall.AutoBan(e.IP, "WAF: "+strconv.Itoa(n)+" failed "+name+" logins", "waf")
 	}
 }
+
+// gateRedirect are the gate rules that send a browser to the CAPTCHA (the
+// others refuse a client that is no browser).
+var gateRedirect = map[int]bool{IDGateNoCookie: true, IDGateBadCookie: true, IDCentralGate: true, IDCentralGateBadCookie: true}
 
 // noBanRules block a request but never count toward a ban: shop scrapers
 // come from residential and mobile addresses real visitors share, and a
@@ -1414,4 +1381,62 @@ func (c *counter) reset(ip string) {
 	c.mu.Lock()
 	delete(c.hits, ip)
 	c.mu.Unlock()
+}
+
+// tailState is what reading the logs remembers between lines.
+type tailState struct {
+	logins, blocks *counter
+	dedupe         *seenIDs
+	reasons        *reasons
+}
+
+func newTailState() *tailState {
+	return &tailState{logins: newCounter(), blocks: newCounter(), dedupe: newSeenIDs(4096), reasons: newReasons(2048)}
+}
+
+// handleEvent records one WAF log entry and bans repeat offenders.
+func (m *Manager) handleEvent(ev Event, t *tailState) {
+	ev = t.reasons.apply(ev)
+	// Third-party rule sets (OWASP CRS scoring) log a warning for every
+	// matched rule; only the request they block is an attack to record.
+	// (The warnings share the request's unique id, so this comes first.)
+	if !strings.HasPrefix(ev.Action, "Access denied") && (ev.RuleID < 7700000 || ev.RuleID > 7709999) {
+		return
+	}
+	// A suspect sent a pass cookie of the check on the website's address.
+	if slot := CentralPassSlot(ev.RuleID); slot >= 0 {
+		if m.OnPassCookie != nil && !isSelfTest(ev) {
+			m.OnPassCookie(ev.IP, slot)
+		}
+		return
+	}
+	// Visitors sent to the login-page CAPTCHA are not attacks: logged
+	// once per address and site in half an hour (category "captcha", so
+	// the WAF log shows the step after failed logins), never counted.
+	if isGateRule(ev.RuleID) && !isSelfTest(ev) {
+		if NoteCaptchaSent(ev.IP, ev.Host, time.Now()) && t.dedupe.add(ev.UID) && ev.URI != "" {
+			ev.Category = "captcha"
+			if gateRedirect[ev.RuleID] {
+				ev.Action = "Sent to the CAPTCHA"
+			}
+			m.record(ev)
+		}
+		return
+	}
+	if isSelfTest(ev) || !t.dedupe.add(ev.UID) {
+		return
+	}
+	// Summary lines without the request or reason duplicate a full entry.
+	if ev.URI == "" && ev.Msg == "" {
+		return
+	}
+	m.record(ev)
+	if m.OnBotBlocked != nil && (ev.RuleID == IDBadBots || ev.RuleID == IDSEOBots || ev.RuleID == IDAIBots || ev.RuleID == IDCustomBots) {
+		m.OnBotBlocked(ev.IP, ev.Detail)
+	}
+	if ev.Category == "login" {
+		m.maybeBan(ev, t.logins)
+	} else if strings.HasPrefix(ev.Action, "Access denied") && !noBanRules[ev.RuleID] && !policyOnly(ev) {
+		m.maybeBanBlocked(ev, t.blocks)
+	}
 }

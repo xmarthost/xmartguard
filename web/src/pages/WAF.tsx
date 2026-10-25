@@ -40,6 +40,14 @@ function toCSV(rows: WafEvent[]): string {
 
 
 /** Shared table for WAF Logs and Bot Attacks. */
+// The kind of an entry, shown when a list mixes them.
+const KIND: Record<string, [string, string]> = {
+  waf: ['blocked attack', 'bg-amber-50 text-amber-800'],
+  login: ['failed login', 'bg-rose-50 text-rose-700'],
+  captcha: ['sent to the CAPTCHA', 'bg-sky-50 text-sky-800'],
+  bot: ['bot', 'bg-slate-100 text-slate-600'],
+};
+
 function WafEventsPage({ title, categories, emptyText }: { title: string; categories: { v: string; l: string }[]; emptyText: string }) {
   const { id } = useParams();
   const host = useServerName(id);
@@ -52,7 +60,12 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
   const [offset, setOffset] = useState(0);
   const [limit, setLimit] = useState(25);
   const status = useAgent<WafStatus>(id, 'waf.status');
-  const ev = useAgent<{ events: WafEvent[]; total: number }>(id, 'waf.events', { category: cat, q: query, limit, offset }, 10_000);
+  // A search looks through every kind of entry the page has (an address's
+  // failed logins are not "Blocked attacks": the owner searched there and
+  // found none).
+  const all = categories.some((c) => c.v === '');
+  const effCat = query && all ? '' : cat;
+  const ev = useAgent<{ events: WafEvent[]; total: number }>(id, 'waf.events', { category: effCat, q: query, limit, offset }, 10_000);
   const { run, busy } = useAction();
   const watch = useApplyWatch();
   const [sel, setSel] = useState<number[]>([]);
@@ -66,7 +79,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
     try {
       const all = await fetchAll<WafEvent>(
         async (since, before_id) =>
-          (await agentCall<{ events: WafEvent[] }>(id!, 'waf.events', { category: cat, q: query, limit: 1000, since, before_id })).events,
+          (await agentCall<{ events: WafEvent[] }>(id!, 'waf.events', { category: effCat, q: query, limit: 1000, since, before_id })).events,
         seconds,
         (n) => setExporting(n.toLocaleString()),
       );
@@ -106,7 +119,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
         <h1 className="h-title">{title}</h1>
         <div className="flex flex-wrap items-center gap-2">
           {categories.length > 1 && (
-            <select className="input w-44" value={cat} onChange={(e) => (setOffset(0), setCat(e.target.value))}>
+            <select className="input w-44" value={effCat} disabled={!!query && all} title={query && all ? 'A search looks through all entries' : undefined} onChange={(e) => (setOffset(0), setCat(e.target.value))}>
               {categories.map((c) => (
                 <option key={c.v} value={c.v}>
                   {c.l}
@@ -220,6 +233,7 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
                       <td className="max-w-md px-2 py-3">
                         <div>
                           <span className="text-slate-500">#{e.rule_id}</span> – {e.msg || 'ModSecurity rule'}
+                          {effCat === '' && KIND[e.category] && <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] ${KIND[e.category][1]}`}>{KIND[e.category][0]}</span>}
                         </div>
                         {e.detail && <div className="mt-0.5 truncate text-xs text-slate-400" title={e.detail}>{e.detail}</div>}
                       </td>
@@ -233,6 +247,10 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
                             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">{e.action.match(/\d{3}/)?.[0] ?? 'denied'}</span>
                             <div className="mt-1 text-slate-500">{e.action}</div>
                           </>
+                        ) : e.category === 'captcha' ? (
+                          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-800">CAPTCHA</span>
+                        ) : e.category === 'login' ? (
+                          <span className="rounded-full bg-rose-100 px-2 py-0.5 text-rose-800">failed login</span>
                         ) : (
                           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">logged</span>
                         )}
@@ -396,6 +414,7 @@ export function WafLogs() {
       categories={[
         { v: 'waf', l: 'Blocked attacks' },
         { v: 'login', l: 'Failed CMS logins' },
+        { v: 'captcha', l: 'Sent to the CAPTCHA' },
         { v: '', l: 'All events' },
       ]}
       emptyText="No web attacks recorded yet"
