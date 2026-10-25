@@ -293,6 +293,26 @@ var wpRootFiles = []string{"activate", "blog-header", "comments-post", "config",
 	"login", "mail", "settings", "signup", "trackback", "app", "atom", "commentsrss2", "feed", "pass", "rdf", "register",
 	"rss", "rss2"}
 
+// LoginPages drops the WordPress admin folder from the protected login
+// URLs: no login happens there (wp-login.php has its own rule), and every
+// POST of a logged-in admin's screens (admin-ajax.php: heartbeat, autosave,
+// carts, forms) answers 200 like a failed login form. Listed as a protected
+// URL (business200) it counted those as failed logins: website owners on
+// iCloud Private Relay were banned after 10 of them and then could not
+// pass the CAPTCHA ("attacked after solving"), and the site's login attack
+// mode was set off by its own admin.
+func LoginPages(urls []string) []string {
+	var out []string
+	for _, u := range urls {
+		l := strings.TrimSuffix(strings.ToLower(u), "/")
+		if l == "/wp-admin" || strings.HasPrefix(l, "/wp-admin/") {
+			continue
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
 // knownLogin are login paths with dedicated rules.
 var knownLogin = map[string]bool{"/wp-login.php": true, "/xmlrpc.php": true, "/administrator/index.php": true, "/admin/index.php": true}
 
@@ -612,6 +632,7 @@ func Render(c settings.WAF, o Options) string {
 	c.WhitelistIPs = filter(c.WhitelistIPs, validAddr)
 	c.WhitelistDomains = filter(c.WhitelistDomains, settings.ValidDomain)
 	c.LoginURLs = filter(c.LoginURLs, settings.ValidLoginURL)
+	c.LoginURLs = LoginPages(c.LoginURLs)
 	var b strings.Builder
 	w := func(format string, a ...any) { fmt.Fprintf(&b, format+"\n", a...) }
 	w("# xPGuard WAF rules. Managed by the xPGuard agent: changes here are overwritten.")

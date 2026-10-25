@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.23** (see `VERSION`).
+- Current release: **0.23.24** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.23 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.24 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.23: `--branch backup-0.23.22`; see "Rollback" under 0.23.23 below);
+  0.23.24: `--branch backup-0.23.23`; see "Rollback" under 0.23.24 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,33 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.24: the WordPress admin folder is no login page; login
+  attack mode from 2 addresses** (2026-10-25).
+  - Owner's test 07:58-08:02 PKT on primescopeusa.com (business200
+    websoulhost) through Firefox's VPN: 10 failed logins from
+    63.245.217.85 (banned at the 10th), then the VPN moved to
+    63.245.217.24 for 5 more; no CAPTCHA. Site attack mode needed 3
+    addresses; the 3-failures suspect list only reaches the WAF at the
+    10-minute refresh (a reload restarts LiteSpeed, so it stays so).
+    `loginAttackAddrs` is 2 now (still 10 failed logins in 15 minutes).
+  - Found on the same server: business200 lists `/wp-admin` as a
+    protected login URL. Rule 7700405 counted every POST of a logged-in
+    admin's screens (`/wp-admin/admin-ajax.php`: heartbeat, autosave,
+    200 answers) as a failed login: primescopeusa.com's own admin on
+    iCloud Private Relay (104.29.x) was banned again and again ("10 failed
+    protected URL logins"), refused by the CAPTCHA ("attacked after solving
+    the CAPTCHA and stays banned") and the site went into login attack mode
+    from its admin's heartbeats; fleet reports put those relay addresses on
+    the IPDB. `waf.LoginPages` drops `/wp-admin` (and below) from the
+    protected URLs in `Render` (counter 7700405, gates, the IPDB POST
+    exemption) and `siteLoginURLs` uses it. wp-login.php keeps its own rule.
+  - Tests: waf `TestWPAdminIsNoLoginPage`, core `TestLoginAttackSites`
+    (two VPN addresses).
+  - Open: relay addresses listed on the IPDB from those false bans age out
+    on their own; whether shared egress (relay, meta) should be kept off
+    the fleet list is for the owner.
+  - **Rollback**: `backup-0.23.23`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.23: VPN and cloud visitors can solve the CAPTCHA**
   (2026-10-25). Through Firefox's built-in VPN the owner reached the

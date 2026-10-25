@@ -172,10 +172,16 @@ func (a *Agent) centralWAF() *waf.Central {
 // window that only counted the last 30 minutes let the guard drop while
 // the attack went on more slowly, and a new burst (16 attempts from 4
 // addresses of Firefox's VPN in 73 seconds) was over before it came back.
+// Two addresses are enough: Firefox's VPN moved to a second address of
+// its own range once the first was banned at 10 attempts (primescopeusa.com:
+// 15 attempts from 2 addresses in 2 minutes, never the CAPTCHA). The
+// threshold of 10 failed logins keeps a visitor who mistypes a few times
+// on two devices out of it, and the result is only the CAPTCHA on the
+// login page.
 const (
 	loginAttackWindow = 15 * 60 // seconds
 	loginAttackFails  = 10
-	loginAttackAddrs  = 3
+	loginAttackAddrs  = 2
 	loginAttackHold   = time.Hour
 )
 
@@ -249,15 +255,15 @@ func siteLoginURLs(urls []string) []string {
 	var out []string
 	for _, u := range urls {
 		l := strings.TrimSuffix(strings.ToLower(u), "/")
-		// Not the WordPress admin folder (business200 lists /wp-admin): its
-		// admin-ajax.php and admin-post.php serve every visitor's carts,
-		// forms and searches, which the CAPTCHA would break for everyone.
-		if skip[l] || l == "/wp-admin" || strings.HasPrefix(l, "/wp-admin/") {
+		if skip[l] {
 			continue
 		}
 		out = append(out, u)
 	}
-	return out
+	// Not the WordPress admin folder (business200 lists /wp-admin): its
+	// admin-ajax.php and admin-post.php serve every visitor's carts, forms
+	// and searches, which the CAPTCHA would break for everyone.
+	return waf.LoginPages(out)
 }
 
 // centralSuspects lists the addresses sent to the CAPTCHA.

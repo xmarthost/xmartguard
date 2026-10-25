@@ -1,6 +1,7 @@
 package waf
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -63,6 +64,45 @@ func TestSiteAttackRule(t *testing.T) {
 	}
 	if !m.CentralSitesAdded([]string{"www.websoulhost.com", "shop.example.com"}) {
 		t.Error("new site not noticed")
+	}
+}
+
+// business200 lists /wp-admin as a protected login URL. Every POST of a
+// logged-in admin's screens there (admin-ajax.php: heartbeat, autosave)
+// answers 200 and was counted as a failed login: site owners on iCloud
+// Private Relay were banned after 10 and could not pass the CAPTCHA again,
+// and their own site went into login attack mode. The admin folder is no
+// login page (wp-login.php is): it is neither counted nor gated.
+func TestWPAdminIsNoLoginPage(t *testing.T) {
+	if got := LoginPages([]string{"/wp-admin", "/WP-Admin/", "/wp-admin/admin-ajax.php", "/members/login.php", "/wp-login.php"}); strings.Join(got, ",") != "/members/login.php,/wp-login.php" {
+		t.Fatalf("login pages: %v", got)
+	}
+	c := settings.Defaults().WAF
+	c.Enabled, c.BruteForce, c.WordPress = true, true, true
+	c.LoginURLs = []string{"/wp-login.php", "/wp-admin", "/members/login.php"}
+	central := &Central{URL: "https://captcha.xpguard.org/v", ServerID: "15d69a72-653a-47b6-90f6-fde737bce061", Suspects: []string{"203.0.113.9"}}
+	out := Render(c, Options{Dir: "/r", Central: central})
+	for _, id := range []int{IDLoginCustom, IDCentralGate, IDCentralNoBrowser} {
+		ch := chainOf(out, id)
+		if len(ch) < 2 {
+			t.Fatalf("rule %d missing:\n%s", id, out)
+		}
+		path := ch[0]
+		if id == IDLoginCustom {
+			path = ch[1]
+		}
+		re := rxOf(t, path)
+		if re.MatchString("/wp-admin/admin-ajax.php") || re.MatchString("/wp-admin/post.php") || re.MatchString("/wp-admin/") {
+			t.Errorf("rule %d counts or gates the admin folder: %s", id, path)
+		}
+		if !re.MatchString("/members/login.php") {
+			t.Errorf("rule %d lost the protected login URL: %s", id, path)
+		}
+	}
+	// Only the admin folder listed: no protected-URL counter at all.
+	c.LoginURLs = []string{"/wp-admin/"}
+	if strings.Contains(Render(c, Options{Dir: "/r"}), fmt.Sprintf("id:%d,", IDLoginCustom)) {
+		t.Error("counter for the admin folder")
 	}
 }
 

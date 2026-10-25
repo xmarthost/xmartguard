@@ -77,6 +77,13 @@ func TestLoginAttackSites(t *testing.T) {
 	if got := a.loginAttackSites(); !slices.Contains(got, "burst.example.com") {
 		t.Fatalf("burst not caught: %v", got)
 	}
+	// Firefox's VPN again (primescopeusa.com): 10 attempts from one address
+	// (banned at the 10th), then 5 from a second one of its range.
+	add("vpn2.example.com", "63.245.217.85", 7700401, 10)
+	add("vpn2.example.com", "63.245.217.24", 7700401, 5)
+	if got := a.loginAttackSites(); !slices.Contains(got, "vpn2.example.com") {
+		t.Fatalf("two VPN addresses not caught: %v", got)
+	}
 	// Gated pages: not xmlrpc.php or the admin scripts of Joomla and OpenCart.
 	if l := siteLoginURLs([]string{"/wp-login.php", "/xmlrpc.php", "/administrator/index.php", "/admin/index.php", "/client-area/login", "/wp-admin", "/wp-admin/"}); strings.Join(l, ",") != "/wp-login.php,/client-area/login" {
 		t.Fatalf("gated pages: %v", l)
