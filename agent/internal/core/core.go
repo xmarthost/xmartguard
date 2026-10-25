@@ -1554,7 +1554,10 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		rules := a.WAF.RuleCatalog()
 		return map[string]any{"status": a.WAF.Status(), "rules": rules, "packages": waf.PackagesOf(rules), "stats": a.WAF.Stats(),
 			"tor": a.Tor.Status(), "ipdb_addresses": len(a.Firewall.IPDBEntries()),
-			"auto_exclusions": a.WAF.AutoExclusions(), "cpanel_off": waf.CPanelModsecOff()}, nil
+			"auto_exclusions": a.WAF.AutoExclusions(), "cpanel_off": waf.CPanelModsecOff(),
+			// Websites whose login page asks every visitor for the CAPTCHA
+			// (a login attack from many addresses, see loginAttackSites).
+			"login_attack_sites": a.loginAttackSites()}, nil
 	}
 	// waf.auto_exclusion accepts, rejects or forgets a learned false positive.
 	h["waf.auto_exclusion"] = func(_ context.Context, p json.RawMessage) (any, error) {

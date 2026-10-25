@@ -73,8 +73,75 @@ func (a *Agent) centralWAF() *waf.Central {
 	}
 	if !all {
 		w.Suspects = a.centralSuspects()
+		w.Sites = a.loginAttackSites()
+		w.SiteLoginURLs = siteLoginURLs(cur.WAF.LoginURLs)
 	}
 	return w
+}
+
+// A website is under a password-guessing attack spread over many addresses
+// when it had loginAttackFails failed logins from loginAttackAddrs
+// addresses or more in loginAttackWindow: botnets and VPNs change address
+// every few attempts, so no address reaches the ban threshold (seen: 22
+// attempts from 6 addresses of one VPN in 3 minutes on websoulhost.com,
+// none banned). Its login page then asks every visitor for the CAPTCHA
+// until the attack has stopped for the window.
+const (
+	loginAttackWindow = 30 * 60 // seconds
+	loginAttackFails  = 15
+	loginAttackAddrs  = 3
+)
+
+// failedLoginRules are the WAF rules that count failed logins on login
+// pages (WordPress, the protected URLs); XML-RPC calls are not pages.
+const failedLoginRules = "7700401, 7700405"
+
+// loginAttackSites lists the websites under such an attack.
+func (a *Agent) loginAttackSites() []string {
+	rows, err := a.DB.Query(`SELECT host, ip FROM waf_events WHERE at >= ? AND rule_id IN (`+failedLoginRules+`)`, store.Now()-loginAttackWindow)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	fails := map[string]int{}
+	addrs := map[string]map[string]bool{}
+	for rows.Next() {
+		var host, ip string
+		if rows.Scan(&host, &ip) != nil {
+			continue
+		}
+		h := strings.TrimPrefix(strings.ToLower(host), "www.")
+		if i := strings.LastIndexByte(h, ':'); i >= 0 {
+			h = h[:i]
+		}
+		fails[h]++
+		if addrs[h] == nil {
+			addrs[h] = map[string]bool{}
+		}
+		addrs[h][ip] = true
+	}
+	var out []string
+	for h, n := range fails {
+		if n >= loginAttackFails && len(addrs[h]) >= loginAttackAddrs {
+			out = append(out, h)
+		}
+	}
+	return waf.AttackSites(out)
+}
+
+// siteLoginURLs are the login pages gated on a website under attack: the
+// WordPress login and the protected URLs, not xmlrpc.php (apps and
+// Jetpack call it; it is no page to show a CAPTCHA on) or the Joomla and
+// OpenCart admin scripts (every admin page of a logged-in admin).
+func siteLoginURLs(urls []string) []string {
+	skip := map[string]bool{"/xmlrpc.php": true, "/administrator/index.php": true, "/admin/index.php": true}
+	var out []string
+	for _, u := range urls {
+		if !skip[strings.ToLower(u)] {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 // centralSuspects lists the addresses sent to the CAPTCHA.
@@ -97,6 +164,18 @@ func (a *Agent) centralSuspects() []string {
 	}
 	if rows, err := a.DB.Query(`SELECT ip FROM waf_events WHERE at >= ? AND action LIKE 'Access denied%'
 		AND NOT (rule_id BETWEEN 7700900 AND 7700919) GROUP BY ip HAVING count(*) >= 3`, now-86400); err == nil {
+		for rows.Next() {
+			var ip string
+			if rows.Scan(&ip) == nil {
+				set[ip] = true
+			}
+		}
+		rows.Close()
+	}
+	// Three failed logins in the last hour: the next visit to a login page
+	// asks for the CAPTCHA (before the ban threshold is reached).
+	if rows, err := a.DB.Query(`SELECT ip FROM waf_events WHERE at >= ? AND rule_id IN (`+failedLoginRules+`)
+		GROUP BY ip HAVING count(*) >= 3`, now-3600); err == nil {
 		for rows.Next() {
 			var ip string
 			if rows.Scan(&ip) == nil {
@@ -383,21 +462,35 @@ func (a *Agent) pullCentralConfig(ctx context.Context) {
 }
 
 // centralLoop keeps the suspect list current: the WAF reloads when it
-// changed (checked every 10 minutes), and the setting is re-fetched.
+// changed (checked every 10 minutes), and the setting is re-fetched. A
+// website coming under a login attack is checked every minute and applied
+// at once: the attack would otherwise run 10 minutes unhindered.
 func (a *Agent) centralLoop(ctx context.Context) {
+	refresh := func(why string) {
+		a.central.applyMu.Lock()
+		if err := a.WAF.ApplyBackground(); err != nil {
+			a.Log.Warn(why+" failed", "err", err)
+		}
+		a.central.applyMu.Unlock()
+	}
+	last := time.Time{}
 	for {
-		a.pullCentralConfig(ctx)
-		if a.WAF.CentralChanged() {
-			a.central.applyMu.Lock()
-			if err := a.WAF.ApplyBackground(); err != nil {
-				a.Log.Warn("CAPTCHA list refresh failed", "err", err)
+		if time.Since(last) >= 10*time.Minute {
+			last = time.Now()
+			a.pullCentralConfig(ctx)
+			if a.WAF.CentralChanged() {
+				refresh("CAPTCHA list refresh")
 			}
-			a.central.applyMu.Unlock()
+		} else if cur := a.Settings.Get(); cur.Captcha.Central && cur.Captcha.CentralURL != "" && !captcha.GateWanted(cur) {
+			if sites := a.loginAttackSites(); a.WAF.CentralSitesAdded(sites) {
+				a.Log.Info("login attack from many addresses: the CAPTCHA guards the website's login page", "sites", sites)
+				refresh("CAPTCHA for a website under a login attack")
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(10 * time.Minute):
+		case <-time.After(time.Minute):
 		}
 	}
 }

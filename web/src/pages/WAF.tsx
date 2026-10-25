@@ -26,6 +26,7 @@ export interface WafEvent {
 interface WafStatus {
   status: { available: boolean; enabled: boolean; web_server: string; error: string; warning: string; rules: number };
   stats: { blocked_24h: number; bots_24h: number; logins_24h: number; total: number };
+  login_attack_sites?: string[];
 }
 
 function toCSV(rows: WafEvent[]): string {
@@ -129,6 +130,16 @@ function WafEventsPage({ title, categories, emptyText }: { title: string; catego
           <DownloadRange onPick={exportRange} busyText={exporting} disabled={!ev.data?.total} />
         </div>
       </div>
+
+      {(status.data?.login_attack_sites?.length ?? 0) > 0 && (
+        <div className="flex items-start gap-3 rounded-lg bg-amber-50 p-4 text-sm text-amber-800">
+          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" />
+          <div>
+            <b>Login attack from many addresses:</b> {status.data!.login_attack_sites!.join(', ')}. Every visitor of these websites' login page solves the CAPTCHA first,
+            whatever its address, until the attack has stopped for 30 minutes (15 or more failed logins from 3 or more addresses in 30 minutes).
+          </div>
+        </div>
+      )}
 
       {st && !st.available && (
         <div className="flex items-start gap-3 rounded-lg bg-amber-50 p-4 text-sm text-amber-800">

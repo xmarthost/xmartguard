@@ -213,7 +213,13 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
       name: 'get_settings',
       description: "A server's xPGuard settings (scanner, firewall, WAF, IPDB, CMS, notifications). Secrets are masked.",
       inputSchema: obj({ server }, ['server']),
-      run: (ctx, a) => agent(ctx, a.server, 'settings.get'),
+      // The settings only: the agent's answer also carries the server's
+      // user list and other page data (meta), which on a big server filled
+      // the whole answer before the settings.
+      run: async (ctx, a) => {
+        const r = (await agent(ctx, a.server, 'settings.get')) as { settings?: unknown; apply?: unknown };
+        return { settings: r.settings ?? r, apply: r.apply };
+      },
     },
     {
       name: 'firewall_events',

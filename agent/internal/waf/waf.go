@@ -366,6 +366,28 @@ func (m *Manager) CentralChanged() bool {
 	return false
 }
 
+// CentralSitesAdded reports whether sites names a website under a login
+// attack that the rules on disk do not hold yet (the agent then reloads at
+// once instead of at the next 10-minute refresh; a site leaving waits for
+// that). The caller passes the sites: building the whole Central (the
+// suspects with the IPDB) every minute would cost too much.
+func (m *Manager) CentralSitesAdded(sites []string) bool {
+	if !m.Settings.Get().WAF.Enabled {
+		return false
+	}
+	cur, _ := os.ReadFile(filepath.Join(m.RulesDir, FileCaptchaSites))
+	have := map[string]bool{}
+	for _, h := range strings.Fields(string(cur)) {
+		have[h] = true
+	}
+	for _, h := range AttackSites(sites) {
+		if !have[h] {
+			return true
+		}
+	}
+	return false
+}
+
 // BlockedListChanged reports whether the address lists on disk (proxy IP
 // check, IPDB POST block, Tor) differ from the current ones (so a reload
 // is due).

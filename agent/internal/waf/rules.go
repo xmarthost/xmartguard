@@ -370,6 +370,10 @@ const (
 	IDMarkSuspect = 7700062
 	// IDSoftStrictIPDB.. +2: soft blocking's bad reputation from the marks.
 	IDSoftStrictIPDB = 7700064
+	// IDMarkSiteAttack marks every visitor of the login page of a website
+	// under a password-guessing attack from many addresses (Central.Sites):
+	// each one must solve the CAPTCHA, whatever its address.
+	IDMarkSiteAttack = 7700067
 )
 
 // ipdbMarkVars are the variables of renderIPDBMarks: the visitor's own
@@ -452,6 +456,14 @@ type Central struct {
 	Site      bool
 	Slots     [][]string
 	HTTPSPort int
+	// Sites are websites under a password-guessing attack spread over many
+	// addresses (one per few attempts, as botnets and VPNs rotate): every
+	// visitor of their WordPress or protected login page gets the CAPTCHA,
+	// not only suspects. Lowercase, without "www." and port.
+	Sites []string
+	// SiteLoginURLs are the login pages gated on those websites (not
+	// xmlrpc.php or admin panels: apps and logged-in admins use them).
+	SiteLoginURLs []string
 }
 
 // Files the central CAPTCHA rule reads.
@@ -461,6 +473,9 @@ const (
 	// CAPTCHA (allowed, protected); read with the IPDB marks.
 	FileCaptchaNotSuspects = "captcha-not-suspects.txt"
 	FileCaptchaPass        = "captcha-pass.txt"
+	// FileCaptchaSites lists Central.Sites (the rule holds them; the file
+	// tells a change, see CentralChanged and CentralSitesAdded).
+	FileCaptchaSites = "captcha-sites.txt"
 )
 
 // CentralFiles are the address lists of the central CAPTCHA rule. With
@@ -500,7 +515,40 @@ func CentralFiles(c *Central, ipdb []string) map[string]string {
 			}
 		}
 	}
-	return map[string]string{FileCaptchaSuspects: list(suspects), FileCaptchaNotSuspects: list(not), FileCaptchaPass: list(c.Pass)}
+	return map[string]string{FileCaptchaSuspects: list(suspects), FileCaptchaNotSuspects: list(not), FileCaptchaPass: list(c.Pass), FileCaptchaSites: siteList(c.Sites)}
+}
+
+// reSiteHost is a website name the site attack rule may hold.
+var reSiteHost = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// MaxAttackSites caps the websites in the site attack rule.
+const MaxAttackSites = 300
+
+// AttackSites are the valid, distinct, sorted names of sites (at most
+// MaxAttackSites).
+func AttackSites(sites []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, h := range sites {
+		h = strings.TrimPrefix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."), "www.")
+		if reSiteHost.MatchString(h) && !seen[h] {
+			seen[h] = true
+			out = append(out, h)
+		}
+	}
+	sort.Strings(out)
+	if len(out) > MaxAttackSites {
+		out = out[:MaxAttackSites]
+	}
+	return out
+}
+
+func siteList(sites []string) string {
+	l := AttackSites(sites)
+	if len(l) == 0 {
+		return "\n"
+	}
+	return strings.Join(l, "\n") + "\n"
 }
 
 var reCentralURL = regexp.MustCompile(`^https://[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9/_-]*$`)
@@ -887,6 +935,16 @@ func Render(c settings.WAF, o Options) string {
 				w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,setvar:tx.xg_suspect=1"`, o.Dir, FileCaptchaNotSuspects)
 			}
 			w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,setvar:tx.xg_suspect=1"`, o.Dir, FileCaptchaSuspects, IDMarkSuspect+1)
+			// A website under a password-guessing attack from many
+			// addresses: every visitor of its login page is a suspect.
+			var gated []string
+			for _, u := range ct.SiteLoginURLs {
+				gated = append(gated, regexp.QuoteMeta(strings.ToLower(u)))
+			}
+			if sites := AttackSites(ct.Sites); len(sites) > 0 && len(gated) > 0 {
+				w(`SecRule SERVER_NAME "@rx ^(?:www\.)?(?:%s)\.?$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, strings.Join(quoteAll(sites), "|"), IDMarkSiteAttack)
+				w(`  SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,setvar:tx.xg_suspect=1"`, strings.Join(gated, "|"))
+			}
 		}
 		gateRule := func(id int, cond, action, msg, browser string) {
 			w(`SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,%s,log,msg:'%s',tag:'xpguard/captcha',chain"`,

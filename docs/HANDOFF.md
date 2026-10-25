@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.16** (see `VERSION`).
+- Current release: **0.23.17** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.16 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.17 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.16: `--branch backup-0.23.15`; see "Rollback" under 0.23.16 below);
+  0.23.17: `--branch backup-0.23.16`; see "Rollback" under 0.23.17 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,45 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.17: login attacks from many addresses** (2026-10-25).
+  The owner tried 10+ fake WordPress logins on websoulhost.com
+  (business200) from Browsec VPN and was never blocked. The logs: 22
+  failed logins in 3 minutes, all counted (7700401), but from 6 addresses
+  (the VPN changed address every 1-7 attempts: 45.58.242.100,
+  45.58.242.10, 45.58.238.93, 45.58.238.19, 149.143.161.99,
+  149.143.161.22). The only defence was per address: the WAF bans after
+  `waf.bf_threshold` (10) failed logins in `bf_window_minutes` (10), and
+  failed logins (action "Logged", rule count) never made an address a
+  CAPTCHA suspect (suspects needed 3 refused requests). Botnets rotate the
+  same way: business200 had 275 failed logins in 17 minutes, nearly all
+  from different addresses.
+  - **Site attack mode**: a website with 15+ failed logins (7700401
+    WordPress, 7700405 protected URLs; not XML-RPC) from 3+ addresses in
+    30 minutes (`loginAttackSites`, core/central.go) gets `Central.Sites`:
+    rule 7700067 (`SERVER_NAME` of the site + its login page) marks every
+    visitor a suspect, so the central gate sends each browser to the
+    CAPTCHA and refuses scripts (403), whatever the address. Gated pages
+    (`siteLoginURLs`): the WordPress login and protected URLs, not
+    xmlrpc.php or the Joomla/OpenCart admin scripts. Not with the CAPTCHA
+    for everyone (`All`). It ends 30 minutes after the attack stops.
+    `centralLoop` checks every minute and reloads at once when a site comes
+    under attack (`CentralSitesAdded`, file `captcha-sites.txt`); the full
+    suspects refresh stays every 10 minutes. The WAF page shows the sites
+    (waf.status `login_attack_sites`).
+  - **Suspects**: an address with 3 failed logins in the last hour gets the
+    CAPTCHA on its next login page visit (refreshed every 10 minutes); the
+    ban at 10 stays.
+  - Connector `get_settings` returned the agent's whole answer, whose user
+    list filled the 60,000-character limit before the settings on big
+    servers: it now returns only `settings` and `apply`.
+  - Tests: waf `TestSiteAttackRule`, `TestSiteAttackOnApache` (real Apache:
+    the attacked site's login page redirects a non-suspect browser and
+    refuses a script, its other pages, other sites and a look-alike name do
+    not; a pass and the attack's end open it); core `TestLoginAttackSites`
+    (the owner's VPN pattern, a single address, a few people mistyping,
+    www/port names, XML-RPC and old events, the 3-failure suspects).
+  - **Rollback**: `backup-0.23.16`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.16: the CAPTCHA at once when an address is listed
   during a visit** (2026-10-25). The owner tested from a Browsec VPN
