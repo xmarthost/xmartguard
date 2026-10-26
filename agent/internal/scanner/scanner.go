@@ -513,6 +513,12 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	if shapeOK {
 		return nil, ErrTrusted
 	}
+	// A PHP file planted among WordPress core's styles and images.
+	if bigPHPExts[ext] {
+		if d := plantedInCore(path); d != nil {
+			return final(d)
+		}
+	}
 	// A program, whatever it is called (also disguised as an image).
 	if IsELF(content) {
 		return binaryCheck(path, content)

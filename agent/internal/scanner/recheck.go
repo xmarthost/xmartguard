@@ -96,6 +96,12 @@ func (s *Scanner) Recheck(f RecheckFilter, keep func(sha string) bool) (RecheckR
 			rep.Still++
 			continue
 		}
+		// Judged by where the file was (its copies may be quarantined by
+		// now), not by its content: stays.
+		if strings.HasPrefix(it.Signature, "PHP.Planted.") {
+			rep.Still++
+			continue
+		}
 		if d := s.checkContent(it.Path, ext, content); d != nil {
 			rep.Still++
 			continue

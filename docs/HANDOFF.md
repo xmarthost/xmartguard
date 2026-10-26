@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.26** (see `VERSION`).
+- Current release: **0.23.27** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.26 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.27 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.26: `--branch backup-0.23.25`; see "Rollback" under 0.23.26 below);
+  0.23.27: `--branch backup-0.23.26`; see "Rollback" under 0.23.27 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,27 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.23.27: PHP planted in WordPress core folders** (2026-10-26).
+  `/home/nutrishoppk/Old-files hmy` (business200 websoulhost) had
+  `worksec.php` in 42 core folders (CMS core check: "unknown"); a path
+  scan (id 180, 39,199 files) found nothing: each copy's content passed the
+  content rules. Content not looked at (no finding to read it from).
+  - `scanner/planted.go` `plantedInCore` (in `contentVerdict`, after the
+    known-good and hash checks, PHP only): WordPress keeps no PHP in
+    `wp-admin/css`, `wp-admin/images`, `wp-includes/css`,
+    `wp-includes/images` (`coreAssetDirs`; not `wp-includes/fonts`, which
+    has PHP since 6.5). A name there with copies in 3 or more other core
+    folders (`coreDirs`) is `PHP.Planted.WordPressCoreSpray` (virus), every
+    copy in every core folder; one there alone is
+    `PHP.Planted.WordPressCoreAssets` (suspicious, the AI looks). Only a
+    WordPress site (wp-includes/version.php). Files elsewhere in core cost 4
+    lookups. Droppers found are remembered 24 h (`sprayed`) so the last
+    copies stay caught while the others are quarantined. Recheck keeps
+    `PHP.Planted.*` (judged by place, not content).
+  - Test: `TestFleetPlantedInWordPressCore` (fleetfp_test.go, inert fixture).
+  - After the agent update: a path scan of that folder.
+  - **Rollback**: `backup-0.23.26`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
+
 - **Release 0.23.26: automatic updates of vulnerable WordPress that work;
   bulk updates** (2026-10-26).
   - Checked on business200 websoulhost (auto update on, CVSS above 6,
@@ -116,7 +137,7 @@ project. It holds the rules, the current state and what is still open.
     risk and account filters, checkboxes, the bulk bar with progress.
   - Seen on the way: `/home/nutrishoppk/Old-files hmy` has `worksec.php` in
     42 WordPress core folders (core check "unknown"), with no scanner
-    finding. Not looked into yet (owner informed).
+    finding. See 0.23.27.
   - Tests: cms `TestAutoUpdateDue`, `TestVulnPass`, `TestBulkUpdate`.
   - **Rollback**: `backup-0.23.25`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 

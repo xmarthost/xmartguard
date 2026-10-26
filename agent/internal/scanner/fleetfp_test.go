@@ -611,3 +611,64 @@ func TestFleetMassMailKit(t *testing.T) {
 		}
 	}
 }
+
+// business200 (2026-10-26): one name (worksec.php) copied into 42
+// WordPress core folders of a site, with no finding: each copy's content
+// passed the content rules. WordPress keeps no PHP in its css and images
+// folders; a copy there with copies in other core folders is a dropper,
+// one alone is suspicious. Core's own PHP (wp-includes/fonts since 6.5,
+// wp-admin/includes) and other folders called so stay alone.
+func TestFleetPlantedInWordPressCore(t *testing.T) {
+	s := newScanner(t)
+	root := filepath.Join(t.TempDir(), "u", "public_html")
+	put := func(rel, body string) {
+		os.MkdirAll(filepath.Join(root, filepath.Dir(rel)), 0o755)
+		os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644)
+	}
+	put("wp-includes/version.php", "<?php $wp_version = '7.1.3';")
+	inert := "<?php /* inert test fixture */ echo 'x';"
+	for _, d := range []string{"wp-admin/css", "wp-admin/images", "wp-includes/css", "wp-includes/ID3", "wp-includes/IXR", "wp-includes/Text"} {
+		put(d+"/worksec.php", inert)
+	}
+	put("wp-includes/images/lonely.php", inert)
+	put("wp-includes/fonts/class-wp-font-face.php", "<?php class WP_Font_Face {}")
+	put("wp-admin/includes/custom-helper.php", inert)
+	check := func(rel string) *Detection {
+		return s.checkContent(filepath.Join(root, rel), ".php", []byte(inert))
+	}
+	for _, rel := range []string{"wp-admin/css/worksec.php", "wp-includes/css/worksec.php", "wp-admin/images/worksec.php"} {
+		if d := check(rel); d == nil || d.Signature != "PHP.Planted.WordPressCoreSpray" || d.Category != CatVirus {
+			t.Errorf("%s: %+v", rel, d)
+		}
+	}
+	if d := check("wp-includes/images/lonely.php"); d == nil || d.Category != CatSuspicious {
+		t.Errorf("one PHP file in core images: %+v", d)
+	}
+	// Every copy, also outside the asset folders, and also the last ones
+	// once the others are quarantined.
+	if d := check("wp-includes/ID3/worksec.php"); d == nil || d.Signature != "PHP.Planted.WordPressCoreSpray" {
+		t.Errorf("copy outside the asset folders: %+v", d)
+	}
+	for _, d := range []string{"wp-admin/css", "wp-admin/images", "wp-includes/css", "wp-includes/ID3", "wp-includes/IXR"} {
+		os.Remove(filepath.Join(root, d, "worksec.php"))
+	}
+	if d := check("wp-includes/Text/worksec.php"); d == nil || d.Signature != "PHP.Planted.WordPressCoreSpray" {
+		t.Errorf("last copy: %+v", d)
+	}
+	// Core's own names in several folders (a release newer than the known
+	// files): not a spray.
+	for _, d := range []string{"wp-admin", "wp-admin/network", "wp-admin/user"} {
+		put(d+"/about.php", inert)
+	}
+	for _, rel := range []string{"wp-includes/fonts/class-wp-font-face.php", "wp-admin/includes/custom-helper.php", "wp-admin/network/about.php"} {
+		if d := check(rel); d != nil && strings.HasPrefix(d.Signature, "PHP.Planted.") {
+			t.Errorf("%s: %s", rel, d.Signature)
+		}
+	}
+	// Not a WordPress site: a folder that is only called wp-admin.
+	other := filepath.Join(t.TempDir(), "u", "public_html", "wp-admin", "css")
+	os.MkdirAll(other, 0o755)
+	if d := s.checkContent(filepath.Join(other, "theme.php"), ".php", []byte(inert)); d != nil {
+		t.Errorf("not WordPress: %s", d.Signature)
+	}
+}
