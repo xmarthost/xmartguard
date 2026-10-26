@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.28** (see `VERSION`).
+- Current release: **0.23.29** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.28 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.29 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.28: `--branch backup-0.23.27`; see "Rollback" under 0.23.28 below);
+  0.23.29: `--branch backup-0.23.28`; see "Rollback" under 0.23.29 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,32 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.29: wp-cli without the site's plugins; CMS checks at night,
+  slowly** (2026-10-26).
+  - brandaville.com (business100, brandavi): every plugin update from CMS
+    Threat Alerts failed with the site's own fatal error (Elementor Pro
+    2.7.2 with Elementor 4.1.4; the site shows "There has been a critical
+    error"; Elementor had no known vulnerability, so xPGuard did not
+    update it). `wpArgv` (cms/cms.go) runs wp-cli with `--skip-plugins
+    --skip-themes` for every command (updates, core download,
+    deactivation), so a broken site can still be updated.
+  - Owner's request: CMS checks only at night, very slow. `nightHour` is
+    2:00-6:00 (scan schedule time zone, Asia/Karachi on the fleet).
+    "Scan now" (agent `cms.scan`) queues a full scan for the next night
+    (`RequestScan`, kv `cms_scan_requested`; button "Scan tonight",
+    `cms.status.scan_requested`). The daily `VulnPass` runs in the night
+    window too. Between sites `slowDown`: wait for load per CPU < 0.7 (up
+    to 2 min), then 2 s. A single update from the portal refreshes that
+    site only (`RefreshSite`), no longer a full scan. Bulk updates and
+    single updates still run when asked.
+  - Seen: brandaville.com has 4 foreign PHP files in core
+    (`wp-admin/includes/class-wp-page-thXuMD.php`, `.../medias.php`,
+    `wp-includes/customize/class-wp-customize-filters-setting.php`,
+    `wp-includes/wp-class.php`) without a scanner finding; content not
+    seen. Owner informed.
+  - Tests: cms `TestWPCLISkipsSiteCode`, `TestCMSScanAtNight`.
+  - **Rollback**: `backup-0.23.28`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.28: Joomla (and other) admin saves on LiteSpeed**
   (2026-10-26). joomlashare.ir (business600, LiteSpeed, account joomlash):

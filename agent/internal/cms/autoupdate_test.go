@@ -129,6 +129,7 @@ func autoUpdateManager(t *testing.T, patch string) (*Manager, *fakeWPRun) {
 	v.WPAPI = api.URL
 	vd := NewVulnDB(db)
 	vd.Base = api.URL
+	sitePause, idleLoad = 0, 1e9
 	f := &fakeWPRun{}
 	return &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Versions: v, Vulns: vd, RunWPCLI: f.run}, f
 }
@@ -239,5 +240,48 @@ func TestBulkUpdate(t *testing.T) {
 	m.mu.Unlock()
 	if _, err := m.BulkUpdate(BulkRequest{Mode: "vulnerable"}); err == nil || !strings.Contains(err.Error(), "scan is running") {
 		t.Fatalf("during a scan: %v", err)
+	}
+}
+
+// brandaville.com: a site broken by one of its plugins failed every
+// wp-cli update with that plugin's fatal error. wp-cli runs without the
+// site's plugins and theme.
+func TestWPCLISkipsSiteCode(t *testing.T) {
+	got := strings.Join(wpArgv("brandavi", []string{"/usr/local/bin/wp"}, "/home2/brandavi/public_html", []string{"plugin", "update", "elementor"}), " ")
+	if got != "-u brandavi -- /usr/local/bin/wp plugin update elementor --path=/home2/brandavi/public_html --no-color --skip-plugins --skip-themes" {
+		t.Fatalf("argv: %s", got)
+	}
+}
+
+// Every CMS check runs at night from 2:00 (the scan schedule's time zone);
+// "Scan now" queues the full scan for then.
+func TestCMSScanAtNight(t *testing.T) {
+	pkt := time.FixedZone("PKT", 5*3600)
+	for h, want := range map[int]bool{1: false, 2: true, 5: true, 6: false, 14: false} {
+		if nightHour(time.Date(2026, 10, 26, h, 30, 0, 0, pkt)) != want {
+			t.Errorf("%d:30 night %v", h, !want)
+		}
+	}
+	day := time.Date(2026, 10, 26, 14, 0, 0, 0, pkt)
+	if n := nextNight(day); !n.Equal(time.Date(2026, 10, 27, 2, 0, 0, 0, pkt)) {
+		t.Fatalf("from 14:00: %v", n)
+	}
+	if n := nextNight(time.Date(2026, 10, 26, 0, 30, 0, 0, pkt)); !n.Equal(time.Date(2026, 10, 26, 2, 0, 0, 0, pkt)) {
+		t.Fatalf("from 0:30: %v", n)
+	}
+	if n := nextNight(time.Date(2026, 10, 26, 3, 0, 0, 0, pkt)); n.Hour() != 3 {
+		t.Fatalf("inside the window: %v", n)
+	}
+	m, _ := autoUpdateManager(t, `{}`)
+	m.Zone = func() *time.Location { return pkt }
+	if m.ScanRequested() {
+		t.Fatal("requested before asking")
+	}
+	m.RequestScan()
+	if !m.ScanRequested() {
+		t.Fatal("Scan now not queued")
+	}
+	if m.Status().Running {
+		t.Fatal("Scan now started a scan in the day")
 	}
 }

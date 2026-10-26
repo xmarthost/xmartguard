@@ -1295,7 +1295,7 @@ function CMSSection({ s, meta, admin, busy, onSave, repair, onCore }: { s: CMSS;
         </div>
       </div>
       <ListEditor title="Blacklisted WordPress plugins" desc="Automatically deactivate these plugins (slug) during CMS checks" items={s.blacklist_plugins ?? []} disabled={dis} placeholder="plugin-slug" onChange={(v) => onSave({ blacklist_plugins: v.map((x) => x.toLowerCase()) })} />
-      <SettingRow title="Scan interval" desc="How often all websites are re-checked. Scheduled checks run at night (3:00–6:00, scan schedule time zone) at the lowest priority, and a database that did not change since the last check is not searched again. Scan now runs at once.">
+      <SettingRow title="Scan interval" desc="How often all websites are re-checked. Every check runs at night (from 2:00, scan schedule time zone), slowly and at the lowest priority, with a pause between sites; a database that did not change since the last check is not searched again. The daily vulnerability check and its automatic updates run at night too. Scan tonight on CMS Threat Alerts queues a full scan for the next night.">
         <select className="input w-40" value={s.interval_hours} disabled={dis || !s.enabled} onChange={(e) => onSave({ interval_hours: Number(e.target.value) })}>
           {[24, 48, 72, 168].map((h) => (
             <option key={h} value={h}>

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,6 +121,32 @@ func (m *Manager) Start() error {
 	return nil
 }
 
+// kvScanRequested: "Scan now" asked for a full scan, run the next night.
+const kvScanRequested = "cms_scan_requested"
+
+// RequestScan queues a full scan for the night (CMS Threat Alerts » Scan
+// now): checking hundreds of sites' core files and databases in the day
+// slowed the websites. It returns when the scan starts.
+func (m *Manager) RequestScan() time.Time {
+	_ = store.SetKV(m.DB, kvScanRequested, strconv.FormatInt(time.Now().Unix(), 10))
+	return nextNight(time.Now().In(m.zone()))
+}
+
+// ScanRequested reports a full scan queued for the night.
+func (m *Manager) ScanRequested() bool { return store.GetKV(m.DB, kvScanRequested) != "" }
+
+// nextNight is when the night window starts next (now, inside it).
+func nextNight(t time.Time) time.Time {
+	if nightHour(t) {
+		return t
+	}
+	n := time.Date(t.Year(), t.Month(), t.Day(), 2, 0, 0, 0, t.Location())
+	if !n.After(t) {
+		n = n.AddDate(0, 0, 1)
+	}
+	return n
+}
+
 // kvDBRules remembers the database rules version of the last full scan.
 const kvDBRules = "db_rules_version"
 
@@ -137,15 +164,19 @@ func (m *Manager) Run(ctx context.Context) {
 		last, _ := strconv.ParseInt(store.GetKV(m.DB, "cms_last_scan"), 10, 64)
 		// New database rules: scan now, so earlier false detections go.
 		newRules := cfg.DBScan && store.GetKV(m.DB, kvDBRules) != DBRulesVersion
-		// Scheduled checks run at night only (3:00-6:00 in the scan schedule's
-		// time zone), at most once per interval (every 3 days by default);
-		// "Scan now" in the portal runs at once.
-		due := newRules || time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600-3*3600
-		if cfg.Enabled && due && nightHour(time.Now().In(m.zone())) {
-			_ = m.Start()
-		} else if pass, _ := strconv.ParseInt(store.GetKV(m.DB, kvVulnPass), 10, 64); cfg.Enabled && cfg.Vulns && m.Vulns != nil &&
+		// Every check runs at night (2:00-6:00 in the scan schedule's time
+		// zone), slowly: the full scan at most once per interval (every 3
+		// days by default) or when "Scan now" asked for one, the daily
+		// vulnerability check on the other nights.
+		requested := store.GetKV(m.DB, kvScanRequested) != ""
+		due := newRules || requested || time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600-3*3600
+		night := nightHour(time.Now().In(m.zone()))
+		if cfg.Enabled && due && night {
+			if m.Start() == nil {
+				_ = store.SetKV(m.DB, kvScanRequested, "")
+			}
+		} else if pass, _ := strconv.ParseInt(store.GetKV(m.DB, kvVulnPass), 10, 64); cfg.Enabled && cfg.Vulns && m.Vulns != nil && night &&
 			time.Now().Unix()-max(pass, last) >= vulnPassEvery {
-			// Between the full scans: the daily vulnerability check.
 			prio.LowThread()
 			if err := m.VulnPass(ctx); err != nil && ctx.Err() == nil {
 				m.Log.Info("CMS vulnerability check skipped", "err", err)
@@ -159,8 +190,25 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-// nightHour: scheduled checks start between 3:00 and 6:00.
-func nightHour(t time.Time) bool { return t.Hour() >= 3 && t.Hour() < 6 }
+// sitePause is the rest between two sites of a scheduled check, and
+// idleLoad the load (per CPU) it waits to drop below, up to idleWait.
+var (
+	sitePause = 2 * time.Second
+	idleLoad  = 0.7
+	idleWait  = 2 * time.Minute
+)
+
+func slowDown(ctx context.Context) {
+	prio.WaitIdle(ctx, idleLoad, idleWait)
+	select {
+	case <-ctx.Done():
+	case <-time.After(sitePause):
+	}
+}
+
+// nightHour: scheduled checks start between 2:00 and 6:00 (the owner's
+// choice: 2:00 PKT, when the websites are quietest).
+func nightHour(t time.Time) bool { return t.Hour() >= 2 && t.Hour() < 6 }
 
 // zone is the time zone of the night window (Settings » Virus Scanner »
 // schedule time zone; the server's own zone when unset).
@@ -203,8 +251,9 @@ func (m *Manager) scan(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// A busy server (websites, MySQL) comes first.
-		prio.WaitIdle(ctx, 1.0, time.Minute)
+		// A busy server (websites, MySQL) comes first, and every site is
+		// followed by a pause: a slow scan the websites do not feel.
+		slowDown(ctx)
 		seen[in.Path] = true
 		s := Site{Type: in.Type, Path: in.Path, User: in.User, Domain: in.Domain, Version: Version(in),
 			Plugins: []Component{}, Themes: []Component{}, MUPlugins: []string{}, Core: CoreReport{Modified: []string{}, Unknown: []string{}}}
@@ -321,6 +370,14 @@ func (m *Manager) refresh(ctx context.Context, s Site) {
 	m.save(s)
 }
 
+// RefreshSite re-reads one WordPress site after an update from the portal
+// (not a full scan of every site, as before).
+func (m *Manager) RefreshSite(ctx context.Context, path string) {
+	if sites, _, err := m.Sites(SiteFilter{Type: WordPress, Path: path, Limit: 1}); err == nil && len(sites) == 1 {
+		m.refresh(ctx, sites[0])
+	}
+}
+
 // VulnPass runs refresh for every stored WordPress site.
 func (m *Manager) VulnPass(ctx context.Context) error {
 	m.mu.Lock()
@@ -343,7 +400,7 @@ func (m *Manager) VulnPass(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		prio.WaitIdle(ctx, 1.0, time.Minute)
+		slowDown(ctx)
 		if _, err := os.Stat(filepath.Join(s.Path, "wp-includes", "version.php")); err != nil {
 			continue // gone: the next full scan forgets it
 		}
@@ -458,6 +515,8 @@ func (m *Manager) save(s Site) {
 type SiteFilter struct {
 	// User limits the list to one hosting account (panel users).
 	User string `json:"-"`
+	// Path is one site (the agent's own use).
+	Path string `json:"-"`
 	// Account is the portal's filter by hosting account.
 	Account string `json:"account"`
 	Type    string `json:"type"`
@@ -501,6 +560,9 @@ func (m *Manager) Sites(f SiteFilter) ([]Site, int, error) {
 	}
 	if f.Risk != "" {
 		where, args = append(where, "risk = ?"), append(args, f.Risk)
+	}
+	if f.Path != "" {
+		where, args = append(where, "path = ?"), append(args, f.Path)
 	}
 	if f.Query != "" {
 		where, args = append(where, "(domain LIKE ? OR path LIKE ? OR user LIKE ?)"), append(args, "%"+f.Query+"%", "%"+f.Query+"%", "%"+f.Query+"%")
@@ -676,6 +738,16 @@ func wpArgAllowed(a string) bool {
 	return ok && reWPRelease.MatchString(v)
 }
 
+// wpArgv is runuser's command line for wp-cli as the site owner. Without
+// loading the site's plugins and theme: a site broken by one of them
+// (brandaville.com: Elementor Pro 2.7 with Elementor 4, "There has been a
+// critical error") failed every update with that fatal error, the update
+// that would mend it included. Updates and deactivations need neither.
+func wpArgv(owner string, wp []string, path string, args []string) []string {
+	cmd := append(append(slices.Clone(wp), args...), "--path="+path, "--no-color", "--skip-plugins", "--skip-themes")
+	return append([]string{"-u", owner, "--"}, cmd...)
+}
+
 // WPCLI runs a wp-cli command as the site owner.
 func (m *Manager) WPCLI(ctx context.Context, path string, args ...string) (string, error) {
 	var owner string
@@ -691,7 +763,7 @@ func (m *Manager) WPCLI(ctx context.Context, path string, args ...string) (strin
 	if err != nil {
 		return "", err
 	}
-	argv := append([]string{"-u", owner, "--"}, append(wp, append(args, "--path="+path, "--no-color")...)...)
+	argv := wpArgv(owner, wp, path, args)
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(cctx, "runuser", argv...).CombinedOutput()

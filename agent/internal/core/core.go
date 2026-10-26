@@ -1630,7 +1630,7 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 
 	// ---- CMS + database scanner
 	h["cms.status"] = func(context.Context, json.RawMessage) (any, error) {
-		return map[string]any{"status": a.CMS.Status(), "counts": a.CMS.Counts(), "bulk": a.CMS.Bulk()}, nil
+		return map[string]any{"status": a.CMS.Status(), "counts": a.CMS.Counts(), "bulk": a.CMS.Bulk(), "scan_requested": a.CMS.ScanRequested()}, nil
 	}
 	// cms.bulk_update: CMS Threat Alerts » update the selected sites, one
 	// account's or all (in the background; progress in cms.status).
@@ -1654,7 +1654,9 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		if !a.Settings.Get().CMS.Enabled {
 			return nil, errors.New("CMS monitoring is disabled in settings")
 		}
-		return map[string]any{"ok": true}, a.CMS.Start()
+		// Queued for the night (2:00, slowly), not run in the day.
+		at := a.CMS.RequestScan()
+		return map[string]any{"ok": true, "queued": true, "at": at.Unix()}, nil
 	}
 	h["cms.update"] = func(ctx context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
@@ -1667,7 +1669,8 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		}
 		out, err := a.CMS.Update(ctx, in.Path, in.What, in.Slug)
 		if err == nil {
-			_ = a.CMS.Start() // refresh the inventory
+			// The list shows the site as the update left it.
+			go a.CMS.RefreshSite(context.Background(), in.Path)
 		}
 		return map[string]any{"output": out}, err
 	}

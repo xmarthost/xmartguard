@@ -79,6 +79,7 @@ interface BulkStatus {
 interface CmsStatus {
   status: { running: boolean; last_scan: number; error: string };
   bulk?: BulkStatus;
+  scan_requested?: boolean;
   counts: {
     with_issues: number;
     wordpress: number;
@@ -238,7 +239,9 @@ export function CMSThreats() {
           <h1 className="h-title">CMS Threat Alerts</h1>
           <p className="text-sm text-slate-500">
             {running
-              ? "Scanning websites…"
+              ? bulk?.running
+                ? "Updating websites…"
+                : "Scanning websites (slowly)…"
               : status.data!.status.last_scan
                 ? `Last scan ${fmtTime(status.data!.status.last_scan)}`
                 : "Not scanned yet"}
@@ -309,16 +312,18 @@ export function CMSThreats() {
             <button
               className="btn-primary"
               disabled={busy || running}
+              title="Every website is checked tonight from 2:00 (scan schedule time zone), slowly, so the websites do not feel it"
               onClick={() =>
-                run(() => agentCall(id!, "cms.scan"), "CMS scan started").then(
-                  () => status.reload(),
-                )
+                run(
+                  () => agentCall<{ at: number }>(id!, "cms.scan"),
+                  "Full scan queued for tonight (2:00)",
+                ).then(() => status.reload())
               }
             >
               <RefreshCw
                 className={`h-4 w-4 ${running ? "animate-spin" : ""}`}
               />{" "}
-              Scan now
+              {status.data?.scan_requested ? "Queued for tonight" : "Scan tonight"}
             </button>
           )}
         </div>
