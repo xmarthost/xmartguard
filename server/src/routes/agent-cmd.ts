@@ -96,6 +96,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'waf.auto_exclusion': { role: 'admin', mutates: true, timeoutMs: 180_000 },
   'waf.sync': { role: 'admin', mutates: true, timeoutMs: 300_000 },
   'cms.update': { role: 'admin', mutates: true, timeoutMs: 660_000 },
+  'cms.bulk_update': { role: 'admin', mutates: true },
   'osm.release': { role: 'admin', mutates: true, timeoutMs: 120_000 },
   'suspend.lift': { role: 'admin', mutates: true, timeoutMs: 360_000 },
 };

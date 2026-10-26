@@ -44,6 +44,7 @@ type Manager struct {
 	RunWPCLI func(ctx context.Context, path string, args ...string) (string, error)
 
 	mu      sync.Mutex
+	bulk    BulkStatus
 	running bool
 	last    time.Time
 	lastErr string
@@ -142,6 +143,13 @@ func (m *Manager) Run(ctx context.Context) {
 		due := newRules || time.Now().Unix()-last >= int64(cfg.IntervalHours)*3600-3*3600
 		if cfg.Enabled && due && nightHour(time.Now().In(m.zone())) {
 			_ = m.Start()
+		} else if pass, _ := strconv.ParseInt(store.GetKV(m.DB, kvVulnPass), 10, 64); cfg.Enabled && cfg.Vulns && m.Vulns != nil &&
+			time.Now().Unix()-max(pass, last) >= vulnPassEvery {
+			// Between the full scans: the daily vulnerability check.
+			prio.LowThread()
+			if err := m.VulnPass(ctx); err != nil && ctx.Err() == nil {
+				m.Log.Info("CMS vulnerability check skipped", "err", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -202,28 +210,7 @@ func (m *Manager) scan(ctx context.Context) error {
 			Plugins: []Component{}, Themes: []Component{}, MUPlugins: []string{}, Core: CoreReport{Modified: []string{}, Unknown: []string{}}}
 		switch in.Type {
 		case WordPress:
-			s.Latest = m.Versions.Latest(ctx, "wp-core", "")
-			s.Plugins = Plugins(in.Path)
-			s.Themes = Themes(in.Path)
-			if mu := MUPlugins(in.Path); mu != nil {
-				s.MUPlugins = mu
-			}
-			for i := range s.Plugins {
-				c := &s.Plugins[i]
-				c.Latest = m.Versions.Latest(ctx, "wp-plugin", c.Slug)
-				if c.Latest != "" && c.Version != "" && CompareVersions(c.Version, c.Latest) < 0 {
-					c.Outdated = true
-					s.OutdatedPlugins++
-				}
-			}
-			for i := range s.Themes {
-				c := &s.Themes[i]
-				c.Latest = m.Versions.Latest(ctx, "wp-theme", c.Slug)
-				if c.Latest != "" && c.Version != "" && CompareVersions(c.Version, c.Latest) < 0 {
-					c.Outdated = true
-					s.OutdatedThemes++
-				}
-			}
+			m.inventory(ctx, &s)
 			if cfg.CoreCheck && s.Version != "" {
 				if sums, err := m.Versions.Checksums(ctx, cacheDir, s.Version, Locale(in.Path)); err == nil {
 					s.Core = VerifyCore(in.Path, sums)
@@ -273,6 +260,101 @@ func (m *Manager) scan(ctx context.Context) error {
 	}
 	return nil
 }
+
+// inventory reads a WordPress site's plugins and themes and the newest
+// releases of them and of WordPress.
+func (m *Manager) inventory(ctx context.Context, s *Site) {
+	s.Latest = m.Versions.Latest(ctx, "wp-core", "")
+	s.Plugins = Plugins(s.Path)
+	s.Themes = Themes(s.Path)
+	s.MUPlugins = []string{}
+	if mu := MUPlugins(s.Path); mu != nil {
+		s.MUPlugins = mu
+	}
+	s.OutdatedPlugins, s.OutdatedThemes = 0, 0
+	for i := range s.Plugins {
+		c := &s.Plugins[i]
+		c.Latest = m.Versions.Latest(ctx, "wp-plugin", c.Slug)
+		if c.Latest != "" && c.Version != "" && CompareVersions(c.Version, c.Latest) < 0 {
+			c.Outdated = true
+			s.OutdatedPlugins++
+		}
+	}
+	for i := range s.Themes {
+		c := &s.Themes[i]
+		c.Latest = m.Versions.Latest(ctx, "wp-theme", c.Slug)
+		if c.Latest != "" && c.Version != "" && CompareVersions(c.Version, c.Latest) < 0 {
+			c.Outdated = true
+			s.OutdatedThemes++
+		}
+	}
+}
+
+// vulnPassEvery: the known vulnerabilities of every WordPress site are
+// checked (and fixed, with automatic updates on) this often, between the
+// full scans (every 3 days by default, with core files and databases):
+// new plugin holes are attacked within hours of disclosure.
+const vulnPassEvery = 20 * 3600
+
+// refresh re-reads one stored WordPress site's plugins, themes and version
+// and its known vulnerabilities, applies the automatic updates and saves it;
+// the core file and database results of the last full scan stay.
+func (m *Manager) refresh(ctx context.Context, s Site) {
+	s.Version = Version(Install{Type: WordPress, Path: s.Path})
+	m.inventory(ctx, &s)
+	if m.Vulns != nil && m.Settings.Get().CMS.Vulns {
+		m.lookupVulns(ctx, &s)
+	}
+	s.Risk = risk(&s)
+	if acts := m.autoActions(ctx, &s); len(acts) > 0 {
+		if m.OnAutoAction != nil {
+			m.OnAutoAction(s, acts)
+		}
+		// What the updates left (the list shows the site as it is now).
+		s.Version = Version(Install{Type: WordPress, Path: s.Path})
+		m.inventory(ctx, &s)
+		if m.Vulns != nil && m.Settings.Get().CMS.Vulns {
+			m.lookupVulns(ctx, &s)
+		}
+		s.Risk = risk(&s)
+	}
+	m.save(s)
+}
+
+// VulnPass runs refresh for every stored WordPress site.
+func (m *Manager) VulnPass(ctx context.Context) error {
+	m.mu.Lock()
+	if m.running {
+		m.mu.Unlock()
+		return errors.New("a CMS scan is already running")
+	}
+	m.running = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.running = false
+		m.mu.Unlock()
+	}()
+	sites, _, err := m.Sites(SiteFilter{Type: WordPress, Limit: -1})
+	if err != nil {
+		return err
+	}
+	for _, s := range sites {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		prio.WaitIdle(ctx, 1.0, time.Minute)
+		if _, err := os.Stat(filepath.Join(s.Path, "wp-includes", "version.php")); err != nil {
+			continue // gone: the next full scan forgets it
+		}
+		m.refresh(ctx, s)
+	}
+	_ = store.SetKV(m.DB, kvVulnPass, strconv.FormatInt(time.Now().Unix(), 10))
+	return nil
+}
+
+// kvVulnPass remembers when VulnPass last ran.
+const kvVulnPass = "cms_last_vuln_pass"
 
 func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 	c, err := ReadWPConfig(s.Path)
@@ -375,12 +457,14 @@ func (m *Manager) save(s Site) {
 // SiteFilter narrows Sites.
 type SiteFilter struct {
 	// User limits the list to one hosting account (panel users).
-	User   string `json:"-"`
-	Type   string `json:"type"`
-	Risk   string `json:"risk"`
-	Query  string `json:"q"`
-	Limit  int    `json:"limit"`
-	Offset int    `json:"offset"`
+	User string `json:"-"`
+	// Account is the portal's filter by hosting account.
+	Account string `json:"account"`
+	Type    string `json:"type"`
+	Risk    string `json:"risk"`
+	Query   string `json:"q"`
+	Limit   int    `json:"limit"`
+	Offset  int    `json:"offset"`
 }
 
 // Counts summarises installations for the stat cards.
@@ -412,6 +496,8 @@ func (m *Manager) Sites(f SiteFilter) ([]Site, int, error) {
 	}
 	if f.User != "" {
 		where, args = append(where, "user = ?"), append(args, f.User)
+	} else if f.Account != "" {
+		where, args = append(where, "user = ?"), append(args, f.Account)
 	}
 	if f.Risk != "" {
 		where, args = append(where, "risk = ?"), append(args, f.Risk)
@@ -419,7 +505,10 @@ func (m *Manager) Sites(f SiteFilter) ([]Site, int, error) {
 	if f.Query != "" {
 		where, args = append(where, "(domain LIKE ? OR path LIKE ? OR user LIKE ?)"), append(args, "%"+f.Query+"%", "%"+f.Query+"%", "%"+f.Query+"%")
 	}
-	if f.Limit <= 0 || f.Limit > 500 {
+	switch {
+	case f.Limit < 0:
+		f.Limit = -1 // all (the agent's own passes)
+	case f.Limit == 0 || f.Limit > 500:
 		f.Limit = 25
 	}
 	cond := strings.Join(where, " AND ")
@@ -580,7 +669,7 @@ func wpArgAllowed(a string) bool {
 		return true
 	}
 	switch a {
-	case "--force", "--skip-content":
+	case "--force", "--skip-content", "--minor", "--all":
 		return true
 	}
 	v, ok := strings.CutPrefix(a, "--version=")

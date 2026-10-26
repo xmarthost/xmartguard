@@ -63,8 +63,22 @@ interface Site {
   scanned_at: number;
 }
 
+interface BulkStatus {
+  running: boolean;
+  mode: string;
+  sites: number;
+  done: number;
+  updated: number;
+  failed: number;
+  current: string;
+  started: number;
+  finished: number;
+  errors?: string[];
+}
+
 interface CmsStatus {
   status: { running: boolean; last_scan: number; error: string };
+  bulk?: BulkStatus;
   counts: {
     with_issues: number;
     wordpress: number;
@@ -107,10 +121,19 @@ export function CMSThreats() {
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
   const [open, setOpen] = useState<number | null>(null);
+  const [risk, setRisk] = useState("");
+  const [account, setAccount] = useState("");
+  const [accountQ, setAccountQ] = useState("");
+  const [sel, setSel] = useState<string[]>([]);
+  const [scope, setScope] = useState<"selected" | "account" | "all">(
+    "selected",
+  );
   const limit = 25;
   const status = useAgent<CmsStatus>(id, "cms.status", {}, 5000);
   const list = useAgent<{ sites: Site[]; total: number }>(id, "cms.sites", {
     type,
+    risk,
+    account,
     q: query,
     limit,
     offset,
@@ -123,6 +146,8 @@ export function CMSThreats() {
     if (wasRunning.current && !running) list.reload();
     wasRunning.current = running;
   }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Another filter: the selection is of sites no longer shown.
+  useEffect(() => setSel([]), [type, risk, account, query]);
 
   if (status.loading && !status.data) return <PageLoader />;
   if (status.error && !status.data) return <ErrorBox message={status.error} />;
@@ -145,6 +170,41 @@ export function CMSThreats() {
     );
     if (r) list.reload();
   };
+
+  const bulk = status.data?.bulk;
+  const bulkRunning = !!bulk?.running;
+  const startBulk = async (mode: "vulnerable" | "outdated") => {
+    const what =
+      mode === "vulnerable"
+        ? "every plugin and theme with a known vulnerability (and WordPress core to its security release)"
+        : "every outdated plugin and theme (and WordPress core to the latest release of its branch)";
+    const where =
+      scope === "selected"
+        ? `${sel.length} selected site${sel.length === 1 ? "" : "s"}`
+        : scope === "account"
+          ? `all WordPress sites of the account ${account}`
+          : "ALL WordPress sites on this server";
+    if (
+      !confirm(
+        `Update ${what} on ${where}?\n\nUpdates can change how a site works; make sure backups exist.`,
+      )
+    )
+      return;
+    const params: Record<string, unknown> = { mode };
+    if (scope === "selected") params.paths = sel;
+    if (scope === "account") params.account = account;
+    const r = await run(
+      () => agentCall<{ sites: number }>(id!, "cms.bulk_update", params),
+      "Bulk update started",
+    );
+    if (r) {
+      setSel([]);
+      status.reload();
+    }
+  };
+  const pageSites = list.data?.sites ?? [];
+  const allOnPage =
+    pageSites.length > 0 && pageSites.every((s) => sel.includes(s.path));
 
   return (
     <div className="space-y-5">
@@ -192,6 +252,32 @@ export function CMSThreats() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
+            className="input w-36"
+            value={risk}
+            onChange={(e) => (setOffset(0), setRisk(e.target.value))}
+          >
+            <option value="">All risks</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="ok">Secure</option>
+          </select>
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setOffset(0);
+              setAccount(accountQ.trim());
+            }}
+          >
+            <input
+              className="input w-40"
+              placeholder="Account (cPanel user)"
+              value={accountQ}
+              onChange={(e) => setAccountQ(e.target.value)}
+            />
+          </form>
+          <select
             className="input w-40"
             value={type}
             onChange={(e) => (setOffset(0), setType(e.target.value))}
@@ -238,6 +324,64 @@ export function CMSThreats() {
         </div>
       </div>
 
+      {can(user, "admin") && (
+        <div className="card flex flex-wrap items-center gap-3 py-3 text-sm">
+          <span className="font-medium text-navy-900">Bulk update</span>
+          <select
+            className="input w-64"
+            value={scope}
+            onChange={(e) => setScope(e.target.value as typeof scope)}
+          >
+            <option value="selected">Selected sites ({sel.length})</option>
+            <option value="account" disabled={!account}>
+              {account
+                ? `All sites of account ${account}`
+                : "All sites of an account (filter by account first)"}
+            </option>
+            <option value="all">All WordPress sites on this server</option>
+          </select>
+          <button
+            className="btn-primary"
+            disabled={
+              busy ||
+              bulkRunning ||
+              running ||
+              (scope === "selected" && sel.length === 0)
+            }
+            onClick={() => startBulk("vulnerable")}
+            title="Plugins and themes with a known vulnerability; WordPress core to its security release"
+          >
+            Update vulnerable
+          </button>
+          <button
+            className="btn-outline"
+            disabled={
+              busy ||
+              bulkRunning ||
+              running ||
+              (scope === "selected" && sel.length === 0)
+            }
+            onClick={() => startBulk("outdated")}
+            title="Every outdated plugin and theme; WordPress core to the latest release of its branch"
+          >
+            Update all outdated
+          </button>
+          {bulk && bulk.started > 0 && (
+            <span className={bulkRunning ? "text-blue-700" : "text-slate-500"}>
+              {bulkRunning
+                ? `Updating ${bulk.done} of ${bulk.sites} sites… ${bulk.current.replace(/^\/home\//, "")}`
+                : `Last bulk update (${bulk.mode}) ${fmtTime(bulk.finished)}: ${bulk.sites} sites, ${bulk.updated} updates`}
+              {bulk.failed > 0 && (
+                <span className="text-red-600" title={(bulk.errors ?? []).join("\n")}>
+                  {" "}
+                  · {bulk.failed} failed
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="card overflow-x-auto p-0">
         {!list.data ? (
           list.error ? (
@@ -257,6 +401,31 @@ export function CMSThreats() {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs text-slate-500 uppercase">
               <tr>
+                {can(user, "admin") && (
+                  <th className="w-8 pl-4">
+                    <input
+                      type="checkbox"
+                      aria-label="Select the sites on this page"
+                      checked={allOnPage}
+                      onChange={() =>
+                        setSel(
+                          allOnPage
+                            ? sel.filter(
+                                (p) => !pageSites.some((s) => s.path === p),
+                              )
+                            : [
+                                ...new Set([
+                                  ...sel,
+                                  ...pageSites
+                                    .filter((s) => s.type === "wordpress")
+                                    .map((s) => s.path),
+                                ]),
+                              ],
+                        )
+                      }
+                    />
+                  </th>
+                )}
                 <th className="px-4 py-3">CMS</th>
                 <th className="px-2">User</th>
                 <th className="px-2">Version</th>
@@ -274,6 +443,23 @@ export function CMSThreats() {
                     className="cursor-pointer hover:bg-slate-50"
                     onClick={() => setOpen(open === s.id ? null : s.id)}
                   >
+                    {can(user, "admin") && (
+                      <td className="pl-4" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${s.domain || s.path}`}
+                          disabled={s.type !== "wordpress"}
+                          checked={sel.includes(s.path)}
+                          onChange={() =>
+                            setSel(
+                              sel.includes(s.path)
+                                ? sel.filter((p) => p !== s.path)
+                                : [...sel, s.path],
+                            )
+                          }
+                        />
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="font-medium text-navy-900">
                         {s.domain || s.path.split("/").slice(-2).join("/")}
@@ -333,7 +519,7 @@ export function CMSThreats() {
                   </tr>
                   {open === s.id && (
                     <tr>
-                      <td colSpan={8} className="bg-slate-50 px-4 py-4">
+                      <td colSpan={can(user, "admin") ? 9 : 8} className="bg-slate-50 px-4 py-4">
                         <SiteDetail
                           site={s}
                           admin={can(user, "admin")}

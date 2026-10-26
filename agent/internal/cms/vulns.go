@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
@@ -394,7 +395,71 @@ const updateRetry = 7 * 86400
 // notUpdated reports wp-cli's answer for an update that changed nothing.
 func notUpdated(out string) bool {
 	o := strings.ToLower(out)
-	return strings.Contains(o, "already updated") || strings.Contains(o, "updated 0 of") || strings.Contains(o, "no updates available")
+	return strings.Contains(o, "already updated") || strings.Contains(o, "updated 0 of") || strings.Contains(o, "no updates available") ||
+		strings.Contains(o, "is up to date") // wp core update
+}
+
+// autoUpdateNowCVSS: a vulnerability this severe is fixed at once, without
+// the waiting days (Patchstack: half of the high-impact WordPress bugs are
+// attacked within a day of disclosure, the worst within hours).
+const autoUpdateNowCVSS = 9.0
+
+// autoUpdateDue reports whether a vulnerable component is to be updated
+// automatically: an update exists, the severity is over the setting (a
+// vulnerability without a score counts: WPVulnerability has none for many
+// new ones, and they were never fixed), and the disclosure is old enough
+// unless it is critical.
+func autoUpdateDue(cfg settings.CMS, c Component, now int64) bool {
+	if len(c.Vulns) == 0 || c.Latest == "" || CompareVersions(c.Version, c.Latest) >= 0 {
+		return false
+	}
+	top, unscored := 0.0, false
+	for _, v := range c.Vulns {
+		top = max(top, v.CVSS)
+		unscored = unscored || v.CVSS == 0
+	}
+	if cfg.AutoUpdateCVSS > 0 && top <= cfg.AutoUpdateCVSS && !unscored {
+		return false
+	}
+	if cfg.AutoUpdateDays > 0 && top < autoUpdateNowCVSS {
+		oldest := int64(0)
+		for _, v := range c.Vulns {
+			if v.Date > 0 && (oldest == 0 || v.Date < oldest) {
+				oldest = v.Date
+			}
+		}
+		if oldest == 0 || now-oldest < int64(cfg.AutoUpdateDays)*86400 {
+			return false
+		}
+	}
+	return true
+}
+
+// UpdateArgs is the wp-cli command that fixes a vulnerable component, and
+// the version it goes to. Plugins and themes go to the newest release,
+// except when that is a new major version and a release of the installed
+// major fixes every known hole: Elementor 3 to 4, WooCommerce 8 to 11
+// break sites; the fix within the branch does not. Core gets the security
+// release of its branch (--minor), never a new major version.
+func UpdateArgs(kind string, c Component) ([]string, string) {
+	if kind == "core" {
+		return []string{"core", "update", "--minor"}, "the latest " + c.Version + " security release"
+	}
+	fix := ""
+	for _, v := range c.Vulns {
+		if v.FixedIn == "" {
+			fix = "" // a hole without a fix in the branch: the newest release
+			break
+		}
+		if fix == "" || CompareVersions(v.FixedIn, fix) > 0 {
+			fix = v.FixedIn
+		}
+	}
+	if fix != "" && c.Latest != "" && leadingInt(c.Latest) > leadingInt(c.Version) && leadingInt(fix) == leadingInt(c.Version) &&
+		CompareVersions(fix, c.Version) > 0 && reWPRelease.MatchString(fix) {
+		return []string{kind, "update", c.Slug, "--version=" + fix}, fix
+	}
+	return []string{kind, "update", c.Slug}, c.Latest
 }
 
 // autoActions applies the automatic CMS policies to one scanned site and
@@ -430,8 +495,12 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 			return
 		}
 		_ = store.SetKV(m.DB, key, strconv.FormatInt(store.Now(), 10))
-		out, err := wp(ctx, s.Path, kind, "update", c.Slug)
-		desc := fmt.Sprintf("updated vulnerable %s %s %s → %s", kind, c.Slug, c.Version, c.Latest)
+		args, to := UpdateArgs(kind, c)
+		out, err := wp(ctx, s.Path, args...)
+		desc := fmt.Sprintf("updated vulnerable %s %s %s → %s", kind, c.Slug, c.Version, to)
+		if kind == "core" {
+			desc = fmt.Sprintf("installed the WordPress security release for %s", c.Version)
+		}
 		switch {
 		case err != nil:
 			m.Log.Warn("CMS automatic action failed", "site", s.Path, "action", desc, "err", err)
@@ -448,35 +517,24 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 		}
 	}
 	if cfg.AutoUpdate {
-		due := func(c Component) bool {
-			if len(c.Vulns) == 0 || c.Latest == "" || CompareVersions(c.Version, c.Latest) >= 0 {
-				return false
-			}
-			if cfg.AutoUpdateCVSS > 0 && maxCVSS(c.Vulns) <= cfg.AutoUpdateCVSS {
-				return false
-			}
-			if cfg.AutoUpdateDays > 0 {
-				oldest := int64(0)
-				for _, v := range c.Vulns {
-					if v.Date > 0 && (oldest == 0 || v.Date < oldest) {
-						oldest = v.Date
-					}
-				}
-				if oldest == 0 || store.Now()-oldest < int64(cfg.AutoUpdateDays)*86400 {
-					return false
-				}
-			}
-			return true
-		}
+		now := store.Now()
 		for _, p := range s.Plugins {
-			if due(p) {
+			if autoUpdateDue(cfg, p, now) {
 				update("plugin", p)
 			}
 		}
 		for _, t := range s.Themes {
-			if due(t) {
+			if autoUpdateDue(cfg, t, now) {
 				update("theme", t)
 			}
+		}
+		// WordPress core: the security release of the installed branch
+		// (WP2Shell, 2026: fixed in 6.8.6, 6.9.5 and 7.0.2; sites that block
+		// WordPress's own updates stayed open).
+		// wp-cli finds the release itself (WPVulnerability gives no fixed
+		// version for core).
+		if core := (Component{Slug: "wordpress", Version: s.Version, Latest: s.Latest, Vulns: s.Core.Vulns}); autoUpdateDue(cfg, core, now) {
+			update("core", core)
 		}
 	}
 	// The wp-cron override is a performance setting, not a security fix:

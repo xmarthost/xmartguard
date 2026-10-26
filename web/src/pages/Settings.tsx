@@ -1272,7 +1272,9 @@ function CMSSection({ s, meta, admin, busy, onSave, repair, onCore }: { s: CMSS;
         <div className="flex items-start justify-between gap-6">
           <div>
             <div className="font-medium text-navy-900">Auto Update Vulnerable WordPress Plugin or Theme</div>
-            <div className="text-sm text-slate-500">Forcefully update plugins or themes that meet the conditions below (needs WP-CLI)</div>
+            <div className="text-sm text-slate-500">
+              Forcefully update plugins, themes and WordPress core (to its branch's security release) that meet the conditions below (needs WP-CLI). Checked every day, not only at the full scan. A vulnerability without a CVSS score counts, and one scoring 9 or more is fixed at once, without the waiting days. A plugin a whole major version behind goes to the fixed release of its own branch when there is one.
+            </div>
           </div>
           <Toggle on={s.auto_update} disabled={dis || !s.enabled || !s.vulns} onChange={(v) => onSave({ auto_update: v })} />
         </div>

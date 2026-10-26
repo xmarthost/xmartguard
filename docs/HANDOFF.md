@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.25** (see `VERSION`).
+- Current release: **0.23.26** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.25 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.26 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.25: `--branch backup-0.23.24`; see "Rollback" under 0.23.25 below);
+  0.23.26: `--branch backup-0.23.25`; see "Rollback" under 0.23.26 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,41 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.26: automatic updates of vulnerable WordPress that work;
+  bulk updates** (2026-10-26).
+  - Checked on business200 websoulhost (auto update on, CVSS above 6,
+    7 days): 1,567 of 1,620 sites outdated and almost nothing updated.
+    Many new vulnerabilities have no CVSS score in WPVulnerability (0):
+    never "above 6". A critical one waited 7 days (attacks start within
+    hours). Core was never updated (WP2Shell). The CMS check ran every
+    3 days at night only.
+  - `autoUpdateDue` (cms/vulns.go): a vulnerability without a score counts;
+    CVSS >= 9 (`autoUpdateNowCVSS`) skips the waiting days; otherwise the
+    settings as before. Core: `wp core update --minor` (the branch's
+    security release) when core has known vulnerabilities and a newer
+    release exists. `UpdateArgs`: a plugin or theme a whole major version
+    behind goes to the highest fixed release of its own branch
+    (`--version=`) when every hole is fixed there, else the newest.
+    "WordPress is up to date" counts as no update. wp-cli also takes
+    `--minor` and `--all`.
+  - `VulnPass` (cms/cms.go): every 20 hours between full scans, each stored
+    WordPress site's plugins, themes and version are re-read, looked up and
+    the automatic updates applied (`refresh`); core file and database
+    results of the last full scan stay. Not during a scan.
+  - Bulk update (cms/bulk.go, agent `cms.bulk_update`, admin): the
+    selected sites, one account's (`account`, also a cms.sites filter) or
+    all; mode "vulnerable" (what has a known hole, core to its security
+    release) or "outdated" (`plugin/theme update --all`, `core update
+    --minor`). In the background, one at a time, progress in
+    `cms.status.bulk`; no scan meanwhile. "Never patched automatically"
+    accounts are left out unless selected one by one. CMS Threat Alerts:
+    risk and account filters, checkboxes, the bulk bar with progress.
+  - Seen on the way: `/home/nutrishoppk/Old-files hmy` has `worksec.php` in
+    42 WordPress core folders (core check "unknown"), with no scanner
+    finding. Not looked into yet (owner informed).
+  - Tests: cms `TestAutoUpdateDue`, `TestVulnPass`, `TestBulkUpdate`.
+  - **Rollback**: `backup-0.23.25`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.25: shared egress networks stay off the fleet IPDB**
   (2026-10-25, owner's decision). One iCloud Private Relay or Meta address

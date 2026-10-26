@@ -1630,7 +1630,17 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 
 	// ---- CMS + database scanner
 	h["cms.status"] = func(context.Context, json.RawMessage) (any, error) {
-		return map[string]any{"status": a.CMS.Status(), "counts": a.CMS.Counts()}, nil
+		return map[string]any{"status": a.CMS.Status(), "counts": a.CMS.Counts(), "bulk": a.CMS.Bulk()}, nil
+	}
+	// cms.bulk_update: CMS Threat Alerts » update the selected sites, one
+	// account's or all (in the background; progress in cms.status).
+	h["cms.bulk_update"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[cms.BulkRequest](p)
+		if err != nil {
+			return nil, err
+		}
+		n, err := a.CMS.BulkUpdate(in)
+		return map[string]any{"ok": err == nil, "sites": n}, err
 	}
 	h["cms.sites"] = func(_ context.Context, p json.RawMessage) (any, error) {
 		f, err := decode[cms.SiteFilter](p)
