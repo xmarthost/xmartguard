@@ -1,6 +1,9 @@
 package core
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -76,5 +79,45 @@ func TestSummaryCountsCached(t *testing.T) {
 	a := newTestAgent(t, `{"firewall":{"enabled":false}}`)
 	if m, ok := a.SecuritySummary().(map[string]any); !ok || m["card"] == nil {
 		t.Fatalf("summary %v", a.SecuritySummary())
+	}
+}
+
+// Quarantined files are kept a week by default (the owner's choice), apart
+// from the logs (2 months): one restored in time comes back, older ones
+// are deleted for good.
+func TestQuarantineKeptAWeek(t *testing.T) {
+	a := newTestAgent(t, `{"firewall":{"enabled":false}}`)
+	if st := a.Settings.Get().Scanner; st.QuarantineDays != 7 || st.KeepDays != 60 {
+		t.Fatalf("defaults: quarantine %d, logs %d", st.QuarantineDays, st.KeepDays)
+	}
+	now := store.Now()
+	dir := t.TempDir()
+	add := func(name string, age int64) int64 {
+		q := filepath.Join(dir, name)
+		os.WriteFile(q, []byte("x"), 0o600)
+		res, _ := a.DB.Exec(`INSERT INTO findings (source, path, owner, category, signature, status, qpath, created_at, updated_at)
+			VALUES ('manual', ?, 'u', 'virus', 'X', 'quarantined', ?, ?, ?)`, "/home/u/"+name, q, now-age*86400, now-age*86400)
+		id, _ := res.LastInsertId()
+		return id
+	}
+	old, recent := add("old.php", 8), add("recent.php", 3)
+	// The first week after the update: nothing is deleted yet.
+	a.pruneOld()
+	var st string
+	a.DB.QueryRow(`SELECT status FROM findings WHERE id = ?`, old).Scan(&st)
+	if st != "quarantined" {
+		t.Fatalf("deleted in the first week: %s", st)
+	}
+	store.SetKV(a.DB, kvQuarantineWeek, strconv.FormatInt(now-8*86400, 10))
+	a.pruneOld()
+	status := func(id int64) (s string) {
+		a.DB.QueryRow(`SELECT status FROM findings WHERE id = ?`, id).Scan(&s)
+		return
+	}
+	if status(old) != "deleted" || status(recent) != "quarantined" {
+		t.Fatalf("old %s, recent %s", status(old), status(recent))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "old.php")); !os.IsNotExist(err) {
+		t.Fatal("old quarantined file kept")
 	}
 }

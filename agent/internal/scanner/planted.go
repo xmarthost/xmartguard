@@ -3,6 +3,7 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -94,4 +95,65 @@ func plantedInCore(path string) *Detection {
 		return &Detection{CatSuspicious, "PHP.Planted.WordPressCoreAssets"}
 	}
 	return nil
+}
+
+// Hidden PHP files and PHP in the logs folder (business100, 2026-10-26:
+// two SEO doorway farms, sahibsul and bashopco, with no finding). The
+// doorway's self-healing kit kept 27 dormant copies named
+// .sys_<hex>.php, .sess_<hex>.php, .tmp_<hex>.php and .cache_<hex>.php
+// (mode 000, switched on again when the doorway was removed) and its
+// restore scripts in ~/logs/ (cache_gc.php, restore_config.php). Their
+// content passed the content rules; the place and the name do not.
+
+// reHiddenRandomPHP: a hidden PHP file named by random hex (a word and an
+// underscore may come first).
+var reHiddenRandomPHP = regexp.MustCompile(`(?i)^\.(?:[a-z]{2,12}[_-])?[0-9a-f]{8,}\.(?:php\d?|phtml|inc)$`)
+
+// devDotfiles are hidden PHP files that developer tools put into plugins
+// and packages (code style, IDE and test settings), and applications'
+// settings (Laravel 4's .env.php, .env.local.php).
+func devDotfile(base string) bool {
+	b := strings.ToLower(base)
+	for _, p := range []string{".php", ".rector", ".phan", ".psalm", ".env"} {
+		if strings.HasPrefix(b, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// plantedByName judges a PHP file by its name and folder (and, for a
+// hidden one, its permissions: mode returns -1 when unknown).
+func plantedByName(path string, mode func(string) int) *Detection {
+	base := filepath.Base(path)
+	parts := strings.Split(path, "/")
+	home := homeDepth(parts)
+	if home < 0 || len(parts) <= home+1 {
+		return nil
+	}
+	// ~/logs/ holds the web server's access logs, never a script.
+	if parts[home+1] == "logs" {
+		return &Detection{CatVirus, "PHP.Planted.InLogsFolder"}
+	}
+	if !strings.HasPrefix(base, ".") || devDotfile(base) {
+		return nil
+	}
+	switch {
+	case reHiddenRandomPHP.MatchString(base):
+		return &Detection{CatVirus, "PHP.Planted.HiddenRandomName"}
+	case mode(path) == 0:
+		// Hidden and with no permission at all: a dormant copy kept for
+		// switching back on.
+		return &Detection{CatVirus, "PHP.Planted.HiddenDormant"}
+	}
+	return &Detection{CatSuspicious, "PHP.Planted.HiddenFile"}
+}
+
+// plantedMode is a file's permission bits, or -1.
+func plantedMode(path string) int {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return -1
+	}
+	return int(st.Mode().Perm())
 }

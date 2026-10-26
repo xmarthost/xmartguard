@@ -543,14 +543,36 @@ func (a *Agent) retentionLoop(ctx context.Context) {
 	}
 }
 
+// kvQuarantineWeek: when the quarantine week was first applied here.
+const kvQuarantineWeek = "quarantine_week_since"
+
+// quarantineDeleteBatch is how many quarantined files one round deletes
+// (rounds are 6 hours apart; a backlog goes over a few days).
+const quarantineDeleteBatch = 20000
+
 func (a *Agent) pruneOld() {
 	days := a.Settings.Get().Scanner.KeepDays
 	if days <= 0 {
 		return
 	}
 	cut := store.Now() - int64(days)*86400
-	// Quarantined files past retention are deleted for good.
-	rows, err := a.DB.Query(`SELECT id FROM findings WHERE status = 'quarantined' AND updated_at < ?`, cut)
+	// Quarantined files past their own retention (a week by default) are
+	// deleted for good, a batch per round so the disk is not flooded
+	// (business100 held 71,000).
+	qdays := max(1, a.Settings.Get().Scanner.QuarantineDays)
+	qcut := store.Now() - int64(qdays)*86400
+	// The week started with 0.23.31 (before it quarantined files were kept
+	// with the logs, 2 months): what was quarantined before gets that week
+	// too, to be restored if needed.
+	since, _ := strconv.ParseInt(store.GetKV(a.DB, kvQuarantineWeek), 10, 64)
+	if since == 0 {
+		since = store.Now()
+		_ = store.SetKV(a.DB, kvQuarantineWeek, strconv.FormatInt(since, 10))
+	}
+	if store.Now()-since < int64(qdays)*86400 {
+		qcut = 0 // nothing quarantined is deleted in that first week
+	}
+	rows, err := a.DB.Query(`SELECT id FROM findings WHERE status = 'quarantined' AND updated_at < ? ORDER BY updated_at LIMIT ?`, qcut, quarantineDeleteBatch)
 	if err == nil {
 		var ids []int64
 		for rows.Next() {
@@ -570,7 +592,7 @@ func (a *Agent) pruneOld() {
 	// days of countries: those logs keep at least 32 days.
 	logCut := min(cut, store.Now()-32*86400)
 	// Originals kept for trimmed and cleaned files too (the live file stays).
-	a.Scanner.PruneKept(cut)
+	a.Scanner.PruneKept(qcut)
 	for _, q := range []string{
 		`DELETE FROM findings WHERE status IN ('deleted','restored','ignored','ai_restored','cleared') AND updated_at < ?`,
 		`DELETE FROM fw_events WHERE status != 'blocked' AND created_at < ?`,

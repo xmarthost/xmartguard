@@ -34,6 +34,7 @@ interface ScannerS {
   yara: boolean;
   db_whitelist: { id: string; reason: string }[];
   keep_days: number;
+  quarantine_days?: number;
   scan_speed?: 'auto' | 'low' | 'fast';
   schedule_tz?: string;
 }
@@ -694,7 +695,14 @@ function AdditionalSection({ serverId, st, meta, admin, busy, save }: { serverId
           <Toggle on={st.cron.disable ?? true} disabled={dis || !st.cron.enabled} onChange={(v) => save({ cron: { disable: v } })} />
         </SettingRow>
       </div>
-      <SettingRow title="Keep logs for" desc="How long to keep xPGuard logs and quarantined files on the server">
+      <SettingRow title="Keep quarantined files for" desc="Quarantined files are deleted for good after this time (restore a false positive before then)">
+        <select className="input w-40" value={st.scanner.quarantine_days ?? 7} disabled={dis} onChange={(e) => save({ scanner: { quarantine_days: Number(e.target.value) } })}>
+          {[[7, '1 Week'], [14, '2 Weeks'], [30, '1 Month'], [60, '2 Months'], [90, '3 Months']].map(([d, l]) => (
+            <option key={d} value={d}>{l}</option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow title="Keep logs for" desc="How long to keep xPGuard logs on the server">
         <select className="input w-40" value={st.scanner.keep_days} disabled={dis} onChange={(e) => save({ scanner: { keep_days: Number(e.target.value) } })}>
           {[[7, '1 Week'], [30, '1 Month'], [60, '2 Months'], [90, '3 Months'], [180, '6 Months'], [365, '1 Year']].map(([d, l]) => (
             <option key={d} value={d}>{l}</option>

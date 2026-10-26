@@ -513,9 +513,13 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	if shapeOK {
 		return nil, ErrTrusted
 	}
-	// A PHP file planted among WordPress core's styles and images.
+	// A PHP file planted among WordPress core's styles and images, hidden
+	// or in the logs folder.
 	if bigPHPExts[ext] {
 		if d := plantedInCore(path); d != nil {
+			return final(d)
+		}
+		if d := plantedByName(path, plantedMode); d != nil {
 			return final(d)
 		}
 	}

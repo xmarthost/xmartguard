@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.30** (see `VERSION`).
+- Current release: **0.23.31** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.30 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.31 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.30: `--branch backup-0.23.29`; see "Rollback" under 0.23.30 below);
+  0.23.31: `--branch backup-0.23.30`; see "Rollback" under 0.23.31 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,40 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.31: hidden and logs-folder PHP; quarantine kept a week**
+  (2026-10-26).
+  - business100: the owner's server assistant (another tool, root shell)
+    cleaned two SEO doorway farms (sahibsul, bashopco) and 9 infected
+    accounts, moving files to /root/malware-quarantine-serverwide-20261026
+    (not xPGuard's quarantine). xPGuard had no finding for sahibsul or
+    bashopco. From its report: dormant copies `.sys_<hex>.php`,
+    `.sess_<hex>.php`, `.tmp_<hex>.php`, `.cache_<hex>.php` (mode 000),
+    restore scripts in `~/logs/` (cache_gc.php, restore_config.php), a
+    `.sitemap_indo.php` generator, `/* SC_WC */` in wp-config.php, rogue
+    admins (bot@local.invalid …) and casino spam posts. Its spam-post
+    cleanup trashed legit posts too (restored by it).
+  - `plantedByName` (scanner/planted.go, PHP only, after known-good and
+    hash checks): PHP in `~/logs/` → `PHP.Planted.InLogsFolder` (virus);
+    hidden PHP named by random hex → `PHP.Planted.HiddenRandomName`
+    (virus); hidden PHP with mode 000 → `PHP.Planted.HiddenDormant`
+    (virus); other hidden PHP → `PHP.Planted.HiddenFile` (suspicious, the
+    AI looks). Developer dotfiles (`.php*`, `.rector*`, `.phan*`,
+    `.psalm*`) and `.env*.php` stay alone. The mode is read only for
+    hidden files. Recheck keeps `PHP.Planted.*`.
+  - Not covered yet (need content or the database): the SC_WC wp-config
+    injection, rogue admin accounts, spam posts (research items M3, I4).
+  - Quarantine retention (owner): `scanner.quarantine_days`, default 7,
+    separate from `keep_days` (logs, 60). `pruneOld` deletes quarantined
+    files (and kept originals of trimmed/cleaned files) older than that,
+    20,000 per 6-hour round; on a server's first round after the update it
+    starts a one-week grace (kv `quarantine_week_since`), so files already
+    in quarantine can still be restored that week. Settings » Virus
+    Scanner: "Keep quarantined files for".
+  - Tests: `TestFleetHiddenAndLogsPHP` (fleetfp_test.go, inert fixtures),
+    core `TestQuarantineKeptAWeek`.
+  - **Rollback**: `backup-0.23.30`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
+    Files the retention already deleted do not come back.
 
 - **Release 0.23.30: LiteSpeed restarts at least 90 s apart, also after an
   agent update** (2026-10-26). Owner: after recent updates some LiteSpeed

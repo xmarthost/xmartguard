@@ -83,8 +83,13 @@ type Scanner struct {
 	YARA bool `json:"yara"`
 	// DBWhitelist lists database-scanner signature ids to ignore.
 	DBWhitelist []Exclusion `json:"db_whitelist"`
-	// KeepDays is how long logs and quarantined files are kept.
+	// KeepDays is how long logs are kept.
 	KeepDays int `json:"keep_days"`
+	// QuarantineDays is how long quarantined files are kept before they are
+	// deleted (7 by default, the owner's choice: a week is enough to
+	// restore a false positive, and a million quarantined files filled
+	// the disks).
+	QuarantineDays int `json:"quarantine_days"`
 	// ScanSpeed sets how many threads a scan uses: "auto" (the default:
 	// as many as the CPU time the rest of the server leaves free allows,
 	// from one up to half of the CPUs, at most 8), "low" (one) or "fast"
@@ -558,7 +563,7 @@ func Defaults() Settings {
 			VirusAction: ActionQuarantine, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, ScheduleTZ: "Asia/Karachi", MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
-			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60, ScanSpeed: "auto",
+			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60, QuarantineDays: 7, ScanSpeed: "auto",
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
@@ -806,6 +811,9 @@ func normalize(s *Settings) {
 	}
 	if s.Scanner.KeepDays <= 0 {
 		s.Scanner.KeepDays = 60
+	}
+	if s.Scanner.QuarantineDays <= 0 {
+		s.Scanner.QuarantineDays = 7
 	}
 	if s.Scanner.DBWhitelist == nil {
 		s.Scanner.DBWhitelist = []Exclusion{}

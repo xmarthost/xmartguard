@@ -672,3 +672,62 @@ func TestFleetPlantedInWordPressCore(t *testing.T) {
 		t.Errorf("not WordPress: %s", d.Signature)
 	}
 }
+
+// business100 (2026-10-26): two SEO doorway farms (sahibsul, bashopco)
+// had no finding. Their self-healing kit kept dormant copies named
+// .sys_<hex>.php, .sess_<hex>.php, .tmp_<hex>.php, .cache_<hex>.php
+// (mode 000) and restore scripts in ~/logs/. Hidden PHP named by random
+// hex, hidden PHP without permissions and PHP in ~/logs are malware;
+// another hidden PHP file is suspicious (the AI looks); developer tools'
+// dotfiles in plugins and packages stay alone.
+func TestFleetHiddenAndLogsPHP(t *testing.T) {
+	s := newScanner(t)
+	inert := "<?php /* inert test fixture */ echo 'x';"
+	dir := filepath.Join(t.TempDir(), "home2", "u")
+	write := func(rel string, mode os.FileMode) string {
+		p := filepath.Join(dir, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(inert), 0o644)
+		os.Chmod(p, mode)
+		return p
+	}
+	// The test runs from a temporary folder: name it like a home.
+	homeOf := func(p string) string { return "/home2/u" + strings.TrimPrefix(p, dir) }
+	check := func(p string) *Detection {
+		return plantedByName(homeOf(p), func(string) int { return plantedMode(p) })
+	}
+	for rel, sig := range map[string]string{
+		"public_html/assets/.sys_9f3a1c7e2b.php":  "PHP.Planted.HiddenRandomName",
+		"public_html/.sess_0a1b2c3d4e5f.php":      "PHP.Planted.HiddenRandomName",
+		"cavescode.com/app/.cache_deadbeef01.php": "PHP.Planted.HiddenRandomName",
+		"logs/cache_gc.php":                       "PHP.Planted.InLogsFolder",
+		"logs/example.com/restore_config.php":     "PHP.Planted.InLogsFolder",
+	} {
+		if d := check(write(rel, 0o644)); d == nil || d.Signature != sig || d.Category != CatVirus {
+			t.Errorf("%s: %+v", rel, d)
+		}
+	}
+	if d := check(write("public_html/en/.sitemap_indo.php", 0)); d == nil || d.Signature != "PHP.Planted.HiddenDormant" {
+		t.Errorf("dormant hidden copy: %+v", d)
+	}
+	if d := check(write("public_html/en/.sitemap_indo2.php", 0o644)); d == nil || d.Category != CatSuspicious {
+		t.Errorf("hidden PHP: %+v", d)
+	}
+	for _, rel := range []string{
+		"public_html/wp-content/plugins/x/.php-cs-fixer.dist.php",
+		"public_html/wp-content/plugins/x/.phpstorm.meta.php",
+		"public_html/vendor/y/.php_cs.dist.php",
+		"public_html/wp-content/plugins/x/.rector.php",
+		"laravel/app/.env.local.php",
+		"public_html/index.php",
+		"public_html/logs/view.php", // a site's own folder called logs
+	} {
+		if d := check(write(rel, 0o644)); d != nil {
+			t.Errorf("%s: %s", rel, d.Signature)
+		}
+	}
+	// Through the content check too (scan and recheck).
+	if d := s.checkContent("/home2/u/logs/cache_gc.php", ".php", []byte(inert)); d == nil || d.Signature != "PHP.Planted.InLogsFolder" {
+		t.Errorf("content check: %+v", d)
+	}
+}
