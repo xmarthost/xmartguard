@@ -130,7 +130,11 @@ func adminAreaSetup() string {
 	head := func(id int) string {
 		return fmt.Sprintf(`SecRule REQUEST_FILENAME "@rx (?:^|/)%s/" "id:%d,phase:1,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, adminAreaSegments, id) + "\n" +
 			`  SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "t:none,t:lowercase,chain"` + "\n" +
-			`  SecRule &REQUEST_COOKIES "@gt 0" "t:none,chain"` + "\n" +
+			// A session cookie, read from the header: LiteSpeed's engine does
+			// not fill the cookie collections reliably (joomlashare.ir: every
+			// Joomla administrator save scoring 10-25 was refused there, and
+			// the site owner was banned for it).
+			`  SecRule REQUEST_HEADERS:Cookie "@rx [^\s;=]+=[^\s;]" "t:none,chain"` + "\n" +
 			fmt.Sprintf(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?%s/" "t:none,t:lowercase,capture,chain"`, adminAreaSegments) + "\n" +
 			`  SecRule TX:1 "@streq %{REQUEST_HEADERS.Host}" "t:none,t:lowercase,chain"` + "\n"
 	}

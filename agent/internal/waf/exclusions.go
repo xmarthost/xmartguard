@@ -223,7 +223,7 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 	if !off[IDAdminPanel] {
 		w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDAdminPanel)
 		w(`  SecRule REQUEST_FILENAME "@rx (?:^|/)%s/" "t:none,t:urlDecodeUni,t:lowercase,chain"`, adminSegments)
-		w(`  SecRule &REQUEST_COOKIES "@gt 0" "t:none,chain"`)
+		w(`  SecRule REQUEST_HEADERS:Cookie "@rx [^\s;=]+=[^\s;]" "t:none,chain"`) // the header: see adminAreaSetup
 		w(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?%s/" "t:none,t:lowercase,capture,chain"`, adminSegments)
 		w(`  SecRule TX:1 "@streq %%{REQUEST_HEADERS.Host}" "t:none,t:lowercase,%s"`, tags)
 	}
