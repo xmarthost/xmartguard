@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
 // Tests change address lists and check the result at once.
@@ -14,6 +16,7 @@ func TestMain(m *testing.M) {
 	ListReloadGap = func(bool, bool) time.Duration { return 0 }
 	PassSettle = 0
 	ServiceDownWait = 0
+	LiteSpeedMinGap, LiteSpeedNowWait = 0, 0
 	os.Exit(m.Run())
 }
 
@@ -298,5 +301,61 @@ func TestStaleLiteSpeedRuleSetGetsStub(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "xpguard-waf.conf"), []byte("own"), 0o644)
 	if staleRuleSetFile() != "" {
 		t.Fatal("an existing rule set file would be replaced")
+	}
+}
+
+// After an agent update on LiteSpeed servers the load went up: the WAF
+// start, the portal's rule sync and the CAPTCHA settings each restarted
+// LiteSpeed within a minute, and every restart left the old "nobody"
+// processes serving their connections. Restarts are LiteSpeedMinGap
+// apart, also across an agent restart; what comes sooner is done later
+// in one restart, and a change someone made waits for the gap.
+func TestLiteSpeedRestartsSpacedOut(t *testing.T) {
+	oldGap, oldNow := LiteSpeedMinGap, LiteSpeedNowWait
+	t.Cleanup(func() { LiteSpeedMinGap, LiteSpeedNowWait = oldGap, oldNow })
+	LiteSpeedMinGap, LiteSpeedNowWait = time.Hour, 0
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	db, err := store.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	tg, calls := countReloads(t, true)
+	rules := t.TempDir()
+	m := &Manager{RulesDir: rules, DB: db}
+	reloads := func() int { return strings.Count(strings.Join(calls(), ","), "lswsctrl") }
+	if err := m.install(tg, "SecRule A", nil); err != nil || reloads() != 1 {
+		t.Fatalf("first restart: %d %v", reloads(), err)
+	}
+	// The next rule change right after: not now, scheduled once.
+	if err := m.install(tg, "SecRule B", nil); err != nil || reloads() != 1 {
+		t.Fatalf("second restart at once: %d %v", reloads(), err)
+	}
+	if m.deferred == nil {
+		t.Fatal("no restart scheduled")
+	}
+	m.deferred.Stop()
+	// The agent is updated (a new Manager): the last restart is remembered.
+	m2 := &Manager{RulesDir: rules, DB: db}
+	if err := m2.install(tg, "SecRule C", nil); err != nil || reloads() != 1 {
+		t.Fatalf("restart right after the agent restart: %d %v", reloads(), err)
+	}
+	m2.deferred.Stop()
+	// A change someone made waits out a short rest of the gap, then restarts.
+	LiteSpeedMinGap, LiteSpeedNowWait = 300*time.Millisecond, 2*time.Second
+	if err := m2.installMode(tg, "SecRule D", nil, modeNow); err != nil || reloads() != 2 {
+		t.Fatalf("ApplyNow: %d %v", reloads(), err)
+	}
+	// Apache re-reads its configuration: no gap.
+	tga, callsA := countReloads(t, false)
+	ma := &Manager{RulesDir: t.TempDir()}
+	for _, r := range []string{"SecRule A", "SecRule B"} {
+		if err := ma.install(tga, r, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := strings.Count(strings.Join(callsA(), ","), "restartsrv_httpd"); n != 2 {
+		t.Fatalf("Apache reloads: %d", n)
 	}
 }

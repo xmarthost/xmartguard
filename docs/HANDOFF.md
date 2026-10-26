@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.29** (see `VERSION`).
+- Current release: **0.23.30** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.29 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.30 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.29: `--branch backup-0.23.28`; see "Rollback" under 0.23.29 below);
+  0.23.30: `--branch backup-0.23.29`; see "Rollback" under 0.23.30 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,28 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.30: LiteSpeed restarts at least 90 s apart, also after an
+  agent update** (2026-10-26). Owner: after recent updates some LiteSpeed
+  servers filled with "nobody" processes and the load went up until they
+  were killed. An update restarts the agent; `lastReload` started at zero,
+  so the reload gaps did not apply, and in the first minute the WAF start
+  (`Run` → Apply), the portal's rule sync (wafsync → Apply) and the CAPTCHA
+  settings (central → Apply) could each run `lswsctrl restart`. A graceful
+  LiteSpeed restart keeps the old processes until their connections end:
+  several restarts close together stack generations of them. Not seen in
+  logs (no restart log in the portal); inferred from the code.
+  - `install` (waf/install.go): LiteSpeed restarts are at least
+    `LiteSpeedMinGap` (90 s) apart; a sooner one is scheduled once
+    (`deferred`, everything meanwhile in one restart); a change someone
+    made (`modeNow`) waits up to `LiteSpeedNowWait` (45 s), else is
+    scheduled; a solved CAPTCHA keeps its own 30 s gap. The last reload is
+    kept in kv `waf_last_reload` across agent restarts (`loadLastReload`).
+    Apache (graceful re-read) is unchanged.
+  - Test: `TestLiteSpeedRestartsSpacedOut` (reloadgap_test.go).
+  - Not changed: on servers with many CAPTCHA solves LiteSpeed still
+    restarts up to every 30 s for passes; watch for load there.
+  - **Rollback**: `backup-0.23.29`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.29: wp-cli without the site's plugins; CMS checks at night,
   slowly** (2026-10-26).

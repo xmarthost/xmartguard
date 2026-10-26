@@ -8,8 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
 // Target describes how ModSecurity is wired into the local web server.
@@ -396,6 +399,7 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	}
 	m.reloadMu.Lock()
 	defer m.reloadMu.Unlock()
+	m.loadLastReload()
 	// A reload that failed last time is tried again even when nothing
 	// changed since: the files on disk are newer than what runs.
 	changed := len(stale) > 0 || m.reloadPending
@@ -441,6 +445,30 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 		if w := wait(ListReloadGap(t.LiteSpeed, false)); w > 0 {
 			if m.deferred == nil {
 				m.deferred = time.AfterFunc(w+time.Second, func() {
+					m.reloadMu.Lock()
+					m.deferred = nil
+					m.reloadMu.Unlock()
+					_ = m.ApplyBackground()
+				})
+			}
+			return nil
+		}
+	}
+	// LiteSpeed restarts all its server processes on a reload, and the old
+	// ones serve their open connections before they go: restarts close
+	// together (after an agent update the WAF start, the portal's rule
+	// sync and the CAPTCHA settings each asked for one within a minute)
+	// left several generations of "nobody" processes running and the load
+	// went up until they were killed. Two restarts are at least
+	// LiteSpeedMinGap apart; one asked for sooner waits (a change someone
+	// made, up to LiteSpeedNowWait) or is done later together with what
+	// comes meanwhile.
+	if floor := m.liteSpeedFloor(t); floor > 0 && !(listsOnly && urgent) {
+		if mode == modeNow && floor <= LiteSpeedNowWait {
+			time.Sleep(floor)
+		} else {
+			if m.deferred == nil {
+				m.deferred = time.AfterFunc(floor+time.Second, func() {
 					m.reloadMu.Lock()
 					m.deferred = nil
 					m.reloadMu.Unlock()
@@ -501,7 +529,7 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 		rollback()
 		return fmt.Errorf("web server rejected the WAF rules (rolled back): %s", strings.TrimSpace(out))
 	}
-	m.lastReload = time.Now()
+	m.setLastReload(time.Now())
 	// LiteSpeed only loads changed ModSecurity rules on a (graceful)
 	// restart, and on cPanel restartsrv_httpd restarts LiteSpeed too: one
 	// restart, never two in a row (a second restart while the first is
@@ -529,6 +557,46 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 		time.Sleep(PassSettle)
 	}
 	return nil
+}
+
+// LiteSpeedMinGap is the least time between two LiteSpeed restarts, and
+// LiteSpeedNowWait how long a change someone made waits for it (longer:
+// done afterwards). Tests set them to zero.
+var (
+	LiteSpeedMinGap  = 90 * time.Second
+	LiteSpeedNowWait = 45 * time.Second
+)
+
+// liteSpeedFloor is how long a LiteSpeed restart has to wait yet.
+func (m *Manager) liteSpeedFloor(t Target) time.Duration {
+	if !t.LiteSpeed || t.Plain || m.lastReload.IsZero() {
+		return 0
+	}
+	return LiteSpeedMinGap - time.Since(m.lastReload)
+}
+
+// kvLastReload keeps the last reload across agent restarts: an update
+// restarts the agent, and the reload gaps started from zero again.
+const kvLastReload = "waf_last_reload"
+
+func (m *Manager) setLastReload(t time.Time) {
+	m.lastReload = t
+	if m.DB != nil {
+		_ = store.SetKV(m.DB, kvLastReload, strconv.FormatInt(t.Unix(), 10))
+	}
+}
+
+// loadLastReload reads it once (reloadMu held).
+func (m *Manager) loadLastReload() {
+	if m.lastLoaded || m.DB == nil {
+		return
+	}
+	m.lastLoaded = true
+	if v, _ := strconv.ParseInt(store.GetKV(m.DB, kvLastReload), 10, 64); v > 0 && m.lastReload.IsZero() {
+		if at := time.Unix(v, 0); at.Before(time.Now()) {
+			m.lastReload = at
+		}
+	}
 }
 
 // PassSettle is how long a LiteSpeed restart for a solved CAPTCHA is given
@@ -560,7 +628,7 @@ func (m *Manager) RefreshPasses() error {
 	if t.LiteSpeed && !t.Plain {
 		reload = liteSpeedRestart
 	}
-	m.lastReload = time.Now()
+	m.setLastReload(time.Now())
 	if out, err := m.runTimeout(reload, 120*time.Second); err != nil {
 		return fmt.Errorf("reload failed: %s", strings.TrimSpace(out))
 	}

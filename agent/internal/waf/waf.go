@@ -91,6 +91,7 @@ type Manager struct {
 	// than ListReloadGap allows (see install).
 	reloadMu   sync.Mutex
 	lastReload time.Time
+	lastLoaded bool // lastReload read from the store
 	// reloadPending: the last reload failed, so the rules on disk are not
 	// the ones running; the next apply reloads even without a change.
 	reloadPending bool
