@@ -135,8 +135,12 @@ func adminAreaSetup() string {
 			// Joomla administrator save scoring 10-25 was refused there, and
 			// the site owner was banned for it).
 			`  SecRule REQUEST_HEADERS:Cookie "@rx [^\s;=]+=[^\s;]" "t:none,chain"` + "\n" +
-			fmt.Sprintf(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://([^/?#]+)/(?:[^?#]*/)?%s/" "t:none,t:lowercase,capture,chain"`, adminAreaSegments) + "\n" +
-			`  SecRule TX:1 "@streq %{REQUEST_HEADERS.Host}" "t:none,t:lowercase,chain"` + "\n"
+			// The page it came from is in the admin area. Same site: the
+			// browser's own Sec-Fetch-Site above, not a comparison with the
+			// Host header through a macro, which LiteSpeed's engine did not
+			// honour (joomlashares.com: Joomla Global Configuration saves
+			// scoring 10 still refused after 0.23.28).
+			fmt.Sprintf(`  SecRule REQUEST_HEADERS:Referer "@rx ^https?://[^/?#]+/(?:[^?#]*/)?%s/" "t:none,t:lowercase,chain"`, adminAreaSegments) + "\n"
 	}
 	return "# Saves from a web application's own admin area (xPGuard WAF level).\n" +
 		head(IDAdminArea) +
@@ -172,6 +176,15 @@ func sessionSetup() string {
 		// (no "|" in a collection's name regex: ModSecurity splits on it)
 		`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_/ "@eq 0" "t:none,chain"` + "\n" +
 		`  SecRule &REQUEST_COOKIES_NAMES:/^w(?:p_w)?oocommerce_/ "@eq 0" "t:none,chain"` + "\n" +
+		`  SecRule REQUEST_FILENAME "!@rx /wp-(?:admin|json|content|includes|comments-post|login)" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n" +
+		`  SecRule &TX:xg_strict "@eq 0" "t:none,chain"` + "\n" +
+		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_session=1,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n" +
+		// The same told by the browser's Sec-Fetch-Site and read from the
+		// Cookie header: no macro and no cookie collection, which
+		// LiteSpeed's engine did not honour (see adminAreaSetup).
+		fmt.Sprintf(`SecRule REQUEST_HEADERS:Sec-Fetch-Site "@streq same-origin" "id:%d,phase:1,pass,t:none,t:lowercase,nolog,chain"`, IDSessionSite+1000) + "\n" +
+		`  SecRule REQUEST_HEADERS:Cookie "@rx (?i)(?:^|;)\s*(?:[^=;\s]*(?:sess|xsrf|csrf|token|logged_in|auth|remember)[^=;\s]*|[^=;\s]*sid|[0-9a-f]{32})=" "t:none,chain"` + "\n" +
+		`  SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*(?:wordpress_|wp_woocommerce_|woocommerce_)" "t:none,chain"` + "\n" +
 		`  SecRule REQUEST_FILENAME "!@rx /wp-(?:admin|json|content|includes|comments-post|login)" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n" +
 		`  SecRule &TX:xg_strict "@eq 0" "t:none,chain"` + "\n" +
 		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_session=1,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"

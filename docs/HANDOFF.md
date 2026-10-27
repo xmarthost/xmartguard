@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.31** (see `VERSION`).
+- Current release: **0.23.32** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.31 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.32 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.31: `--branch backup-0.23.30`; see "Rollback" under 0.23.31 below);
+  0.23.32: `--branch backup-0.23.31`; see "Rollback" under 0.23.32 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,29 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.32: same-site relaxations without macros (LiteSpeed)**
+  (2026-10-27). joomlashares.com (business600, joomlash, behind
+  Cloudflare): Joomla Global Configuration saves were still refused on
+  2026-10-26 15:57-16:08 UTC, after 0.23.28 (930120 + 932160, and 941100
+  + 941160; score 10). The remaining LiteSpeed-only link in the admin-area
+  lift (7700058) was the Host comparison `TX:1 "@streq
+  %{REQUEST_HEADERS.Host}"`; the session lift (7700044) used the same kind
+  (`%{tx.xg_host}`). Inferred, not proven on a LiteSpeed engine.
+  - `adminAreaSetup`: Referer in the admin area (no capture), same site from
+    the browser's `Sec-Fetch-Site: same-origin` (already required).
+  - `sessionSetup`: a second rule `IDSessionSite+1000` (7701044):
+    `Sec-Fetch-Site: same-origin` + a session cookie read from the Cookie
+    header, not WordPress or WooCommerce, not a /wp- path; same threshold
+    30 and the same XSS cap afterwards.
+  - The customer asked for the WAF off on /administrator/ and for the
+    origin to accept only Cloudflare: not done (owner's decision; the
+    server's address is shared by every account, so a firewall rule cannot
+    do it per account; per site it is `.htaccess` / LiteSpeed access
+    control). The site gets daily front-end attacks the WAF blocks.
+  - Tests: `TestAdminAreaReadsCookieHeader` (no macro, session rule);
+    Apache `TestAdminAreaSavesWithoutRuleRemoval` (Global Configuration).
+  - **Rollback**: `backup-0.23.31`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.31: hidden and logs-folder PHP; quarantine kept a week**
   (2026-10-26).

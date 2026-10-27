@@ -1,6 +1,7 @@
 package waf
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,6 +138,11 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 // 0.23.28, and the owner banned for "15 WAF blocked").
 func TestAdminAreaReadsCookieHeader(t *testing.T) {
 	setup := adminAreaSetup()
+	// No macro either (joomlashares.com, after 0.23.28): same site is the
+	// browser's Sec-Fetch-Site.
+	if strings.Contains(setup, "%{") || strings.Contains(sessionSetup(), fmt.Sprintf("id:%d,", IDSessionSite+1000)) == false {
+		t.Fatalf("admin area setup uses a macro, or no session rule without one:\n%s", setup)
+	}
 	if strings.Contains(setup, "REQUEST_COOKIES") || !strings.Contains(setup, `REQUEST_HEADERS:Cookie "@rx [^\s;=]+=[^\s;]"`) {
 		t.Fatalf("admin area setup:\n%s", setup)
 	}
@@ -173,6 +179,13 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 	}{
 		{"Joomla e-mail template", "joomla.example.ir", "/administrator/index.php?option=com_rsmembership&view=configuration", template, own, 200},
 		{"Joomla File Explorer save", "joomla.example.ir", "/administrator/index.php?option=com_ffexplorer&task=save", file, own, 200},
+		// joomlashares.com (2026-10-26): Joomla Global Configuration (paths
+		// and the sendmail program read as OS file access and shell code).
+		{"Joomla Global Configuration save", "joomla.example.ir", "/administrator/index.php?option=com_config",
+			"jform%5Bsendmail%5D=" + urlEncode("/usr/sbin/sendmail") + "&jform%5Blog_path%5D=" + urlEncode("/home/joomlash/public_html/administrator/logs") +
+				"&jform%5Btmp_path%5D=" + urlEncode("/home/joomlash/public_html/tmp") + "&jform%5Boffline_message%5D=" + urlEncode(`<p>Back soon</p><script>alert(1)</script>`) +
+				"&task=application.apply&0123456789abcdef0123456789abcdef=1",
+			[]string{joomla, "Sec-Fetch-Site: same-origin", "Referer: https://joomla.example.ir/administrator/index.php?option=com_config"}, 200},
 		// joomlashare.ir (2026-10-21..25): jDownloads item saves scoring 25.
 		{"Joomla jDownloads item save", "joomla.example.ir", "/administrator/index.php?option=com_jdownloads&layout=edit&id=60",
 			"jform%5Bdescription%5D=" + urlEncode(`<div class="dl"><a href="#" onclick="return false">Download</a></div><pre>wget https://example.com/x.zip; ls -la</pre>`) +
