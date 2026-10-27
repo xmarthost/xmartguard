@@ -46,6 +46,14 @@ func TestPruneOldGrowingTables(t *testing.T) {
 	if n := count(`SELECT count(*) FROM waf_events`); n != 1 {
 		t.Error("WAF events of the last 32 days pruned")
 	}
+	// With logs kept 60 days the WAF log still goes after 35 (business500:
+	// 4 million rows in 18 days).
+	a.Settings.Patch([]byte(`{"scanner":{"keep_days":60}}`))
+	a.DB.Exec(`INSERT INTO waf_events (at, ip, category, action) VALUES (?, '192.0.2.10', 'waf', 'Access denied')`, now-40*86400)
+	a.pruneOld()
+	if n := count(`SELECT count(*) FROM waf_events`); n != 1 {
+		t.Errorf("WAF events older than 35 days kept: %d", n)
+	}
 }
 
 // Audit A1 F10: the table counts behind the metrics summary run once per

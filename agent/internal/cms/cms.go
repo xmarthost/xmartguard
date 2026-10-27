@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -278,11 +279,14 @@ func (m *Manager) scan(ctx context.Context) error {
 			m.lookupVulns(ctx, &s)
 		}
 		s.Risk = risk(&s)
+		s.ScannedAt = store.Now()
+		// Saved before the automatic updates: wp-cli finds the site's owner
+		// in the list, and a site found for the first time was not in it yet
+		// (business500: 1,073 updates failed with "WordPress site not found").
+		m.save(s)
 		if acts := m.autoActions(ctx, &s); len(acts) > 0 && m.OnAutoAction != nil {
 			m.OnAutoAction(s, acts)
 		}
-		s.ScannedAt = store.Now()
-		m.save(s)
 	}
 	// Forget installations that no longer exist.
 	rows, err := m.DB.Query(`SELECT path, user FROM cms_sites`)
@@ -748,6 +752,24 @@ func wpArgv(owner string, wp []string, path string, args []string) []string {
 	return append([]string{"-u", owner, "--"}, cmd...)
 }
 
+// wpEnv is wp-cli's environment as the site owner: the agent runs without
+// a HOME (systemd), and runuser keeps it, so wp-cli tried to make its
+// cache in /.wp-cli/cache and refused ("Permission denied", business500:
+// 326 failed updates). HOME is the owner's home.
+func wpEnv(env []string, owner string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if !strings.HasPrefix(e, "HOME=") && !strings.HasPrefix(e, "WP_CLI_CACHE_DIR=") {
+			out = append(out, e)
+		}
+	}
+	if u, err := user.Lookup(owner); err == nil && u.HomeDir != "" && u.HomeDir != "/" {
+		return append(out, "HOME="+u.HomeDir)
+	}
+	// No home: no cache rather than a failed command.
+	return append(out, "HOME=/tmp", "WP_CLI_CACHE_DIR=/dev/null")
+}
+
 // WPCLI runs a wp-cli command as the site owner.
 func (m *Manager) WPCLI(ctx context.Context, path string, args ...string) (string, error) {
 	var owner string
@@ -766,7 +788,9 @@ func (m *Manager) WPCLI(ctx context.Context, path string, args ...string) (strin
 	argv := wpArgv(owner, wp, path, args)
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, "runuser", argv...).CombinedOutput()
+	cmd := exec.CommandContext(cctx, "runuser", argv...)
+	cmd.Env = wpEnv(os.Environ(), owner)
+	out, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(out))
 	if len(text) > 4000 {
 		text = text[len(text)-4000:]

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.32** (see `VERSION`).
+- Current release: **0.23.33** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.32 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.33 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.32: `--branch backup-0.23.31`; see "Rollback" under 0.23.32 below);
+  0.23.33: `--branch backup-0.23.32`; see "Rollback" under 0.23.33 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,42 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.33: fixes from three server audits** (2026-10-27). The
+  owner's server assistant audited business200, server1 and business500.
+  Checked against the code; fixed what was right:
+  - wp-cli ran as the site owner without a HOME (the agent's environment
+    under systemd): "mkdir '/.wp-cli/cache/': Permission denied", 326
+    failed updates on business500. `wpEnv` (cms) sets the owner's HOME
+    (or HOME=/tmp and no cache). Test `TestWPCLIHome`.
+  - The CMS scan ran a new site's automatic updates before saving it, and
+    wp-cli looks the owner up in the list: "WordPress site not found (run
+    a CMS scan first)", 1,073 times on business500. Saved first now. Test
+    `TestNewSiteSavedBeforeUpdates`.
+  - CAPTCHA server: client errors ("http2: server: error reading preface
+    from client …", GOAWAY, connection errors) are counted
+    (`ClientErrors`), not logged (server1: 122,251 lines, 95 MB).
+    Test `TestCaptchaClientNoiseNotLogged`.
+  - WAF events kept 35 days (`wafEventDays`), not with the logs' 60:
+    business500 had 4 million rows in 18 days (1.1 GB database).
+  - Not right (left as is): firewall "dead chains" (XPGUARD_CTRY is jumped
+    to only with blocked countries; XPGUARD_EXEMPT holds the port filter's
+    rules, off; banned addresses' web traffic is reset/redirected before
+    XPGUARD_TBAN); AI restore loop (the AI has not restored files since
+    0.23.8; the log lines were older); "no log rotation" (the agent
+    rotates agent.log itself); exit status 3 (the self-update's restart,
+    must stay a failure for Restart=on-failure); the WooCommerce
+    "LanguageFactory.php" (a 631-byte PHP in a JS asset folder that no
+    plugin checksum matches: a dropper); localhost SQLi probe returning
+    200 (the server's own addresses are not inspected); CAPTCHA ports
+    listening publicly (the firewall redirects visitors to them);
+    PK in ignored_countries (owner's policy).
+  - Open, owner to decide: reinfection escalation (a file coming back
+    1,000+ times; auto-suspend is off), restoring an official plugin
+    file the scanner quarantined (Elementor on 2 business500 sites),
+    CRS anomaly threshold 10 at level normal, `max_file_size_mb` 10 (PHP
+    over it is read at both ends already).
+  - **Rollback**: `backup-0.23.32`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.32: same-site relaxations without macros (LiteSpeed)**
   (2026-10-27). joomlashares.com (business600, joomlash, behind

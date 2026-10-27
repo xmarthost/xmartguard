@@ -543,6 +543,9 @@ func (a *Agent) retentionLoop(ctx context.Context) {
 	}
 }
 
+// wafEventDays is how long WAF events are kept.
+const wafEventDays = 35
+
 // kvQuarantineWeek: when the quarantine week was first applied here.
 const kvQuarantineWeek = "quarantine_week_since"
 
@@ -606,7 +609,10 @@ func (a *Agent) pruneOld() {
 	} {
 		_, _ = a.DB.Exec(q, cut)
 	}
-	_, _ = a.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, logCut)
+	// The WAF log is the biggest table (business500: 4 million rows in 18
+	// days, a 1.1 GB database): kept 35 days whatever the logs' setting,
+	// enough for the monthly report.
+	_, _ = a.DB.Exec(`DELETE FROM waf_events WHERE at < ?`, store.Now()-wafEventDays*86400)
 	_, _ = a.DB.Exec(`DELETE FROM ipdb_country WHERE day < ?`, time.Unix(logCut, 0).UTC().Format("2006-01-02"))
 	// AI verdicts are a cache of files judged: kept while a finding names
 	// the file, and half a year otherwise. An administrator's decisions

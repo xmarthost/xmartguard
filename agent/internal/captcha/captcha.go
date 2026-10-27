@@ -200,12 +200,29 @@ var HandshakeErrors atomic.Int64
 // internet (site mode sends visitors to it), and scanners probing it made
 // one "TLS handshake error" line each: 235,000 lines in agent.log on
 // business200. Those are only counted; other server errors are logged.
+// clientNoise are the HTTP server's messages about a client's broken
+// connection, not about the server.
+var clientNoise = [][]byte{[]byte("http2: server: error reading preface from client"), []byte("http2: received GOAWAY"),
+	[]byte("http2: server connection error from"), []byte("http: response.WriteHeader on hijacked connection"),
+	[]byte("http: URL query contains semicolon")}
+
+// ClientErrors counts the client errors left out of the log.
+var ClientErrors atomic.Int64
+
 type quietErrors struct{}
 
 func (quietErrors) Write(p []byte) (int, error) {
 	if bytes.Contains(p, []byte("TLS handshake error")) {
 		HandshakeErrors.Add(1)
 		return len(p), nil
+	}
+	// Scanners that open the port and send nothing or garbage: one line
+	// each filled the agent's log (server1: 122,251 lines, a 95 MB log).
+	for _, noise := range clientNoise {
+		if bytes.Contains(p, noise) {
+			ClientErrors.Add(1)
+			return len(p), nil
+		}
 	}
 	return os.Stderr.Write(p)
 }

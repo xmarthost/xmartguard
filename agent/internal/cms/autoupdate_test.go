@@ -285,3 +285,48 @@ func TestCMSScanAtNight(t *testing.T) {
 		t.Fatal("Scan now started a scan in the day")
 	}
 }
+
+// business500: wp-cli ran as the site owner with the agent's environment
+// (no HOME), tried to create /.wp-cli/cache and failed 326 updates. HOME
+// is the owner's home now.
+func TestWPCLIHome(t *testing.T) {
+	env := wpEnv([]string{"PATH=/usr/bin", "HOME=/", "WP_CLI_CACHE_DIR=/x"}, "root")
+	got := strings.Join(env, " ")
+	if !strings.Contains(got, "PATH=/usr/bin") || !strings.Contains(got, "HOME=/root") || strings.Contains(got, "HOME=/ ") || strings.Contains(got, "/x") {
+		t.Fatalf("env: %v", env)
+	}
+	if got := strings.Join(wpEnv(nil, "no-such-user-xg"), " "); got != "HOME=/tmp WP_CLI_CACHE_DIR=/dev/null" {
+		t.Fatalf("unknown owner: %s", got)
+	}
+}
+
+// business500: the first automatic update of a site the CMS scan had just
+// found failed with "WordPress site not found (run a CMS scan first)":
+// wp-cli looks the owner up in the list, and the site was saved after the
+// updates. It is saved first now.
+func TestNewSiteSavedBeforeUpdates(t *testing.T) {
+	m, _ := autoUpdateManager(t, `{"cms":{"auto_update":true,"core_check":false,"db_scan":false}}`)
+	home := filepath.Join(t.TempDir(), "alice")
+	root := filepath.Join(home, "public_html")
+	fakeSite(t, root)
+	os.WriteFile(filepath.Join(root, "wp-config.php"), []byte("<?php"), 0o644)
+	m.Accounts = func() []Account { return []Account{{Name: "alice", Home: home}} }
+	var listed []int
+	m.RunWPCLI = func(_ context.Context, path string, _ ...string) (string, error) {
+		var n int
+		m.DB.QueryRow(`SELECT count(*) FROM cms_sites WHERE path = ?`, path).Scan(&n)
+		listed = append(listed, n)
+		return "Success: Updated 1 of 1.", nil
+	}
+	if err := m.scan(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) == 0 {
+		t.Fatal("no automatic update ran")
+	}
+	for _, n := range listed {
+		if n != 1 {
+			t.Fatal("wp-cli ran before the site was in the list")
+		}
+	}
+}

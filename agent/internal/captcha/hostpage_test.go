@@ -231,3 +231,14 @@ func TestHostnameServiceCertificate(t *testing.T) {
 		t.Fatal("self-signed certificate passed")
 	}
 }
+
+// server1: scanners opening the CAPTCHA port without speaking HTTP/2
+// properly wrote one log line each (122,251 lines, a 95 MB log). Client
+// errors are counted, not logged; the server's own errors still are.
+func TestCaptchaClientNoiseNotLogged(t *testing.T) {
+	before := ClientErrors.Load()
+	n, err := quietErrors{}.Write([]byte("http2: server: error reading preface from client 45.138.12.52:54068: bogus greeting\n"))
+	if err != nil || n == 0 || ClientErrors.Load() != before+1 {
+		t.Fatalf("preface error: %d %v %d", n, err, ClientErrors.Load())
+	}
+}
