@@ -830,3 +830,41 @@ func TestFleetPhishingCasinoAndLoaders(t *testing.T) {
 		}
 	}
 }
+
+// server1 (2026-10-28, full scan 59): 9,790 macOS metadata files
+// (__MACOSX/…/._Kernel.php, AppleDouble) as hidden PHP, a PsySH fixture,
+// PHP-CS-Fixer's settings requiring each other as a hidden include, and
+// phpstan's string escaper (a regex of byte ranges, assert()) as
+// char-encoded obfuscation. The real thing stays caught.
+func TestFleetMacMetadataAndDevFiles(t *testing.T) {
+	s := newScanner(t)
+	apple := append([]byte{0, 5, 0x16, 7, 0, 2, 0, 0}, []byte("Mac OS X        \x00\x02\x00\x00\x00\x09com.apple.quarantine")...)
+	clean := map[string][]byte{
+		"/home2/u/site/__MACOSX/app/vendor/laravel/framework/src/Illuminate/Foundation/Http/._Kernel.php": apple,
+		"/home2/u/site/vendor/x/._Select.php":                                    apple,
+		"/home2/u/public_html/vendor/psy/psysh/test/fixtures/project/.psysh.php": []byte("<?php\nreturn array('useReadline' => false);\n"),
+		"/home2/u/site/vendor/barryvdh/laravel-ide-helper/.php-cs-fixer.tests.php": []byte("<?php\nrequire __DIR__ . '/vendor/autoload.php';\n" +
+			"$config = require __DIR__ . '/.php-cs-fixer.common.php';\nreturn (new PhpCsFixer\\Config())->setRules($config);\n"),
+		"/home2/u/site/vendor/phpstan/phpdoc-parser/src/Ast/ConstExpr/ConstExprStringNode.php": []byte("<?php declare(strict_types = 1);\nnamespace PHPStan\\PhpDocParser\\Ast\\ConstExpr;\n" +
+			"class ConstExprStringNode {\n\tprivate function escape(string $v): string {\n\t\t$regex = '/(\n" +
+			strings.Repeat("\t\t\t| [\\xC0-\\xC1] | \\xE0(?=[\\x80-\\x9F]) | [\\xF0-\\xF4](?![\\x80-\\xBF]{3}) | (?<=[\\x00-\\x7F\\xF5-\\xFF])[\\x80-\\xBF]\n", 6) +
+			"\t\t)/x';\n\t\treturn preg_replace_callback($regex, static function ($m) {\n\t\t\tassert(strlen($m[0]) === 1);\n\t\t\treturn '\\\\x' . dechex(ord($m[0]));\n\t\t}, $v);\n\t}\n}\n"),
+	}
+	for p, body := range clean {
+		if d := s.checkContent(p, ".php", body); d != nil {
+			t.Errorf("%s flagged: %+v", p, d)
+		}
+	}
+	for p, body := range map[string]string{
+		// Real PHP behind a "._" name is still a hidden PHP file.
+		"/home2/u/public_html/wp-content/._x.php": "<?php echo 'inert';",
+		// A hidden include of a planted name is still a loader.
+		"/home2/u/public_html/wp-content/index2.php": "<?php include __DIR__ . '/.cache_5f2a.php';",
+		// Escapes spelling words, run by eval, are still obfuscation.
+		"/home2/u/public_html/wp-content/x.php": "<?php\n" + strings.Repeat("$a[] = \"\\x69\\x6e\\x65\\x72\\x74\";\n", 12) + "eval(implode('', $a));\n",
+	} {
+		if d := s.checkContent(p, ".php", []byte(body)); d == nil {
+			t.Errorf("%s not found", p)
+		}
+	}
+}

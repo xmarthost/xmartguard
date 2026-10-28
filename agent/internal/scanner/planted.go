@@ -111,10 +111,10 @@ var reHiddenRandomPHP = regexp.MustCompile(`(?i)^\.(?:[a-z]{2,12}[_-])?[0-9a-f]{
 
 // devDotfiles are hidden PHP files that developer tools put into plugins
 // and packages (code style, IDE and test settings), and applications'
-// settings (Laravel 4's .env.php, .env.local.php).
+// settings (Laravel 4's .env.php, .env.local.php, PsySH's .psysh.php).
 func devDotfile(base string) bool {
 	b := strings.ToLower(base)
-	for _, p := range []string{".php", ".rector", ".phan", ".psalm", ".env"} {
+	for _, p := range []string{".php", ".rector", ".phan", ".psalm", ".env", ".psysh"} {
 		if strings.HasPrefix(b, p) {
 			return true
 		}
@@ -147,6 +147,13 @@ func plantedByName(path string, mode func(string) int) *Detection {
 		return &Detection{CatVirus, "PHP.Planted.HiddenDormant"}
 	}
 	return &Detection{CatSuspicious, "PHP.Planted.HiddenFile"}
+}
+
+// appleDouble: a macOS metadata file (magic 0x00051607). Archives made on a
+// Mac carry one per file, named "._" plus the file's name, often under
+// __MACOSX/ (server1, 2026-10-28: 9,790 of them in one Laravel upload).
+func appleDouble(content []byte) bool {
+	return len(content) >= 4 && content[0] == 0 && content[1] == 5 && content[2] == 0x16 && content[3] == 7
 }
 
 // plantedMode is a file's permission bits, or -1.

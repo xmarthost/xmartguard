@@ -515,7 +515,9 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	}
 	// A PHP file planted among WordPress core's styles and images, hidden
 	// or in the logs folder.
-	if bigPHPExts[ext] {
+	// (Not a macOS AppleDouble file: "._name.php" beside a folder unpacked
+	// from a Mac archive holds the original's metadata, no code.)
+	if bigPHPExts[ext] && !appleDouble(content) {
 		if d := plantedInCore(path); d != nil {
 			return final(d)
 		}

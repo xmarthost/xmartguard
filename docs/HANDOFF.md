@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.34** (see `VERSION`).
+- Current release: **0.23.35** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.34 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.35 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.34: `--branch backup-0.23.33`; see "Rollback" under 0.23.34 below);
+  0.23.35: `--branch backup-0.23.34`; see "Rollback" under 0.23.35 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,30 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.35: false positives of server1's full scan** (2026-10-28).
+  Full scan 59 found 9,793 files after 8 of 1,498 accounts; the owner had
+  it stopped. All were wrong:
+  - 9,790 `PHP.Planted.HiddenFile` (suspicious; the signature had paused
+    itself): macOS AppleDouble files (`__MACOSX/…/._Kernel.php`, magic
+    00 05 16 07, metadata of a Mac archive, no code) and PsySH's
+    `.psysh.php` fixture. The planted-PHP rules skip AppleDouble content;
+    `.psysh` joins the developer dotfiles. A "._" name with real PHP in it
+    is still found.
+  - `PHP.Loader.HiddenInclude` (quarantined) on PHP-CS-Fixer's
+    `.php-cs-fixer.tests.php` and `.dist.php` (they require
+    `.php-cs-fixer.common.php`): an include of a developer dotfile is no
+    hidden include.
+  - `PHP.Obfuscated.CharEncoded` (quarantined) on phpstan's
+    ConstExprStringNode.php: a regex of byte ranges (`[\x00-\x08]`) and an
+    `assert(strlen(…) === 1)`. Hex and octal escapes now need five runs of
+    four or more ("\x65\x76\x61\x6c"), which encoded code has and byte
+    ranges do not.
+  The three quarantined files were restored. Test:
+  `TestFleetMacMetadataAndDevFiles` (fails on 0.23.34, five cases). After
+  the update: `findings.recheck_apply` on server1 clears the stale
+  findings, then the full scan can run again.
+  - **Rollback**: `backup-0.23.34`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.34: phishing kits, casino spam, fake plugins** (2026-10-28).
   server1's evidence pack (101 files: a Mercantil bank phishing kit, casino

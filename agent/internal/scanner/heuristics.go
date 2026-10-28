@@ -33,6 +33,7 @@ var (
 	reGoto          = regexp.MustCompile(`(?i)\bgoto\s+[a-zA-Z_]\w*\s*;`)
 	reHex           = regexp.MustCompile(`\\x[0-9A-Fa-f]{2}`)
 	reOct           = regexp.MustCompile(`\\[0-3][0-7]{2}`)
+	reEscRun        = regexp.MustCompile(`(?:\\(?:x[0-9A-Fa-f]{2}|[0-3][0-7]{2})){4,}`)
 	reChr           = regexp.MustCompile(`(?i)\bchr\s*\(`)
 	// A file opened for writing (fwrite to a socket is not a dropper).
 	reFileWrite  = regexp.MustCompile(`(?i)\b(?:file_put_contents|move_uploaded_file|copy)\s*\(|\bfopen\s*\([^;]{0,300}?,\s*['"][wacx]`)
@@ -154,7 +155,10 @@ func analyzePHP(content []byte) *verdict {
 	}
 	// 8. Heavy hex/octal/chr obfuscation building code.
 	dens := float64(hex*4+oct*4+chr*4) / float64(max64(n, 1))
-	if (hex+oct >= 40 || chr >= 40) && dens > 0.10 && (evalOrAssert || decoders >= 1 || varFunc) {
+	// Hex and octal count in runs that spell something ("\x65\x76\x61\x6c"):
+	// a regular expression's byte ranges ([\x00-\x08], phpstan's UTF-8
+	// check) are single escapes.
+	if (hex+oct >= 40 && cnt(reEscRun) >= 5 || chr >= 40) && dens > 0.10 && (evalOrAssert || decoders >= 1 || varFunc) {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharEncoded"}
 	}
 	// 9. eval/assert after __halt_compiler (payload appended to the file).

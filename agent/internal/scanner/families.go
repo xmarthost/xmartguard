@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -29,7 +30,7 @@ var (
 	reIncludePhar = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?\s*[^;]{0,120}?['"]phar://`)
 	// include/require of a hidden file: ".../.name.php" or ".name.php"
 	// (not a ". '.json.php'" suffix).
-	reIncludeHidden = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?(?:[^;]{0,200}?/|\s*['"])\.[a-z0-9_-][\w.-]*\.(?:php\d?|phtml|inc)['"]\s*\)?\s*;`)
+	reIncludeHidden = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?(?:[^;]{0,200}?/|\s*['"])(\.[a-z0-9_-][\w.-]*\.(?:php\d?|phtml|inc))['"]\s*\)?\s*;`)
 	// f(40)($x): functions fetched from a lookup table by number.
 	reFuncTable = regexp.MustCompile(`\b[a-zA-Z_]\w*\(\s*\d{1,4}\s*\)\s*\(`)
 	// (212^222): constants hidden behind arithmetic.
@@ -188,7 +189,9 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 	if m(reIncludePhar) && !library && !bytes.Contains(s, []byte("__HALT_COMPILER")) && n < 8192 {
 		return &verdict{CatSuspicious, "PHP.Suspicious.PharInclude"}
 	}
-	if m(reIncludeHidden) {
+	// (Developer tools' own settings include each other: .php-cs-fixer.dist.php
+	// requires .php-cs-fixer.common.php.)
+	if may(reIncludeHidden, low) && slices.ContainsFunc(reIncludeHidden.FindAllSubmatch(s, 20), func(m [][]byte) bool { return !devDotfile(string(m[1])) }) {
 		if n < 4096 {
 			return &verdict{CatVirus, "PHP.Loader.HiddenInclude"}
 		}
