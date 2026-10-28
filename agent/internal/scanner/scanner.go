@@ -523,6 +523,11 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 			return final(d)
 		}
 	}
+	// Phishing kit pages, casino doorways and their printers, C2 address
+	// files (kits.go).
+	if d := kitByPlace(path, ext, content); d != nil {
+		return final(d)
+	}
 	// A program, whatever it is called (also disguised as an image).
 	if IsELF(content) {
 		return binaryCheck(path, content)

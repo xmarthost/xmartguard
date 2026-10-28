@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.33** (see `VERSION`).
+- Current release: **0.23.34** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.33 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.34 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.33: `--branch backup-0.23.32`; see "Rollback" under 0.23.33 below);
+  0.23.34: `--branch backup-0.23.33`; see "Rollback" under 0.23.34 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,43 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.34: phishing kits, casino spam, fake plugins** (2026-10-28).
+  server1's evidence pack (101 files: a Mercantil bank phishing kit, casino
+  SEO doorways, EtherHiding fake plugins, "woocommerce_inputs" loaders, a
+  C2 address file) had no finding. New rules in `scanner/kits.go`, all our
+  own, built from how each family works:
+  - `PHP.Obfuscated.SplitStrings`: 40+ string pieces ('wp'.'_fo') with
+    add_action (the fake plugins' inc/class-handler.php);
+  - `PHP.Obfuscated.HashNames`: 20+ md5-named identifiers, or 10+ with a
+    network fetch (woocommerce-load.php);
+  - `PHP.Backdoor.TelegramDeadDrop`: reads a t.me/s/ channel page and adds
+    users or includes code; `PHP.Backdoor.HiddenPluginLoader`: hides itself
+    from the plugin list and its action links, downloads, writes and
+    includes code (the older woocommerce_inputs.php);
+  - `PHP.SEOSpam.RemoteFooterLinks`: /api/links fetched without TLS checks
+    and printed in the footer (fhelpers.php);
+  - `Phishing.Collector.Telegram`: Telegram bot settings, the visitor's
+    address or browser and three kinds of secret with a card or bank login
+    among them (a one-time-code plugin sending by Telegram stays clean);
+    `Phishing.KitPage`: an HTML page naming a sibling script that is such a
+    collector;
+  - `HTML.SEOSpam.HiddenGambling`: an element hidden by its own style
+    (clip, 1px, far off screen; not display:none, which themes use for
+    menus) holding 15+ links and 10+ casino terms;
+    `PHP.SEOSpam.HiddenGamblingPrinter`: a mu-plugin printing such a
+    sibling .html in the footer; `HTML.SEOSpam.GamblingDoorway`: a static
+    .html named for casino offers, outside wp-content, copying the site's
+    WordPress page (5+ wp-content references) with 40+ casino terms;
+  - `Dropper.Base64URL`: an extensionless 32-hex-named file holding only a
+    base64 http(s) URL.
+  Evidence: 36 of 101 files now found (every kit, plugin and loader's
+  working file; the rest are images, CSS, readme and data). Elementor,
+  Yoast, LiteSpeed Cache, MainWP Child, Contact Form 7, WP Mail SMTP,
+  the Stripe gateway, the WordPress importer and WordPress core: no
+  finding. Test: `TestFleetPhishingCasinoAndLoaders` (inert fixtures and
+  look-alikes).
+  - **Rollback**: `backup-0.23.33`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.33: fixes from three server audits** (2026-10-27). The
   owner's server assistant audited business200, server1 and business500.

