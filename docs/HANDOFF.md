@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.35** (see `VERSION`).
+- Current release: **0.23.36** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.35 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.36 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.35: `--branch backup-0.23.34`; see "Rollback" under 0.23.35 below);
+  0.23.36: `--branch backup-0.23.35`; see "Rollback" under 0.23.36 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,22 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.36: the kit rules no longer slow scans down** (2026-10-28).
+  server1's full scan ran at about 280 files a second (595 before
+  0.23.34). The agent's profile showed regexp's NFA (`machine.add`,
+  `unicode.SimpleFold`) on top: 0.23.34's kit rules ran their
+  case-insensitive regular expressions on every PHP and HTML file. A
+  timing over 3,000 plugin and core files plus 200 large HTML pages: the
+  kit rules took 13.6 s of a 27 s analysis, the place rules 4.7 s. Each
+  rule now first checks its plain words (bytes.Contains: "t.me/s/",
+  "all_plugins", "/api/links", the string-piece and `$var_` counts, a
+  Telegram word, a casino word, a ".php" a page names) on one pooled
+  lowercase copy; the regular expressions run only on files that have
+  them. Now 0.8 s and 0.03 s, same detections (evidence 36 of 101, the
+  plugin and core corpus clean, all tests).
+  Keep it so: a new content rule starts with a plain-word check.
+  - **Rollback**: `backup-0.23.35`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.35: false positives of server1's full scan** (2026-10-28).
   Full scan 59 found 9,793 files after 8 of 1,498 accounts; the owner had

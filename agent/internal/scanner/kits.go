@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 )
 
 // Malware families from server1 (2026-10-28 evidence pack: none of its 101
@@ -67,38 +69,53 @@ var (
 
 	reGamblingName = regexp.MustCompile(`casino|spins|bonus|slots?\b|betting|deposit|gamstop|poker|jackpot|wager|roulette|blackjack|bingo|gambl`)
 
+	// gamblingWords: one of them comes before the casino rules run (ten
+	// casino terms in a block have one of these).
+	gamblingWords = []string{"casino", "slot", "spins", "betting", "jackpot", "bonus"}
+
 	reHexName = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
-// kitFamilies judges content alone (see analyze).
+// kitFamilies judges content alone (see analyze). Every rule first looks
+// for its plain words (bytes.Contains): the regular expressions run on the
+// few files that have them, not on every page of a server (0.23.34 ran them
+// on all, which doubled a full scan's time on server1).
 func kitFamilies(ext string, content []byte) *Detection {
-	php := bytes.Contains(content, []byte("<?"))
+	has := func(w string) bool { return bytes.Contains(content, []byte(w)) }
+	lp := lowerPooled(content)
+	defer lowerPool.Put(lp)
+	low := *lp
+	php := has("<?")
 	if php && len(content) < 512<<10 {
-		if len(reSplitPiece.FindAllIndex(content, 40)) >= 40 && bytes.Contains(content, []byte("add_action")) {
+		pieces := bytes.Count(content, []byte("'.'")) + bytes.Count(content, []byte("' . '")) +
+			bytes.Count(content, []byte("'. '")) + bytes.Count(content, []byte("' .'"))
+		if pieces >= 40 && has("add_action") && len(reSplitPiece.FindAllIndex(content, 40)) >= 40 {
 			return &Detection{CatVirus, "PHP.Obfuscated.SplitStrings"}
 		}
-		if n := len(reHashName.FindAllIndex(content, 20)); n >= 20 || n >= 10 && reNetFetch.Match(content) {
-			return &Detection{CatVirus, "PHP.Obfuscated.HashNames"}
+		if bytes.Count(content, []byte("$var_"))+bytes.Count(content, []byte("fn_")) >= 10 {
+			if n := len(reHashName.FindAllIndex(content, 20)); n >= 20 || n >= 10 && reNetFetch.Match(content) {
+				return &Detection{CatVirus, "PHP.Obfuscated.HashNames"}
+			}
 		}
-		if reTgChannel.Match(content) && reNetFetch.Match(content) && (reAddUser.Match(content) || reIncludeV.Match(content)) {
+		if has("t.me/s/") && reNetFetch.Match(content) && (reAddUser.Match(content) || reIncludeV.Match(content)) {
 			return &Detection{CatVirus, "PHP.Backdoor.TelegramDeadDrop"}
 		}
 		// Hidden from the plugin list, downloading and running code
 		// (management plugins that hide themselves do not include what
 		// they download from the same file).
-		if len(content) < 64<<10 && reHidesPlugin.Match(content) && reHidesActions.Match(content) &&
+		if len(content) < 64<<10 && has("all_plugins") && has("plugin_action_links_") && reHidesPlugin.Match(content) && reHidesActions.Match(content) &&
 			reNetFetch.Match(content) && reWritesFile.Match(content) && (reIncludeV.Match(content) || reAddUser.Match(content)) {
 			return &Detection{CatVirus, "PHP.Backdoor.HiddenPluginLoader"}
 		}
-		if reApiLinks.Match(content) && reNoVerify.Match(content) && reFooterHook.Match(content) {
+		if has("/api/links") && has("sslverify") && reApiLinks.Match(content) && reNoVerify.Match(content) && reFooterHook.Match(content) {
 			return &Detection{CatVirus, "PHP.SEOSpam.RemoteFooterLinks"}
 		}
-		if phishBackend(content) {
+		if phishBackend(content, low) {
 			return &Detection{CatVirus, "Phishing.Collector.Telegram"}
 		}
 	}
 	if ext == ".html" || ext == ".htm" || ext == ".php" {
-		if hiddenGambling(content) {
+		if hiddenGambling(content, low) {
 			return &Detection{CatVirus, "HTML.SEOSpam.HiddenGambling"}
 		}
 	}
@@ -109,7 +126,10 @@ func kitFamilies(ext string, content []byte) *Detection {
 // with the visitor's address or browser, asking for three kinds of secret,
 // a card's or a bank login's among them (a plugin sending one-time codes by
 // Telegram asks for no card).
-func phishBackend(content []byte) bool {
+func phishBackend(content, low []byte) bool {
+	if !bytes.Contains(low, []byte("telegram.org/bot")) && !bytes.Contains(low, []byte("tg_")) && !bytes.Contains(low, []byte("chat_id")) {
+		return false
+	}
 	if !reTgExfil.Match(content) || !reVictim.Match(content) {
 		return false
 	}
@@ -131,7 +151,13 @@ func phishBackend(content []byte) bool {
 
 // hiddenGambling: an element hidden from visitors holding a list of casino
 // links (right after the hiding style).
-func hiddenGambling(content []byte) bool {
+func hiddenGambling(content, low []byte) bool {
+	if !bytes.Contains(content, []byte("px")) && !bytes.Contains(content, []byte("rect(")) {
+		return false
+	}
+	if !slices.ContainsFunc(gamblingWords, func(w string) bool { return bytes.Contains(low, []byte(w)) }) {
+		return false
+	}
 	for _, m := range reHiddenBlock.FindAllIndex(content, 20) {
 		w := content[m[1]:min(len(content), m[1]+16<<10)]
 		if len(reGambling.FindAllIndex(w, 10)) >= 10 && len(reLink.FindAllIndex(w, 15)) >= 15 {
@@ -154,7 +180,7 @@ func kitByPlace(path, ext string, content []byte) *Detection {
 		}
 	case ext == ".html" || ext == ".htm":
 		// A page of a phishing kit: it posts to a backend next to it.
-		if reSecretWord.Match(content) {
+		if bytes.Contains(content, []byte(".php")) {
 			seen := map[string]bool{}
 			for _, m := range reKitPost.FindAllSubmatch(content, 40) {
 				name := string(m[1])
@@ -162,7 +188,7 @@ func kitByPlace(path, ext string, content []byte) *Detection {
 					continue
 				}
 				seen[name] = true
-				if b, err := readSmall(filepath.Join(filepath.Dir(path), name)); err == nil && phishBackend(b) {
+				if b, err := readSmall(filepath.Join(filepath.Dir(path), name)); err == nil && phishBackend(b, lowerASCII(b)) && reSecretWord.Match(content) {
 					return &Detection{CatVirus, "Phishing.KitPage"}
 				}
 			}
@@ -177,12 +203,29 @@ func kitByPlace(path, ext string, content []byte) *Detection {
 	case ext == ".php" && strings.Contains(low, "/wp-content/mu-plugins/"):
 		// A must-use plugin printing a hidden casino block kept next to it.
 		if m := reSiblingHTML.FindSubmatch(content); m != nil && reReadFile.Match(content) && reFooterHook.Match(content) {
-			if b, err := readSmall(filepath.Join(filepath.Dir(path), string(m[1]))); err == nil && hiddenGambling(b) {
+			if b, err := readSmall(filepath.Join(filepath.Dir(path), string(m[1]))); err == nil && hiddenGambling(b, lowerASCII(b)) {
 				return &Detection{CatVirus, "PHP.SEOSpam.HiddenGamblingPrinter"}
 			}
 		}
 	}
 	return nil
+}
+
+// lowerPool holds buffers for the lowercased content (no new copy of
+// every page scanned).
+var lowerPool = sync.Pool{New: func() any { b := []byte{}; return &b }}
+
+func lowerPooled(content []byte) *[]byte {
+	p := lowerPool.Get().(*[]byte)
+	b := slices.Grow((*p)[:0], len(content))[:len(content)]
+	for i, c := range content {
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	*p = b
+	return p
 }
 
 // readSmall reads a file of at most 256 KB.
