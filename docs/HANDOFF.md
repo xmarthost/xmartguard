@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.37** (see `VERSION`).
+- Current release: **0.23.38** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.37 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.38 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.37: `--branch backup-0.23.36`; see "Rollback" under 0.23.37 below);
+  0.23.38: `--branch backup-0.23.37`; see "Rollback" under 0.23.38 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,16 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.38: inert PHP is really inert** (2026-10-29). A review of
+  0.23.37's exceptions for abuse: a hidden "<?php return require 'x';"
+  counted as inert (a string table) and escaped the planted-PHP rules. An
+  inert file now has no include/require/eval, no `new`, no static call,
+  no heredoc. Remaining, accepted trade-offs of 0.23.37 (other rules still
+  see such files): readable goto labels, readable $GLOBALS names, a
+  *whitelist* function of the file's own, an unanchored .htaccess lock
+  without the kits' extension list.
+  - **Rollback**: `backup-0.23.37`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.37: libraries quarantined by server1's full scan 62**
   (2026-10-29). Scan 62 (43.7 million files, 3,236 findings) found real

@@ -984,6 +984,8 @@ func TestFleetLibrariesOfScan62(t *testing.T) {
 		"/home2/u/public_html/wp-content/x8.php":                "<?php\n$c = $_POST['c'];\necho preg_replace('/.*/e', '\\0', $c);\n",
 		"/home2/u/public_html/wp-content/x9.php":                "<?php\n$f = $_POST['f'];\nif (in_array($f, array('system', 'exec'))) { call_user_func_array($f, array($_POST['a'])); }\n",
 		"/home2/u/public_html/wp-content/.stubs_9f3a1c7e2b.php": "<?php echo 'inert';",
+		"/home2/u/public_html/wp-content/.rules.php":            "<?php return require 'inert-loader.txt';",
+		"/home2/u/public_html/wp-content/.rules2.php":           "<?php return array('a' => Loader::run('inert'));",
 	} {
 		if d := check(p, body); d == nil {
 			t.Errorf("%s not found", p)

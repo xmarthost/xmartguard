@@ -186,13 +186,16 @@ func inertPHP(content []byte) bool {
 			return false
 		}
 	}
-	return !bytes.Contains(bare, []byte("$")) && !bytes.Contains(bare, []byte("`"))
+	// No variable, command, or other file pulled in ("return require
+	// 'x.php';" runs that file).
+	return !bytes.Contains(bare, []byte("$")) && !bytes.Contains(bare, []byte("`")) && !reLoadsCode.Match(bare)
 }
 
 var (
-	reStopNow  = regexp.MustCompile(`^(?:exit|die)\s*(?:\(\s*\))?\s*;`)
-	reStrLit   = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*"`)
-	reCallName = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	reLoadsCode = regexp.MustCompile(`(?i)\b(?:include|require|include_once|require_once|eval|new|static|self|parent)\b|::|<<<`)
+	reStopNow   = regexp.MustCompile(`^(?:exit|die)\s*(?:\(\s*\))?\s*;`)
+	reStrLit    = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*"`)
+	reCallName  = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 )
 
 // plantedMode is a file's permission bits, or -1.
