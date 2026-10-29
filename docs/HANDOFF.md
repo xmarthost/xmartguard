@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.38** (see `VERSION`).
+- Current release: **0.23.39** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.38 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.39 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.38: `--branch backup-0.23.37`; see "Rollback" under 0.23.38 below);
+  0.23.39: `--branch backup-0.23.38`; see "Rollback" under 0.23.39 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,27 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.39: a packer slipped past 0.23.35's escape rule; a
+  Telegram phishing page** (2026-10-29). The fleet review of quarantined
+  files ("findings.recheck" on every server, each "no longer flagged" file
+  looked at before restoring) found two holes:
+  - `PHP.Obfuscated.CharEncoded` counted escape *runs* (five needed) since
+    0.23.35; a packer that puts its whole hex-escaped payload in one string
+    (goto flow, openssl_decrypt; business100 ajokaorg recommend.php) is one
+    run. It now counts the escapes in runs that decode to text (40 needed);
+    Wordfence's binary mask table and phpstan's byte ranges still count 0.
+  - `Phishing.KitPage` for .php and .html: a page that reports visitors to
+    api.telegram.org/bot and has a form asking for a one-time code, a
+    password or a card, outside plugin, theme and vendor folders (a SumUp
+    kit in wp-admin/sumup/web/, which the old mailer rule had flagged and
+    a later fix let go).
+  Restored after a look at each: Vafpress copies, Wordfence, phpstan,
+  ForceUTF8 Encoding.php, Unyson, LayerSlider, EWWW binaries, phars,
+  cPanel php.ini files, Really Simple Security, site contact forms. Kept:
+  the SumUp kit and recommend.php. Rule for the review: a recheck verdict is
+  the engine's opinion; a file that is no known library is opened first.
+  - **Rollback**: `backup-0.23.38`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.38: inert PHP is really inert** (2026-10-29). A review of
   0.23.37's exceptions for abuse: a hidden "<?php return require 'x';"

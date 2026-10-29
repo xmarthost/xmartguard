@@ -178,6 +178,8 @@ func kitByPlace(path, ext string, content []byte) *Detection {
 			(bytes.HasPrefix(b, []byte("https://")) || bytes.HasPrefix(b, []byte("http://"))) {
 			return &Detection{CatVirus, "Dropper.Base64URL"}
 		}
+	case (ext == ".php" || ext == ".html" || ext == ".htm") && phishPage(low, content):
+		return &Detection{CatVirus, "Phishing.KitPage"}
 	case ext == ".html" || ext == ".htm":
 		// A page of a phishing kit: it posts to a backend next to it.
 		if bytes.Contains(content, []byte(".php")) {
@@ -236,3 +238,21 @@ func readSmall(path string) ([]byte, error) {
 	}
 	return os.ReadFile(path)
 }
+
+// phishPage: a page that reports its visitors to a Telegram bot and asks
+// them for a one-time code, a password or a card (s1.cobuildhost, 2026-10-
+// 29: a SumUp kit in wp-admin/sumup/web/ - "user in the email page!" to
+// the bot, then six OTP boxes posting to send.php). Plugins and themes that
+// send notices by Telegram do not render a sign-in form of their own next
+// to it outside their folders.
+func phishPage(low string, content []byte) bool {
+	if !bytes.Contains(content, []byte("api.telegram.org/bot")) || !bytes.Contains(content, []byte("<form")) {
+		return false
+	}
+	if strings.Contains(low, "/wp-content/plugins/") || strings.Contains(low, "/wp-content/themes/") || strings.Contains(low, "/vendor/") {
+		return false
+	}
+	return rePhishInput.Match(content)
+}
+
+var rePhishInput = regexp.MustCompile(`(?i)autocomplete\s*=\s*["']one-time-code|type\s*=\s*["']password|name\s*=\s*["'](?:cvv|cvc|card_?number|cc_?num|otp|pin)["']`)

@@ -171,7 +171,9 @@ func analyzePHP(content []byte) *verdict {
 	// Binary tables (Wordfence's IPv6 masks, "\xff\xff\x00…") are runs too,
 	// but they decode to no text: only runs of letters, digits and code
 	// punctuation count.
-	if (hex+oct >= 40 && textEscRuns(s) >= 5 || chr >= 40) && dens > 0.10 && (evalOrAssert || decoders >= 1 || varFunc) {
+	// (Escapes counted, not runs: a packer puts its whole payload in one
+	// run, business100 ajokaorg recommend.php, 2026-10-29.)
+	if (hex+oct >= 40 && textEscapes(s) >= 40 || chr >= 40) && dens > 0.10 && (evalOrAssert || decoders >= 1 || varFunc) {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharEncoded"}
 	}
 	// 9. eval/assert after __halt_compiler (payload appended to the file).
@@ -680,9 +682,11 @@ func readableGotos(s []byte) bool {
 	return words*10 >= len(ms)*9
 }
 
-// textEscRuns counts escape runs that decode to text (letters, digits,
-// code punctuation): "\x65\x76\x61\x6c" is "eval"; a binary table is not.
-func textEscRuns(s []byte) int {
+// textEscapes counts the escapes in runs that decode to text (letters,
+// digits, code punctuation): "\x65\x76\x61\x6c" is "eval"; a binary table
+// (Wordfence's IPv6 masks) is not, and single escapes of a regex's byte
+// ranges are no run.
+func textEscapes(s []byte) int {
 	n := 0
 	for _, run := range reEscRun.FindAll(s, -1) {
 		text, all := 0, 0
@@ -699,7 +703,7 @@ func textEscRuns(s []byte) int {
 			}
 		}
 		if all > 0 && text*4 >= all*3 {
-			n++
+			n += text
 		}
 	}
 	return n
