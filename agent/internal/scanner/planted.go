@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -111,13 +112,19 @@ var reHiddenRandomPHP = regexp.MustCompile(`(?i)^\.(?:[a-z]{2,12}[_-])?[0-9a-f]{
 
 // devDotfiles are hidden PHP files that developer tools put into plugins
 // and packages (code style, IDE and test settings), and applications'
-// settings (Laravel 4's .env.php, .env.local.php, PsySH's .psysh.php).
+// settings (Laravel 4's .env.php, .env.local.php, PsySH's .psysh.php,
+// Filament's .stubs.php for IDEs, Sami's .sami.php documentation settings).
 func devDotfile(base string) bool {
 	b := strings.ToLower(base)
-	for _, p := range []string{".php", ".rector", ".phan", ".psalm", ".env", ".psysh"} {
+	for _, p := range []string{".php", ".rector", ".phan", ".psalm", ".env"} {
 		if strings.HasPrefix(b, p) {
 			return true
 		}
+	}
+	// Whole names only: ".stubs_9f3a1c7e.php" is a planted copy.
+	switch b {
+	case ".psysh.php", ".stubs.php", ".sami.php":
+		return true
 	}
 	return false
 }
@@ -155,6 +162,38 @@ func plantedByName(path string, mode func(string) int) *Detection {
 func appleDouble(content []byte) bool {
 	return len(content) >= 4 && content[0] == 0 && content[1] == 5 && content[2] == 0x16 && content[3] == 7
 }
+
+// inertPHP: a PHP file that runs nothing. Its code stops at once
+// (LiteSpeed Cache's .litespeed_conf.php: "<?php exit; ?>" and its
+// settings as JSON) or only returns a table of strings (PicoFeed's
+// .wsj.com.php site rules).
+func inertPHP(content []byte) bool {
+	c := bytes.TrimLeft(content, " \t\r\n\ufeff")
+	if !bytes.HasPrefix(c, []byte("<?php")) {
+		return false
+	}
+	code := stripPHPComments(c[5:])
+	code = bytes.TrimSpace(code)
+	if reStopNow.Match(code) {
+		return true
+	}
+	if !bytes.HasPrefix(code, []byte("return")) {
+		return false
+	}
+	bare := reStrLit.ReplaceAll(code, nil)
+	for _, m := range reCallName.FindAllSubmatch(bare, -1) {
+		if !bytes.EqualFold(m[1], []byte("array")) {
+			return false
+		}
+	}
+	return !bytes.Contains(bare, []byte("$")) && !bytes.Contains(bare, []byte("`"))
+}
+
+var (
+	reStopNow  = regexp.MustCompile(`^(?:exit|die)\s*(?:\(\s*\))?\s*;`)
+	reStrLit   = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*"`)
+	reCallName = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+)
 
 // plantedMode is a file's permission bits, or -1.
 func plantedMode(path string) int {

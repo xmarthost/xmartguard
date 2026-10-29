@@ -49,8 +49,12 @@ func analyze(ext string, content []byte) *Detection {
 			return &Detection{v.category, v.signature}
 		}
 	default:
-		// Images/text/other extensions that smuggle PHP code.
-		if v := analyzePHP(content); v != nil {
+		// Images/text/other extensions that smuggle PHP code. (A Perl,
+		// Python or shell program that writes PHP carries it as text:
+		// SquirrelMail's conf.pl. A weak sign there is no finding; code the
+		// analyzer calls malicious still is, shebang or not, since PHP runs
+		// such a file when another script includes it.)
+		if v := analyzePHP(content); v != nil && !(v.category == CatSuspicious && otherInterpreter(content)) {
 			return codeInNonScript(ext, v, content)
 		}
 		if d := scriptInImage(ext, content); d != nil {
@@ -123,4 +127,14 @@ func startsLikeScript(content []byte) bool {
 		}
 	}
 	return bytes.HasPrefix(head, []byte("<?")) || bytes.HasPrefix(head, []byte("#!"))
+}
+
+// otherInterpreter: a script whose first line names another language's
+// interpreter (#!/usr/bin/perl, #!/usr/bin/env python3).
+func otherInterpreter(content []byte) bool {
+	if !bytes.HasPrefix(content, []byte("#!")) {
+		return false
+	}
+	line, _, _ := bytes.Cut(content[:min(len(content), 200)], []byte("\n"))
+	return !bytes.Contains(line, []byte("php"))
 }

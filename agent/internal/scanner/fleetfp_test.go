@@ -868,3 +868,125 @@ func TestFleetMacMetadataAndDevFiles(t *testing.T) {
 		}
 	}
 }
+
+// server1 (2026-10-29, full scan 62): phpList's admin/.htaccess refuses
+// .php and .inc and allows its three entry points, and was quarantined as
+// an attack kit's lock. Without the kits' extension list (py, exe, PHP in
+// mixed case, suspected) and with names allowed by their ending, the lock
+// is an application's; the kits' own locks stay malware, also the ones the
+// AI called clean.
+func TestFleetAppHtaccessLock(t *testing.T) {
+	phplist := "<FilesMatch \"\\.(php|inc)$\">\n\t<IfModule mod_authz_core.c>\n\t\tRequire all denied\n\t</IfModule>\n</FilesMatch>\n" +
+		"<FilesMatch \"(index.php|connector.php|upload.php)$\">\n\t<IfModule mod_authz_core.c>\n\t\tRequire all granted\n\t</IfModule>\n</FilesMatch>\n"
+	if d := htaccessHack([]byte(phplist)); d != nil {
+		t.Errorf("application lock: %+v", d)
+	}
+	for _, kit := range []string{
+		"<FilesMatch \".*\\.(py|exe|phtml|php|PHP|Php|PHp|pHp|suspected)$\">\nOrder Allow,Deny\nDeny from all\n</FilesMatch>\n<FilesMatch \"^(wp-login.php)$\">\nOrder Allow,Deny\nAllow from all\n</FilesMatch>",
+		"<FilesMatch '.(py|exe|phtml|php|PHP|Php|php5|suspected)$'>\r\nOrder allow,deny\r\nDeny from all\r\n</FilesMatch>\r\n<FilesMatch '^(index.php)$'>\r\nOrder allow,deny\r\nAllow from all\r\n</FilesMatch>",
+		"<FilesMatch '.(py|exe|php|PHP|Php|suspected)$'>\nOrder allow,deny\nDeny from all\n</FilesMatch>",
+		"<FilesMatch \"\\.php$\">\nRequire all denied\n</FilesMatch>\n<FilesMatch \"^(index\\.php|x7shell\\.php)$\">\nRequire all granted\n</FilesMatch>",
+	} {
+		if d := htaccessHack([]byte(kit)); d == nil || d.Category != CatVirus || d.Signature != "Htaccess.Hacked.PHPLock" {
+			t.Errorf("kit lock: %+v", d)
+		}
+	}
+}
+
+// server1 (2026-10-29, full scan 62): official plugin and library files
+// quarantined. Each inert fixture keeps the shape that fired; the attack
+// next to it stays caught.
+func TestFleetLibrariesOfScan62(t *testing.T) {
+	s := newScanner(t)
+	check := func(path string, body string) *Detection {
+		t.Helper()
+		return s.checkContent(path, extOf(path), []byte(body))
+	}
+	masks := ""
+	for i := range 60 {
+		masks += fmt.Sprintf("\t\t%d => \"\\xff\\xff\\xff\\x%02x\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\",\n", i, i)
+	}
+	big := strings.Repeat("// LayerSlider admin actions: sliders, revisions, templates.\nfunction ls_action_x() { update_option('ls_x', 1); }\n", 300)
+	gotos := ""
+	for i := range 10 {
+		gotos += fmt.Sprintf("if ($m !== 'GET') { goto not_simple_trailing_slash_GET_method_%d; }\nreturn rawurldecode($p);\nnot_simple_trailing_slash_GET_method_%d:\n", i, i)
+	}
+	clean := map[string]string{
+		// Wordfence wf-waf utils.php: IPv6 masks as binary strings.
+		"/home2/u/public_html/wp-content/plugins/wordfence/vendor/wordfence/wf-waf/src/lib/utils.php": "<?php\nclass wfWAFUtils {\n\tstatic function hmac($algo, $key) { return $algo($key); }\n\tstatic $masks = array(\n" + masks + "\t);\n}\n",
+		// Vafpress (JNews, Rehub): the AJAX wrapper calls allowed functions only.
+		"/home2/u/public_html/wp-content/plugins/jnews-essential/lib/vp/bootstrap.php": "<?php\nfunction vp_ajax_wrapper() {\n\t$function = $_POST['func'];\n\t$params = $_POST['params'];\n\tif (VP_Security::instance()->is_function_whitelisted($function)) {\n\t\t$result = call_user_func_array($function, $params);\n\t}\n}\n",
+		// LayerSlider actions.php: an importer behind nonce checks.
+		"/home2/u/public_html/wp-content/plugins/LayerSlider/assets/wp/actions.php": "<?php\n" + big + "function ls_import_online() {\n\tcheck_ajax_referer('ls-import-demos', 'security');\n\t$slider = urlencode($_GET['slider']);\n\t$downloadPath = sys_get_temp_dir() . '/' . sanitize_file_name($_GET['slider']) . '.zip';\n\tfile_put_contents($downloadPath, wp_remote_retrieve_body(wp_remote_get('https://example.invalid/' . $slider)));\n}\n",
+		// SquirrelMail and SitePad: /e with a fixed replacement.
+		"/home2/u/public_html/squirrel/functions/encode/koi8_r.php": "<?php\nfunction charset_encode_koi8_r($string) {\n\treturn preg_replace(\"/([\\200-\\377])/e\", \"'&#' . ord('\\\\1') . ';'\", $string);\n}\n",
+		// Symfony's build script: commands from the command line's arguments.
+		"/home2/u/public_html/vendor/symfony/symfony/.github/build-packages.php": "<?php\nif (3 > $_SERVER['argc']) { exit(1); }\n$dirs = $_SERVER['argv'];\n$base = trim(shell_exec(sprintf('git merge-base %s HEAD', array_shift($dirs))));\n",
+		// A generated router (Symfony's dumper fixtures): labelled gotos.
+		"/home2/u/public_html/vendor/symfony/symfony/src/Symfony/Component/Routing/Tests/Fixtures/dumper/url_matcher6.php": "<?php\nfunction match($p, $m) {\n" + gotos + "}\n",
+		// phpxmlrpc: the saved error handler is called by its name.
+		"/home2/u/public_html/wp-content/plugins/x/xmlrpc-3.0/lib/xmlrpcs.inc": "<?php\nfunction _xmlrpcs_errorHandler($c, $e) {\n\t$GLOBALS['_xmlrpcs_prev_ehandler']($c, $e);\n}\nfunction parse($d) { return gzuncompress($d); }\n",
+		// Unyson: a random string built with chr(), far from any callback.
+		"/home2/u/public_html/wp-content/plugins/unyson/framework/helpers/general.php": "<?php\nfunction fw_rand($sha) {\n\t$rnd = '';\n\tfor ($c = 0; $c < 32; $c += 2) { $rnd .= chr( hexdec( $sha[ $c ] . $sha[ $c + 1 ] ) ); }\n\treturn $rnd;\n}\n" + strings.Repeat("function fw_helper_x() { return get_option('fw_x'); }\n", 60) + "function fw_call($cb) { return isset($_SERVER['windir']) ? $cb() : $cb(); }\n",
+		// LiteSpeed Cache's settings, PicoFeed's site rules, Filament stubs.
+		"/home2/u/public_html/wp-content/.litespeed_conf.php":                                                   "<?php exit; // LiteSpeed Cache runtime configuration. Do not edit. ?>\n{\"debug\":0,\"object-kind\":false}",
+		"/home2/u/public_html/wp-content/plugins/penci-feeds/classes/libs/fguillot/PicoFeed/Rules/.wsj.com.php": "<?php\nreturn array(\n\t'grabber' => array('%.*%' => array('test_url' => 'https://example.test/a', 'body' => array('//div[@class=\"article\"]'))),\n);\n",
+		"/home2/u/public_html/vendor/filament/forms/.stubs.php":                                                 "<?php\nnamespace Livewire\\Features;\nclass Testable { public function fillForm(array $state = []): static { return $this; } }\n",
+	}
+	for p, body := range clean {
+		if d := check(p, body); d != nil {
+			t.Errorf("%s flagged: %+v", p, d)
+		}
+	}
+	// Really Simple Security's prepend; another prepend is still reported.
+	rss := "; BEGIN Really Simple Auto Prepend File\nauto_prepend_file = '/home/u/public_html/wp-content/advanced-headers.php'\n; END Really Simple Auto Prepend File"
+	if d := configLoader([]byte(rss)); d != nil {
+		t.Errorf("Really Simple Security prepend flagged: %+v", d)
+	}
+	if d := configLoader([]byte("auto_prepend_file = '/home/u/public_html/wp-content/advanced-headers.php'")); d == nil {
+		t.Error("unmarked prepend not reported")
+	}
+	// js-beautify's unpacker inside node_modules.
+	if d := capHeuristic("/home2/u/nodevenv/app/10/lib/node_modules/js-beautify/js/src/unpackers/myobfuscate_unpacker.js", ".js",
+		&Detection{CatSuspicious, "JS.Injection.DocumentWriteUnescape"}); d != nil {
+		t.Errorf("node package flagged: %+v", d)
+	}
+	// A Perl script holding a web shell is still a web shell (PHP runs it
+	// when it is included).
+	if d := analyze(".pl", []byte("#!/usr/bin/perl\n<?php system($_GET['x']); ?>\n")); d == nil {
+		t.Error("shell behind a perl shebang not found")
+	}
+	// A Perl program carrying PHP as text (SquirrelMail's conf.pl).
+	perl := "#!/usr/bin/env perl\nmy $ok = eval(\"require 'conf.pl'\");\nprint CF \"<?php\\n\";\n" + strings.Repeat("print CF \"$\" . \"conf\" . \"['\" . \"$k\" . \"'] = '\" . \"$v\" . \"';\\n\";\n", 30)
+	if v := analyzePHP([]byte(perl)); v == nil || v.category != CatSuspicious {
+		t.Fatalf("perl fixture does not reproduce conf.pl: %+v", v)
+	}
+	if d := analyze(".pl", []byte(perl)); d != nil {
+		t.Errorf("perl program flagged: %+v", d)
+	}
+	// composer and php-cs-fixer shipped as phars without an extension.
+	phar := buildPhar("<?php Phar::mapPhar('composer.phar'); require 'phar://composer.phar/bin/composer'; ",
+		map[string]string{"src/Util/Eval.php": "<?php namespace Composer\\Util; class E { function run($code) { return eval($code); } }"})
+	if old := analyze("", phar); old == nil {
+		t.Fatal("phar fixture does not reproduce the old false positive")
+	}
+	if d := check("/home2/u/public_html/vendor/phpunit/phpunit/tools/composer", string(phar)); d != nil {
+		t.Errorf("extensionless phar flagged: %+v", d)
+	}
+	for p, body := range map[string]string{
+		"/home2/u/public_html/wp-content/x1.php":                "<?php\n$f = $_POST['f'];\ncall_user_func_array($f, array($_POST['a']));\n",
+		"/home2/u/public_html/wp-content/x2.php":                "<?php\necho preg_replace('/.*/e', $_POST['c'], 'x');\n",
+		"/home2/u/public_html/wp-content/x3.php":                "<?php\necho preg_replace(\"/(.*)/e\", \"eval('\\\\1')\", 'x');\n",
+		"/home2/u/public_html/wp-content/x4.php":                "<?php\nsystem($_SERVER['HTTP_CMD']);\n",
+		"/home2/u/public_html/wp-content/x5.php":                "<?php\n$GLOBALS['_1452_'][3](base64_decode('aW5lcnQ='));\n",
+		"/home2/u/public_html/wp-content/x6.php":                "<?php\n$k = 'x';\n$s = '';\nfor ($i = 0; $i < 9; $i++) { $s .= chr(ord($k[$i % 1]) ^ 7); }\n$s($_POST['a']);\n",
+		"/home2/u/public_html/wp-content/.x_7.php":              "<?php exit_soon(); include $_GET['p'];",
+		"/home2/u/public_html/wp-content/x8.php":                "<?php\n$c = $_POST['c'];\necho preg_replace('/.*/e', '\\0', $c);\n",
+		"/home2/u/public_html/wp-content/x9.php":                "<?php\n$f = $_POST['f'];\nif (in_array($f, array('system', 'exec'))) { call_user_func_array($f, array($_POST['a'])); }\n",
+		"/home2/u/public_html/wp-content/.stubs_9f3a1c7e2b.php": "<?php echo 'inert';",
+	} {
+		if d := check(p, body); d == nil {
+			t.Errorf("%s not found", p)
+		}
+	}
+}

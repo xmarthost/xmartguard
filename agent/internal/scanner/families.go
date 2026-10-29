@@ -38,7 +38,8 @@ var (
 	// chr(ord($s[$i]) ^ $k): XOR string decoder.
 	reXorChr = regexp.MustCompile(`(?i)chr\s*\(\s*ord\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*\^`)
 	// $out .= chr(...): builds a string one computed character at a time.
-	reChrBuild = regexp.MustCompile(`(?i)\.=\s*chr\s*\(\s*[^)'"]`)
+	reChrBuild  = regexp.MustCompile(`(?i)\.=\s*chr\s*\(\s*[^)'"]`)
+	reCharBuild = orRe(reChrBuild, reXorChr)
 	// include/require of a path computed by a decode function: f('…', 109).
 	reDecodedInclude = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b[^;]{0,120}\b[a-zA-Z_]\w*\(\s*['"][^'"]{3,}['"]\s*,\s*\d{1,4}\s*\)`)
 	reIsWritable     = regexp.MustCompile(`(?i)\bis_writable\s*\(`)
@@ -214,7 +215,9 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 	if varFunc && (xor || chrBuild) {
 		varFunc = foreignVarCall(s)
 	}
-	if (xor || chrBuild) && !library && (evalOrAssert || (varFunc && hasInput) || (varFunc && m(reWriteSink))) {
+	// Without eval the built string must be called near where it is built
+	// (Unyson's random-string helper builds with chr() far from any call).
+	if (xor || chrBuild) && !library && (evalOrAssert || varFunc && (hasInput || m(reWriteSink)) && near(s, reCharBuild, reVarFunc, 1500)) {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharDecoder"}
 	}
 	// Droppers that write a decoded payload into every writable directory.
@@ -338,6 +341,11 @@ func configLoader(content []byte) *Detection {
 			if strings.Contains(target, k) {
 				known = true
 			}
+		}
+		// Really Simple Security writes its headers file this way, with
+		// its marker around the setting.
+		if strings.HasSuffix(target, "/wp-content/advanced-headers.php") && bytes.Contains(content, []byte("Really Simple Auto Prepend File")) {
+			known = true
 		}
 		if known {
 			continue

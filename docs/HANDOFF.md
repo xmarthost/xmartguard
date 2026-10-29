@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.36** (see `VERSION`).
+- Current release: **0.23.37** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.36 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.37 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.36: `--branch backup-0.23.35`; see "Rollback" under 0.23.36 below);
+  0.23.37: `--branch backup-0.23.36`; see "Rollback" under 0.23.37 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -84,6 +84,55 @@ project. It holds the rules, the current state and what is still open.
   the website.
 
 ## How things work (recent, easy to get wrong)
+
+- **Release 0.23.37: libraries quarantined by server1's full scan 62**
+  (2026-10-29). Scan 62 (43.7 million files, 3,236 findings) found real
+  infections (7 phishing collectors and kits, 28 casino/footer spam files,
+  213 obfuscated loaders and fake plugins, Tiny File Manager and GSocket
+  shells, UPX-packed "wpbooster" ELF files, 2,600+ kit .htaccess locks)
+  and quarantined official code. 114 files were restored (owner's
+  approval). Engine fixes, each with its abuse case kept caught
+  (`TestFleetLibrariesOfScan62`, `TestFleetAppHtaccessLock`):
+  - `Htaccess.Hacked.PHPLock`: a lock without the kits' extension list
+    that allows names by ending (phpList admin/.htaccess) is no finding;
+    the kits' locks (py|exe, mixed-case PHP, .suspected, ^(…)$ names) stay.
+  - `PHP.Obfuscated.CharEncoded`: escape runs count only when they decode
+    to text (Wordfence wf-waf utils.php's IPv6 mask table is binary).
+  - `PHP.Backdoor.DynamicCall`: a request-named function checked by the
+    file's own *whitelist*/*allowed* function first (Vafpress in JNews and
+    Rehub). in_array() is no check (the backdoor writes the list).
+  - `PHP.Backdoor.FileDropper`: not in a large (>20 KB) admin file that
+    checks nonces or capabilities and uses no chr() or hard decoder
+    (LayerSlider actions.php).
+  - `PHP.Backdoor.PregReplaceEval`: /e with a fixed replacement that wraps
+    the match in code (SquirrelMail charsets, SitePad); a replacement that
+    is the match itself, names a command or decoder, or a subject from the
+    request (also through a variable) stays.
+  - `PHP.Backdoor.CommandInjection`: $_SERVER['argv'/'argc'] is no web
+    input (Symfony build and test scripts).
+  - `PHP.Obfuscated.GotoFlow`: not when 90% of the labels are long words
+    (generated routers).
+  - `PHP.Backdoor.GlobalsDispatch`: not when every $GLOBALS call uses a
+    readable name (phpxmlrpc's saved error handler).
+  - `PHP.Obfuscated.CharDecoder` without eval: the chr()/xor build must be
+    within 1,500 bytes of the variable call (Unyson's random string).
+  - `PHP.Obfuscated.HaltCompilerPayload`: extensionless phars (phpunit
+    tools/composer, ~/composer) are opened like .phar files.
+  - Planted PHP: inert files (first statement exit/die, or only `return`
+    of a string table: LiteSpeed Cache .litespeed_conf.php, PicoFeed
+    rules) and the exact names .stubs.php, .sami.php, .psysh.php (prefix
+    matching would have let .stubs_<hex>.php through).
+  - CodeInNonScript: a weak sign in a Perl/Python/shell program (#! line)
+    is no finding (SquirrelMail conf.pl); a malicious verdict stays.
+  - `PHP.Config.AutoPrepend`: Really Simple Security's
+    wp-content/advanced-headers.php with its marker.
+  - Weak JS signs inside node_modules (js-beautify's unpackers).
+  Left quarantined for a look: GoDaddy's mu-plugin system-plugin-worker
+  functions.php (EvalDecodedPayload, AI unsure), Adminer as
+  wp-includes/check_db.php (planted), rehub-framework.zip.
+  Note: server1 quarantines suspicious files too, so a "suspicious"
+  downgrade is no fix there; a legit case must be no finding.
+  - **Rollback**: `backup-0.23.36`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 
 - **Release 0.23.36: the kit rules no longer slow scans down** (2026-10-28).
   server1's full scan ran at about 280 files a second (595 before

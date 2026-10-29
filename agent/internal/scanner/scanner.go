@@ -517,7 +517,7 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	// or in the logs folder.
 	// (Not a macOS AppleDouble file: "._name.php" beside a folder unpacked
 	// from a Mac archive holds the original's metadata, no code.)
-	if bigPHPExts[ext] && !appleDouble(content) {
+	if bigPHPExts[ext] && !appleDouble(content) && !inertPHP(content) {
 		if d := plantedInCore(path); d != nil {
 			return final(d)
 		}
@@ -534,7 +534,9 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	if IsELF(content) {
 		return binaryCheck(path, content)
 	}
-	if ext == ".phar" {
+	// (Also tools shipped without the extension: vendor/phpunit/phpunit/
+	// tools/composer, ~/composer.)
+	if ext == ".phar" || ext == "" && bytes.Contains(content, []byte("__HALT_COMPILER")) {
 		if d, ok := scanPhar(content); ok {
 			return final(d)
 		}
@@ -1651,6 +1653,12 @@ func capHeuristic(path, ext string, d *Detection) *Detection {
 	// Template-kit thumbnails page builders download into their own upload
 	// folder: when the remote answers with a page, it is saved as the image.
 	if d.Signature == "Disguised.MarkupInImage" && reBuilderThumbs.MatchString(path) {
+		return nil
+	}
+	// A Node package's own code (js-beautify's unpackers carry packed
+	// samples to undo): weak JavaScript signs there are no finding. A
+	// malicious verdict stays.
+	if d.Category == CatSuspicious && strings.HasPrefix(d.Signature, "JS.") && strings.Contains(path, "/node_modules/") {
 		return nil
 	}
 	if d.Category != CatVirus {

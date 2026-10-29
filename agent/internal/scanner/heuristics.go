@@ -46,6 +46,16 @@ var (
 	reDynInclude   = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\s*\(?\s*\$`)
 	reMailInput    = regexp.MustCompile(`(?i)\bmail\s*\(`)
 	reGlobalsCall  = regexp.MustCompile(`\$GLOBALS\s*\[[^\]]+\]\s*(?:\[[^\]]+\]\s*)*\(`)
+	// Request data a web visitor sends ($_SERVER['argv'] and ['argc'] are
+	// a command line's arguments).
+	reWebInput = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|FILES)\b|\$_SERVER\s*\[\s*['"](?:[^a'"]|a[^r]|ar[^g])|\$_SERVER\s*[^\s\[]`)
+	// Decoders a dropper hides its payload with (urldecode of a query
+	// string is ordinary).
+	reHardDecoder = regexp.MustCompile(`(?i)\b(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|hex2bin|convert_uudecode|bzdecompress)\s*\(`)
+	reWPGuard     = regexp.MustCompile(`\b(?:check_admin_referer|check_ajax_referer|wp_verify_nonce|current_user_can)\s*\(`)
+	// $GLOBALS['_xmlrpcs_prev_ehandler'](…): a handler kept under its name.
+	reGlobalsNamed = regexp.MustCompile(`\$GLOBALS\s*\[\s*['"][A-Za-z_]*[a-z]{3}[A-Za-z_]*['"]\s*\]\s*\(`)
+	reGotoLabel    = regexp.MustCompile(`(?i)\bgoto\s+([a-zA-Z_]\w*)\s*;`)
 	reAssertVar    = regexp.MustCompile(`(?i)\bassert\s*\(\s*(?:@\s*)?\$`)
 	reOrdChr       = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
 	reDefineArr    = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
@@ -119,7 +129,7 @@ func analyzePHP(content []byte) *verdict {
 
 	// 1. preg_replace with the /e modifier (executes its replacement).
 	// (Old libraries such as phpseclib still carry /e code paths for PHP 5.)
-	if m(rePregE) && !library {
+	if m(rePregE) && !library && !pregEStatic(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.PregReplaceEval"}
 	}
 	// 2. create_function with attacker input.
@@ -137,7 +147,7 @@ func analyzePHP(content []byte) *verdict {
 		return &verdict{CatVirus, "PHP.Backdoor.EvalInput"}
 	}
 	// 5. Command execution driven by attacker input (incl. backticks).
-	if (m(reSink) || m(reExecBare)) && hasInput && nr(reSinkOrExec, reInput, 200) {
+	if (m(reSink) || m(reExecBare)) && hasInput && nr(reSinkOrExec, reWebInput, 200) {
 		return &verdict{CatVirus, "PHP.Backdoor.CommandInjection"}
 	}
 	if m(reBacktickExec) {
@@ -150,7 +160,7 @@ func analyzePHP(content []byte) *verdict {
 		return &verdict{CatVirus, "PHP.Backdoor.DynamicCall"}
 	}
 	// 7. goto-flattened obfuscation with an execution sink.
-	if goto_ >= 8 && (evalOrAssert || decoders >= 1 || m(reSink)) {
+	if goto_ >= 8 && (evalOrAssert || decoders >= 1 || m(reSink)) && !readableGotos(s) {
 		return &verdict{CatVirus, "PHP.Obfuscated.GotoFlow"}
 	}
 	// 8. Heavy hex/octal/chr obfuscation building code.
@@ -158,7 +168,10 @@ func analyzePHP(content []byte) *verdict {
 	// Hex and octal count in runs that spell something ("\x65\x76\x61\x6c"):
 	// a regular expression's byte ranges ([\x00-\x08], phpstan's UTF-8
 	// check) are single escapes.
-	if (hex+oct >= 40 && cnt(reEscRun) >= 5 || chr >= 40) && dens > 0.10 && (evalOrAssert || decoders >= 1 || varFunc) {
+	// Binary tables (Wordfence's IPv6 masks, "\xff\xff\x00…") are runs too,
+	// but they decode to no text: only runs of letters, digits and code
+	// punctuation count.
+	if (hex+oct >= 40 && textEscRuns(s) >= 5 || chr >= 40) && dens > 0.10 && (evalOrAssert || decoders >= 1 || varFunc) {
 		return &verdict{CatVirus, "PHP.Obfuscated.CharEncoded"}
 	}
 	// 9. eval/assert after __halt_compiler (payload appended to the file).
@@ -182,7 +195,11 @@ func analyzePHP(content []byte) *verdict {
 	// 12. Drop-and-write shell: writes a file from attacker input.
 	// ($_SERVER and writes to php:// streams are request logging, not dropping.)
 	// Writing to a network socket (a WebSocket or API client) is not a file.
-	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders >= 1) && nr(reWriteSinkFile, reUserInput, 200) && m(reFileWrite) {
+	// (A plugin's large admin file that checks nonces and capabilities is an
+	// importer, not a dropper: LayerSlider's actions.php saves a template it
+	// downloads; droppers are small and check nothing.)
+	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders >= 1) && nr(reWriteSinkFile, reUserInput, 200) && m(reFileWrite) &&
+		!(n > 20000 && m(reWPGuard) && !m(reChr) && !m(reHardDecoder)) {
 		return &verdict{CatVirus, "PHP.Backdoor.FileDropper"}
 	}
 	// 13. Spam mailer: mail() fed attacker input, in a small standalone script
@@ -202,7 +219,7 @@ func analyzePHP(content []byte) *verdict {
 	}
 
 	// 14. $GLOBALS['x'][y](...) dynamic dispatch (very common in packed shells).
-	if m(reGlobalsCall) && (decoders >= 1 || evalOrAssert || hasInput) {
+	if m(reGlobalsCall) && (decoders >= 1 || evalOrAssert || hasInput) && !namedGlobalsCalls(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.GlobalsDispatch"}
 	}
 	// 15. assert() on a variable expression built by the file.
@@ -423,6 +440,13 @@ func packedLineAdded(content []byte) bool {
 func taintedCall(s []byte) bool {
 	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
 		name := regexp.QuoteMeta(string(m[1]))
+		// Checked against an allow list first (Vafpress's AJAX wrapper:
+		// is_function_whitelisted($function), JNews and Rehub ship it).
+		// (A function of the file's own named for it: in_array() against a
+		// list the backdoor writes itself is no check.)
+		if regexp.MustCompile(`(?i)\w*(?:whitelist|allowed|allow_list)\w*\s*\(\s*\$` + name + `\b`).Match(s) {
+			continue
+		}
 		// $f(…), not $this->$f(…) or Class::$f(…) (dispatch to own methods),
 		// and not "Exported $type ($subtitle)" inside a string.
 		re := regexp.MustCompile(`(?:(?:^|[^>:\w$])\$` + name + `\s*\(|(?i:call_user_func(?:_array)?)\s*\(\s*\$` + name + `\b)`)
@@ -608,6 +632,93 @@ func argOnInput(call *regexp.Regexp, s []byte) bool {
 			if regexp.MustCompile(`\$` + regexp.QuoteMeta(name) + `\b`).Match(arg) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// pregEStatic: every preg_replace with /e has a fixed replacement that only
+// reuses what the pattern matched (SquirrelMail's charset tables:
+// "'&#' . ord('\\1') . ';'") and a subject that is no request data. A
+// backdoor's replacement comes from a variable or a decoder, names a
+// command, or its subject is the request.
+func pregEStatic(s []byte) bool {
+	for _, loc := range rePregE.FindAllIndex(s, 50) {
+		rest := s[loc[1]:min(len(s), loc[1]+600)]
+		m := rePregEArgs.FindSubmatch(rest)
+		// The replacement is the match itself ("\\0", '$1'): it runs the
+		// subject, so the subject must be no request data, not even through
+		// a variable assigned from it.
+		if m == nil || reWebInput.Match(m[2]) || rePregEBad.Match(m[1]) || rePregEBare.Match(m[1]) || taintedArg(s, m[2]) {
+			return false
+		}
+	}
+	return true
+}
+
+var (
+	rePregEArgs = regexp.MustCompile(`^\s*,\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*([^;]{0,200})`)
+	rePregEBare = regexp.MustCompile(`^['"]\s*(?:\\{1,2}\d|\$\d|\$\{\d\})\s*['"]$`)
+	rePregEBad  = regexp.MustCompile(`(?i)\b(?:eval|assert|system|exec|shell_exec|passthru|popen|proc_open|base64_decode|gzinflate|str_rot13|create_function|include|require|file_put_contents)\b|\$_|\\x[0-9a-f]{2}|\\[0-3][0-7]{2}`)
+)
+
+// readableGotos: the goto labels are words (a generated router's
+// "not_simple_trailing_slash_GET_method"); flattened malware jumps between
+// random labels.
+func readableGotos(s []byte) bool {
+	ms := reGotoLabel.FindAllSubmatch(s, -1)
+	if len(ms) == 0 {
+		return false
+	}
+	words := 0
+	for _, m := range ms {
+		l := m[1]
+		if len(l) >= 10 && bytes.Count(l, []byte("_")) >= 2 {
+			words++
+		}
+	}
+	return words*10 >= len(ms)*9
+}
+
+// textEscRuns counts escape runs that decode to text (letters, digits,
+// code punctuation): "\x65\x76\x61\x6c" is "eval"; a binary table is not.
+func textEscRuns(s []byte) int {
+	n := 0
+	for _, run := range reEscRun.FindAll(s, -1) {
+		text, all := 0, 0
+		for _, e := range reEscOne.FindAll(run, -1) {
+			var c uint64
+			if e[1] == 'x' || e[1] == 'X' {
+				c, _ = strconv.ParseUint(string(e[2:]), 16, 8)
+			} else {
+				c, _ = strconv.ParseUint(string(e[1:]), 8, 8)
+			}
+			all++
+			if c >= 0x20 && c < 0x7f {
+				text++
+			}
+		}
+		if all > 0 && text*4 >= all*3 {
+			n++
+		}
+	}
+	return n
+}
+
+var reEscOne = regexp.MustCompile(`\\(?:[xX][0-9A-Fa-f]{2}|[0-3][0-7]{2})`)
+
+// namedGlobalsCalls: every call through $GLOBALS uses a readable name
+// (an error handler a library saved); packed shells index tables of
+// encoded names: $GLOBALS['_1452_'][3](…).
+func namedGlobalsCalls(s []byte) bool {
+	return len(reGlobalsCall.FindAllIndex(s, -1)) == len(reGlobalsNamed.FindAllIndex(s, -1))
+}
+
+// taintedArg: arg names a variable the file assigns from request data.
+func taintedArg(s, arg []byte) bool {
+	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
+		if regexp.MustCompile(`\$` + regexp.QuoteMeta(string(m[1])) + `\b`).Match(arg) {
+			return true
 		}
 	}
 	return false

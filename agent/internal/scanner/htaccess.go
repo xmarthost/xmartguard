@@ -50,13 +50,19 @@ func htaccessHack(content []byte) *Detection {
 	if cgiShellHandler(content) {
 		return &Detection{CatVirus, "Htaccess.Webshell.CGIHandler"}
 	}
-	if phpLock(content) {
-		return &Detection{CatVirus, "Htaccess.Hacked.PHPLock"}
-	}
 	for _, m := range reFilesMatch.FindAllSubmatch(content, -1) {
 		if kitDenyBlock(m[1], m[2]) {
 			return &Detection{CatVirus, "Htaccess.Hacked.PHPLock"}
 		}
+	}
+	// The lock without the kits' extension list: kits allow their names as
+	// a whole name (^(index.php|x7shell.php)$); applications lock their own
+	// folders too, by name ending (phpList's admin/.htaccess refuses .php
+	// and .inc and allows "(index.php|connector.php|upload.php)$"; server1,
+	// 2026-10-29). That one is no finding: servers that quarantine
+	// suspicious files would break the application's admin.
+	if phpLock(content) && lockAnchored(content) {
+		return &Detection{CatVirus, "Htaccess.Hacked.PHPLock"}
 	}
 	return nil
 }
@@ -71,6 +77,16 @@ func phpLock(content []byte) bool {
 		allow = allow || lockAllowBlock(m[1], m[2])
 	}
 	return deny && allow
+}
+
+// lockAnchored: the allowed names of the lock are whole names (^(…)$).
+func lockAnchored(content []byte) bool {
+	for _, m := range reFilesMatch.FindAllSubmatch(content, -1) {
+		if lockAllowBlock(m[1], m[2]) && bytes.HasPrefix(bytes.TrimSpace(m[1]), []byte("^")) {
+			return true
+		}
+	}
+	return false
 }
 
 func denyPHPBlock(pattern, body []byte) bool {
