@@ -1,0 +1,31 @@
+package waf
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/xmarthost/xmartguard/agent/internal/settings"
+)
+
+// Web shells that read their commands from a base64 cookie get past the
+// parameter rules: the cookie rule decodes it. New: it only watches until
+// approved, and a fake logged-in cookie gives no way around it.
+func TestCookieShellRule(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled = true
+	out := Render(c, Options{Dir: "/r"})
+	l := ruleLine(out, IDCookieShell)
+	if l == "" || !strings.Contains(l, "t:base64Decode") || !strings.Contains(l, "REQUEST_COOKIES") || !strings.Contains(l, "[watch]") || strings.Contains(l, "deny") {
+		t.Fatalf("rule: %s", l)
+	}
+	if strings.Contains(strings.Join(chainOf(out, IDCookieShell), "\n"), "logged_in") {
+		t.Error("a logged-in cookie skips the rule")
+	}
+	if l := strings.Join(chainOf(out, IDStaticPost), "\n"); !strings.Contains(l, "@streq POST") || !strings.Contains(l, "gif|jpe?g") || !strings.Contains(l, "[watch]") {
+		t.Fatalf("static POST rule: %s", l)
+	}
+	out = Render(c, Options{Dir: "/r", Intel: (&Intel{Enforce: []int{IDCookieShell}}).Clean()})
+	if l := ruleLine(out, IDCookieShell); !strings.Contains(l, "deny,status:403") {
+		t.Fatalf("approved rule does not block: %s", l)
+	}
+}

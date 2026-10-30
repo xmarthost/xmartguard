@@ -72,6 +72,9 @@ fire on the 2026-10-28 shapes and nowhere else.
 
 ## Part 3 - answer new vulnerabilities in hours (P1)
 
+0. Carried from part 2: card-skimmer and blockchain-loader script
+   families, in files and in the database.
+
 1. Targeted virtual-patch feed for the plugins installed on each server
    (I2, watch first).
 2. Generic "anonymous request creates privilege" rules (M7, watch).
@@ -101,6 +104,6 @@ fire on the 2026-10-28 shapes and nowhere else.
 | Part | State |
 |---|---|
 | 1 | released in 0.24.0, on the fleet |
-| 2 | in progress: locked (chattr +i) shells quarantined in 0.24.1 |
+| 2 | released in 0.24.1 and 0.24.2; skimmer and blockchain-loader script families moved to part 3 |
 | 3 | waiting |
 | 4 | waiting |

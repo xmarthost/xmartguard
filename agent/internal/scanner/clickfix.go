@@ -98,6 +98,10 @@ func clickFix(low []byte) bool {
 	return rePasteStep.Match(text) && reRunStep.Match(text) && reHumanLure.Match(text)
 }
 
+// ClickFixPage reports a stored page or block that is the fake human check
+// (the DB scan: posts, options and widgets hold the kit's page too).
+func ClickFixPage(v []byte) bool { return clickFix(lowerASCII(v)) }
+
 // clickFixKit judges content alone (kitFamilies).
 func clickFixKit(ext string, content, low []byte, has func(string) bool) *Detection {
 	switch ext {

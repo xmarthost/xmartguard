@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.1** (see `VERSION`).
+- Current release: **0.24.2** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.1 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.2 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.1: `--branch backup-0.24.0`; see "Rollback" under 0.24.1 below);
+  0.24.2: `--branch backup-0.24.1`; see "Rollback" under 0.24.2 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,32 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.2: security plan part 2 - malware and persistence
+  breadth** (2026-10-30).
+  - DB: a ClickFix page kept in a post, option or widget
+    (`DB.Phishing.ClickFix.FakeVerification`, category `phishing`; the
+    cleaner refuses it: the whole value is the page). `scanner.ClickFixPage`.
+  - `.htaccess` cloaking (`Htaccess.Hacked.SearchCloaking`): visitors from a
+    search engine (HTTP_REFERER) sent to another site, or crawlers
+    (HTTP_USER_AGENT) given another site or a PHP doorway. Not: target `-`
+    (LiteSpeed Cache's crawler vary), prerender services, `%{HTTP_HOST}`
+    targets, negated conditions, mobile redirects, hotlink/bad-bot blocks,
+    index.php. The cleaner drops these groups (`kitGroups`, with the
+    ClickFix redirect) and keeps the site's rules.
+  - Audit: `persistence` (authorized_keys changed in 7 days - key comments
+    only, never key material; systemd user units; a shell profile line that
+    downloads and runs, decodes and runs, or opens /dev/tcp; at jobs of
+    hosting accounts), `world_writable` (0777 folders in webroots, sticky
+    ones not), `exposed_repo` (a .git repository with config in a website).
+  - WAF, watch until approved: 7700606 base64 PHP command in a cookie
+    (no logged-in exception: a fake cookie would bypass it), 7700607 POST to
+    an image, icon or stylesheet (polyglot shells).
+  - 0.24.1 (in this part): chattr +i shells quarantined; quarantine week.
+  - Open, moved to part 3: card-skimmer and blockchain-loader script
+    families (files and DB).
+  Tests: `TestDBClickFixPage`, `TestFleetHtaccessCloaking`,
+  `TestPersistenceAndWritableFolders`, `TestCookieShellRule`.
+  - **Rollback**: `backup-0.24.1`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.1: quarantine kept a week, then deleted; locked shells
   quarantined** (2026-10-30).
   - Owner's rule: a quarantined file older than `quarantine_days` (7) is

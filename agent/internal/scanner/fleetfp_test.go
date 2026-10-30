@@ -1340,3 +1340,43 @@ func TestQuarantineLockedFile(t *testing.T) {
 		t.Error("the folder's own lock was not put back")
 	}
 }
+
+// SEO cloaking in a hacked .htaccess: visitors from a search engine sent
+// to another site, crawlers given a PHP doorway or another site. Caching,
+// prerender, mobile, hotlink and bad-bot rules of real sites stay clean,
+// and the cleaner keeps them while dropping the kit's rules.
+func TestFleetHtaccessCloaking(t *testing.T) {
+	for _, kit := range []string{
+		"RewriteEngine On\nRewriteCond %{HTTP_REFERER} (google|bing|yahoo) [NC]\nRewriteRule ^(.*)$ https://example.invalid/offer [R=302,L]\n",
+		"RewriteEngine On\nRewriteCond %{HTTP_USER_AGENT} (googlebot|bingbot|baiduspider) [NC]\nRewriteRule ^(.*)$ /wp-content/uploads/.cache/sitemap.php?u=$1 [L]\n",
+		"RewriteEngine On\nRewriteCond %{HTTP_USER_AGENT} Googlebot [NC,OR]\nRewriteCond %{HTTP_USER_AGENT} Bingbot [NC]\nRewriteRule ^ http://example.invalid/d.php [P,L]\n",
+	} {
+		if d := htaccessHack([]byte(kit)); d == nil || d.Signature != "Htaccess.Hacked.SearchCloaking" || d.Category != CatVirus {
+			t.Errorf("kit not caught: %+v\n%s", d, kit)
+		}
+	}
+	for _, own := range []string{
+		// LiteSpeed Cache: a cache vary for crawlers (target "-").
+		"RewriteCond %{HTTP_USER_AGENT} (chrome-lighthouse|googlebot|page\\ speed) [NC,OR]\nRewriteCond %{HTTP_USER_AGENT} Firefox/([6-9][0-9]) [NC]\nRewriteRule .* - [E=Cache-Control:vary=%{ENV:LSCACHE_VARY_VALUE}+webp]\n",
+		// A prerender service for crawlers.
+		"RewriteCond %{HTTP_USER_AGENT} googlebot|bingbot|yandex [NC]\nRewriteRule ^(.*)$ http://service.prerender.io/https://%{HTTP_HOST}/$1 [P,L]\n",
+		// Mobile site, hotlink protection, bad bots refused, crawlers to the
+		// same site, a referer block.
+		"RewriteCond %{HTTP_USER_AGENT} (android|iphone) [NC]\nRewriteRule ^$ https://m.example.com/ [R=302,L]\n",
+		"RewriteCond %{HTTP_REFERER} !^$\nRewriteCond %{HTTP_REFERER} !^https?://(www\\.)?example\\.com [NC]\nRewriteRule \\.(jpe?g|png)$ - [F]\n",
+		"RewriteCond %{HTTP_USER_AGENT} (AhrefsBot|MJ12bot) [NC]\nRewriteRule .* - [F,L]\n",
+		"RewriteCond %{HTTP_USER_AGENT} googlebot [NC]\nRewriteRule ^old/(.*)$ https://%{HTTP_HOST}/new/$1 [R=301,L]\n",
+		"RewriteCond %{HTTP_REFERER} google [NC]\nRewriteRule ^promo$ /index.php?page=promo [L]\n",
+	} {
+		if d := htaccessHack([]byte(own)); d != nil {
+			t.Errorf("site's own rule flagged: %+v\n%s", d, own)
+		}
+	}
+	site := "# BEGIN LSCACHE\nRewriteCond %{HTTP_USER_AGENT} (chrome-lighthouse|googlebot) [NC]\nRewriteRule .* - [E=Cache-Control:vary=x]\n# END LSCACHE\n" +
+		"RewriteCond %{HTTP_REFERER} (google|bing) [NC]\nRewriteRule ^(.*)$ https://example.invalid/offer [R=302,L]\n" +
+		"# BEGIN WordPress\nRewriteRule ^index\\.php$ - [L]\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule . /index.php [L]\n# END WordPress\n"
+	clean := string(CleanHtaccess([]byte(site), "/"))
+	if strings.Contains(clean, "example.invalid") || !strings.Contains(clean, "LSCACHE_VARY") && !strings.Contains(clean, "vary=x") || !strings.Contains(clean, "RewriteRule . /index.php [L]") || htaccessHack([]byte(clean)) != nil {
+		t.Errorf("cleaned:\n%s", clean)
+	}
+}

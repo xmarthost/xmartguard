@@ -209,3 +209,22 @@ func TestPluginWatch(t *testing.T) {
 		t.Fatalf("plugin finding cleaned: %+v", res)
 	}
 }
+
+// The ClickFix page kept in a post or widget (steps in the HTML, the copy
+// in the script) is a DB finding the cleaner leaves to a person; a post
+// with a copy button and how-to steps is not.
+func TestDBClickFixPage(t *testing.T) {
+	page := "<p>Verify you are human by completing the action below.</p><ol><li>Press the Windows Key + <b>R</b></li><li>Press <b>Ctrl</b> + <b>V</b></li></ol>" +
+		"<script>document.getElementById('b').onclick=function(){navigator.clipboard.writeText('echo inert')}</script>"
+	d := ScanValueDetail(page)
+	if d.Signature != "DB.Phishing.ClickFix.FakeVerification" || d.Category != "phishing" {
+		t.Fatalf("stored page: %+v", d)
+	}
+	if _, err := CleanStoredValue(page); err == nil {
+		t.Fatal("the stored page was cut automatically")
+	}
+	howto := "<p>Press <b>Win</b> + <b>R</b>, then <b>Ctrl</b> + <b>V</b>.</p><script>function c(){navigator.clipboard.writeText('ipconfig /flushdns')}</script>"
+	if d := ScanValueDetail(howto); d.Signature != "" {
+		t.Fatalf("how-to post: %+v", d)
+	}
+}

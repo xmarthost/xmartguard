@@ -240,6 +240,12 @@ func ScanValueDetail(v string) Detail {
 			return Detail{"DB.Injected.HiddenIframe", "iframe", snippetAround(v, loc)}
 		}
 	}
+	// The ClickFix fake human check kept as a post, option or widget: the
+	// steps are in the HTML and the copy in the script. Not cut out
+	// automatically (the whole value is the page).
+	if i := strings.Index(strings.ToLower(v), "<script"); i >= 0 && scanner.ClickFixPage([]byte(v)) {
+		return Detail{"DB.Phishing.ClickFix.FakeVerification", "phishing", snippetAround(v, []int{i, min(len(v), i+200)})}
+	}
 	if loc := rePHPOpen.FindStringIndex(v); loc != nil {
 		// Only what is inside PHP tags is PHP: the HTML and JavaScript of a
 		// snippet around it (template literals use backticks) are not.

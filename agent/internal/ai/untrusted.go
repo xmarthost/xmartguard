@@ -42,6 +42,8 @@ var untrustedSignatures = map[string]bool{
 	// core plugin.
 	"PHP.Backdoor.SelfHidingInjector": true,
 	"PHP.Injector.HiddenScriptURL":    true,
+	// Search engine cloaking in .htaccess reads as SEO configuration.
+	"Htaccess.Hacked.SearchCloaking": true,
 }
 
 // wpDropIns are wp-content files WordPress loads on its own: malware

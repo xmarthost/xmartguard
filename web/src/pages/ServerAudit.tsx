@@ -33,6 +33,9 @@ const CHECKS: Record<string, string> = {
   php_eol: 'Old PHP',
   php_cve: 'PHP security update',
   stack_cve: 'Panel / web server security update',
+  persistence: 'Way back in (SSH key, timer, profile, at job)',
+  world_writable: 'Folder writable by everyone',
+  exposed_repo: 'Git repository in the website',
   stuck_php: 'Stuck PHP',
   cron: 'Cron jobs',
 };

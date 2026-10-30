@@ -67,6 +67,9 @@ func htaccessHack(content []byte) *Detection {
 	if captchaRedirect(content) {
 		return &Detection{CatVirus, "Htaccess.Hacked.CaptchaRedirect"}
 	}
+	if cloaking(content) {
+		return &Detection{CatVirus, "Htaccess.Hacked.SearchCloaking"}
+	}
 	return nil
 }
 
@@ -92,20 +95,12 @@ func captchaRedirect(content []byte) bool {
 	return false
 }
 
-// captchaGroups lists the lines of the kit's rules: each redirect to the
-// fake check and each rule whose conditions name that page, with their
-// RewriteCond lines.
-func captchaGroups(lines []string) map[int]bool {
-	drop := map[int]bool{}
-	targets := map[string]bool{}
-	for _, l := range lines {
-		if m := reCaptchaRule.FindStringSubmatch(l); m != nil && reCatchAll.MatchString(m[1]) {
-			targets[strings.ToLower(strings.TrimPrefix(filepath.Base(m[2]), "/"))] = true
-		}
-	}
-	if len(targets) == 0 {
-		return drop
-	}
+// rewriteGroup is one rewrite rule with the RewriteCond lines before it
+// (line numbers, from..to inclusive; to is the RewriteRule).
+type rewriteGroup struct{ from, to int }
+
+func rewriteGroups(lines []string) []rewriteGroup {
+	var out []rewriteGroup
 	start := -1
 	for i, l := range lines {
 		t := strings.ToLower(strings.TrimSpace(l))
@@ -115,32 +110,105 @@ func captchaGroups(lines []string) map[int]bool {
 				start = i
 			}
 		case strings.HasPrefix(t, "rewriterule"):
-			kit := false
 			from := i
 			if start >= 0 {
 				from = start
 			}
-			for j := from; j <= i && !kit; j++ {
-				lj := strings.ToLower(strings.ReplaceAll(lines[j], `\.`, "."))
-				for name := range targets {
-					if strings.Contains(lj, name) {
-						kit = true
-						break
-					}
-				}
-			}
-			if kit {
-				for j := from; j <= i; j++ {
-					drop[j] = true
-				}
-			}
+			out = append(out, rewriteGroup{from, i})
 			start = -1
 		case t == "" || strings.HasPrefix(t, "#"):
 		default:
 			start = -1
 		}
 	}
+	return out
+}
+
+// kitGroups lists the lines of attack rules to drop from a site's
+// .htaccess: each redirect to the fake check and each rule whose
+// conditions name that page, and cloaking rules (cloakGroup), with their
+// RewriteCond lines.
+func kitGroups(lines []string) map[int]bool {
+	drop := map[int]bool{}
+	targets := map[string]bool{}
+	for _, l := range lines {
+		if m := reCaptchaRule.FindStringSubmatch(l); m != nil && reCatchAll.MatchString(m[1]) {
+			targets[strings.ToLower(strings.TrimPrefix(filepath.Base(m[2]), "/"))] = true
+		}
+	}
+	for _, g := range rewriteGroups(lines) {
+		kit := cloakGroup(lines[g.from : g.to+1])
+		for j := g.from; j <= g.to && !kit; j++ {
+			lj := strings.ToLower(strings.ReplaceAll(lines[j], `\.`, "."))
+			for name := range targets {
+				if strings.Contains(lj, name) {
+					kit = true
+					break
+				}
+			}
+		}
+		if kit {
+			for j := g.from; j <= g.to; j++ {
+				drop[j] = true
+			}
+		}
+	}
 	return drop
+}
+
+// Cloaking (the SEO spam of hacked sites): visitors arriving from a search
+// engine are sent to another site, or search engine crawlers get another
+// page (a PHP doorway or another site) than people do. A prerender
+// service proxying crawlers ([P] to prerender.io and the like) is the
+// site's own choice.
+var (
+	reCondVar     = regexp.MustCompile(`(?i)^\s*RewriteCond\s+%\{(HTTP_REFERER|HTTP_USER_AGENT)\}\s+(\S+)`)
+	reSearchRef   = regexp.MustCompile(`(?i)google|bing|yahoo|yandex|baidu|duckduckgo|naver|seznam`)
+	reCrawlerUA   = regexp.MustCompile(`(?i)googlebot|bingbot|google|baiduspider|baidu|yandex|slurp|msnbot|duckduckbot|sogou|naver`)
+	reRuleTarget  = regexp.MustCompile(`(?i)^\s*RewriteRule\s+\S+\s+(\S+)(?:\s+\[([^\]]*)\])?`)
+	rePrerender   = regexp.MustCompile(`(?i)prerender\.io|prerender\.cloud|seo4ajax\.com|rendertron|prerender\.com|ostr\.io`)
+	reExternalURL = regexp.MustCompile(`(?i)^https?://`)
+	reLocalPHP    = regexp.MustCompile(`(?i)\.php(?:\?|$)`)
+)
+
+func cloakGroup(group []string) bool {
+	m := reRuleTarget.FindStringSubmatch(group[len(group)-1])
+	if m == nil || m[1] == "-" {
+		return false
+	}
+	target := m[1]
+	if rePrerender.MatchString(target) || strings.Contains(strings.ToLower(target), "%{http_host}") {
+		return false
+	}
+	external := reExternalURL.MatchString(target)
+	doorway := !external && reLocalPHP.MatchString(target) && !strings.HasSuffix(strings.ToLower(strings.SplitN(target, "?", 2)[0]), "index.php")
+	var fromSearch, toCrawler bool
+	for _, l := range group[:len(group)-1] {
+		c := reCondVar.FindStringSubmatch(l)
+		if c == nil || strings.HasPrefix(c[2], "!") {
+			continue
+		}
+		switch strings.ToUpper(c[1]) {
+		case "HTTP_REFERER":
+			fromSearch = fromSearch || reSearchRef.MatchString(c[2])
+		case "HTTP_USER_AGENT":
+			toCrawler = toCrawler || reCrawlerUA.MatchString(c[2])
+		}
+	}
+	return fromSearch && external || toCrawler && (external || doorway)
+}
+
+func cloaking(content []byte) bool {
+	if !bytes.Contains(bytes.ToLower(content), []byte("rewritecond")) {
+		return false
+	}
+	lines := strings.Split(string(content), "\n")
+	for _, g := range rewriteGroups(lines) {
+		if cloakGroup(lines[g.from : g.to+1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // phpLock reports the whole lock: all PHP refused, then a list of PHP
@@ -212,7 +280,7 @@ func CleanHtaccess(content []byte, base string) []byte {
 	})
 	var lines []string
 	all := strings.Split(string(out), "\n")
-	kitRules := captchaGroups(all)
+	kitRules := kitGroups(all)
 	for i, l := range all {
 		if kitRules[i] {
 			continue

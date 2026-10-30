@@ -76,6 +76,8 @@ type Auditor struct {
 	// stack check (tests); EximVersion reads Exim's (nil: exim -bV).
 	StackRoot   string
 	EximVersion func() string
+	// AtDir overrides the at job spool (tests).
+	AtDir string
 }
 
 func (a *Auditor) now() time.Time {
@@ -108,6 +110,7 @@ func (a *Auditor) Run(ctx context.Context) Report {
 	add("php", a.phpSettings(), nil)
 	add("php_cve", a.phpCVEs(), nil)
 	add("stack_cve", a.stackCVEs(), nil)
+	add("persistence", a.persistence(), nil)
 	add("lsphp", a.stuckPHP(), nil)
 	add("cron", a.cronJobs(), nil)
 	sev := map[string]int{"high": 0, "medium": 1, "low": 2}
@@ -286,8 +289,23 @@ func (a *Auditor) webroots(ctx context.Context) ([]Item, int, bool) {
 				return nil
 			}
 			if d.IsDir() {
+				// A Git repository in the website: its history can hold
+				// passwords and the whole code (scanners ask for /.git/config
+				// hundreds of times a day). The WAF blocks it; the fix is to
+				// move it out.
+				if d.Name() == ".git" && isFile(filepath.Join(p, "config")) {
+					addItem("exposed_repo", Item{Check: "exposed_repo", Severity: "medium", Title: "Git repository inside the website", Path: p,
+						Detail: "Its history may hold passwords and the site's code. xPGuard's WAF blocks /.git/, but move the repository out of the website folder."})
+				}
 				if p != root && (skipWebDirs[d.Name()] || strings.Count(p, "/")-base > 8) {
 					return filepath.SkipDir
+				}
+				// A folder anyone can write to (0777): kits keep their files
+				// there (.tmb farms on server1, 2026-10-30). Sticky folders
+				// (tmp) are meant to be shared.
+				if info, err := d.Info(); err == nil && info.Mode().Perm()&0o002 != 0 && info.Mode()&fs.ModeSticky == 0 {
+					addItem("world_writable", Item{Check: "world_writable", Severity: "medium", Title: "Folder writable by everyone (" + strconv.FormatUint(uint64(info.Mode().Perm()), 8) + ")", Path: p,
+						Detail: "Any process on the server may write files here; malware keeps its files in such folders. Set it to 755 (chmod 755)."})
 				}
 				if isWordPress(p) {
 					sites++

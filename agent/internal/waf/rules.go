@@ -104,6 +104,12 @@ const (
 	IDWebshellDir  = 7700602
 	IDExploitProbe = 7700603
 	IDMalwareExt   = 7700604
+	// IDCookieShell: a cookie whose value is a base64 PHP command (shells
+	// that read their commands from cookies get past parameter rules).
+	IDCookieShell = 7700606
+	// IDStaticPost: a POST to an image, icon or stylesheet address
+	// (polyglot shells run when a handler maps those extensions to PHP).
+	IDStaticPost   = 7700607
 	IDProxyBlocked = 7700701
 	// IPDB and Tor: id+1000 checks the real address behind Cloudflare or a
 	// local proxy, id+2000 Cloudflare's Tor marker.
@@ -193,6 +199,8 @@ var Catalog = []RuleInfo{
 	{IDLoginCustom, "bruteforce", "Count logins on the other protected login URLs", "count"},
 	{IDWebshell, "webshell", "Block requests to well-known web shell files", "block"},
 	{IDWebshellDir, "webshell", "Block requests into web shell working folders", "block"},
+	{IDStaticPost, "webshell", "Block POST requests to image, icon and stylesheet addresses (polyglot web shells)", "block"},
+	{IDCookieShell, "webshell", "Block cookies carrying a base64-encoded PHP command (web shells that read their commands from cookies)", "block"},
 	{IDExploitProbe, "webshell", "Block probes for well-known exploits (PHPUnit eval-stdin RCE, Laravel Ignition RCE, leaked cloud credentials)", "block"},
 	{IDFleetNames, "webshell", "Block web shell file names the scanners of your servers found (learned by the portal)", "block"},
 	{IDMalwareExt, "webshell", "Block requests into plugin and theme folders that only malware creates (fake plugins, seotheme)", "block"},
@@ -1061,6 +1069,10 @@ func Render(c settings.WAF, o Options) string {
 	if c.Webshell {
 		rule(IDWebshell, `SecRule REQUEST_FILENAME "@rx /(?:%s)[0-9]?(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell request blocked',tag:'xpguard/webshell'"`, strings.Join(quoteAll(WebshellNames), "|"), IDWebshell)
 		rule(IDWebshellDir, `SecRule REQUEST_FILENAME "@rx /(?:alfa_data|alfacgiapi|wso_data)/" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - Web shell folder request blocked',tag:'xpguard/webshell'"`, IDWebshellDir)
+		// (CRS reads plain PHP in cookies; this one the base64 form.)
+		rule(IDStaticPost, `SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - POST to an image or stylesheet blocked',tag:'xpguard/webshell',chain"
+  SecRule REQUEST_FILENAME "@rx \.(?:gif|jpe?g|png|ico|bmp|webp|css)$" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase"`, IDStaticPost)
+		rule(IDCookieShell, `SecRule REQUEST_COOKIES "@rx (?i)\b(?:system|passthru|shell_exec|proc_open|popen|pcntl_exec|assert|eval|create_function|file_put_contents|move_uploaded_file)\s*\(" "id:%d,phase:1,t:none,t:urlDecodeUni,t:base64Decode,deny,status:403,log,msg:'xPGuard - Web shell command in a cookie blocked',logdata:'%%{MATCHED_VAR_NAME}',tag:'xpguard/webshell'"`, IDCookieShell)
 		// Paths only exploit scanners request: PHPUnit's eval-stdin.php
 		// (CVE-2017-9841), Laravel Ignition (CVE-2021-3129), leaked credentials.
 		if in := o.Intel; in != nil && len(in.Names) > 0 && !off[IDFleetNames] {
