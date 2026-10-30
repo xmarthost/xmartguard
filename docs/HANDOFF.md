@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.2** (see `VERSION`).
+- Current release: **0.24.3** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.2 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.3 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.2: `--branch backup-0.24.1`; see "Rollback" under 0.24.2 below);
+  0.24.3: `--branch backup-0.24.2`; see "Rollback" under 0.24.3 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,36 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.3: security plan part 3 - answer new holes faster**
+  (2026-10-30).
+  - WAF 7700316 (watch until approved): `role`/`roles`/`user_role`/
+    `new_role`/`default_role`/... = administrator outside WordPress's own
+    user screens (user-new, user-edit, users, profile) and the core REST
+    users route. No cookie exception (one is easily added).
+  - Plugin integrity (`cms/integrity.go`, with the CMS core check): each
+    wordpress.org plugin's PHP files against the release's SHA-256 sums
+    (downloads.wordpress.org/plugin-checksums, cached per release);
+    `WP.Plugin.ModifiedFiles` (category `integrity`) lists changed and
+    added PHP files; cache/logs folders skipped; never cleaned.
+  - Audit `kernel` (a newer kernel installed than running: reboot pending;
+    low with KernelCare) and `isolation` (fs.protected_symlinks/hardlinks,
+    CloudLinux SecureLinks sysctls off; /proc without hidepid when there is
+    no CageFS). Read-only, no CVE build list invented.
+  - WAF 7700406 counts REST requests with Basic authentication refused
+    (401) as failed logins: application-password guessing reaches the
+    brute-force ban.
+  - Process lineage (`monitor`): a shell whose parent is lsphp/php-fpm/
+    php-cgi/php running over 2 minutes, not a backup or build tool, is
+    Suspicious (alert; killed only by the existing CPU rule).
+  - Not done, owner or later: signed releases (the updater only checks a
+    sha256 from the same portal; signing needs a key the owner keeps
+    outside the repo), a patch feed per unpatched plugin (needs each
+    exploit's request shape; portal patches 7703xxx stay the way),
+    phpMyAdmin/Roundcube jails, card-skimmer and blockchain-loader script
+    families.
+  Tests: `TestAdminRoleArgRule`, `TestPluginIntegrity`,
+  `TestKernelAndIsolation`, `TestAppPasswordLoginRule`, `TestShellFromPHP`.
+  - **Rollback**: `backup-0.24.2`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.2: security plan part 2 - malware and persistence
   breadth** (2026-10-30).
   - DB: a ClickFix page kept in a post, option or widget

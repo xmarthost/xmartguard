@@ -306,6 +306,8 @@ type ProcInfo struct {
 	Age      time.Duration
 	Start    uint64
 	CPUTicks uint64
+	// ParentExe is the program of the parent process ("" when unknown).
+	ParentExe string
 }
 
 // Judge decides whether a process of a hosting user is malicious or
@@ -391,7 +393,27 @@ func Assess(p ProcInfo, home string) (string, Level) {
 	if strings.Contains(exe, "/.") && home != "" && strings.HasPrefix(exe, home+"/") {
 		return "program runs from a hidden folder in the home directory", Suspicious
 	}
+	// A shell the website's PHP started that keeps running: a web shell's
+	// session or a reverse shell. (PHP runs short shell commands all the
+	// time, and backup and media plugins long ones with their tools.)
+	if shellNames[filepath.Base(exe)] && phpWorker(p.ParentExe) && p.Age > shellFromPHPAge && !reShellTool.MatchString(p.Cmdline) {
+		return "a shell started by the website's PHP (" + filepath.Base(p.ParentExe) + ") has run for " + p.Age.Round(time.Minute).String() + " (web shells and reverse shells do so)", Suspicious
+	}
 	return "", Clean
+}
+
+var (
+	shellNames = map[string]bool{"sh": true, "bash": true, "dash": true, "zsh": true, "ksh": true, "csh": true, "tcsh": true}
+	// What plugins run through a shell for a long time.
+	reShellTool = regexp.MustCompile(`\b(?:mysqldump|mariadb-dump|mysql|zip|unzip|tar|gzip|gunzip|bzip2|xz|wp|wp-cli(?:\.phar)?|composer(?:\.phar)?|git|ffmpeg|convert|magick|wkhtmltopdf|rsync|php|node|npm|nice|ionice|sleep)\b`)
+	rePHPWorker = regexp.MustCompile(`^(?:lsphp\d*|php-fpm\S*|php-cgi\S*|php\d*(?:\.\d+)?)$`)
+)
+
+// shellFromPHPAge is how long a shell from PHP runs before it is reported.
+const shellFromPHPAge = 2 * time.Minute
+
+func phpWorker(exe string) bool {
+	return exe != "" && rePHPWorker.MatchString(filepath.Base(strings.TrimSuffix(exe, " (deleted)")))
 }
 
 func (m *Monitor) procs() []ProcInfo {
@@ -430,6 +452,9 @@ func (m *Monitor) procs() []ProcInfo {
 		p := ProcInfo{PID: pid, UID: sys.Uid, User: name, Exe: exe, Cmdline: cmd}
 		if raw, err := os.ReadFile(filepath.Join(dir, "stat")); err == nil {
 			p.Start, p.CPUTicks = parseStat(string(raw))
+			if pp := parentPID(string(raw)); pp > 1 {
+				p.ParentExe, _ = os.Readlink(filepath.Join(m.ProcRoot, strconv.Itoa(pp), "exe"))
+			}
 			if up := uptime; up > 0 && p.Start > 0 {
 				p.Age = time.Duration((up - float64(p.Start)/clockTicks) * float64(time.Second))
 			}
@@ -458,6 +483,20 @@ func parseStat(stat string) (start, cpu uint64) {
 	st, _ := strconv.ParseUint(f[12], 10, 64)
 	start, _ = strconv.ParseUint(f[19], 10, 64)
 	return start, ut + st
+}
+
+// parentPID reads the parent's PID (field 4) from /proc/PID/stat.
+func parentPID(stat string) int {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0
+	}
+	f := strings.Fields(stat[i+1:])
+	if len(f) < 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(f[1])
+	return n
 }
 
 // readUptime is the seconds since boot (0 = unknown).

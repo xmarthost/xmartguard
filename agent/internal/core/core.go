@@ -409,7 +409,7 @@ func (a *Agent) onPluginDir(wpRoot string) {
 
 func (a *Agent) onDBFinding(s cms.Site, f cms.DBFinding) {
 	n := a.Settings.Get().Notifications
-	if n.OnVirus && f.Category == cms.PluginCategory {
+	if n.OnVirus && (f.Category == cms.PluginCategory || f.Category == cms.IntegrityCategory) {
 		a.alertAdmin("WordPress plugin to check",
 			fmt.Sprintf("[%s] %s\n  site: %s (%s)\n  %s\n  Nothing was changed.\n", f.Signature, s.Domain, s.Path, s.User, f.Snippet))
 		return

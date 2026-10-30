@@ -50,6 +50,11 @@ const (
 	// 5 (threshold 10): a malicious plugin upload with a stolen admin
 	// session passed on business200 (2026-10-20).
 	IDWPPackagePHP = 7700315
+	// IDAdminRoleArg: a request outside WordPress's own user screens that
+	// asks for the administrator role (role=administrator,
+	// default_role=administrator): how plugin bugs of 2024-2026 made
+	// admins (OttoKit, King Addons, registration and option-update bugs).
+	IDAdminRoleArg = 7700316
 	// 7700314 (XML-RPC "fake Jetpack") is retired: the Jetpack mobile app
 	// sends that name from its users' own connections.
 	IDStaticPHP    = 7700321
@@ -77,13 +82,16 @@ const (
 	IDLoginJoomla      = 7700403
 	IDLoginOpenCart    = 7700404
 	IDLoginCustom      = 7700405
-	IDBadBots          = 7700501
-	IDSEOBots          = 7700502
-	IDAIBots           = 7700503
-	IDCustomBots       = 7700504
-	IDRootProbe        = 7700505
-	IDBareMozilla      = 7700506
-	IDFakeSearchBot    = 7700507
+	// IDLoginAppPass: a REST request with Basic authentication (an
+	// application password) that WordPress refused (401).
+	IDLoginAppPass  = 7700406
+	IDBadBots       = 7700501
+	IDSEOBots       = 7700502
+	IDAIBots        = 7700503
+	IDCustomBots    = 7700504
+	IDRootProbe     = 7700505
+	IDBareMozilla   = 7700506
+	IDFakeSearchBot = 7700507
 	// IDCrawlerCart: crawlers adding to cart or wishlist (every such URL
 	// writes a session and runs the shop uncached).
 	IDCrawlerCart = 7700508
@@ -191,8 +199,10 @@ var Catalog = []RuleInfo{
 	{IDWPLookalike, "wordpress", "Block wp-*.php files that imitate WordPress core names (wp-l0gin.php, wp-configs.php, wp-2019.php)", "block"},
 	{IDWPUploadsList, "wordpress", "Block folder listings of wp-content/uploads and its year/month folders", "block"},
 	{IDWPCachePHP, "wordpress", "Block running PHP files inside wp-content/cache", "block"},
+	{IDAdminRoleArg, "wordpress", "Block requests asking for the administrator role outside WordPress's own user screens (plugin bugs that create admins)", "block"},
 	{IDWPPackagePHP, "wordpress", "Block PHP files sent to the WordPress plugin, theme and media uploaders (they only take zip files and media)", "block"},
 	{IDLoginWP, "bruteforce", "Count failed WordPress logins", "count"},
+	{IDLoginAppPass, "bruteforce", "Count failed WordPress application-password logins (REST API with Basic authentication)", "count"},
 	{IDLoginXMLRPC, "bruteforce", "Count WordPress XML-RPC login calls", "count"},
 	{IDLoginJoomla, "bruteforce", "Count Joomla administrator logins", "count"},
 	{IDLoginOpenCart, "bruteforce", "Count OpenCart administrator logins", "count"},
@@ -811,6 +821,14 @@ func Render(c settings.WAF, o Options) string {
 			w(`  SecRule REQUEST_FILENAME "!@rx /wp-(?:%s)\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase"`, strings.Join(quoteAll(wpRootFiles), "|"))
 		}
 		rule(IDWPUploadsList, `SecRule REQUEST_FILENAME "@rx /wp-content/+uploads/+(?:\d{4}/+(?:\d{2}/+)?)?$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - Uploads folder listing blocked',tag:'xpguard/wordpress'"`, IDWPUploadsList)
+		if !off[IDAdminRoleArg] {
+			// WordPress checks the login and nonce on its own user screens
+			// and REST users route; no cookie is trusted here (one is
+			// easily added).
+			w(`SecRule ARGS:role|ARGS:roles|ARGS:user_role|ARGS:new_role|ARGS:default_role|ARGS:userrole|ARGS:wp_role|ARGS:user_roles "@rx ^administrator$" "id:%d,phase:2,t:none,t:urlDecodeUni,t:trim,t:lowercase,deny,status:403,log,msg:'xPGuard - Request for the administrator role blocked',logdata:'%%{MATCHED_VAR_NAME}',tag:'xpguard/wordpress',chain"`, IDAdminRoleArg)
+			w(`  SecRule REQUEST_FILENAME "!@rx /wp-admin/+(?:network/+)?(?:user-new|user-edit|users|profile)\.php$" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"`)
+			w(`  SecRule REQUEST_URI "!@rx (?:/wp-json/+wp/+v2/+users|[?&]rest_route=/+wp/+v2/+users)" "t:none,t:urlDecodeUni,t:lowercase"`)
+		}
 		if !off[IDWPPackagePHP] {
 			w(`SecRule REQUEST_FILENAME "@rx /wp-admin/+(?:update|async-upload|media-new|upload|theme-install|plugin-install)\.php$" "id:%d,phase:2,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,deny,status:403,log,msg:'xPGuard - PHP file sent to the WordPress plugin, theme or media uploader blocked',logdata:'%%{MATCHED_VAR}',tag:'xpguard/wordpress',chain"`, IDWPPackagePHP)
 			w(`  SecRule FILES "@rx \.(?:php[0-9]?|phtml|phar|pht|phps)$" "t:none,t:lowercase"`)
@@ -870,6 +888,13 @@ func Render(c settings.WAF, o Options) string {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:3,pass,log,msg:'xPGuard - Failed login: WordPress',tag:'xpguard/login',chain"`, IDLoginWP)
 			w(`  SecRule REQUEST_FILENAME "@rx /wp-login\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"`)
 			w(`  SecRule RESPONSE_STATUS "@streq 200" "t:none"`)
+		}
+		if !off[IDLoginAppPass] {
+			// Application passwords are guessed on the REST API, where no
+			// login page is involved.
+			w(`SecRule REQUEST_HEADERS:Authorization "@rx (?i)^basic\s" "id:%d,phase:3,pass,log,msg:'xPGuard - Failed login: WordPress application password',tag:'xpguard/login',chain"`, IDLoginAppPass)
+			w(`  SecRule REQUEST_URI "@rx (?:/wp-json/|[?&]rest_route=)" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
+			w(`  SecRule RESPONSE_STATUS "@streq 401" "t:none"`)
 		}
 		if !off[IDLoginXMLRPC] {
 			// Only calls that log in (wp.*, blogger.*, metaWeblog.*, mt.*,

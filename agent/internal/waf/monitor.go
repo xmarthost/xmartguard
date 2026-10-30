@@ -28,6 +28,7 @@ var NewRules = map[int]string{
 	IDWPPackagePHP:     "0.23.5",
 	IDCookieShell:      "0.24.2",
 	IDStaticPost:       "0.24.2",
+	IDAdminRoleArg:     "0.24.3",
 }
 
 // FirstReviewedPatch: portal virtual patches from this id on are new and

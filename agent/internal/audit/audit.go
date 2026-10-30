@@ -111,6 +111,7 @@ func (a *Auditor) Run(ctx context.Context) Report {
 	add("php_cve", a.phpCVEs(), nil)
 	add("stack_cve", a.stackCVEs(), nil)
 	add("persistence", a.persistence(), nil)
+	add("kernel", a.kernel(), nil)
 	add("lsphp", a.stuckPHP(), nil)
 	add("cron", a.cronJobs(), nil)
 	sev := map[string]int{"high": 0, "medium": 1, "low": 2}

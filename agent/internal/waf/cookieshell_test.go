@@ -29,3 +29,37 @@ func TestCookieShellRule(t *testing.T) {
 		t.Fatalf("approved rule does not block: %s", l)
 	}
 }
+
+// Plugin bugs of 2024-2026 made admins from requests that ask for the
+// administrator role; WordPress's own user screens and REST users route
+// (which check the login themselves) are left alone. Watch first.
+func TestAdminRoleArgRule(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled = true
+	out := Render(c, Options{Dir: "/r"})
+	chain := strings.Join(chainOf(out, IDAdminRoleArg), "\n")
+	for _, want := range []string{"ARGS:role|", "ARGS:default_role", "^administrator$", "user-new|user-edit|users|profile", "wp/+v2/+users", "[watch]"} {
+		if !strings.Contains(chain, want) {
+			t.Errorf("rule lacks %q:\n%s", want, chain)
+		}
+	}
+	if strings.Contains(chain, "logged_in") || strings.Contains(chain, "deny") {
+		t.Errorf("cookie exception or blocking before approval:\n%s", chain)
+	}
+}
+
+// Application passwords guessed on the REST API counted as failed logins
+// (toward the brute-force ban), like the login page.
+func TestAppPasswordLoginRule(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled = true
+	chain := strings.Join(chainOf(Render(c, Options{Dir: "/r"}), IDLoginAppPass), "\n")
+	for _, want := range []string{"REQUEST_HEADERS:Authorization", "^basic", "/wp-json/", "rest_route", `RESPONSE_STATUS "@streq 401"`, ",pass,"} {
+		if !strings.Contains(chain, want) {
+			t.Errorf("rule lacks %q:\n%s", want, chain)
+		}
+	}
+	if classify(IDLoginAppPass, "") != "login" || loginRuleName[IDLoginAppPass] == "" {
+		t.Error("not counted as a failed login")
+	}
+}

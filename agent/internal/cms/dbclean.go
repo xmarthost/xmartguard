@@ -108,7 +108,7 @@ func (m *Manager) cleanOne(ctx context.Context, id int64, conns map[string]*sql.
 		return "", errors.New("an administrator is not cleaned here: demote or delete the user in WordPress")
 	}
 	if watchCategory(r.category) {
-		return "", errors.New("a plugin is not cleaned here: deactivate or delete it in WordPress if nobody installed it")
+		return "", errors.New("a plugin is not cleaned here: reinstall, deactivate or delete it in WordPress")
 	}
 	cfg, err := ReadWPConfig(r.site)
 	if err != nil {

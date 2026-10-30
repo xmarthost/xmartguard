@@ -761,6 +761,7 @@ const DB_CATEGORY: Record<string, string> = {
   phishing: "Phishing page stored in the database (clean by hand)",
   admin: "Administrator to check (not cleaned: demote or delete in WordPress)",
   plugin: "Plugin to check (not cleaned: deactivate or delete in WordPress)",
+  integrity: "Plugin files differ from the wordpress.org release (reinstall it)",
 };
 
 function dbCSV(rows: DBRow[]): string {

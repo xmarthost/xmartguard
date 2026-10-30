@@ -276,3 +276,34 @@ func TestRootkitCutShortIsAnError(t *testing.T) {
 		t.Fatal("a killed run recorded as a result")
 	}
 }
+
+// A shell the website's PHP started that keeps running is a web shell's
+// session or a reverse shell; short shell commands, backup and media tools
+// and shells of other programs are not.
+func TestShellFromPHP(t *testing.T) {
+	home := "/home/u"
+	sh := func(cmd, parent string, age time.Duration) Level {
+		_, l := Assess(ProcInfo{Exe: "/usr/bin/bash", Cmdline: cmd, ParentExe: parent, Age: age}, home)
+		return l
+	}
+	if l := sh("sh -c id; uname -a; bash", "/opt/cpanel/ea-php82/root/usr/bin/lsphp", 10*time.Minute); l != Suspicious {
+		t.Errorf("long shell from lsphp: %v", l)
+	}
+	if l := sh("bash", "/usr/local/lsws/lsphp81/bin/lsphp", 5*time.Minute); l != Suspicious {
+		t.Errorf("long shell from lsphp81: %v", l)
+	}
+	for name, l := range map[string]Level{
+		"short command": sh("sh -c id", "/opt/cpanel/ea-php82/root/usr/bin/lsphp", 20*time.Second),
+		"backup":        sh("sh -c mysqldump --single-transaction db | gzip > b.sql.gz", "/opt/cpanel/ea-php82/root/usr/sbin/php-fpm", 20*time.Minute),
+		"wp-cli":        sh("sh -c php wp-cli.phar cron event run --due-now", "/usr/bin/php", 5*time.Minute),
+		"login shell":   sh("-bash", "/usr/sbin/sshd", time.Hour),
+		"cron":          sh("/bin/sh -c cd /home/u/public_html && php wp-cron.php", "/usr/sbin/crond", 5*time.Minute),
+	} {
+		if l != Clean {
+			t.Errorf("%s: %v", name, l)
+		}
+	}
+	if parentPID("123 (lsphp (x)) S 456 123 123 0") != 456 {
+		t.Error("parent PID")
+	}
+}

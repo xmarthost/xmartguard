@@ -104,6 +104,6 @@ fire on the 2026-10-28 shapes and nowhere else.
 | Part | State |
 |---|---|
 | 1 | released in 0.24.0, on the fleet |
-| 2 | released in 0.24.1 and 0.24.2; skimmer and blockchain-loader script families moved to part 3 |
-| 3 | waiting |
+| 2 | released in 0.24.1 and 0.24.2, on the fleet |
+| 3 | released in 0.24.3: admin-role rule (watch), plugin integrity, kernel/isolation audit, application-password counting, PHP-to-shell lineage. Open: signed releases (owner's key), per-plugin patch feed, phpMyAdmin/Roundcube jails, skimmer and blockchain-loader families |
 | 4 | waiting |

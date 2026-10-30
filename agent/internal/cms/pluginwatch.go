@@ -142,4 +142,6 @@ func (m *Manager) recordWatch(s Site, category string, found []DBFinding) {
 
 // watchCategory: findings of the watches, not database infections; never
 // cleaned.
-func watchCategory(c string) bool { return c == AdminCategory || c == PluginCategory }
+func watchCategory(c string) bool {
+	return c == AdminCategory || c == PluginCategory || c == IntegrityCategory
+}

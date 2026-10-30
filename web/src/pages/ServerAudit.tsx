@@ -36,6 +36,8 @@ const CHECKS: Record<string, string> = {
   persistence: 'Way back in (SSH key, timer, profile, at job)',
   world_writable: 'Folder writable by everyone',
   exposed_repo: 'Git repository in the website',
+  kernel: 'Kernel update / reboot',
+  isolation: 'Account isolation',
   stuck_php: 'Stuck PHP',
   cron: 'Cron jobs',
 };

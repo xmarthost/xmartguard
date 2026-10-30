@@ -285,6 +285,9 @@ func (m *Manager) scan(ctx context.Context) error {
 		// (business500: 1,073 updates failed with "WordPress site not found").
 		m.save(s)
 		m.watchPlugins(s)
+		if cfg.CoreCheck {
+			m.checkIntegrity(ctx, s, cacheDir)
+		}
 		if acts := m.autoActions(ctx, &s); len(acts) > 0 && m.OnAutoAction != nil {
 			m.OnAutoAction(s, acts)
 		}
