@@ -102,6 +102,14 @@ func (m *Manager) cleanOne(ctx context.Context, id int64, conns map[string]*sql.
 	if r.status != "detected" && r.status != "archived" {
 		return "", fmt.Errorf("finding is %s", r.status)
 	}
+	// An administrator is a person's account and a plugin someone's
+	// install: the owner decides, in WordPress (admins.go, pluginwatch.go).
+	if r.category == AdminCategory {
+		return "", errors.New("an administrator is not cleaned here: demote or delete the user in WordPress")
+	}
+	if watchCategory(r.category) {
+		return "", errors.New("a plugin is not cleaned here: deactivate or delete it in WordPress if nobody installed it")
+	}
 	cfg, err := ReadWPConfig(r.site)
 	if err != nil {
 		return "", err

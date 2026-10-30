@@ -284,6 +284,7 @@ func (m *Manager) scan(ctx context.Context) error {
 		// in the list, and a site found for the first time was not in it yet
 		// (business500: 1,073 updates failed with "WordPress site not found").
 		m.save(s)
+		m.watchPlugins(s)
 		if acts := m.autoActions(ctx, &s); len(acts) > 0 && m.OnAutoAction != nil {
 			m.OnAutoAction(s, acts)
 		}
@@ -302,6 +303,8 @@ func (m *Manager) scan(ctx context.Context) error {
 		rows.Close()
 		for _, x := range gone {
 			_, _ = m.DB.Exec(`DELETE FROM cms_sites WHERE path = ?`, x.path)
+			_, _ = m.DB.Exec(`DELETE FROM cms_admins WHERE site_path = ?`, x.path)
+			_, _ = m.DB.Exec(`DELETE FROM cms_plugin_base WHERE site_path = ?`, x.path)
 			// Its wp-cron job would only fail now.
 			if x.user != "" {
 				_, _ = RemoveRealCron(x.path, x.user)
@@ -372,6 +375,7 @@ func (m *Manager) refresh(ctx context.Context, s Site) {
 		s.Risk = risk(&s)
 	}
 	m.save(s)
+	m.watchPlugins(s)
 }
 
 // RefreshSite re-reads one WordPress site after an update from the portal
@@ -437,6 +441,9 @@ func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 	}
 	start := time.Now()
 	found, err := ScanDatabase(dctx, c)
+	if err == nil {
+		found = append(found, m.watchAdmins(dctx, c, s.Path)...)
+	}
 	// Give MySQL a rest as long as the search took (at most 5 seconds).
 	select {
 	case <-ctx.Done():
@@ -479,7 +486,7 @@ func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 	if recheck {
 		gone = "cleared"
 	}
-	_, _ = m.DB.Exec(`UPDATE db_findings SET status = ? WHERE site_path = ? AND status = 'detected'`, gone, s.Path)
+	_, _ = m.DB.Exec(`UPDATE db_findings SET status = ? WHERE site_path = ? AND status = 'detected' AND category != ?`, gone, s.Path, PluginCategory)
 	for _, f := range found {
 		key := f.Table + "\x00" + f.Row + "\x00" + f.Signature
 		// Archived findings stay archived (the admin has seen them).

@@ -34,6 +34,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 	"github.com/xmarthost/xmartguard/agent/internal/firewall"
 	"github.com/xmarthost/xmartguard/agent/internal/hostfw"
+	"github.com/xmarthost/xmartguard/agent/internal/hostnets"
 	"github.com/xmarthost/xmartguard/agent/internal/identity"
 	"github.com/xmarthost/xmartguard/agent/internal/mail"
 	"github.com/xmarthost/xmartguard/agent/internal/monitor"
@@ -104,13 +105,18 @@ type Agent struct {
 	// and Imunify360 (nil in tests).
 	HostFW *hostfw.Host
 	// Trusted holds search engine, monitor, CDN and payment addresses.
-	Trusted     *trusted.Store
-	Tor         *tor.List
-	clam        clamState
-	hostMu      sync.Mutex
-	hostLoopOn  atomic.Bool // the host firewall sync runs (not in tests)
-	wafExemptMu sync.Mutex
-	hostTrust   []hostfw.Result
+	Trusted *trusted.Store
+	Tor     *tor.List
+	// HostNets are hosting, cloud and VPS networks (login page CAPTCHA).
+	HostNets *hostnets.Store
+	// pluginTimers wait out a plugin upload before the plugin watch runs.
+	pluginMu     sync.Mutex
+	pluginTimers map[string]*time.Timer
+	clam         clamState
+	hostMu       sync.Mutex
+	hostLoopOn   atomic.Bool // the host firewall sync runs (not in tests)
+	wafExemptMu  sync.Mutex
+	hostTrust    []hostfw.Result
 }
 
 // New opens the local store and builds all modules.
@@ -151,7 +157,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		pluginsOnce.Do(func() { plugins.Source = a.pluginSource() })
 		return plugins.KnownFile(slug, version, rel, sum)
 	}
-	a.Realtime = &scanner.Realtime{S: a.Scanner}
+	a.Realtime = &scanner.Realtime{S: a.Scanner, OnPluginDir: a.onPluginDir}
 	// Scans run in their own low-priority process (the agent's program
 	// with "scan-engine"), named xpguard-scan in the process list.
 	if exe, err := os.Executable(); err == nil && !strings.HasSuffix(exe, ".test") {
@@ -171,6 +177,8 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 	a.Firewall.FleetName = a.fleetName
 	a.Trusted = trusted.New(filepath.Join(store.StateDir(), "trusted-services.json"))
 	a.Tor = tor.New(filepath.Join(store.StateDir(), "tor-exits.json"))
+	a.HostNets = &hostnets.Store{}
+	a.HostNets.Load()
 	a.Trusted.SetCustom(st.Get().Firewall.TrustedCustom)
 	a.Firewall.Trusted = a.trustedCIDRs
 	a.Firewall.TrustedMatch = func(ip string) string {
@@ -344,6 +352,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.wafLearnLoop(ctx)
 	go a.intelLoop(ctx)
 	go a.centralLoop(ctx)
+	go a.hostNetsLoop(ctx)
 	// Put back system files that older rules quarantined (root's temp
 	// files, SpamAssassin's compiled rules).
 	go func() {
@@ -371,8 +380,47 @@ func portalPorts(serverURL string) []int {
 	return []int{443}
 }
 
+// pluginWatchDelay lets an upload finish (unzip, activation) first.
+var pluginWatchDelay = 2 * time.Minute
+
+// onPluginDir runs the plugin watch of a site a while after a folder
+// appeared in its plugins (once for a burst of folders).
+func (a *Agent) onPluginDir(wpRoot string) {
+	if a.CMS == nil || !a.Settings.Get().CMS.Enabled {
+		return
+	}
+	a.pluginMu.Lock()
+	defer a.pluginMu.Unlock()
+	if a.pluginTimers == nil {
+		a.pluginTimers = map[string]*time.Timer{}
+	}
+	if _, waiting := a.pluginTimers[wpRoot]; waiting || len(a.pluginTimers) > 1000 {
+		return
+	}
+	a.pluginTimers[wpRoot] = time.AfterFunc(pluginWatchDelay, func() {
+		a.pluginMu.Lock()
+		delete(a.pluginTimers, wpRoot)
+		a.pluginMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		a.CMS.WatchPluginsAt(ctx, wpRoot)
+	})
+}
+
 func (a *Agent) onDBFinding(s cms.Site, f cms.DBFinding) {
 	n := a.Settings.Get().Notifications
+	if n.OnVirus && f.Category == cms.PluginCategory {
+		a.alertAdmin("WordPress plugin to check",
+			fmt.Sprintf("[%s] %s\n  site: %s (%s)\n  %s\n  Nothing was changed.\n", f.Signature, s.Domain, s.Path, s.User, f.Snippet))
+		return
+	}
+	if n.OnVirus && f.Category == cms.AdminCategory {
+		// Admin watch: nothing was changed; the owner checks the user.
+		a.alertAdmin("WordPress administrator to check",
+			fmt.Sprintf("[%s] %s\n  site: %s (%s)\n  %s\n  Nothing was changed: demote or delete the user in WordPress if you do not know it, then rotate passwords.\n",
+				f.Signature, s.Domain, s.Path, s.User, f.Snippet))
+		return
+	}
 	if n.OnVirus {
 		a.alertAdmin("database infection found",
 			fmt.Sprintf("[%s] %s\n  site: %s (%s)\n  table: %s  row: %s\n", f.Signature, s.Domain, s.Path, s.User, f.Table, f.Row))

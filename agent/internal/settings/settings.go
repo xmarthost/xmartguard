@@ -159,6 +159,10 @@ type Captcha struct {
 	// URLs (Settings » WAF » Captcha Protected URLs) before the login page;
 	// the rest of the website is not affected.
 	LoginGate bool `json:"login_gate"`
+	// HostingLogin sends visitors of the login pages from hosting, cloud
+	// and VPS networks to the central CAPTCHA (stolen passwords are used
+	// from rented servers; owners log in from homes, offices and phones).
+	HostingLogin bool `json:"hosting_login"`
 	// Central sends suspicious visitors of the protected login URLs (IPDB,
 	// recent bans, repeated WAF blocks) to the portal's CAPTCHA page
 	// (CentralURL); solving it lets the address in for CentralMinutes. Set
@@ -587,7 +591,7 @@ func Defaults() Settings {
 			OnVirus: true, OnSuspicious: false, OnBinary: false, OnBan: false, OnBlacklist: true,
 			UserOutdated: "never", ExcludeUsers: []string{},
 		},
-		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 1440, HTTPPort: 7780, HTTPSPort: 7743, CentralMinutes: 720},
+		Captcha:   Captcha{Provider: "builtin", AllowMinutes: 1440, HTTPPort: 7780, HTTPSPort: 7743, CentralMinutes: 720, HostingLogin: true},
 		AI:        AI{Enabled: true, Provider: "portal", Scope: "suspicious", MaxPerHour: 120, MaxKB: 12, Learn: true},
 		Processes: ProcessMonitor{Enabled: true, Kill: false, WhitelistUsers: []string{}, WhitelistStrings: []string{}},
 		Cron:      CronMonitor{Enabled: true, Disable: true, WhitelistUsers: []string{}},

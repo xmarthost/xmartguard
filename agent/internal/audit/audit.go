@@ -72,6 +72,10 @@ type Auditor struct {
 	Now        func() time.Time
 	MaxFiles   int
 	MaxPerKey  int
+	// StackRoot prefixes the panel and web server files read by the
+	// stack check (tests); EximVersion reads Exim's (nil: exim -bV).
+	StackRoot   string
+	EximVersion func() string
 }
 
 func (a *Auditor) now() time.Time {
@@ -103,6 +107,7 @@ func (a *Auditor) Run(ctx context.Context) Report {
 	add("website_files", web, webErr)
 	add("php", a.phpSettings(), nil)
 	add("php_cve", a.phpCVEs(), nil)
+	add("stack_cve", a.stackCVEs(), nil)
 	add("lsphp", a.stuckPHP(), nil)
 	add("cron", a.cronJobs(), nil)
 	sev := map[string]int{"high": 0, "medium": 1, "low": 2}

@@ -1245,3 +1245,37 @@ func TestRealtimeCatchesNewLinks(t *testing.T) {
 		t.Fatalf("restored link recorded again: %+v", fs)
 	}
 }
+
+// A plugin uploaded through wp-admin (server1, 2026-10-28) was only seen by
+// the CMS scan days later: a folder made in wp-content/plugins now tells
+// the plugin watch at once; other folders do not.
+func TestRealtimeReportsNewPluginFolder(t *testing.T) {
+	s := newScanner(t)
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "public_html/wp-content/plugins"), 0o755)
+	os.MkdirAll(filepath.Join(root, "public_html/wp-content/uploads"), 0o755)
+	got := make(chan string, 4)
+	rt := &Realtime{S: s, OnPluginDir: func(wp string) { got <- wp }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := rt.init([]string{root}); err != nil {
+		t.Skip("inotify unavailable:", err)
+	}
+	go rt.loop(ctx)
+	time.Sleep(300 * time.Millisecond)
+	os.MkdirAll(filepath.Join(root, "public_html/wp-content/uploads/2026"), 0o755)
+	os.MkdirAll(filepath.Join(root, "public_html/wp-content/plugins/system-defence"), 0o755)
+	select {
+	case wp := <-got:
+		if wp != filepath.Join(root, "public_html") {
+			t.Fatalf("site %q", wp)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("new plugin folder not reported")
+	}
+	select {
+	case wp := <-got:
+		t.Fatalf("reported again: %q", wp)
+	case <-time.After(500 * time.Millisecond):
+	}
+}

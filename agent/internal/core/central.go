@@ -155,6 +155,9 @@ func (a *Agent) centralWAF() *waf.Central {
 		w.Suspects = a.centralSuspects()
 		w.Sites = a.loginAttackSites()
 		w.SiteLoginURLs = siteLoginURLs(cur.WAF.LoginURLs)
+		if c.HostingLogin && a.HostNets != nil {
+			w.Hosting, w.HostingNets, w.HostingExempt = true, a.HostNets.Nets(), a.hostingExempt()
+		}
 	}
 	if !w.Site {
 		w.HostPage = a.hostPageURL()
@@ -314,17 +317,8 @@ func (a *Agent) centralSuspects() []string {
 	}
 	// Never the server itself, the portal, allowed addresses or trusted services.
 	skip := map[string]bool{}
-	if a.Firewall != nil {
-		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow, firewall.KindCaptchaPass} {
-			if rs, err := a.Firewall.List(kind); err == nil {
-				for _, r := range rs {
-					if !r.Inbound() {
-						continue
-					}
-					skip[r.CIDR] = true
-				}
-			}
-		}
+	for _, c := range a.allowedInbound() {
+		skip[c] = true
 	}
 	var out []string
 	for ip := range set {
@@ -342,6 +336,57 @@ func (a *Agent) centralSuspects() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// allowedInbound are the firewall's allowed, ignored and passed inbound
+// addresses.
+func (a *Agent) allowedInbound() []string {
+	var out []string
+	if a.Firewall != nil {
+		for _, kind := range []string{firewall.KindAllow, firewall.KindIgnore, firewall.KindTempAllow, firewall.KindCaptchaPass} {
+			if rs, err := a.Firewall.List(kind); err == nil {
+				for _, r := range rs {
+					if r.Inbound() {
+						out = append(out, r.CIDR)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// hostingExempt are addresses of hosting networks that never get the
+// login CAPTCHA for it: the server's own, the fleet's and the allowed ones.
+func (a *Agent) hostingExempt() []string {
+	out := a.allowedInbound()
+	for _, f := range a.fleet() {
+		if net.ParseIP(f.IP) != nil {
+			out = append(out, f.IP)
+		}
+	}
+	for _, ip := range a.Settings.Get().Reputation.IPs {
+		if net.ParseIP(ip) != nil {
+			out = append(out, ip)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// hostNetsLoop reads the hosting networks daily; the central CAPTCHA's
+// 10-minute check sees the new list and reloads the rules.
+func (a *Agent) hostNetsLoop(ctx context.Context) {
+	for {
+		if a.Settings.Get().Captcha.HostingLogin && a.HostNets.Refresh(ctx) {
+			a.Log.Info("hosting networks refreshed", "networks", len(a.HostNets.Nets()))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Hour):
+		}
+	}
 }
 
 // centralPassMap reads the pass list, dropping expired entries.

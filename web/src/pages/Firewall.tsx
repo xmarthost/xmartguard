@@ -71,6 +71,7 @@ interface CaptchaSettings {
   http_port: number;
   https_port: number;
   login_gate?: boolean;
+  hosting_login?: boolean;
   // Set fleet-wide on Overview » CAPTCHA Page.
   central?: boolean;
   central_url?: string;
@@ -1021,6 +1022,18 @@ export function FirewallPage() {
               <option value="all">Every visitor</option>
             </select>
           </SettingRow>
+          {cap.central && !cap.login_gate ? (
+            <SettingRow
+              title="Logins from hosting networks"
+              desc="Visitors of the login pages from hosting, cloud and VPS networks (AWS, Hetzner, OVH, DigitalOcean and others) get the CAPTCHA first: stolen passwords are used from rented servers, while site owners log in from homes, offices and phones. Not xmlrpc.php, trusted services or allowed addresses."
+            >
+              <Toggle
+                on={cap.hosting_login !== false}
+                disabled={!isAdmin || busy}
+                onChange={(v) => saveAny({ captcha: { hosting_login: v } }, v ? 'CAPTCHA for logins from hosting networks on' : 'CAPTCHA for logins from hosting networks off')}
+              />
+            </SettingRow>
+          ) : null}
           {cap.central ? (
             <p className="rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-800">
               The CAPTCHA is the portal's page{cap.central_url ? ` (${cap.central_url})` : ''}, the same for all servers: its check, keys and how long a solved

@@ -398,6 +398,10 @@ const (
 	// mode) is not inspected (a static page; its link holds the page the
 	// visitor wanted, which may look like an attack).
 	IDHostPage = 7700068
+	// IDMarkHosting marks visitors of the login pages from hosting, cloud
+	// and VPS networks (Central.Hosting): stolen passwords are used from
+	// rented servers.
+	IDMarkHosting = 7700069
 )
 
 // ipdbMarkVars are the variables of renderIPDBMarks: the visitor's own
@@ -492,6 +496,12 @@ type Central struct {
 	// (https://<hostname>/xpguard-check/, hostname mode): suspects are sent
 	// there instead of URL, and pass through the pass list.
 	HostPage string
+	// Hosting: visitors of SiteLoginURLs from hosting, cloud and VPS
+	// networks (HostingNets, hostnets) are suspects, except HostingExempt
+	// (the server's allowed addresses, the fleet) and trusted services.
+	Hosting       bool
+	HostingNets   []string
+	HostingExempt []string
 }
 
 // reHostPage is a hostname page address the rules may hold.
@@ -507,6 +517,10 @@ const (
 	// FileCaptchaSites lists Central.Sites (the rule holds them; the file
 	// tells a change, see CentralChanged and CentralSitesAdded).
 	FileCaptchaSites = "captcha-sites.txt"
+	// FileCaptchaHosting and FileCaptchaHostingExempt: Central.HostingNets
+	// and Central.HostingExempt.
+	FileCaptchaHosting       = "captcha-hosting.txt"
+	FileCaptchaHostingExempt = "captcha-hosting-exempt.txt"
 )
 
 // CentralFiles are the address lists of the central CAPTCHA rule. With
@@ -546,7 +560,8 @@ func CentralFiles(c *Central, ipdb []string) map[string]string {
 			}
 		}
 	}
-	return map[string]string{FileCaptchaSuspects: list(suspects), FileCaptchaNotSuspects: list(not), FileCaptchaPass: list(c.Pass), FileCaptchaSites: siteList(c.Sites)}
+	return map[string]string{FileCaptchaSuspects: list(suspects), FileCaptchaNotSuspects: list(not), FileCaptchaPass: list(c.Pass), FileCaptchaSites: siteList(c.Sites),
+		FileCaptchaHosting: list(c.HostingNets), FileCaptchaHostingExempt: list(c.HostingExempt)}
 }
 
 // reSiteHost is a website name the site attack rule may hold.
@@ -975,6 +990,16 @@ func Render(c settings.WAF, o Options) string {
 			}
 			if sites := AttackSites(ct.Sites); len(sites) > 0 && len(gated) > 0 {
 				w(`SecRule SERVER_NAME "@rx ^(?:www\.)?(?:%s)\.?$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, strings.Join(quoteAll(sites), "|"), IDMarkSiteAttack)
+				w(`  SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,setvar:tx.xg_suspect=1"`, strings.Join(gated, "|"))
+			}
+			// A login page opened from a hosting network (not xmlrpc.php:
+			// apps and services call it from servers).
+			if ct.Hosting && len(gated) > 0 {
+				w(`SecRule REMOTE_ADDR "@ipMatchFromFile %s/%s" "id:%d,phase:1,t:none,pass,nolog,chain"`, o.Dir, FileCaptchaHosting, IDMarkHosting)
+				w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileCaptchaHostingExempt)
+				if o.Trusted {
+					w(`  SecRule REMOTE_ADDR "!@ipMatchFromFile %s/%s" "t:none,chain"`, o.Dir, FileTrustedIPs)
+				}
 				w(`  SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,setvar:tx.xg_suspect=1"`, strings.Join(gated, "|"))
 			}
 		}

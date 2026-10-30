@@ -228,6 +228,20 @@ CREATE TABLE IF NOT EXISTS db_clean_backup (
   old_value   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS db_clean_backup_finding ON db_clean_backup(finding_id);
+-- A WordPress site's administrators when xPGuard first read them: later
+-- ones are new (admin watch, cms/admins.go).
+CREATE TABLE IF NOT EXISTS cms_admins (
+  site_path   TEXT NOT NULL,
+  user_id     INTEGER NOT NULL,
+  PRIMARY KEY(site_path, user_id)
+);
+-- A WordPress site's plugin folders when xPGuard first listed them (plugin
+-- watch, cms/pluginwatch.go).
+CREATE TABLE IF NOT EXISTS cms_plugin_base (
+  site_path   TEXT NOT NULL,
+  slug        TEXT NOT NULL,
+  PRIMARY KEY(site_path, slug)
+);
 CREATE TABLE IF NOT EXISTS osm_events (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   at        INTEGER NOT NULL,

@@ -758,6 +758,8 @@ const DB_CATEGORY: Record<string, string> = {
   iframe: "Hidden iframe",
   php: "PHP code in the database",
   siteurl: "Site URL changed",
+  admin: "Administrator to check (not cleaned: demote or delete in WordPress)",
+  plugin: "Plugin to check (not cleaned: deactivate or delete in WordPress)",
 };
 
 function dbCSV(rows: DBRow[]): string {

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.42** (see `VERSION`).
+- Current release: **0.24.0** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.42 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.0 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.42: `--branch backup-0.23.41`; see "Rollback" under 0.23.42 below);
+  0.24.0: `--branch backup-0.23.42`; see "Rollback" under 0.24.0 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,40 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.0: security plan part 1 - stop the attack chains seen on
+  the fleet** (2026-10-30; plan in `docs/SECURITY_PLAN.md`, four parts,
+  each released and installed before the next).
+  - **Admin watch** (`cms/admins.go`, with the DB scan): per site,
+    `WP.Admin.New` (not in the site's baseline; at the first read, one
+    registered in the last 30 days other than the first user),
+    `WP.Admin.Suspicious` (adm + random, a hex tail, a look-alike of admin,
+    mail at example.*/.local/wordpress.org), `WP.Admin.Farm` (more than 20
+    such, or over 50 admins: one summary row and 20 named rows). Baseline
+    table `cms_admins`, never learned again: a new admin stays reported
+    until archived or demoted. Nothing is changed in the site; the DB
+    cleaner refuses these rows.
+  - **Plugin watch** (`cms/pluginwatch.go`): `WP.Plugin.NewUnknown` (after
+    the first listing, not on wordpress.org or claiming a version newer than
+    it), `WP.Plugin.TimestampClone` (`name_<unix time>`). Baseline table
+    `cms_plugin_base`. Realtime tells it within 2 minutes when a folder
+    appears in `wp-content/plugins` (`Realtime.OnPluginDir`, no updates or
+    saving at that time).
+  - **Logins from hosting networks** (`captcha.hosting_login`, default on;
+    `hostnets`): ~40 hosting/cloud/VPS AS numbers, routes from RADb daily
+    (wide or nested routes dropped, at most 60,000), file
+    `captcha-hosting.txt`; rule 7700069 marks visitors of the site login
+    URLs (not xmlrpc.php) from those networks as CAPTCHA suspects, except
+    `captcha-hosting-exempt.txt` (allowed/ignored/passed addresses, the
+    fleet, the server's IPs) and trusted services. Needs the central
+    CAPTCHA; sites behind Cloudflare are not covered (the address is
+    Cloudflare's).
+  - **Panel audit** (`audit/stack.go`, check `stack_cve`): cPanel < 11.136.0.32,
+    LiteSpeed Enterprise < 6.3.7 (OpenLiteSpeed skipped), Exim < 4.99.2,
+    Roundcube < 1.6.11 (1.5.x < 1.5.10). Read-only.
+  Tests: `TestAdminWatch`, `TestAdminWatchBaseline`, `TestPluginWatch`,
+  `TestHostingLoginRule`, `hostnets.TestRefresh`, `TestStackCVEs`,
+  `TestRealtimeReportsNewPluginFolder`.
+  - **Rollback**: `backup-0.23.42`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.23.42: plugins uploaded with known passwords; new links seen
   by realtime protection** (2026-10-30). server1, 2026-10-28: logins with
   passwords the attacker already had (each the first POST, a 302; no

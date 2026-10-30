@@ -66,6 +66,10 @@ type Realtime struct {
 	S *Scanner
 	// Roots overrides the watched directories (tests).
 	Roots func() []string
+	// OnPluginDir is called with a WordPress root when a folder appears in
+	// its wp-content/plugins (a plugin uploaded through wp-admin or dropped
+	// by a kit): the plugin watch looks at it within minutes.
+	OnPluginDir func(wpRoot string)
 
 	mu      sync.Mutex
 	fd      int
@@ -676,6 +680,9 @@ func (r *Realtime) handle(buf []byte) {
 		}
 		full := filepath.Join(dir, name)
 		if ev.Mask&unix.IN_ISDIR != 0 {
+			if ev.Mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 && r.OnPluginDir != nil && filepath.Base(dir) == "plugins" && filepath.Base(filepath.Dir(dir)) == "wp-content" {
+				r.OnPluginDir(filepath.Dir(filepath.Dir(dir)))
+			}
 			if ev.Mask&(unix.IN_CREATE|unix.IN_MOVED_TO) != 0 && !r.skip(full, name) {
 				select {
 				case r.trees <- full:

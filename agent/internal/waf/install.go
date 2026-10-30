@@ -717,7 +717,8 @@ var liteSpeedRestart = []string{"/usr/local/lsws/bin/lswsctrl", "restart"}
 // The whitelist, trusted and exempt lists are not here: they change when
 // someone edits them, and apply at once.
 var addressLists = map[string]bool{FileBlockedIPs: true, FileIPDBIPs: true, FileTorIPs: true,
-	FileCaptchaSuspects: true, FileCaptchaNotSuspects: true, FileCaptchaPass: true, FileStrictIPs: true}
+	FileCaptchaSuspects: true, FileCaptchaNotSuspects: true, FileCaptchaPass: true, FileStrictIPs: true,
+	FileCaptchaHosting: true, FileCaptchaHostingExempt: true}
 
 // ListReloadGap is the least time between two reloads for address list
 // changes: LiteSpeed restarts its server processes on every reload, Apache

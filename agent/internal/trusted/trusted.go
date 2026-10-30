@@ -350,6 +350,10 @@ func insideOf(l, nets []string, max int) []string {
 // point it at a local server).
 var RADBAddr = "whois.radb.net:43"
 
+// RADBRoutes lists the routes an AS announces, from the RADb registry
+// (also read for the hosting networks, hostnets).
+func RADBRoutes(ctx context.Context, as string) ([]string, error) { return radbRoutes(ctx, as) }
+
 // radbRoutes lists the routes an AS announces, from the RADb registry.
 func radbRoutes(ctx context.Context, as string) ([]string, error) {
 	var d net.Dialer

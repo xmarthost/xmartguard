@@ -32,6 +32,7 @@ const CHECKS: Record<string, string> = {
   php: 'PHP settings',
   php_eol: 'Old PHP',
   php_cve: 'PHP security update',
+  stack_cve: 'Panel / web server security update',
   stuck_php: 'Stuck PHP',
   cron: 'Cron jobs',
 };
