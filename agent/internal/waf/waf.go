@@ -1346,7 +1346,8 @@ func (m *Manager) countStats() Stats {
 	day := store.Now() - 86400
 	_ = m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category='waf' AND at>=?`, day).Scan(&s.Blocked24h)
 	_ = m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category='bot' AND at>=?`, day).Scan(&s.Bots24h)
-	_ = m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category='login' AND at>=?`, day).Scan(&s.Logins24h)
+	// (Checkout attempts count toward the ban like logins; they are no logins.)
+	_ = m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category='login' AND rule_id != ? AND at>=?`, IDCheckoutTry, day).Scan(&s.Logins24h)
 	_ = m.DB.QueryRow(`SELECT count(*) FROM waf_events`).Scan(&s.Total)
 	return s
 }

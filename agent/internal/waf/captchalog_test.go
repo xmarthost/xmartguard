@@ -29,6 +29,12 @@ func TestCaptchaRedirectLogged(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		m.handleEvent(login("L"+string(rune('a'+i))), st)
 	}
+	// A checkout attempt counts toward the ban, not as a login.
+	co, _ := ParseLine(`[Sat Oct 25 06:01:00.471444 2026] [security2:error] [pid 1:tid 1] [client 45.58.238.98:45142] [client 45.58.238.98] ModSecurity: Warning. Pattern match "x" at REQUEST_URI. [file "/x/rules.conf"] [line "9"] [id "7700407"] [msg "xPGuard - Checkout attempt: WooCommerce"] [tag "xpguard/login"] [hostname "websoulhost.com"] [uri "/wp-json/wc/store/v1/checkout"] [unique_id "C1"]`)
+	if co.Category != "login" {
+		t.Fatalf("checkout category %q", co.Category)
+	}
+	m.handleEvent(co, st)
 	// Every page the visitor opens is a redirect: one line in half an hour.
 	for _, uid := range []string{"G1", "G2", "G3"} {
 		m.handleEvent(gate(uid), st)

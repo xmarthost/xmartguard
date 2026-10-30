@@ -188,3 +188,20 @@ func TestGeoPrefersPortal(t *testing.T) {
 		t.Fatal("list lost when the portal was down")
 	}
 }
+
+// Whitelisted countries are a full whitelist for the login CAPTCHA of
+// hosting networks too (the owner whitelists PK): a hosting network in such
+// a country leaves the list, others stay.
+func TestWhitelistCountryDropsHostingNets(t *testing.T) {
+	m := newManager(t, "iptables")
+	geoDir := t.TempDir()
+	os.WriteFile(filepath.Join(geoDir, "zz.zone"), []byte("10.99.0.0/16\n"), 0o600)
+	m.Geo = &Geo{Dir: geoDir, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if _, err := m.Settings.Patch([]byte(`{"firewall":{"ignored_countries":["ZZ"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	got := m.WithoutWhitelistedCountries([]string{"10.99.4.0/24", "10.98.0.0/16", "2001:db8::/32"})
+	if strings.Join(got, ",") != "10.98.0.0/16,2001:db8::/32" {
+		t.Fatalf("hosting nets: %v", got)
+	}
+}

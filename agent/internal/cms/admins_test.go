@@ -228,3 +228,14 @@ func TestDBClickFixPage(t *testing.T) {
 		t.Fatalf("how-to post: %+v", d)
 	}
 }
+
+// wordpress.org did not answer (no plugin has a release version): nothing
+// is reported as unknown and earlier rows stay.
+func TestPluginWatchLookupsFailed(t *testing.T) {
+	if !lookupsFailed([]Component{{Slug: "a"}, {Slug: "b"}, {Slug: "c"}}) {
+		t.Error("all unknown not seen as a failed lookup")
+	}
+	if lookupsFailed([]Component{{Slug: "a", Latest: "1"}, {Slug: "b"}, {Slug: "c"}}) || lookupsFailed([]Component{{Slug: "a"}}) {
+		t.Error("a normal listing seen as a failed lookup")
+	}
+}

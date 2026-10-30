@@ -489,7 +489,7 @@ func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 	if recheck {
 		gone = "cleared"
 	}
-	_, _ = m.DB.Exec(`UPDATE db_findings SET status = ? WHERE site_path = ? AND status = 'detected' AND category != ?`, gone, s.Path, PluginCategory)
+	m.markDBGone(s.Path, gone)
 	for _, f := range found {
 		key := f.Table + "\x00" + f.Row + "\x00" + f.Signature
 		// Archived findings stay archived (the admin has seen them).
@@ -506,7 +506,22 @@ func (m *Manager) scanDB(ctx context.Context, s Site, recheck bool) int {
 			m.OnFinding(s, f)
 		}
 	}
-	return len(found)
+	// Infections only: the admin watch's rows are listed, not counted as
+	// an infected database.
+	n := 0
+	for _, f := range found {
+		if !watchCategory(f.Category) {
+			n++
+		}
+	}
+	return n
+}
+
+// markDBGone marks a site's detected database rows gone before a scan
+// finds them again. The plugin and integrity watches keep their own rows
+// (recordWatch): marking them here notified them again on every scan.
+func (m *Manager) markDBGone(site, status string) {
+	_, _ = m.DB.Exec(`UPDATE db_findings SET status = ? WHERE site_path = ? AND status = 'detected' AND category NOT IN (?, ?)`, status, site, PluginCategory, IntegrityCategory)
 }
 
 func (m *Manager) save(s Site) {
@@ -557,7 +572,7 @@ func (m *Manager) Counts() Counts {
 	_ = m.DB.QueryRow(`SELECT count(*) FROM cms_sites WHERE type = 'joomla'`).Scan(&c.Joomla)
 	_ = m.DB.QueryRow(`SELECT count(*) FROM cms_sites WHERE type = 'opencart'`).Scan(&c.OpenCart)
 	_ = m.DB.QueryRow(`SELECT count(*) FROM cms_sites WHERE outdated_plugins + outdated_themes > 0 OR (latest != '' AND version != latest)`).Scan(&c.Outdated)
-	_ = m.DB.QueryRow(`SELECT count(*) FROM db_findings WHERE status = 'detected'`).Scan(&c.DBInfected)
+	_ = m.DB.QueryRow(`SELECT count(*) FROM db_findings WHERE status = 'detected' AND category NOT IN (?, ?, ?)`, AdminCategory, PluginCategory, IntegrityCategory).Scan(&c.DBInfected)
 	return c
 }
 

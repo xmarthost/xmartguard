@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.4** (see `VERSION`).
+- Current release: **0.24.5** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.4 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.5 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.4: `--branch backup-0.24.3`; see "Rollback" under 0.24.4 below);
+  0.24.5: `--branch backup-0.24.4`; see "Rollback" under 0.24.5 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,34 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.5: review of parts 1-4** (2026-10-30). The owner asked
+  for parts 1-4 and the system around them to be checked again for
+  mistakes and overlaps. Found and fixed:
+  - The database scan marked every detected row of a site gone before
+    finding them again, also the integrity watch's rows (only the plugin
+    watch's were kept): each DB scan re-notified every modified plugin.
+    `markDBGone` keeps both watches' rows.
+  - The "DB infected" count (portal) and a site's `db_issues` counted the
+    admin, plugin and integrity watch rows as infections; they now count
+    infections only (the rows stay listed).
+  - wordpress.org not answering: the plugin watch would call every plugin
+    unknown (three or more plugins and none with a release is a failed
+    lookup: skipped, earlier rows kept), and the integrity watch would mark
+    earlier rows cleaned (kept unless the release has no sums, 404).
+  - The login CAPTCHA for hosting networks ignored the whitelisted
+    countries (ignored_countries, the owner's PK), which the rest of the
+    central CAPTCHA treats as a full whitelist: they are now dropped from
+    the hosting list.
+  - Checkout attempts (7700407) were counted in "logins in 24 h"; they
+    still count toward the ban.
+  Checked with no change needed: no WAF id, rule-list entry, scanner
+  signature or audit check name used twice; the WooCommerce exclusion
+  (7700014) removes PHP-injection rules only; 0.24.4 rules loaded and the
+  WAF self-test passed on business500 and server1.
+  Tests: `TestPluginIntegrity` (DB scan, wordpress.org down, counts),
+  `TestPluginWatchLookupsFailed`, `TestWhitelistCountryDropsHostingNets`,
+  checkout in the WAF log test.
+  - **Rollback**: `backup-0.24.4`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.4: security plan part 4 - card testing and server
   checks** (2026-10-30; last part of the plan).
   - WAF 7700407 counts WooCommerce checkout POSTs (Store API

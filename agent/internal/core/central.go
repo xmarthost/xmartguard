@@ -157,6 +157,10 @@ func (a *Agent) centralWAF() *waf.Central {
 		w.SiteLoginURLs = siteLoginURLs(cur.WAF.LoginURLs)
 		if c.HostingLogin && a.HostNets != nil {
 			w.Hosting, w.HostingNets, w.HostingExempt = true, a.HostNets.Nets(), a.hostingExempt()
+			// Whitelisted countries are a full whitelist here too.
+			if a.Firewall != nil {
+				w.HostingNets = a.Firewall.WithoutWhitelistedCountries(w.HostingNets)
+			}
 		}
 	}
 	if !w.Site {

@@ -79,6 +79,11 @@ func (m *Manager) watchPlugins(s Site) {
 		}
 		rows.Close()
 	}
+	// wordpress.org did not answer (no plugin has a release version): every
+	// plugin would look unknown, and earlier rows would read as removed.
+	if lookupsFailed(s.Plugins) {
+		return
+	}
 	found := pluginFindings(s.Plugins, baseline)
 	if baseline == nil {
 		tx, err := m.DB.Begin()
@@ -110,6 +115,20 @@ func (m *Manager) WatchPluginsAt(ctx context.Context, path string) {
 		}
 	}
 	m.watchPlugins(s)
+}
+
+// lookupsFailed: three or more plugins and none known to wordpress.org,
+// which every site with a few plugins has (akismet, contact-form-7...).
+func lookupsFailed(plugins []Component) bool {
+	if len(plugins) < 3 {
+		return false
+	}
+	for _, p := range plugins {
+		if p.Latest != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // recordWatch stores what a watch found for a site: rows no longer found

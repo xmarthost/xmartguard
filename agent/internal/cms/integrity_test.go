@@ -82,6 +82,29 @@ func TestPluginIntegrity(t *testing.T) {
 	if calls != 1 {
 		t.Errorf("checksums fetched %d times (cached after the first)", calls)
 	}
+	// The database scan of the same site leaves the watch's rows alone:
+	// they were marked cleaned and notified again on every scan.
+	m.markDBGone(site, "cleaned")
+	notified := 0
+	m.OnFinding = func(Site, DBFinding) { notified++ }
+	m.checkIntegrity(context.Background(), s, cache)
+	if n, _ := count(); n != 1 || notified != 0 {
+		t.Fatalf("after a database scan: %d rows, %d notifications", n, notified)
+	}
+	m.OnFinding = nil
+	// wordpress.org down: the finding stays (it is not "cleaned").
+	os.RemoveAll(cache)
+	DownloadsAPI = "http://127.0.0.1:1"
+	m.checkIntegrity(context.Background(), s, cache)
+	if n, _ := count(); n != 1 {
+		t.Fatalf("finding dropped while wordpress.org was down: %d", n)
+	}
+	DownloadsAPI = srv.URL
+	// Watch rows are no infected database.
+	db.Exec(`INSERT INTO db_findings (at, site_path, db_name, tbl, row_ref, signature, status, category) VALUES (1, ?, 'x', 'wp_users', 'ID=9', 'WP.Admin.New', 'detected', 'admin')`, site)
+	if c := m.Counts(); c.DBInfected != 0 {
+		t.Errorf("watch rows counted as infections: %d", c.DBInfected)
+	}
 	var id int64
 	db.QueryRow(`SELECT id FROM db_findings WHERE category = ?`, IntegrityCategory).Scan(&id)
 	if res := m.CleanDBFindings(context.Background(), []int64{id}); len(res) != 1 || res[0].Error == "" {

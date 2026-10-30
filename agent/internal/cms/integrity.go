@@ -150,6 +150,11 @@ func (m *Manager) checkIntegrity(ctx context.Context, s Site, cacheDir string) {
 		}
 		sums, err := m.Versions.PluginChecksums(ctx, cacheDir, p.Slug, p.Version)
 		if err != nil {
+			// wordpress.org did not answer: what was found before stays
+			// (a release without sums, 404, has nothing to compare).
+			if !strings.Contains(err.Error(), "HTTP 404") {
+				found = append(found, m.keptWatchRows(s.Path, IntegrityCategory, "slug="+p.Slug)...)
+			}
 			continue
 		}
 		checked++
@@ -163,6 +168,24 @@ func (m *Manager) checkIntegrity(ctx context.Context, s Site, cacheDir string) {
 	if ctx.Err() == nil {
 		m.recordWatch(s, IntegrityCategory, found)
 	}
+}
+
+// keptWatchRows are a site's detected rows of a watch for one row_ref, to be
+// recorded again unchanged.
+func (m *Manager) keptWatchRows(site, category, row string) []DBFinding {
+	var out []DBFinding
+	rows, err := m.DB.Query(`SELECT tbl, signature, column_name, snippet FROM db_findings WHERE site_path = ? AND category = ? AND row_ref = ? AND status = 'detected'`, site, category, row)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		f := DBFinding{Row: row, Category: category}
+		if rows.Scan(&f.Table, &f.Signature, &f.Column, &f.Snippet) == nil {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 func integritySnippet(p Component, mod, add []string) string {
