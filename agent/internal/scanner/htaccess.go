@@ -64,7 +64,83 @@ func htaccessHack(content []byte) *Detection {
 	if phpLock(content) && lockAnchored(content) {
 		return &Detection{CatVirus, "Htaccess.Hacked.PHPLock"}
 	}
+	if captchaRedirect(content) {
+		return &Detection{CatVirus, "Htaccess.Hacked.CaptchaRedirect"}
+	}
 	return nil
+}
+
+// The ClickFix kit's .htaccess (clickfix.go) sends the home page and every
+// static file to its fake human check, always: a site's own bot check lets
+// a visitor through once a cookie says they passed (%{HTTP_COOKIE}), and a
+// maintenance page is not named for a check.
+var (
+	reCaptchaRule = regexp.MustCompile(`(?im)^\s*RewriteRule\s+(\S+)\s+(\S*(?:captcha|verify-?human|human-?check|challenge|cloudflare|cf-check)\S*\.(?:html?|php))\s+\[[^\]\n]*\bR(?:=\d+)?\b[^\]\n]*\]`)
+	// The whole site or its pages and assets.
+	reCatchAll = regexp.MustCompile(`^(?:\^|\^/?\$|\.\*|\^\(\.\*\)\$|\^/?\(\.\*\)\$|\.|\\\.\(.*\b(?:html?|css|js|png|jpe?g)\b.*\)\$?)$`)
+)
+
+func captchaRedirect(content []byte) bool {
+	if bytes.Contains(bytes.ToLower(content), []byte("http_cookie")) {
+		return false
+	}
+	for _, m := range reCaptchaRule.FindAllSubmatch(content, 20) {
+		if reCatchAll.Match(m[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// captchaGroups lists the lines of the kit's rules: each redirect to the
+// fake check and each rule whose conditions name that page, with their
+// RewriteCond lines.
+func captchaGroups(lines []string) map[int]bool {
+	drop := map[int]bool{}
+	targets := map[string]bool{}
+	for _, l := range lines {
+		if m := reCaptchaRule.FindStringSubmatch(l); m != nil && reCatchAll.MatchString(m[1]) {
+			targets[strings.ToLower(strings.TrimPrefix(filepath.Base(m[2]), "/"))] = true
+		}
+	}
+	if len(targets) == 0 {
+		return drop
+	}
+	start := -1
+	for i, l := range lines {
+		t := strings.ToLower(strings.TrimSpace(l))
+		switch {
+		case strings.HasPrefix(t, "rewritecond"):
+			if start < 0 {
+				start = i
+			}
+		case strings.HasPrefix(t, "rewriterule"):
+			kit := false
+			from := i
+			if start >= 0 {
+				from = start
+			}
+			for j := from; j <= i && !kit; j++ {
+				lj := strings.ToLower(strings.ReplaceAll(lines[j], `\.`, "."))
+				for name := range targets {
+					if strings.Contains(lj, name) {
+						kit = true
+						break
+					}
+				}
+			}
+			if kit {
+				for j := from; j <= i; j++ {
+					drop[j] = true
+				}
+			}
+			start = -1
+		case t == "" || strings.HasPrefix(t, "#"):
+		default:
+			start = -1
+		}
+	}
+	return drop
 }
 
 // phpLock reports the whole lock: all PHP refused, then a list of PHP
@@ -135,7 +211,12 @@ func CleanHtaccess(content []byte, base string) []byte {
 		return block
 	})
 	var lines []string
-	for _, l := range strings.Split(string(out), "\n") {
+	all := strings.Split(string(out), "\n")
+	kitRules := captchaGroups(all)
+	for i, l := range all {
+		if kitRules[i] {
+			continue
+		}
 		t := strings.TrimSpace(l)
 		low := strings.ToLower(t)
 		if reCGIHandler.MatchString(l) && cgiShellHandler([]byte(l)) {

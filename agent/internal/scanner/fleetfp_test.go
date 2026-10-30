@@ -3,6 +3,7 @@ package scanner
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
@@ -995,6 +996,113 @@ func TestFleetLibrariesOfScan62(t *testing.T) {
 	} {
 		if d := check(p, body); d == nil {
 			t.Errorf("%s not found", p)
+		}
+	}
+}
+
+// server1 and server100 (2026-10-30): the ClickFix kit - a fake Cloudflare
+// human check copying a command for the visitor to paste into the Run box,
+// the plugins serving it, a hidden administrator, an owner lockout, the
+// .htaccess sending the site to the check, a hidden payload and doorway
+// loaders; 1 of 1,986 files had a finding. Inert shapes of each, then the
+// look-alikes real sites have.
+func TestFleetClickFixKit(t *testing.T) {
+	s := newScanner(t)
+	home := t.TempDir()
+	put := func(rel, body string) string {
+		p := filepath.Join(home, "public_html", rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+		return p
+	}
+	check := func(p string) *Detection {
+		t.Helper()
+		info, _ := os.Lstat(p)
+		d, err := s.CheckFile(p, info, s.Settings.Get().Scanner)
+		if err != nil && err != ErrTrusted {
+			t.Fatal(err)
+		}
+		return d
+	}
+	steps := "<p>Verify you are human by completing the action below.</p><ol><li>Press &amp; hold the Windows Key <svg viewBox='0 0 24 24'></svg> + <b>R</b></li>" +
+		"<li>In the verification window, press <b>Ctrl</b> + <b>V</b></li><li>Press <b>Enter</b></li></ol>"
+	var z bytes.Buffer
+	zw, _ := flate.NewWriter(&z, flate.BestCompression)
+	zw.Write([]byte("$a = base64_decode('aW5lcnQ='); eval('/* inert */' . $a);"))
+	for i := range 80 {
+		fmt.Fprintf(zw, " /* %x */", md5.Sum([]byte{byte(i)}))
+	}
+	zw.Close()
+	hash := "$wp$2y$10$" + strings.Repeat("a", 53)
+	kit := map[string]struct{ sig, body string }{
+		"wp-content/plugins/seo-1772128746/captcha.html": {"Phishing.ClickFix.FakeVerification",
+			"<html><body>" + steps + "<script>var command = 'echo inert';document.getElementById('cb').onclick=function(){navigator.clipboard.writeText(command);}</script></body></html>"},
+		"wp-content/mu-plugins/core-banner.php": {"Phishing.ClickFix.FakeVerification",
+			"<?php\n/* Plugin Name: Core Banner */\nadd_action( 'template_redirect', function () { if ( is_user_logged_in() ) return; echo '<title>Just a moment...</title>" +
+				strings.ReplaceAll(steps, "'", `\'`) + "<script>function c(e){e.clipboardData.setData(\\'text/plain\\', \\'echo inert\\');}document.execCommand(\\'copy\\');</script>'; exit; } );\n"},
+		"wp-content/plugins/wp-image-reloaded/assets/js/captcha-loader.js": {"Phishing.ClickFix.FakeVerification",
+			"var t={en:{lure:\"I'm not a robot\",s1:\"Hold the Windows key and press R\",s2:\"Press Ctrl+V to paste verification code\"}};\nfunction copy(x){navigator.clipboard.writeText(x).catch(function(){document.execCommand('copy')})}\n"},
+		"wp-content/plugins/adminimize-images-soon/cf-captcha-windows.php": {"Phishing.ClickFix.FakeClearance",
+			"<?php\n/* Plugin Name: CF Captcha */\nadd_action('init', function () { if (isset($_GET['p']) && $_GET['p'] === '1') { readfile(__DIR__ . '/captcha.html'); exit; } });\n" +
+				"add_action('wp_footer', function () { ?><script>window.addEventListener('message', function () { document.cookie = 'cf_clearance=1;path=/'; });</script><?php });\n"},
+		"wp-content/plugins/cf-security-shield/cf-security-shield.php": {"PHP.Backdoor.DNSTXTDeadDrop",
+			"<?php\nadd_action('wp_ajax_nopriv_cf_get_text', 'cf_text');\nfunction cf_text() { $r = dns_get_record('example.invalid', DNS_TXT); if ($r && isset($r[0]['txt'])) { wp_send_json_success(array('text' => $r[0]['txt'])); } }\n"},
+		"wp-content/mu-plugins/service-admin-bootstrap.php": {"PHP.Backdoor.HiddenAdmin",
+			"<?php\ndefine('SAB_ROLE', 'administrator');\ndefine('SAB_HASH', '" + hash + "');\nadd_action('init', function () { global $wpdb; $id = wp_insert_user(array('user_login' => 'svc', 'user_pass' => wp_generate_password(32), 'role' => SAB_ROLE));\n" +
+				"$wpdb->update( $wpdb->users, array( 'user_pass' => SAB_HASH ), array( 'ID' => $id ) ); });\nadd_filter('pre_count_users', function ($r) { return $r; });\nadd_action('pre_user_query', function ($q) { $q->query_where .= ' AND ID <> 0'; });\n"},
+		"wp-content/mu-plugins/cache.php": {"PHP.Backdoor.LoginLockdown",
+			"<?php\n/* Plugin Name: Core Functions */\nadd_filter('authenticate', function ($user, $u, $p) { if (!empty($u) || !empty($p)) { return new WP_Error('lockdown', 'Error'); } return $user; }, 30, 3);\n" +
+				"add_filter('allow_password_reset', '__return_false');\nadd_filter('rest_authentication_errors', function ($result) { return new WP_Error('lockdown', 'Error'); });\n"},
+		"hiroshi.php": {"PHP.SEOSpam.RemoteDoorway",
+			"<?php\n$duri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '/';\n$web = 'hp?web=' . $host . '&zz=' . disbot() . '&uri=' . $duri . '&lang=' . $lang;\n"},
+		".6c02c6d7": {"PHP.Dropper.HiddenPayload", base64.StdEncoding.EncodeToString(z.Bytes())},
+	}
+	for rel, k := range kit {
+		if d := check(put(rel, k.body)); d == nil || d.Signature != k.sig || d.Category != CatVirus {
+			t.Errorf("%s: want %s, got %+v", rel, k.sig, d)
+		}
+	}
+	for rel, body := range map[string]string{
+		// A how-to with a copy button: no human check.
+		"kb/flush-dns.html": "<p>Press <b>Win</b> + <b>R</b>, then <b>Ctrl</b> + <b>V</b> and Enter to run the command in the terminal.</p>" +
+			"<button onclick=\"navigator.clipboard.writeText('ipconfig /flushdns')\">Copy</button>",
+		// A CAPTCHA and a copy-coupon button on one page: nothing to paste anywhere.
+		"shop/checkout.html": "<div class=\"g-recaptcha\">I'm not a robot</div><button onclick=\"navigator.clipboard.writeText('SAVE10')\">Copy code</button><p>Windows and Mac users welcome.</p>",
+		// A cache plugin passing Cloudflare's visitors.
+		"wp-content/plugins/cache/bypass.php": "<?php\nif (isset($_COOKIE['cf_clearance'])) { define('DONOTCACHEPAGE', true); }\n",
+		// A DNS lookup tool and an admin-only TXT check.
+		"wp-content/plugins/dns-tool/dns.php":  "<?php\nadd_action('wp_ajax_nopriv_dns_lookup', function () { $r = dns_get_record(sanitize_text_field($_POST['domain']), DNS_TXT); wp_send_json_success(wp_list_pluck($r, 'txt')); });\n",
+		"wp-content/plugins/verify/verify.php": "<?php\nadd_action('wp_ajax_verify_domain', function () { $r = dns_get_record('_verify.example.com', DNS_TXT); wp_send_json_success($r[0]['txt']); });\n",
+		// A temporary support login (no hiding) and a plugin hiding a user it did not make.
+		"wp-content/plugins/temp-login/login.php": "<?php\n$id = wp_insert_user(array('user_login' => 'support', 'user_pass' => wp_generate_password(32), 'role' => 'administrator'));\n",
+		"wp-content/plugins/hide-user/hide.php":   "<?php\nadd_action('pre_user_query', function ($q) { $q->query_where .= ' AND ID <> ' . (int) get_option('hidden_user'); });\n",
+		// A login policy: a setting decides, by address.
+		"wp-content/plugins/lock/lock.php": "<?php\nadd_filter('authenticate', function ($u) { if (get_option('lock_logins') && $_SERVER['REMOTE_ADDR'] !== get_option('office_ip')) { return new WP_Error('locked', 'Locked'); } return $u; }, 30);\n" +
+			"add_filter('allow_password_reset', '__return_false');\nadd_filter('rest_authentication_errors', function ($r) { if (!is_user_logged_in()) { return new WP_Error('no', 'no'); } return $r; });\n",
+		// A hidden file of base64 that is not code.
+		".cache_9f8e7d6c": base64.StdEncoding.EncodeToString([]byte(strings.Repeat(`{"inert":true,"items":[1,2,3]}`, 20))),
+	} {
+		if d := check(put(rel, body)); d != nil {
+			t.Errorf("%s flagged: %+v", rel, d)
+		}
+	}
+
+	ht := "# maintenance stub\nRewriteEngine On\nRewriteCond %{REQUEST_URI} ^/captcha\\.html$ [NC,OR]\nRewriteCond %{REQUEST_URI} ^/wp-admin [NC]\nRewriteRule .* - [L]\n" +
+		"RewriteCond %{REQUEST_URI} ^/$\nRewriteRule ^ /captcha.html [R=302,L]\nRewriteCond %{REQUEST_FILENAME} -f\nRewriteRule \\.(html?|css|js|png)$ /captcha.php [R=302,L]\n"
+	if d := htaccessHack([]byte(ht)); d == nil || d.Signature != "Htaccess.Hacked.CaptchaRedirect" {
+		t.Errorf("kit .htaccess: %+v", d)
+	}
+	clean := string(CleanHtaccess([]byte(ht+"\n# BEGIN WordPress\nRewriteRule ^index\\.php$ - [L]\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule . /index.php [L]\n# END WordPress\n"), "/"))
+	if strings.Contains(clean, "captcha") || !strings.Contains(clean, "RewriteRule . /index.php [L]") || htaccessHack([]byte(clean)) != nil {
+		t.Errorf("cleaned kit .htaccess:\n%s", clean)
+	}
+	for _, own := range []string{
+		"RewriteEngine On\nRewriteCond %{REQUEST_URI} !^/maintenance\\.html$\nRewriteRule ^ /maintenance.html [R=302,L]\n",
+		"RewriteEngine On\nRewriteCond %{HTTP_COOKIE} !human=1\nRewriteCond %{REQUEST_URI} !^/captcha\\.php\nRewriteRule ^ /captcha.php [R=302,L]\n",
+		"RewriteEngine On\nRewriteRule ^old-captcha/?$ /captcha.php [R=301,L]\n",
+	} {
+		if d := htaccessHack([]byte(own)); d != nil {
+			t.Errorf("site's own rule %q: %+v", own, d)
 		}
 	}
 }

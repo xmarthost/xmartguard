@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.39** (see `VERSION`).
+- Current release: **0.23.40** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.39 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.40 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.39: `--branch backup-0.23.38`; see "Rollback" under 0.23.39 below);
+  0.23.40: `--branch backup-0.23.39`; see "Rollback" under 0.23.40 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,47 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.23.40: the ClickFix kit (fake Cloudflare human check)**
+  (2026-10-30). server1 and server100: 365 fake plugin folders, 1,986
+  files, one finding (its .user.ini). The kit shows logged-out visitors a
+  Cloudflare look-alike that copies a command (PowerShell, msiexec, or
+  `net use` of a WebDAV share) to the clipboard and tells them to press
+  Windows+R (or Win+X, I) and Ctrl+V: the visitor runs the malware. New
+  rules (`scanner/clickfix.go`, own rules built from how it works):
+  - `Phishing.ClickFix.FakeVerification` (.php/.html/.js, mu-plugins too):
+    a clipboard write, a Ctrl+V step, a Run box/PowerShell/terminal step and
+    a human-check lure ("not a robot", "verify you are human", "Ray ID")
+    together, tags removed first (steps are written `<b>Ctrl</b> + <b>V</b>`).
+    A how-to with a copy button has no lure; a page with a CAPTCHA and a
+    copy-coupon button has no paste step.
+  - `Phishing.ClickFix.FakeClearance`: site code writing Cloudflare's own
+    `cf_clearance` cookie (document.cookie / setcookie); reading it (cache
+    plugins) is no finding.
+  - `PHP.Backdoor.DNSTXTDeadDrop`: a TXT record of a fixed domain sent to
+    any visitor (wp_ajax_nopriv_); lookups of a visitor's domain and
+    admin-only checks are no finding.
+  - `PHP.Backdoor.HiddenAdmin`: an administrator made or its password written
+    into the users table (a hash in the file), hidden from the user list or
+    counts. Temporary-login plugins (no hiding) and hide-user plugins (make
+    no user) are no finding.
+  - `PHP.Backdoor.LoginLockdown`: authenticate filter + password reset off +
+    every REST login refused. No "uses a setting" exception (an attacker
+    would add one call); a login policy never refuses REST to everyone.
+  - `Htaccess.Hacked.CaptchaRedirect`: a catch-all redirect (home page, all
+    pages or static files) to a captcha/challenge/cloudflare page with no
+    cookie condition. In a WordPress root the cleaner drops these rules and
+    the rules whose conditions name that page, keeps the rest, adds
+    WordPress's rules. A maintenance page or a cookie-gated bot check is
+    no finding.
+  - `PHP.Dropper.HiddenPayload`: a hidden file of only base64 of deflated
+    PHP (eval/base64_decode inside); `PHP.SEOSpam.RemoteDoorway`: a loader
+    asking its host what to show, with the visitor's URI and a bot flag.
+  Test: `TestFleetClickFixKit`. Evidence copies: 19 of 35 caught (the rest
+  are images, CSS, overlay markup and a header-only plugin.php); real
+  plugin corpora and WordPress core 0; evidence pack 36/101 unchanged; scan
+  time unchanged. Not done: an alert for new administrator accounts (the
+  agent does not read site databases).
+  - **Rollback**: `backup-0.23.39`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.23.39: a packer slipped past 0.23.35's escape rule; a
   Telegram phishing page** (2026-10-29). The fleet review of quarantined
   files ("findings.recheck" on every server, each "no longer flagged" file

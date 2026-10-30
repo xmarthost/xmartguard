@@ -119,7 +119,8 @@ func kitFamilies(ext string, content []byte) *Detection {
 			return &Detection{CatVirus, "HTML.SEOSpam.HiddenGambling"}
 		}
 	}
-	return nil
+	// The ClickFix kit (clickfix.go).
+	return clickFixKit(ext, content, low, has)
 }
 
 // phishBackend: a script sending to a Telegram bot what a visitor typed,
@@ -178,6 +179,8 @@ func kitByPlace(path, ext string, content []byte) *Detection {
 			(bytes.HasPrefix(b, []byte("https://")) || bytes.HasPrefix(b, []byte("http://"))) {
 			return &Detection{CatVirus, "Dropper.Base64URL"}
 		}
+	case strings.HasPrefix(base, ".") && hiddenPayload(path, content):
+		return &Detection{CatVirus, "PHP.Dropper.HiddenPayload"}
 	case (ext == ".php" || ext == ".html" || ext == ".htm") && phishPage(low, content):
 		return &Detection{CatVirus, "Phishing.KitPage"}
 	case ext == ".html" || ext == ".htm":

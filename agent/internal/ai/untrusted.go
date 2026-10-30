@@ -30,6 +30,13 @@ var untrustedSignatures = map[string]bool{
 	// but their own file names; the AI reads it as hardening.
 	"Htaccess.Hacked.PHPLock":      true,
 	"Htaccess.Webshell.CGIHandler": true,
+	// The ClickFix kit (server1, 2026-10-30): its plugins pass for a
+	// Cloudflare or CAPTCHA plugin, its hidden administrator for a
+	// support account.
+	"Phishing.ClickFix.FakeVerification": true,
+	"Phishing.ClickFix.FakeClearance":    true,
+	"PHP.Backdoor.HiddenAdmin":           true,
+	"Htaccess.Hacked.CaptchaRedirect":    true,
 }
 
 // wpDropIns are wp-content files WordPress loads on its own: malware
