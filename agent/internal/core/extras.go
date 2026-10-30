@@ -531,14 +531,17 @@ func (a *Agent) onMonitorEvent(e monitor.Event) {
 // retentionLoop deletes logs and quarantined files older than the
 // configured retention ("Keep logs for").
 func (a *Agent) retentionLoop(ctx context.Context) {
-	t := time.NewTicker(6 * time.Hour)
-	defer t.Stop()
 	for {
-		a.pruneOld()
+		// A backlog of quarantined files (business300: 560,000) goes a
+		// batch an hour; otherwise every 6 hours.
+		wait := 6 * time.Hour
+		if a.pruneOld() {
+			wait = time.Hour
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-time.After(wait):
 		}
 	}
 }
@@ -546,17 +549,16 @@ func (a *Agent) retentionLoop(ctx context.Context) {
 // wafEventDays is how long WAF events are kept.
 const wafEventDays = 35
 
-// kvQuarantineWeek: when the quarantine week was first applied here.
-const kvQuarantineWeek = "quarantine_week_since"
-
 // quarantineDeleteBatch is how many quarantined files one round deletes
-// (rounds are 6 hours apart; a backlog goes over a few days).
+// (an hour apart while a backlog is left: the disk is not flooded).
 const quarantineDeleteBatch = 20000
 
-func (a *Agent) pruneOld() {
+// pruneOld reports whether quarantined files are left past their
+// retention (a full batch was deleted).
+func (a *Agent) pruneOld() (more bool) {
 	days := a.Settings.Get().Scanner.KeepDays
 	if days <= 0 {
-		return
+		return false
 	}
 	cut := store.Now() - int64(days)*86400
 	// Quarantined files past their own retention (a week by default) are
@@ -564,17 +566,8 @@ func (a *Agent) pruneOld() {
 	// (business100 held 71,000).
 	qdays := max(1, a.Settings.Get().Scanner.QuarantineDays)
 	qcut := store.Now() - int64(qdays)*86400
-	// The week started with 0.23.31 (before it quarantined files were kept
-	// with the logs, 2 months): what was quarantined before gets that week
-	// too, to be restored if needed.
-	since, _ := strconv.ParseInt(store.GetKV(a.DB, kvQuarantineWeek), 10, 64)
-	if since == 0 {
-		since = store.Now()
-		_ = store.SetKV(a.DB, kvQuarantineWeek, strconv.FormatInt(since, 10))
-	}
-	if store.Now()-since < int64(qdays)*86400 {
-		qcut = 0 // nothing quarantined is deleted in that first week
-	}
+	// (0.23.31 gave what was quarantined before it a week from the update;
+	// the owner asked for every file past the week to go, 2026-10-30.)
 	rows, err := a.DB.Query(`SELECT id FROM findings WHERE status = 'quarantined' AND updated_at < ? ORDER BY updated_at LIMIT ?`, qcut, quarantineDeleteBatch)
 	if err == nil {
 		var ids []int64
@@ -590,6 +583,7 @@ func (a *Agent) pruneOld() {
 				a.Log.Warn("retention: delete quarantined file", "id", id, "err", err)
 			}
 		}
+		more = len(ids) == quarantineDeleteBatch
 	}
 	// The monthly report reads last month's WAF events and the IPDB page 30
 	// days of countries: those logs keep at least 32 days.
@@ -619,6 +613,7 @@ func (a *Agent) pruneOld() {
 	// (here or from the portal) and the fleet's knowledge base stay.
 	_, _ = a.DB.Exec(`DELETE FROM ai_verdicts WHERE at < ? AND source NOT IN ('admin','fleet') AND model != 'admin'
 		AND sha256 NOT IN (SELECT sha256 FROM findings WHERE sha256 != '')`, min(cut, store.Now()-180*86400))
+	return more
 }
 
 // maybeRepairCore replaces an infected WordPress core file with the official

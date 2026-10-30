@@ -100,7 +100,7 @@ fire on the 2026-10-28 shapes and nowhere else.
 
 | Part | State |
 |---|---|
-| 1 | released in 0.24.0; waiting for the fleet update and checks |
-| 2 | waiting for part 1 on the fleet |
+| 1 | released in 0.24.0, on the fleet |
+| 2 | in progress: locked (chattr +i) shells quarantined in 0.24.1 |
 | 3 | waiting |
 | 4 | waiting |

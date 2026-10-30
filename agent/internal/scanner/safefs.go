@@ -132,10 +132,55 @@ func (p *pinned) open() (*os.File, error) {
 
 // remove unlinks the file (a link itself, never its target).
 func (p *pinned) remove() error {
-	if err := unix.Unlinkat(p.dir, p.name, 0); err != nil {
+	err := unix.Unlinkat(p.dir, p.name, 0)
+	if err == unix.EPERM {
+		err = p.unlocked(func() error { return unix.Unlinkat(p.dir, p.name, 0) })
+	}
+	if err != nil {
 		return &os.PathError{Op: "remove", Path: p.path, Err: err}
 	}
 	return nil
+}
+
+// lockFlags are the inode flags that stop a file being moved or removed
+// even by root: kits set them on their shells (chattr +i) so cleanup
+// fails, and on the folder holding them.
+const lockFlags = 0x10 | 0x20 // FS_IMMUTABLE_FL, FS_APPEND_FL (linux/fs.h)
+
+// clearLock clears fd's lock flags; it returns the old flags, or -1 when
+// none were set (or they could not be read).
+func clearLock(fd int) int {
+	old, err := unix.IoctlGetInt(fd, unix.FS_IOC_GETFLAGS)
+	if err != nil || old&lockFlags == 0 {
+		return -1
+	}
+	if unix.IoctlSetPointerInt(fd, unix.FS_IOC_SETFLAGS, old&^lockFlags) != nil {
+		return -1
+	}
+	return old
+}
+
+// unlocked runs op again with the file's lock flags cleared (they stay
+// cleared: the file is going away) and its folder's cleared for the time
+// of op only (an administrator may have locked the folder on purpose).
+func (p *pinned) unlocked(op func() error) error {
+	locked := false
+	if f, err := p.open(); err == nil {
+		locked = clearLock(int(f.Fd())) >= 0
+		f.Close()
+	}
+	// (p.dir is an O_PATH handle; ioctl needs one opened for reading.)
+	if dfd, err := unix.Openat(p.dir, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0); err == nil {
+		defer unix.Close(dfd)
+		if old := clearLock(dfd); old >= 0 {
+			locked = true
+			defer unix.IoctlSetPointerInt(dfd, unix.FS_IOC_SETFLAGS, old)
+		}
+	}
+	if !locked {
+		return unix.EPERM
+	}
+	return op()
 }
 
 // setOwner gives the file its owner (uid < 0: unchanged) and mode through
@@ -263,6 +308,9 @@ func (p *pinned) takeTo(dst string) error {
 		return errors.New("not a regular file")
 	}
 	err = unix.Renameat(p.dir, p.name, unix.AT_FDCWD, dst)
+	if err == unix.EPERM {
+		err = p.unlocked(func() error { return unix.Renameat(p.dir, p.name, unix.AT_FDCWD, dst) })
+	}
 	if err == nil {
 		if fi, lerr := os.Lstat(dst); lerr != nil || !fi.Mode().IsRegular() {
 			// Swapped between the check and the move: put it back.

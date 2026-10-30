@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.0** (see `VERSION`).
+- Current release: **0.24.1** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.0 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.1 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.0: `--branch backup-0.23.42`; see "Rollback" under 0.24.0 below);
+  0.24.1: `--branch backup-0.24.0`; see "Rollback" under 0.24.1 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,25 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.1: quarantine kept a week, then deleted; locked shells
+  quarantined** (2026-10-30).
+  - Owner's rule: a quarantined file older than `quarantine_days` (7) is
+    deleted, also what was quarantined before 0.23.31 (that release's
+    grace week is gone), and the next ones as they age. 20,000 files a
+    round; rounds an hour apart while a backlog is left (business300 held
+    560,000), else 6 hours (`pruneOld` reports the backlog).
+  - Kits lock their shells (and the folder) with chattr +i so the move
+    fails with EPERM and the file stayed "detected". Quarantine and delete
+    now clear the immutable and append-only flags of the file (they stay
+    cleared) and of its folder for the move only (put back after: an admin
+    may lock a folder on purpose). `pinned.unlocked`; the folder handle is
+    O_PATH, so it is reopened for the ioctl.
+  Tests: `TestQuarantineKeptAWeek`, `TestQuarantineLockedFile`.
+  - Checked on the fleet after 0.24.0: all 17 servers on 0.24.0; RADb
+    reachable (trusted lists from RADb refreshed); server1's audit has no
+    stack_cve item (panel, LiteSpeed, Exim, Roundcube patched). Admin and
+    plugin watch report with each site's next CMS scan (server1: every 72 h).
+  - **Rollback**: `backup-0.24.0`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.0: security plan part 1 - stop the attack chains seen on
   the fleet** (2026-10-30; plan in `docs/SECURITY_PLAN.md`, four parts,
   each released and installed before the next).

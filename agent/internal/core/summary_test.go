@@ -3,7 +3,6 @@ package core
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -109,15 +108,10 @@ func TestQuarantineKeptAWeek(t *testing.T) {
 		return id
 	}
 	old, recent := add("old.php", 8), add("recent.php", 3)
-	// The first week after the update: nothing is deleted yet.
-	a.pruneOld()
-	var st string
-	a.DB.QueryRow(`SELECT status FROM findings WHERE id = ?`, old).Scan(&st)
-	if st != "quarantined" {
-		t.Fatalf("deleted in the first week: %s", st)
+	// Past the week at once (no grace week since 2026-10-30).
+	if a.pruneOld() {
+		t.Error("a backlog reported for one file")
 	}
-	store.SetKV(a.DB, kvQuarantineWeek, strconv.FormatInt(now-8*86400, 10))
-	a.pruneOld()
 	status := func(id int64) (s string) {
 		a.DB.QueryRow(`SELECT status FROM findings WHERE id = ?`, id).Scan(&s)
 		return

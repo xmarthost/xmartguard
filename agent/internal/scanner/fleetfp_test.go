@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Every kind of file restored from quarantine after a fleet review is kept
@@ -1277,5 +1279,64 @@ func TestRealtimeReportsNewPluginFolder(t *testing.T) {
 	case wp := <-got:
 		t.Fatalf("reported again: %q", wp)
 	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+// Kits lock their shells with chattr +i (and the folder holding them) so
+// that cleanup fails: quarantine clears the lock of the file it takes and,
+// for the move only, of its folder.
+func TestQuarantineLockedFile(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root for chattr")
+	}
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "public_html", "wp-content", "uploads")
+	os.MkdirAll(dir, 0o755)
+	p := filepath.Join(dir, "x.php")
+	os.WriteFile(p, []byte(malicious["exec.php"]), 0o644)
+	os.Chown(p, 65534, 65534) // an account's file (root's are never acted on)
+	setFlags := func(path string, set bool) error {
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		v, err := unix.IoctlGetInt(int(f.Fd()), unix.FS_IOC_GETFLAGS)
+		if err != nil {
+			return err
+		}
+		if set {
+			v |= 0x10
+		} else {
+			v &^= 0x10
+		}
+		return unix.IoctlSetPointerInt(int(f.Fd()), unix.FS_IOC_SETFLAGS, v)
+	}
+	if err := setFlags(p, true); err != nil {
+		t.Skip("filesystem without chattr:", err)
+	}
+	if err := setFlags(dir, true); err != nil {
+		t.Skip("filesystem without chattr:", err)
+	}
+	defer setFlags(dir, false)
+	if err := os.Remove(p); err == nil {
+		t.Fatal("the lock does not hold")
+	}
+	info, _ := os.Lstat(p)
+	f, err := s.Record(0, "manual", p, info, Detection{CatVirus, "PHP.Backdoor.ExecInput"})
+	if err != nil || f.Status != "quarantined" {
+		t.Fatalf("locked file not quarantined: %s %v", f.Status, err)
+	}
+	if _, err := os.Lstat(p); !os.IsNotExist(err) {
+		t.Fatal("locked file still there")
+	}
+	d, _ := os.Open(dir)
+	v, _ := unix.IoctlGetInt(int(d.Fd()), unix.FS_IOC_GETFLAGS)
+	d.Close()
+	if v&0x10 == 0 {
+		t.Error("the folder's own lock was not put back")
 	}
 }
