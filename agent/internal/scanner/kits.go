@@ -113,6 +113,10 @@ func kitFamilies(ext string, content []byte) *Detection {
 		if phishBackend(content, low) {
 			return &Detection{CatVirus, "Phishing.Collector.Telegram"}
 		}
+		// The plugin upload campaign (plugininject.go).
+		if d := pluginInjectors(content, has); d != nil {
+			return d
+		}
 	}
 	if ext == ".html" || ext == ".htm" || ext == ".php" {
 		if hiddenGambling(content, low) {

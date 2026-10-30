@@ -399,7 +399,7 @@ func (r *Realtime) sweep() {
 				}
 				return nil
 			}
-			if info, err := d.Info(); err == nil && info.Mode().IsRegular() && !info.ModTime().Before(since.Add(-time.Minute)) {
+			if info, err := d.Info(); err == nil && (info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0) && !info.ModTime().Before(since.Add(-time.Minute)) {
 				r.queue(path)
 			}
 			return nil
@@ -687,6 +687,11 @@ func (r *Realtime) handle(buf []byte) {
 		}
 		if ev.Mask&(unix.IN_CLOSE_WRITE|unix.IN_MOVED_TO) != 0 {
 			r.queue(full)
+		} else if ev.Mask&unix.IN_CREATE != 0 {
+			// A link is made with symlink(): created, never written.
+			if li, err := os.Lstat(full); err == nil && li.Mode()&fs.ModeSymlink != 0 {
+				r.queue(full)
+			}
 		}
 	}
 }
@@ -735,7 +740,7 @@ func (r *Realtime) catchUp(since time.Time) {
 				}
 				return nil
 			}
-			if info, err := d.Info(); err == nil && info.Mode().IsRegular() && info.ModTime().After(since) {
+			if info, err := d.Info(); err == nil && (info.Mode().IsRegular() || info.Mode()&fs.ModeSymlink != 0) && info.ModTime().After(since) {
 				r.queue(path)
 			}
 			return nil

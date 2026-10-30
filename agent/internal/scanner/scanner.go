@@ -1399,6 +1399,10 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 func (s *Scanner) ScanFile(path string) {
 	cfg := s.Settings.Get().Scanner
 	info, err := os.Lstat(path)
+	if err == nil && info.Mode()&fs.ModeSymlink != 0 {
+		s.scanLink(path, info)
+		return
+	}
 	if err != nil || !info.Mode().IsRegular() {
 		return
 	}
@@ -1413,6 +1417,23 @@ func (s *Scanner) ScanFile(path string) {
 		return
 	}
 	_, _ = s.Record(0, "realtime", path, info, *det)
+}
+
+// scanLink judges a link made while realtime protection runs: a credential
+// theft kit's links to other accounts' wp-config.php and .env files are
+// made with symlink(), which writes no file, so only a full scan found them
+// (server1: a farm made again after scan 50 quarantined 231,822). A link an
+// administrator restored or ignored is left alone.
+func (s *Scanner) scanLink(path string, info fs.FileInfo) {
+	target, bad := InsecureSymlink(path, cachedHomes())
+	if !bad {
+		return
+	}
+	var n int
+	if s.DB.QueryRow(`SELECT count(*) FROM findings WHERE path = ? AND category = ? AND status IN ('restored','ignored')`, path, CatSymlink).Scan(&n) == nil && n > 0 {
+		return
+	}
+	_, _ = s.Record(0, "realtime", path, info, Detection{CatSymlink, "Symlink.OtherAccount -> " + target})
 }
 
 // ListScans returns recent scans, newest first.

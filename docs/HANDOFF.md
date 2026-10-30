@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.41** (see `VERSION`).
+- Current release: **0.23.42** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.41 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.42 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.41: `--branch backup-0.23.40`; see "Rollback" under 0.23.41 below);
+  0.23.42: `--branch backup-0.23.41`; see "Rollback" under 0.23.42 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,37 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.23.42: plugins uploaded with known passwords; new links seen
+  by realtime protection** (2026-10-30). server1, 2026-10-28: logins with
+  passwords the attacker already had (each the first POST, a 302; no
+  failed logins, so brute-force protection had nothing to count), then
+  wp-admin's plugin uploader. None of the five files had a finding. New
+  rules (`scanner/plugininject.go`, built from how each works):
+  - `PHP.Backdoor.SelfHidingInjector` ("wp-warden"): removes its own entry
+    from the plugin list unconditionally (`all_plugins`, unset
+    plugin_basename(__FILE__)) and prints a script on front-end hooks, its
+    tag cut in two or from a 20 KB base64 block. A plugin hidden by a
+    setting (MainWP) or a white-label plugin with no visitor script is no
+    finding.
+  - `PHP.Injector.HiddenScriptURL` ("WP-CORE"): byte arrays turned into a
+    URL by XOR with a key, loaded with wp_enqueue_script.
+  - `PHP.Webshell.Uploader`: a page with its own upload form saving the
+    file under the name it was sent with, checking neither the file nor
+    the sender. `PHP.Webshell.FileManager`: file operations with
+    open_basedir / disable_functions switched off from the script.
+    `PHP.Obfuscated.EscapedInput`: request variables read by escaped names.
+  - Realtime: symlink() makes a link without writing a file, so links were
+    only found by full scans (the theft farm was made again after scan 50
+    quarantined 231,822). IN_CREATE of a link now queues it, catch-up walks
+    include links, and `ScanFile` judges a link (`scanLink`); a link an
+    administrator restored or ignored is left alone.
+  Tests: `TestFleetUploadedPluginCampaign`, `TestRealtimeCatchesNewLinks`
+  (fails on 0.23.41). Real plugins incl. file managers, upload libraries,
+  white-label and header/footer plugins: no new finding.
+  Not engine work (owner's decision): `captcha.login_gate` is off on
+  server1, so wp-login.php shows no human check; brute-force counts only
+  failed logins.
+  - **Rollback**: `backup-0.23.41`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.23.41: two old false positives found by a real-plugin scan**
   (2026-10-30). Before shipping the ClickFix rules, 34 real plugins and
   libraries close to them (security, CAPTCHA, login limit, 2FA, hide-login,

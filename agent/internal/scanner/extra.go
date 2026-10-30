@@ -11,11 +11,29 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/config"
 )
+
+var homesCache struct {
+	sync.Mutex
+	m  map[uint32]string
+	at time.Time
+}
+
+// cachedHomes is homes(), read again every ten minutes (realtime checks a
+// link at a time).
+func cachedHomes() map[uint32]string {
+	homesCache.Lock()
+	defer homesCache.Unlock()
+	if homesCache.m == nil || time.Since(homesCache.at) > 10*time.Minute {
+		homesCache.m, homesCache.at = homes(), time.Now()
+	}
+	return homesCache.m
+}
 
 // homes maps hosting-account uids to their home directories.
 func homes() map[uint32]string {
