@@ -240,8 +240,13 @@ func analyzePHP(content []byte) *verdict {
 		return &verdict{CatVirus, "PHP.Obfuscated.PackedArray"}
 	}
 	// 18. Minified single-line PHP with an executor (packed one-liner).
+	// (The line and the executor inside PHP tags: an installer page
+	// carrying minified jQuery in its HTML is no PHP one-liner; Duplicator's
+	// inc.libs.js.php.)
 	if evalOrAssert && longestLine(s) > 2000 && n < 300000 && (decoders >= 1 || concat >= 15 || varFunc) {
-		return &verdict{CatVirus, "PHP.Obfuscated.PackedOneLiner"}
+		if p := phpRegions(s); reEvalSink.Match(p) && longestLine(p) > 2000 {
+			return &verdict{CatVirus, "PHP.Obfuscated.PackedOneLiner"}
+		}
 	}
 	// Laravel compiled Blade views end with /**PATH … ENDPATH**/ and use
 	// hash-named variables ($__componentOriginal<md5>).
@@ -564,6 +569,28 @@ func entropyOfLongestToken(s []byte) float64 {
 	return h
 }
 
+// phpRegions joins the code between PHP's open and close tags (to the end
+// of the file when it is not closed); the HTML around it is left out.
+func phpRegions(s []byte) []byte {
+	var out []byte
+	for {
+		i := bytes.Index(s, []byte("<?"))
+		if i < 0 {
+			return out
+		}
+		s = s[i+2:]
+		if len(s) >= 3 && bytes.EqualFold(s[:3], []byte("xml")) {
+			continue
+		}
+		j := bytes.Index(s, []byte("?>"))
+		if j < 0 {
+			return append(out, s...)
+		}
+		out = append(append(out, s[:j]...), '\n')
+		s = s[j+2:]
+	}
+}
+
 func longestLine(s []byte) int {
 	maxlen, cur := 0, 0
 	for _, c := range s {
@@ -625,8 +652,16 @@ func argOnInput(call *regexp.Regexp, s []byte) bool {
 	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
 		tainted = append(tainted, string(m[1]))
 	}
-	for _, m := range call.FindAllSubmatch(s, 50) {
-		arg := m[1]
+	for _, loc := range call.FindAllSubmatchIndex(s, 50) {
+		// A name written in a string is no call (iThemes Security looks for
+		// 'eval(' in the request URI).
+		if loc[0] > 0 && (s[loc[0]-1] == '\'' || s[loc[0]-1] == '"') {
+			continue
+		}
+		var arg []byte
+		if loc[2] >= 0 {
+			arg = s[loc[2]:loc[3]]
+		}
 		if reInput.Match(arg) {
 			return true
 		}

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.23.40** (see `VERSION`).
+- Current release: **0.23.41** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.40 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.23.41 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.23.40: `--branch backup-0.23.39`; see "Rollback" under 0.23.40 below);
+  0.23.41: `--branch backup-0.23.40`; see "Rollback" under 0.23.41 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,23 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.23.41: two old false positives found by a real-plugin scan**
+  (2026-10-30). Before shipping the ClickFix rules, 34 real plugins and
+  libraries close to them (security, CAPTCHA, login limit, 2FA, hide-login,
+  cache, maintenance, copy-button, Cloudflare; 9,016 files) were scanned:
+  0 from the new rules, 2 from older ones, both fixed in the engine:
+  - `PHP.Backdoor.EvalInput` (and the same check for create_function and
+    mail): a call name written in a string is no call (iThemes Security
+    looks for `'eval('` in the request URI). `assert("eval($_POST..)")`
+    is still caught (the outer call).
+  - `PHP.Obfuscated.PackedOneLiner`: the long line and the eval must be
+    inside PHP tags (`phpRegions`); Duplicator's installer page carrying
+    minified jQuery in its HTML is no PHP one-liner. Packed PHP after HTML
+    is still caught.
+  Test: `TestFleetStringsAndHTMLAreNoCode` (fails on 0.23.40's engine).
+  Test runs: `go test -p 1 ./...` (core's firewall tests share the host's
+  iptables sets with other packages run at the same time).
+  - **Rollback**: `backup-0.23.40`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.23.40: the ClickFix kit (fake Cloudflare human check)**
   (2026-10-30). server1 and server100: 365 fake plugin folders, 1,986
   files, one finding (its .user.ini). The kit shows logged-out visitors a

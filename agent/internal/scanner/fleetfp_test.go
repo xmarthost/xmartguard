@@ -1106,3 +1106,30 @@ func TestFleetClickFixKit(t *testing.T) {
 		}
 	}
 }
+
+// Real plugins scanned for 0.23.40 (security, CAPTCHA, login, cache and
+// copy-button plugins): iThemes Security looks for 'eval(' in the request
+// URI (a string, no call), and Duplicator's installer page carries minified
+// jQuery in its HTML (no PHP one-liner). The real thing stays caught.
+func TestFleetStringsAndHTMLAreNoCode(t *testing.T) {
+	line := "<script>" + strings.Repeat("var a=b+'x'+c+'y'+d;", 120) + "var f=$e(1);eval(z);</script>"
+	for name, body := range map[string]string{
+		"eval( in a string":  "<?php\nif ( strpos( $_SERVER['REQUEST_URI'], 'eval(' ) || strpos( $_GET['q'], 'base64' ) ) { header( 'HTTP/1.1 414' ); exit; }\n",
+		"jQuery in the HTML": "<?php if (!defined('INIT')) { header('Location: /'); exit; } ?>\n<html><head>" + line + "</head><body><?php echo $x; ?></body></html>\n",
+	} {
+		if d := analyze(".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	packed := "<?php " + strings.Repeat("$a.='x'.'y';", 200) + "eval(base64_decode($a));"
+	for name, body := range map[string]string{
+		"eval of input":           "<?php eval($_POST['c']);",
+		"assert of a code string": "<?php assert(\"eval(\\$_POST['c'])\");",
+		"packed PHP one-liner":    packed,
+		"packed after HTML":       "<html><body>hello</body></html>\n" + packed,
+	} {
+		if d := analyze(".php", []byte(body)); d == nil || d.Category != CatVirus {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}
