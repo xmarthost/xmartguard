@@ -980,7 +980,7 @@ func ParseLine(line string) (Event, bool) {
 
 func classify(id int, msg string) string {
 	switch {
-	case id >= IDLoginWP && id <= IDLoginAppPass:
+	case id >= IDLoginWP && id <= IDCheckoutTry:
 		return "login"
 	case id >= IDBadBots && id <= IDCustomBots:
 		return "bot"
@@ -994,6 +994,7 @@ func classify(id int, msg string) string {
 var loginRuleName = map[int]string{
 	IDLoginWP: "WordPress", IDLoginXMLRPC: "WordPress XML-RPC", IDLoginJoomla: "Joomla", IDLoginOpenCart: "OpenCart",
 	IDLoginCustom: "protected URL", IDLoginAppPass: "application password",
+	IDCheckoutTry: "WooCommerce checkout",
 }
 
 // Run tails the error logs, records events and bans brute-force login sources.

@@ -3,6 +3,7 @@ package audit
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +57,50 @@ func TestKernelAndIsolation(t *testing.T) {
 	}
 	if cmpKernel("5.14.0-570.9.1.el9_6.x86_64", "5.14.0-570.12.1.el9_6.x86_64") >= 0 {
 		t.Error("kernel numbers compared as text")
+	}
+}
+
+// php.ini letting scripts run commands, or blocking them but leaving
+// putenv (the LD_PRELOAD bypass); the last disable_functions line counts.
+// A kernel without SYN cookies.
+func TestDisableFunctionsAndSyncookies(t *testing.T) {
+	for ini, want := range map[string]string{
+		"disable_functions =\n": "PHP may run commands",
+		"memory_limit = 256M\n": "PHP may run commands",
+		"disable_functions = exec,shell_exec,system,passthru,proc_open,popen\n":                   "putenv is allowed",
+		"disable_functions = exec,system,putenv\n":                                                "",
+		"disable_functions = \"exec, shell_exec, system, passthru, popen, proc_open, putenv\"\n":  "",
+		"disable_functions = exec,system,putenv\ndisable_functions =\n":                           "PHP may run commands",
+		"; disable_functions = exec\ndisable_functions = exec,shell_exec,system,putenv ; tools\n": "",
+	} {
+		items := disableFunctions("php.ini", ini)
+		got := ""
+		if len(items) > 0 {
+			got = items[0].Title
+		}
+		if want == "" && got != "" || want != "" && !strings.HasPrefix(got, want) {
+			t.Errorf("%q: %q", ini, got)
+		}
+	}
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "proc/sys/net/ipv4"), 0o755)
+	os.WriteFile(filepath.Join(root, "proc/sys/net/ipv4/tcp_syncookies"), []byte("0\n"), 0o644)
+	if items := (&Auditor{StackRoot: root}).syncookies(); len(items) != 1 {
+		t.Fatalf("syncookies off: %+v", items)
+	}
+	os.WriteFile(filepath.Join(root, "proc/sys/net/ipv4/tcp_syncookies"), []byte("1\n"), 0o644)
+	if items := (&Auditor{StackRoot: root}).syncookies(); len(items) != 0 {
+		t.Fatalf("syncookies on: %+v", items)
+	}
+}
+
+func TestRealtimeCoverage(t *testing.T) {
+	a := &Auditor{Realtime: func() (int, int64) { return 1200, 3 }}
+	if items := a.realtimeCoverage(); len(items) != 2 || items[0].Severity != "medium" {
+		t.Fatalf("%+v", items)
+	}
+	a.Realtime = func() (int, int64) { return 0, 0 }
+	if items := a.realtimeCoverage(); len(items) != 0 {
+		t.Fatalf("%+v", items)
 	}
 }

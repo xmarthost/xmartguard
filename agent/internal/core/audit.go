@@ -35,6 +35,13 @@ func (a *Agent) auditor() *audit.Auditor {
 		Docroots:   func() map[string]string { return cms.CPanelDocroots("/var/cpanel/userdata") },
 		MySQLUsers: audit.DefaultMySQLUsers,
 		OwnNames:   ownNames,
+		Realtime: func() (int, int64) {
+			if a.Realtime == nil || !a.Settings.Get().Scanner.Realtime {
+				return 0, 0
+			}
+			st := a.Realtime.Stats()
+			return st.Unwatched, st.Overflows
+		},
 	}
 }
 

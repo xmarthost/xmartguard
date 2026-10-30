@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.3** (see `VERSION`).
+- Current release: **0.24.4** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.3 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.4 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.3: `--branch backup-0.24.2`; see "Rollback" under 0.24.3 below);
+  0.24.4: `--branch backup-0.24.3`; see "Rollback" under 0.24.4 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,34 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.4: security plan part 4 - card testing and server
+  checks** (2026-10-30; last part of the plan).
+  - WAF 7700407 counts WooCommerce checkout POSTs (Store API
+    `/wc/store[/vN]/checkout`, `?rest_route=`, `?wc-ajax=checkout`) like
+    failed logins: card-testing bots reach the brute-force ban (10 in 10
+    minutes by default), a shopper's order or two never does. The Store
+    API exclusion (7700014) removes PHP-injection rules only, not this.
+  - Audit `php`: a php.ini whose disable_functions lists none of exec,
+    shell_exec, system, passthru, proc_open, popen (medium), or blocks them
+    but leaves putenv (LD_PRELOAD bypass with mail(), low); the last
+    disable_functions line counts.
+  - Audit `isolation`: net.ipv4.tcp_syncookies off. Audit `realtime`:
+    folders realtime protection cannot watch (inotify limit; the fleet
+    sits near 999,000 watches) and lost-event counts, with the sysctl to
+    raise.
+  - Checked on the fleet after 0.24.3: all servers on 0.24.3; 7700406
+    counted its first application-password guess (server100,
+    /wp-json/wp/v2/users/me); 7700316 no hits.
+  - Plan items not done (owner decision or larger work, see
+    `docs/SECURITY_PLAN.md`): signed releases, per-plugin patch feed, IP
+    classes and cookie-bound passes (I6/I7), per-site budgets and
+    under-attack mode (M10), client fingerprints (M13), HTTP/2 abuse (M11),
+    Web Bot Auth and Private Access Tokens (M12/M22), AI crawler budgets
+    (I9), egress monitor (M14), 2FA (M17), DoS limit on by default (I10:
+    owner's choice; only audited), skimmer and blockchain-loader families.
+  Tests: `TestCheckoutTryRule`, `TestDisableFunctionsAndSyncookies`,
+  `TestRealtimeCoverage`.
+  - **Rollback**: `backup-0.24.3`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.3: security plan part 3 - answer new holes faster**
   (2026-10-30).
   - WAF 7700316 (watch until approved): `role`/`roles`/`user_role`/

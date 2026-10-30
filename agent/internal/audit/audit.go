@@ -78,6 +78,9 @@ type Auditor struct {
 	EximVersion func() string
 	// AtDir overrides the at job spool (tests).
 	AtDir string
+	// Realtime reports the folders realtime protection could not watch and
+	// its lost events (nil: not running).
+	Realtime func() (unwatched int, overflows int64)
 }
 
 func (a *Auditor) now() time.Time {
@@ -112,6 +115,7 @@ func (a *Auditor) Run(ctx context.Context) Report {
 	add("stack_cve", a.stackCVEs(), nil)
 	add("persistence", a.persistence(), nil)
 	add("kernel", a.kernel(), nil)
+	add("realtime", a.realtimeCoverage(), nil)
 	add("lsphp", a.stuckPHP(), nil)
 	add("cron", a.cronJobs(), nil)
 	sev := map[string]int{"high": 0, "medium": 1, "low": 2}
@@ -524,6 +528,7 @@ func (a *Auditor) phpSettings() []Item {
 			if err != nil {
 				continue
 			}
+			out = append(out, disableFunctions(f, string(b))...)
 			for _, m := range reIniOn.FindAllStringSubmatch(string(b), -1) {
 				switch strings.ToLower(m[1]) {
 				case "allow_url_include":

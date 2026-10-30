@@ -59,7 +59,7 @@ func (a *Auditor) kernel() []Item {
 				Detail: "Mount /proc with hidepid=2 (or hidepid=invisible) so an account sees only its own processes; give monitoring tools a gid= exception."})
 		}
 	}
-	return out
+	return append(out, a.syncookies()...)
 }
 
 var (
@@ -88,4 +88,63 @@ func cmpKernel(a, b string) int {
 		return 1
 	}
 	return 0
+}
+
+// ---- PHP's command functions ----
+
+var reDisableFns = regexp.MustCompile(`(?mi)^[ \t]*disable_functions[ \t]*=[ \t]*"?([^"\r\n;]*)`)
+
+// disableFunctions reports a php.ini where scripts may run commands (a web
+// shell then runs anything as the account), and one that blocks the
+// command functions but leaves putenv: with mail() it loads a library
+// and runs commands anyway (the LD_PRELOAD bypass).
+func disableFunctions(file, ini string) []Item {
+	m := reDisableFns.FindAllStringSubmatch(ini, -1)
+	list := ""
+	if len(m) > 0 {
+		list = strings.ToLower(m[len(m)-1][1]) // the last one counts
+	}
+	set := map[string]bool{}
+	for _, f := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
+		set[f] = true
+	}
+	if !set["exec"] && !set["shell_exec"] && !set["system"] && !set["passthru"] && !set["proc_open"] && !set["popen"] {
+		return []Item{{Check: "php", Severity: "medium", Title: "PHP may run commands (disable_functions does not list them)", Path: file,
+			Detail: "A web shell then runs any command as the account. Add exec, shell_exec, system, passthru, proc_open, popen, pcntl_exec to disable_functions (and putenv), and allow them per account where a tool needs them."}}
+	}
+	if !set["putenv"] && !set["mail"] {
+		return []Item{{Check: "php", Severity: "low", Title: "putenv is allowed while the command functions are not", Path: file,
+			Detail: "putenv with mail() loads a library and runs commands despite disable_functions (LD_PRELOAD bypass). Add putenv to disable_functions."}}
+	}
+	return nil
+}
+
+// syncookies reports a kernel without SYN cookies (a SYN flood fills the
+// connection queue).
+func (a *Auditor) syncookies() []Item {
+	if v := strings.TrimSpace(a.stackFile("proc/sys/net/ipv4/tcp_syncookies")); v == "0" {
+		return []Item{{Check: "isolation", Severity: "medium", Title: "net.ipv4.tcp_syncookies is off",
+			Detail: "A SYN flood fills the connection queue and the websites stop answering. Set net.ipv4.tcp_syncookies = 1 (sysctl.d). Large floods need filtering upstream (the provider's DDoS protection)."}}
+	}
+	return nil
+}
+
+// realtimeCoverage reports folders realtime protection does not watch (the
+// kernel's inotify limit): a file dropped there waits for a sweep or the
+// nightly scan.
+func (a *Auditor) realtimeCoverage() []Item {
+	if a.Realtime == nil {
+		return nil
+	}
+	un, lost := a.Realtime()
+	var out []Item
+	if un > 0 {
+		out = append(out, Item{Check: "realtime", Severity: "medium", Title: strconv.Itoa(un) + " folders are not watched in realtime",
+			Detail: "The kernel's inotify limit is reached: new files there are found by the sweep (every few minutes, slowly) or the nightly scan. Raise fs.inotify.max_user_watches (sysctl.d), e.g. to 4194304, and restart xpguard-agent."})
+	}
+	if lost > 0 {
+		out = append(out, Item{Check: "realtime", Severity: "low", Title: "Realtime protection lost events " + strconv.FormatInt(lost, 10) + " times",
+			Detail: "The event queue overflowed and a catch-up walk covered the gap. Raise fs.inotify.max_queued_events (sysctl.d) if this keeps growing."})
+	}
+	return out
 }

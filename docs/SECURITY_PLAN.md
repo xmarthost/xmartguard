@@ -106,4 +106,4 @@ fire on the 2026-10-28 shapes and nowhere else.
 | 1 | released in 0.24.0, on the fleet |
 | 2 | released in 0.24.1 and 0.24.2, on the fleet |
 | 3 | released in 0.24.3: admin-role rule (watch), plugin integrity, kernel/isolation audit, application-password counting, PHP-to-shell lineage. Open: signed releases (owner's key), per-plugin patch feed, phpMyAdmin/Roundcube jails, skimmer and blockchain-loader families |
-| 4 | waiting |
+| 4 | released in 0.24.4: card-testing counter, PHP disable_functions/putenv, syncookies and realtime coverage audit. Open: I6/I7, M9 per-cookie limits, M10, M11, M12, M13, M14, M17, M22, I9, I10 default, I15, I16 |

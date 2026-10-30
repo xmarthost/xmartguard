@@ -114,8 +114,9 @@ func TestWebsiteFiles(t *testing.T) {
 
 func TestPHPSettings(t *testing.T) {
 	dir := t.TempDir()
-	write(t, filepath.Join(dir, "ea-php81/php.ini"), "allow_url_include = On\nenable_dl = Off\ndisplay_errors = Off\n")
-	write(t, filepath.Join(dir, "ea-php83/php.ini"), "allow_url_include = Off\n; allow_url_include = On\n")
+	hard := "disable_functions = exec,shell_exec,system,passthru,proc_open,popen,putenv\n"
+	write(t, filepath.Join(dir, "ea-php81/php.ini"), hard+"allow_url_include = On\nenable_dl = Off\ndisplay_errors = Off\n")
+	write(t, filepath.Join(dir, "ea-php83/php.ini"), hard+"allow_url_include = Off\n; allow_url_include = On\n")
 	write(t, filepath.Join(dir, "ud/alice/example.com"), "documentroot: /home/alice/public_html\nphpversion: ea-php74\n")
 	write(t, filepath.Join(dir, "ud/alice/new.example.com"), "phpversion: ea-php83\n")
 	write(t, filepath.Join(dir, "ud/alice/example.com.cache"), "phpversion: ea-php56\n")

@@ -38,6 +38,7 @@ const CHECKS: Record<string, string> = {
   exposed_repo: 'Git repository in the website',
   kernel: 'Kernel update / reboot',
   isolation: 'Account isolation',
+  realtime: 'Realtime protection coverage',
   stuck_php: 'Stuck PHP',
   cron: 'Cron jobs',
 };

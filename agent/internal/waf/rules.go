@@ -84,7 +84,11 @@ const (
 	IDLoginCustom      = 7700405
 	// IDLoginAppPass: a REST request with Basic authentication (an
 	// application password) that WordPress refused (401).
-	IDLoginAppPass  = 7700406
+	IDLoginAppPass = 7700406
+	// IDCheckoutTry: a WooCommerce checkout POST (Store API or wc-ajax):
+	// card testing bots place many in minutes, a shopper one or two. It
+	// counts like a failed login toward the brute-force ban.
+	IDCheckoutTry   = 7700407
 	IDBadBots       = 7700501
 	IDSEOBots       = 7700502
 	IDAIBots        = 7700503
@@ -202,6 +206,7 @@ var Catalog = []RuleInfo{
 	{IDAdminRoleArg, "wordpress", "Block requests asking for the administrator role outside WordPress's own user screens (plugin bugs that create admins)", "block"},
 	{IDWPPackagePHP, "wordpress", "Block PHP files sent to the WordPress plugin, theme and media uploaders (they only take zip files and media)", "block"},
 	{IDLoginWP, "bruteforce", "Count failed WordPress logins", "count"},
+	{IDCheckoutTry, "bruteforce", "Count WooCommerce checkout attempts (card testing bots place many in minutes)", "count"},
 	{IDLoginAppPass, "bruteforce", "Count failed WordPress application-password logins (REST API with Basic authentication)", "count"},
 	{IDLoginXMLRPC, "bruteforce", "Count WordPress XML-RPC login calls", "count"},
 	{IDLoginJoomla, "bruteforce", "Count Joomla administrator logins", "count"},
@@ -888,6 +893,11 @@ func Render(c settings.WAF, o Options) string {
 			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:3,pass,log,msg:'xPGuard - Failed login: WordPress',tag:'xpguard/login',chain"`, IDLoginWP)
 			w(`  SecRule REQUEST_FILENAME "@rx /wp-login\.php(?:/|$)" "t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,chain"`)
 			w(`  SecRule RESPONSE_STATUS "@streq 200" "t:none"`)
+		}
+		if !off[IDCheckoutTry] {
+			// Block Checkout (Store API) and the classic checkout (wc-ajax).
+			w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:2,pass,log,msg:'xPGuard - Checkout attempt: WooCommerce',tag:'xpguard/login',chain"`, IDCheckoutTry)
+			w(`  SecRule REQUEST_URI "@rx (?:/wp-json/+wc/+store(?:/+v\d+)?/+checkout\b|[?&]rest_route=/+wc/+store(?:/+v\d+)?/+checkout\b|[?&]wc-ajax=checkout\b)" "t:none,t:urlDecodeUni,t:lowercase"`)
 		}
 		if !off[IDLoginAppPass] {
 			// Application passwords are guessed on the REST API, where no

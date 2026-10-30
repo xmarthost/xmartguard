@@ -63,3 +63,25 @@ func TestAppPasswordLoginRule(t *testing.T) {
 		t.Error("not counted as a failed login")
 	}
 }
+
+// Card testing: bots place many checkouts in minutes (Store API and the
+// classic wc-ajax checkout); each counts like a failed login, so the
+// brute-force ban stops them while a shopper's order or two never do.
+func TestCheckoutTryRule(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.Enabled = true
+	out := Render(c, Options{Dir: "/r"})
+	chain := strings.Join(chainOf(out, IDCheckoutTry), "\n")
+	for _, want := range []string{`"@streq POST"`, "wc/+store", "checkout", "wc-ajax=checkout", ",pass,", "xpguard/login"} {
+		if !strings.Contains(chain, want) {
+			t.Errorf("rule lacks %q:\n%s", want, chain)
+		}
+	}
+	if classify(IDCheckoutTry, "") != "login" || loginRuleName[IDCheckoutTry] == "" {
+		t.Error("not counted toward the ban")
+	}
+	// The Store API exclusion removes PHP-injection rules only, not this one.
+	if strings.Contains(out, "ctl:ruleRemoveByTag=xpguard/login") {
+		t.Error("an exclusion removes the counter")
+	}
+}
