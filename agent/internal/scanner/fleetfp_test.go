@@ -1367,6 +1367,10 @@ func TestFleetHtaccessCloaking(t *testing.T) {
 		"RewriteCond %{HTTP_USER_AGENT} (AhrefsBot|MJ12bot) [NC]\nRewriteRule .* - [F,L]\n",
 		"RewriteCond %{HTTP_USER_AGENT} googlebot [NC]\nRewriteRule ^old/(.*)$ https://%{HTTP_HOST}/new/$1 [R=301,L]\n",
 		"RewriteCond %{HTTP_REFERER} google [NC]\nRewriteRule ^promo$ /index.php?page=promo [L]\n",
+		// Softaculous's bot protection (business300 deversco, 2026-10-30):
+		// Baiduspider among bad bots, sent nowhere.
+		"RewriteCond %{HTTP_USER_AGENT} (?:virusbot|spambot|evilbot|acunetix|BLEXBot|MJ12bot/v|AhrefsBot|SemrushBot|nikto|Baiduspider|HTTrack|python-requests) [NC]\nRewriteRule ^(.*)$ http://no.access/\n",
+		"RewriteCond %{HTTP_USER_AGENT} (Baiduspider|YandexBot) [NC]\nRewriteRule .* http://127.0.0.1/ [R=301,L]\n",
 	} {
 		if d := htaccessHack([]byte(own)); d != nil {
 			t.Errorf("site's own rule flagged: %+v\n%s", d, own)
@@ -1378,5 +1382,43 @@ func TestFleetHtaccessCloaking(t *testing.T) {
 	clean := string(CleanHtaccess([]byte(site), "/"))
 	if strings.Contains(clean, "example.invalid") || !strings.Contains(clean, "LSCACHE_VARY") && !strings.Contains(clean, "vary=x") || !strings.Contains(clean, "RewriteRule . /index.php [L]") || htaccessHack([]byte(clean)) != nil {
 		t.Errorf("cleaned:\n%s", clean)
+	}
+}
+
+// Full scans of 2026-10-30 (server100): library and application files
+// taken for backdoors - assert() of a type check on request data
+// (OpenTelemetry, php-saml), a method named exec and a fixed exec('whoami')
+// (Afterlogic DAV, Yii debug), a canvas image saved from a data URI
+// (Chamilo badges), a debug log of cookies (Retina Images). The same calls
+// fed by the request stay caught.
+func TestFleetLibrariesOfFullScan(t *testing.T) {
+	clean := map[string]string{
+		"assert type check": "<?php class R { private function v($n) { $value = $_SERVER[$n] ?? null; if ($value !== null) { assert(is_string($value)); return $value; } return getenv($n); } }",
+		"assert on request": "<?php class A { function go($url = '') { assert(is_string($url)); if (empty($url) && isset($_REQUEST['RelayState'])) { $url = $_REQUEST['RelayState']; } return $url; } }",
+		"method named exec": "<?php class S { public function exec() { $u = empty($_SERVER['REQUEST_URI']) ? '' : trim($_SERVER['REQUEST_URI']); if (!strpos(urldecode($u), '../')) { $this->start(); } } }",
+		"fixed command":     "<?php $s = ['ip' => $console ? exec('whoami') : $req->getUserIP(), 'time' => $_SERVER['REQUEST_TIME_FLOAT']];",
+		"canvas image":      "<?php api_protect_admin_script(); $path = sprintf('%s%s.png', $dir, sha1($name));\nif (!empty($_POST['badge_image'])) { $img = base64_decode(preg_replace('#^data:image/\\w+;base64,#i', '', $_POST['badge_image'])); file_put_contents($path, $img); }",
+		"application upload page": "<?php exit;\nif (isset($_FILES['user_upload'])) { $p = handle_uploaded_document($course, $_FILES['user_upload'], $dir); echo build_missing_files_form($missing, $_FILES['user_upload']['name']); }\n" +
+			"if (isset($_POST['submit_image'])) { $paths = move_uploaded_file_collection_into_directory($course, $_FILES['img_file'], $dir); }\n?><form method=\"POST\" enctype=\"multipart/form-data\"><input type=\"file\" name=\"user_upload\"/></form>",
+		"debug log": "<?php $uri = parse_url(urldecode($_SERVER['REQUEST_URI']), PHP_URL_PATH);\nif (DEBUG) { $fh = fopen('retinaimages.log', 'a'); fwrite($fh, print_r($_COOKIE, true)); fwrite($fh, \"uri: {$uri}\\n\"); }",
+	}
+	for name, body := range clean {
+		if d := analyze(".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	bad := map[string]string{
+		"eval of input":            "<?php eval($_POST['c']);",
+		"eval inside a type check": "<?php assert(is_string($x) || eval($_POST['c']));",
+		"command with input":       "<?php system('ls ' . $_GET['d']);",
+		"own exec wrapper":         "<?php function exec2($c) { return 1; } function run($c) { system($c); } run($_GET['x']); system($_GET['y']);",
+		"dropper":                  "<?php file_put_contents($_GET['f'], base64_decode($_POST['d']));",
+		"image-wrapped dropper":    "<?php file_put_contents($_POST['name'], base64_decode(preg_replace('#^data:image/\\w+;base64,#i', '', $_POST['img'])));",
+		"log then include":         "<?php $fh = fopen('x.txt', 'w'); fwrite($fh, base64_decode($_POST['c'])); fclose($fh); include 'x.txt';",
+	}
+	for name, body := range bad {
+		if d := analyze(".php", []byte(body)); d == nil || d.Category != CatVirus {
+			t.Errorf("%s not caught: %+v", name, d)
+		}
 	}
 }

@@ -148,7 +148,11 @@ func analyzePHP(content []byte) *verdict {
 	}
 	// 5. Command execution driven by attacker input (incl. backticks).
 	if (m(reSink) || m(reExecBare)) && hasInput && nr(reSinkOrExec, reWebInput, 200) {
-		return &verdict{CatVirus, "PHP.Backdoor.CommandInjection"}
+		// Not a method of that name (Afterlogic DAV's public function
+		// exec()) nor a fixed command (Yii's exec('whoami')).
+		if c := reSinkFixed.ReplaceAll(s, nil); reSinkOrExec.Match(c) && near(c, reSinkOrExec, reWebInput, 200) {
+			return &verdict{CatVirus, "PHP.Backdoor.CommandInjection"}
+		}
 	}
 	if m(reBacktickExec) {
 		return &verdict{CatVirus, "PHP.Backdoor.BacktickInput"}
@@ -200,8 +204,11 @@ func analyzePHP(content []byte) *verdict {
 	// (A plugin's large admin file that checks nonces and capabilities is an
 	// importer, not a dropper: LayerSlider's actions.php saves a template it
 	// downloads; droppers are small and check nothing.)
-	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders >= 1) && nr(reWriteSinkFile, reUserInput, 200) && m(reFileWrite) &&
-		!(n > 20000 && m(reWPGuard) && !m(reChr) && !m(reHardDecoder)) {
+	// (Not when the only decoding is of a canvas image sent as a data URI
+	// (Chamilo's badge editor), nor when it writes only to data files named
+	// in the code, a debug log (Retina Images).)
+	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders > dataURIDecodes(s)) && nr(reWriteSinkFile, reUserInput, 200) && m(reFileWrite) &&
+		!(n > 20000 && m(reWPGuard) && !m(reChr) && !m(reHardDecoder)) && !writesDataOnly(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.FileDropper"}
 	}
 	// 13. Spam mailer: mail() fed attacker input, in a small standalone script
@@ -643,7 +650,18 @@ var (
 
 // evalOnInput reports eval/assert whose argument contains request data or a
 // variable assigned from it.
-func evalOnInput(s []byte) bool { return argOnInput(reEvalArg, s) }
+func evalOnInput(s []byte) bool {
+	return argOnInput(reEvalArg, reBoolAssert.ReplaceAll(s, []byte("check(")))
+}
+
+// reSinkFixed: a function declaration named like a command function, or a
+// command call whose whole argument is a string with no variable in it.
+var reSinkFixed = regexp.MustCompile(`(?i)\bfunction\s+&?\s*(?:system|exec|shell_exec|passthru|proc_open|popen|pcntl_exec)\s*\(|\b(?:system|exec|shell_exec|passthru|popen)\s*\(\s*(?:'[^'$\\]*'|"[^"$\\{]*")\s*[,)]`)
+
+// reBoolAssert: assert() of a type or presence check, which runs no code
+// (OpenTelemetry, php-saml: assert(is_string($value)) on a value from
+// $_SERVER or $_REQUEST). A call inside it is still read on its own.
+var reBoolAssert = regexp.MustCompile(`(?i)\bassert\s*\(\s*!?\s*(?:is_\w+|isset|empty|in_array|array_key_exists|ctype_\w+|method_exists|function_exists|class_exists|property_exists|file_exists|is_a|is_subclass_of)\s*\(`)
 
 // argOnInput reports a call (captured argument text in group 1) that takes
 // request data or a variable assigned from it.
@@ -761,4 +779,72 @@ func taintedArg(s, arg []byte) bool {
 		}
 	}
 	return false
+}
+
+// reDataURIDecode: base64 of an image sent as a data URI, its prefix cut
+// off first.
+var reDataURIDecode = regexp.MustCompile(`(?i)\bbase64_decode\s*\(\s*(?:preg_replace|str_replace|substr)\s*\([^;]{0,120}?data:image`)
+
+var (
+	rePutTarget   = regexp.MustCompile(`(?i)\bfile_put_contents\s*\(\s*([^,]{1,200}),`)
+	reFwriteArg   = regexp.MustCompile(`(?i)\b(?:fwrite|fputs)\s*\(\s*\$(\w+)`)
+	reDataLit     = regexp.MustCompile(`(?i)^['"][^'"$]*\.(?:log|txt|json|csv|data|xml|cache|lock)['"]$`)
+	reIncludeStmt = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b[^;]{0,200}`)
+	reDataExt     = regexp.MustCompile(`(?i)\.(?:log|txt|json|csv|data|xml|cache|lock)\b`)
+	reCopyOrMove  = regexp.MustCompile(`(?i)\b(?:move_uploaded_file|copy|rename)\s*\(`)
+)
+
+// writesDataOnly: every file the code writes is named in it with a data
+// extension (a log, a cache, a JSON file), never a script.
+func writesDataOnly(s []byte) bool {
+	if reCopyOrMove.Match(s) {
+		return false
+	}
+	// A data file it then includes runs as PHP (code saved as .txt and
+	// included): no exception then.
+	for _, m := range reIncludeStmt.FindAll(s, 50) {
+		if bytes.Contains(m, []byte("$")) || reDataExt.Match(m) {
+			return false
+		}
+	}
+	any := false
+	for _, m := range rePutTarget.FindAllSubmatch(s, 50) {
+		any = true
+		if !reDataLit.Match(bytes.TrimSpace(m[1])) {
+			return false
+		}
+	}
+	for _, m := range reFwriteArg.FindAllSubmatch(s, 100) {
+		any = true
+		open := regexp.MustCompile(`\$` + regexp.QuoteMeta(string(m[1])) + `\s*=\s*@?\s*fopen\s*\(\s*('[^']*'|"[^"]*")\s*,`).FindSubmatch(s)
+		if open == nil || !reDataLit.Match(open[1]) {
+			return false
+		}
+	}
+	return any
+}
+
+// dataURIDecodes counts the data-URI image decodes, none when a file the
+// code writes is named by the request (a dropper may wrap its payload as
+// an image too).
+func dataURIDecodes(s []byte) int {
+	n := len(reDataURIDecode.FindAllIndex(s, -1))
+	if n == 0 {
+		return 0
+	}
+	var tainted []*regexp.Regexp
+	for _, m := range reTaintAssign.FindAllSubmatch(s, 20) {
+		tainted = append(tainted, regexp.MustCompile(`\$`+regexp.QuoteMeta(string(m[1]))+`\b`))
+	}
+	for _, m := range rePutTarget.FindAllSubmatch(s, 50) {
+		if reUserInput.Match(m[1]) || reWebInput.Match(m[1]) {
+			return 0
+		}
+		for _, t := range tainted {
+			if t.Match(m[1]) {
+				return 0
+			}
+		}
+	}
+	return n
 }

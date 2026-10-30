@@ -168,7 +168,10 @@ var (
 	reRuleTarget  = regexp.MustCompile(`(?i)^\s*RewriteRule\s+\S+\s+(\S+)(?:\s+\[([^\]]*)\])?`)
 	rePrerender   = regexp.MustCompile(`(?i)prerender\.io|prerender\.cloud|seo4ajax\.com|rendertron|prerender\.com|ostr\.io`)
 	reExternalURL = regexp.MustCompile(`(?i)^https?://`)
-	reLocalPHP    = regexp.MustCompile(`(?i)\.php(?:\?|$)`)
+	reBadBotName  = regexp.MustCompile(`(?i)ahrefs|semrush|mj12|majestic|blexbot|dotbot|petalbot|bytespider|python|curl|wget|nikto|acunetix|httrack|harvest|extract|grab|miner|virusbot|spambot|evilbot|linkpad|xenu|winhttp|clshttp|domaincrawler|twenga|sistrix|seokicks|megaindex|serpstat`)
+	// Targets that send a client nowhere (a block written as a redirect).
+	reDeadEnd  = regexp.MustCompile(`(?i)^https?://(?:no\.access|localhost|127\.0\.0\.1|0\.0\.0\.0)(?:[:/]|$)`)
+	reLocalPHP = regexp.MustCompile(`(?i)\.php(?:\?|$)`)
 )
 
 func cloakGroup(group []string) bool {
@@ -177,7 +180,7 @@ func cloakGroup(group []string) bool {
 		return false
 	}
 	target := m[1]
-	if rePrerender.MatchString(target) || strings.Contains(strings.ToLower(target), "%{http_host}") {
+	if rePrerender.MatchString(target) || strings.Contains(strings.ToLower(target), "%{http_host}") || reDeadEnd.MatchString(target) {
 		return false
 	}
 	external := reExternalURL.MatchString(target)
@@ -192,6 +195,12 @@ func cloakGroup(group []string) bool {
 		case "HTTP_REFERER":
 			fromSearch = fromSearch || reSearchRef.MatchString(c[2])
 		case "HTTP_USER_AGENT":
+			// A bad-bot blocklist that names a search engine too
+			// (Softaculous's bot protection: Baiduspider among AhrefsBot,
+			// SemrushBot, MJ12bot... sent to http://no.access/) is no cloaking.
+			if len(reBadBotName.FindAllStringIndex(c[2], -1)) >= 3 {
+				return false
+			}
 			toCrawler = toCrawler || reCrawlerUA.MatchString(c[2])
 		}
 	}

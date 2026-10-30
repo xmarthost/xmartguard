@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.5** (see `VERSION`).
+- Current release: **0.24.6** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.5 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.6 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.5: `--branch backup-0.24.4`; see "Rollback" under 0.24.5 below);
+  0.24.6: `--branch backup-0.24.5`; see "Rollback" under 0.24.6 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,36 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.6: false positives of the full scans of 2026-10-30**
+  (all servers; reviewed while the scans ran).
+  - `Htaccess.Hacked.SearchCloaking` (0.24.2) took Softaculous's "Enable bot
+    protection" block for cloaking: Baiduspider among AhrefsBot, SemrushBot,
+    MJ12bot... sent to http://no.access/; root .htaccess files were cleaned
+    (bot block removed). Now a user-agent list with three or more bad-bot or
+    scraper names is a blocklist, and targets that go nowhere (no.access,
+    localhost, 127.0.0.1) are blocks. business300 deversco's four restored.
+  - `PHP.Webshell.Uploader` (0.24.2) on Chamilo's upload.document.php:
+    `move_uploaded_file_collection_into_directory(` read as
+    move_uploaded_file and the sent name used elsewhere. Now a real
+    move_uploaded_file() whose destination is built from the sent name
+    (directly or through variables) is needed.
+  - Older rules: `PHP.Backdoor.EvalInput` on assert(is_string($v)) of
+    request data (OpenTelemetry, php-saml: a type check runs no code; an
+    eval inside it is still read); `PHP.Backdoor.CommandInjection` on a
+    method named exec (Afterlogic DAV) and exec('whoami') (Yii debug);
+    `PHP.Backdoor.FileDropper` on a canvas image from a data URI (Chamilo
+    badges; not when the written path comes from the request) and on a
+    debug log of cookies (Retina Images; not when the file then includes a
+    data file or a variable).
+  - Real and kept: ClickFix kit files (server100 ftech), hidden payloads,
+    fake-plugin campaign zips, Telegram phishing pages, kit .htaccess locks
+    in fake wp-includes folders and in plugin data folders
+    (ecommupscale: the kit overwrote WooCommerce wc-logs, CF7 and JetBackup
+    deny files; those folders need their deny back), sci-calc.php (eval of
+    a typed expression: vulnerable code, left flagged).
+  Tests: `TestFleetLibrariesOfFullScan` (fails on 0.24.5), cloaking
+  look-alikes in `TestFleetHtaccessCloaking`.
+  - **Rollback**: `backup-0.24.5`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.5: review of parts 1-4** (2026-10-30). The owner asked
   for parts 1-4 and the system around them to be checked again for
   mistakes and overlaps. Found and fixed:

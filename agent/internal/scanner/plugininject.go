@@ -68,7 +68,7 @@ func pluginInjectors(content []byte, has func(string) bool) *Detection {
 			return &Detection{CatVirus, "PHP.Obfuscated.EscapedInput"}
 		}
 		if len(content) < 8<<10 && has("move_uploaded_file") && reUploadForm.Match(content) && reOrigName.Match(content) &&
-			!reUploadChecks.Match(content) && !reAuth.Match(content) {
+			!reUploadChecks.Match(content) && !reAuth.Match(content) && savesUnderSentName(content) {
 			return &Detection{CatVirus, "PHP.Webshell.Uploader"}
 		}
 	} else if bytes.Contains(content, []byte(`$_GET["\`)) || bytes.Contains(content, []byte(`$_POST["\`)) {
@@ -104,6 +104,52 @@ func bigBase64(content []byte) bool {
 		case c == '\n', c == '\r':
 		default:
 			run = 0
+		}
+	}
+	return false
+}
+
+var (
+	reMoveUpload = regexp.MustCompile(`\bmove_uploaded_file\s*\(([^;]{0,300})`)
+	reAssignVar  = regexp.MustCompile(`\$(\w+)\s*=\s*([^;]{0,300});`)
+)
+
+// savesUnderSentName: a move_uploaded_file() call (not a function of a
+// longer name: Chamilo's move_uploaded_file_collection_into_directory)
+// whose destination is built from the name the file was sent with,
+// directly or through variables.
+func savesUnderSentName(content []byte) bool {
+	tainted := map[string]bool{}
+	assigns := reAssignVar.FindAllSubmatch(content, 400)
+	for round := 0; round < 3; round++ {
+		for _, a := range assigns {
+			rhs := a[2]
+			hit := reOrigName.Match(rhs)
+			for v := range tainted {
+				if hit {
+					break
+				}
+				hit = regexp.MustCompile(`\$` + regexp.QuoteMeta(v) + `\b`).Match(rhs)
+			}
+			if hit {
+				tainted[string(a[1])] = true
+			}
+		}
+	}
+	for _, m := range reMoveUpload.FindAllSubmatch(content, 20) {
+		args := m[1]
+		i := bytes.IndexByte(args, ',')
+		if i < 0 {
+			continue
+		}
+		dest := args[i+1:]
+		if reOrigName.Match(dest) {
+			return true
+		}
+		for v := range tainted {
+			if regexp.MustCompile(`\$` + regexp.QuoteMeta(v) + `\b`).Match(dest) {
+				return true
+			}
 		}
 	}
 	return false
