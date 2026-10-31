@@ -32,6 +32,11 @@ type SelfTest struct {
 	Detail string `json:"detail,omitempty"`
 	// CRS: "" when OWASP CRS is not active, else "blocked" or the problem.
 	CRS string `json:"crs,omitempty"`
+	// Lifts: whether the engine lets through the saves xPGuard's
+	// relaxations are for ("passes", or "refused (HTTP 403)"): a rule a
+	// web server's engine reads differently shows here (joomlashares.com
+	// on LiteSpeed: the header-based lifts never applied).
+	Lifts map[string]string `json:"lifts,omitempty"`
 }
 
 // isSelfTest reports whether an event came from the agent's own check.
@@ -47,6 +52,62 @@ var SelfTestURLs = []string{"http://127.0.0.1", "https://127.0.0.1"}
 func probe(path string) (int, error) {
 	code, _, err := probeLoc(path)
 	return code, err
+}
+
+// probePost posts a form body (tests of the relaxations).
+func probePost(path, body string) (int, error) {
+	c := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // local self-test only
+			Proxy:           nil,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	var last error
+	for _, base := range SelfTestURLs {
+		req, err := http.NewRequest("POST", base+path, strings.NewReader(body))
+		if err != nil {
+			return 0, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (xPGuard WAF self-test)")
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		res, err := c.Do(req)
+		if err != nil {
+			last = err
+			continue
+		}
+		res.Body.Close()
+		return res.StatusCode, nil
+	}
+	return 0, last
+}
+
+// liftChecks posts what a relaxation is for and must let through, with
+// signals the CRS alone refuses: a Joomla administrator save with its form
+// token and a WooCommerce REST product write with API keys.
+func liftChecks() map[string]string {
+	token := "0123456789abcdef0123456789abcdef=1"
+	checks := map[string]struct{ path, body string }{
+		"joomla_admin_save": {crsTestPath + "/administrator/index.php?option=com_admintools&view=htaccessmaker",
+			"task=apply&custhead=" + url.QueryEscape("RewriteCond %{HTTP_USER_AGENT} (wget|curl|python-requests|libwww-perl) [NC]\nRewriteRule .* - [F]") +
+				"&cgibin=" + url.QueryEscape("/usr/local/cgi-bin/php.cgi") + "&exceptiondirs=" + url.QueryEscape("cli\nbin\ntmp") + "&" + token},
+		"woocommerce_api_write": {crsTestPath + "/wp-json/wc/v3/products?consumer_key=ck_" + strings.Repeat("0a", 20) + "&consumer_secret=cs_" + strings.Repeat("1b", 20),
+			"name=Shoes&description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`)},
+	}
+	out := map[string]string{}
+	for name, c := range checks {
+		code, err := probePost(c.path, c.body)
+		switch {
+		case err != nil:
+			out[name] = err.Error()
+		case code == 403 || code == 406 || (code >= 300 && code < 400):
+			out[name] = fmt.Sprintf("refused (HTTP %d)", code)
+		default:
+			out[name] = "passes"
+		}
+	}
+	return out
 }
 
 // probeLoc also returns the redirect target of a 3xx answer.
@@ -128,6 +189,9 @@ func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 			st.CRS = "blocked" // sent to the CAPTCHA (soft blocking)
 		default:
 			st.CRS = fmt.Sprintf("OWASP CRS did not block a test XSS request (HTTP %d); check the paranoia level and anomaly threshold", code)
+		}
+		if st.CRS == "blocked" {
+			st.Lifts = liftChecks()
 		}
 	}
 	return st

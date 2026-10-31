@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"encoding/base64"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -257,7 +258,7 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 		return &verdict{CatVirus, "PHP.Dropper.SelfDeleting"}
 	}
 	// Function names split into pieces so text searches miss them.
-	if name := splitName(s); name != "" && (evalOrAssert || varFunc || decoders >= 1) {
+	if name := splitName(s); name != "" && (evalOrAssert || varFunc || decoders >= 1) && !(!evalOrAssert && splitDecodesURLs(s, name)) {
 		return &verdict{CatVirus, "PHP.Obfuscated.SplitFunctionName"}
 	}
 	// A front-end hook that prints content fetched from elsewhere with TLS
@@ -404,4 +405,125 @@ func splitName(s []byte) string {
 		}
 	}
 	return ""
+}
+
+// JExtStore's Joomla extensions (JSitemap, JComments, GDPR …) spell
+// str_rot13 in pieces to build their own license and update address:
+// $f = 'str_' . 'ro' . 't' . '13'; $f('uggc' . '://' . 'fgberwrkgrafvbaf' . '.bet')
+// (http://storejextensions.org). splitDecodesURLs: the assembled decoder is
+// only ever called on constant strings that decode to a web address, and its
+// result is not called itself. A decoded function name ('flfgrz' is
+// "system") or code, a variable or request data as the argument, or the
+// decoder's name passed on, are still read as obfuscation.
+func splitDecodesURLs(s []byte, name string) bool {
+	if name != "str_rot13" && name != "base64_decode" {
+		return false
+	}
+	vars := map[string]bool{}
+	for _, m := range reSplitAssign.FindAllSubmatch(s, -1) {
+		if joinPieces(m[2]) == name {
+			vars[string(m[1])] = true
+		}
+	}
+	if len(vars) == 0 {
+		return false
+	}
+	calls := 0
+	for v := range vars {
+		reUse := regexp.MustCompile(`\$` + regexp.QuoteMeta(v) + `\b`)
+		for _, loc := range reUse.FindAllIndex(s, -1) {
+			rest := s[loc[1]:]
+			if a := reSplitAssignAt.FindIndex(rest); a != nil && a[0] == 0 {
+				continue // the assignment itself
+			}
+			arg, after, ok := callArgs(rest)
+			if !ok || !reLitConcat.Match(arg) {
+				return false
+			}
+			if bytes.HasPrefix(bytes.TrimLeft(after, " \t\r\n"), []byte("(")) {
+				return false // $f(...)(...): the result is called
+			}
+			var lit strings.Builder
+			for _, p := range reLitPiece.FindAll(arg, -1) {
+				lit.Write(p[1 : len(p)-1])
+			}
+			decoded := lit.String()
+			if name == "str_rot13" {
+				decoded = rot13(decoded)
+			} else {
+				b, err := base64.StdEncoding.DecodeString(decoded)
+				if err != nil {
+					return false
+				}
+				decoded = string(b)
+			}
+			if !reWebAddress.MatchString(decoded) {
+				return false
+			}
+			calls++
+		}
+	}
+	return calls > 0
+}
+
+var (
+	reSplitAssign   = regexp.MustCompile(`\$(\w+)\s*=\s*((?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")(?:\s*\.\s*(?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")){1,8})\s*;`)
+	reSplitAssignAt = regexp.MustCompile(`^\s*=\s*(?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")(?:\s*\.\s*(?:'[a-zA-Z0-9_]{1,12}'|"[a-zA-Z0-9_]{1,12}")){1,8}\s*;`)
+	reLitConcat     = regexp.MustCompile(`^\s*(?:'[^'\\]*'|"[^"\\$]*")(?:\s*\.\s*(?:'[^'\\]*'|"[^"\\$]*"))*\s*$`)
+	reLitPiece      = regexp.MustCompile(`'[^'\\]*'|"[^"\\$]*"`)
+	reWebAddress    = regexp.MustCompile(`^https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[A-Za-z0-9._~/%-]*)?$`)
+)
+
+func joinPieces(b []byte) string {
+	var j strings.Builder
+	for _, p := range bytes.Split(b, []byte(".")) {
+		j.Write(bytes.Trim(bytes.TrimSpace(p), `'"`))
+	}
+	return strings.ToLower(j.String())
+}
+
+// callArgs reads "(args)" at the start of b (after spaces): the arguments
+// and what follows the closing parenthesis.
+func callArgs(b []byte) (arg, after []byte, ok bool) {
+	i := 0
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t') {
+		i++
+	}
+	if i >= len(b) || b[i] != '(' {
+		return nil, nil, false
+	}
+	depth, quote := 0, byte(0)
+	for j := i; j < len(b); j++ {
+		c := b[j]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				j++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 {
+				return b[i+1 : j], b[j+1:], true
+			}
+		}
+	}
+	return nil, nil, false
+}
+
+func rot13(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return 'a' + (r-'a'+13)%26
+		case r >= 'A' && r <= 'Z':
+			return 'A' + (r-'A'+13)%26
+		}
+		return r
+	}, s)
 }

@@ -181,6 +181,12 @@ var Services = []Service{
 	{ID: "paypal", Name: "PayPal IPN / webhooks", Group: "payment",
 		Hosts: []string{"ipnpb.paypal.com", "notify.paypal.com", "api.paypal.com", "ipn.sandbox.paypal.com"}},
 
+	// Dropshipping and marketplace services that write products and orders
+	// through the WooCommerce REST API (addresses from the provider's
+	// support; ssshoesmaker.com, business900, 2026-10-31).
+	{ID: "cjdropshipping", Name: "CJdropshipping (WooCommerce product and order sync)", Group: "vendor",
+		Builtin: []string{"47.254.74.208/32", "47.88.4.204/32", "47.254.34.239/32"}},
+
 	// Outbound mail relays (smarthosts) that hosting servers send through
 	// and receive from: never blocked, and trusted by cPanel's greylisting.
 	{ID: "mailbaby", Name: "MailBaby (mail relay)", Group: "mail",

@@ -42,6 +42,9 @@ const (
 	IDJoomlaAdmin = 7700063
 	// joomlaAdminThreshold: such a save is refused from this score on.
 	joomlaAdminThreshold = 60
+	// IDWCRestKeys: a WooCommerce REST API write sent with the shop's API
+	// keys (+1000 OAuth, +2000 Basic authentication).
+	IDWCRestKeys = 7700065
 	// IDAppSave: a web application admin's save marked before the CRS
 	// setup (tx.xg_app_save, the WHMCS admin area); +1000 on an address
 	// with a bad reputation.
@@ -169,7 +172,8 @@ func joomlaAdminSetup() string {
 	head := func(id int) string {
 		return fmt.Sprintf(`SecRule REQUEST_FILENAME "@rx (?:^|/)administrator/(?:index\.php)?$" "id:%d,phase:2,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, id) + "\n" +
 			`  SecRule REQUEST_METHOD "@streq POST" "t:none,chain"` + "\n" +
-			`  SecRule ARGS_POST_NAMES "@rx ^[0-9a-f]{32}$" "t:none,chain"` + "\n"
+			// ARGS_NAMES: the collection CRS itself reads on every engine.
+			`  SecRule ARGS_NAMES "@rx ^[0-9a-f]{32}$" "t:none,chain"` + "\n"
 	}
 	return "# Joomla administrator saves with the form token (xPGuard WAF level).\n" +
 		head(IDJoomlaAdmin) +
@@ -319,4 +323,23 @@ func contentTypeRx() string {
 func contentTypeSetup() string {
 	return "# Content type policy (xPGuard, in place of CRS 920420).\n" +
 		fmt.Sprintf(`SecRule REQUEST_HEADERS:Content-Type "!@rx %s" "id:%d,phase:2,block,t:none,t:lowercase,msg:'Request content type is not allowed by policy',logdata:'%%{MATCHED_VAR}',tag:'attack-protocol',tag:'xpguard/crs',severity:'CRITICAL',setvar:'tx.inbound_anomaly_score_pl1=+%%{tx.critical_anomaly_score}'"`, contentTypeRx(), IDContentType) + "\n"
+}
+
+// wcRestKeysSetup lifts the threshold for WooCommerce REST API writes sent
+// with the shop's API keys: dropshipping and sync services (CJdropshipping,
+// ssshoesmaker.com on business900, 2026-10-30/31) post product HTML to
+// /wp-json/wc/v3/products, which CRS read as XSS (941100, 941160; score
+// 13-15) and refused. WooCommerce checks the keys: a request with wrong
+// ones changes nothing. One with many attack signals (30 and more) is
+// still refused.
+func wcRestKeysSetup() string {
+	head := func(id int) string {
+		return fmt.Sprintf(`SecRule REQUEST_METHOD "@rx ^(?:POST|PUT|PATCH|DELETE)$" "id:%d,phase:1,pass,t:none,nolog,chain"`, id) + "\n" +
+			`  SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wc/v[1-3]/" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n"
+	}
+	set := fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+	return "# WooCommerce REST API writes with the shop's API keys (xPGuard).\n" +
+		head(IDWCRestKeys) + `  SecRule ARGS_GET:consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,chain"` + "\n" + set +
+		head(IDWCRestKeys+1000) + `  SecRule ARGS_GET:oauth_consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,chain"` + "\n" + set +
+		head(IDWCRestKeys+2000) + `  SecRule REQUEST_HEADERS:Authorization "@rx ^basic\s+[a-z0-9+/=]{20,}$" "t:none,t:lowercase,chain"` + "\n" + set
 }

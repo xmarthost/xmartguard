@@ -565,6 +565,11 @@ func TestCRSSelfTestEveryLevel(t *testing.T) {
 		if st.CRS != "blocked" {
 			t.Errorf("%s: %+v", level, st)
 		}
+		// The relaxations let through what they are for (the Joomla admin
+		// lift is not installed at the strict level).
+		if st.Lifts["woocommerce_api_write"] != "passes" || (level != "strict") != (st.Lifts["joomla_admin_save"] == "passes") {
+			t.Errorf("%s: lifts %v", level, st.Lifts)
+		}
 	}
 }
 

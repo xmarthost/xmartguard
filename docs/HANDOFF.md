@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.8** (see `VERSION`).
+- Current release: **0.24.9** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.8 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.9 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.8: `--branch backup-0.24.7`; see "Rollback" under 0.24.8 below);
+  0.24.9: `--branch backup-0.24.8`; see "Rollback" under 0.24.9 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,47 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.9: WAF relaxations checked on every server; WooCommerce
+  API writes; JExtStore license address; CJdropshipping** (2026-10-31).
+  - joomlash (business600, 0.24.8 installed): File Explorer (score 40),
+    Global Configuration (10) and Admin Tools .htaccess Maker (10) still
+    refused on 2026-10-31 08:20-08:28 UTC, so 7700063 (Joomla form token,
+    phase 2) did not apply on LiteSpeed either, while it passes on Apache
+    with CRS 4.18 and 4.30. The token is now read from ARGS_NAMES (the
+    collection CRS itself reads) instead of ARGS_POST_NAMES. Not proven
+    on LiteSpeed: the WAF self-test now posts what the relaxations are
+    for (`liftChecks`: a Joomla admin save with a token, a WooCommerce API
+    product write with keys) and reports `self_test.lifts` in waf.status
+    ("passes" or "refused (HTTP 403)"). Read it on business600 after the
+    update before changing anything else.
+  - WooCommerce REST API writes with the shop's API keys
+    (`wcRestKeysSetup`, 7700065/7701065/7702065: consumer_key, OAuth
+    consumer key, Basic authentication; POST/PUT/PATCH/DELETE to
+    wc/v1-3) are refused from score 30. ssshoesmaker.com (business900):
+    CJdropshipping's product listing refused as XSS (941100, 941160,
+    920250; score 13-15, 18 times); server1 bestofpk.com's products/batch
+    sync (932370, 15) the same way. Without keys, keys on another route,
+    and an attack with keys are still refused.
+  - Trusted services: `cjdropshipping` (vendor group: firewall, IPDB, bans
+    and the WAF's bot rules never block it) with the three addresses CJ's
+    support gave (47.254.74.208, 47.88.4.204, 47.254.34.239). They were
+    on no list; the CRS was what refused them.
+  - Scanner: JExtStore's extensions (JSitemap Pro AjaxserverModel.php,
+    JComments, GDPR … zips in jdownloads) build their license and update
+    address with str_rot13 spelled in pieces ('str_' . 'ro' . 't' . '13'
+    on 'uggc' . '://' . 'fgberwrkgrafvbaf' . '.bet'). `splitDecodesURLs`:
+    no SplitFunctionName when the file has no eval/assert and every call
+    of the assembled decoder (str_rot13, base64_decode) takes constant
+    strings that decode to a web address and is not called itself. Read
+    in full (95 KB, MCP paging): vendor code, clean.
+  - Open: Akeeba Kickstart restore.php (330 KB, FileDropper) not read in
+    full yet. The customer asks to exclude the whole jdownloads folder:
+    not done (owner's decision; it holds extension packages the site
+    hands to its visitors).
+  - Tests: Apache `TestAdminAreaSavesWithoutRuleRemoval` (WooCommerce
+    cases), `TestCRSSelfTestEveryLevel` (lifts), CRS 4.18 and 4.30;
+    `TestFleetJExtStoreLicenseAddress` (fails on 0.24.8).
+  - **Rollback**: `backup-0.24.8`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.8: Joomla admin saves on LiteSpeed, Joomla page cache**
   (2026-10-31). Customer joomlash (business600: joomlashare.ir/.net/.org,
   joomlashares.com, fajoomla.ir, joomlatranslate.com/.ir, proshare.ir;
