@@ -129,6 +129,9 @@ project. It holds the rules, the current state and what is still open.
     rendering a programming blog comment quoting SQL passes; with the
     Apache rendering it is refused (the case this fixes); scripts in a
     comment and SQL to another script are refused in both.
+  - Apache sweep: only the two known failures; `TestWooReviewWithCRS`
+    and `TestEditorOnListedAddressWithCRS` once "connection refused"
+    (Apache not up in the sweep), each passed twice alone.
   - **Rollback**: `backup-0.24.19`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.19: probes for field exclusions and upload forms**
   (2026-10-31). The Joomla customer (joomlashares.com, business600)
