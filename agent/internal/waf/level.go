@@ -37,6 +37,11 @@ const (
 	// sent by that admin area's own page with a session; +1000 on an address
 	// with a bad reputation.
 	IDAdminArea = 7700058
+	// IDJoomlaAdmin: a Joomla administrator save with its form token (no
+	// header needed); +1000 on an address with a bad reputation.
+	IDJoomlaAdmin = 7700063
+	// joomlaAdminThreshold: such a save is refused from this score on.
+	joomlaAdminThreshold = 60
 	// IDAppSave: a web application admin's save marked before the CRS
 	// setup (tx.xg_app_save, the WHMCS admin area); +1000 on an address
 	// with a bad reputation.
@@ -146,6 +151,31 @@ func adminAreaSetup() string {
 		head(IDAdminArea) +
 		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.xg_session=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n" +
 		head(IDAdminArea+1000) +
+		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
+		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n" +
+		joomlaAdminSetup()
+}
+
+// joomlaAdminSetup lifts the threshold for Joomla administrator saves told
+// by Joomla's own form token: every save posts a field named with 32 hex
+// characters. It needs no request header: on LiteSpeed (joomlashares.com,
+// business600, 2026-10-27/28) Global Configuration, Admin Tools' .htaccess
+// Maker, File Explorer and jDownloads saves scoring 10-30 were still
+// refused with the Sec-Fetch-Site lifts above in place. Joomla checks the
+// token and the login itself; a request without them changes nothing, and
+// one with many attack signals (60 and more) is still refused. On an
+// address with a bad reputation only the session threshold applies.
+func joomlaAdminSetup() string {
+	head := func(id int) string {
+		return fmt.Sprintf(`SecRule REQUEST_FILENAME "@rx (?:^|/)administrator/(?:index\.php)?$" "id:%d,phase:2,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, id) + "\n" +
+			`  SecRule REQUEST_METHOD "@streq POST" "t:none,chain"` + "\n" +
+			`  SecRule ARGS_POST_NAMES "@rx ^[0-9a-f]{32}$" "t:none,chain"` + "\n"
+	}
+	return "# Joomla administrator saves with the form token (xPGuard WAF level).\n" +
+		head(IDJoomlaAdmin) +
+		`  SecRule &TX:xg_strict "@eq 0" "t:none,chain"` + "\n" +
+		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, joomlaAdminThreshold, joomlaAdminThreshold) + "\n" +
+		head(IDJoomlaAdmin+1000) +
 		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
 		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
 }

@@ -165,11 +165,13 @@ func appleDouble(content []byte) bool {
 
 // inertPHP: a PHP file that runs nothing. Its code stops at once
 // (LiteSpeed Cache's .litespeed_conf.php: "<?php exit; ?>" and its
-// settings as JSON) or only returns a table of strings (PicoFeed's
-// .wsj.com.php site rules).
+// settings as JSON; Joomla's page cache: '<?php die("Access Denied"); ?>'
+// and the saved page) or only returns a table of strings (PicoFeed's
+// .wsj.com.php site rules). Not a phar: its stub never runs when a file
+// inside it is opened (phar://).
 func inertPHP(content []byte) bool {
 	c := bytes.TrimLeft(content, " \t\r\n\ufeff")
-	if !bytes.HasPrefix(c, []byte("<?php")) {
+	if !bytes.HasPrefix(c, []byte("<?php")) || reHaltCompiler.Match(c) {
 		return false
 	}
 	code := stripPHPComments(c[5:])
@@ -193,9 +195,11 @@ func inertPHP(content []byte) bool {
 
 var (
 	reLoadsCode = regexp.MustCompile(`(?i)\b(?:include|require|include_once|require_once|eval|new|static|self|parent)\b|::|<<<`)
-	reStopNow   = regexp.MustCompile(`^(?:exit|die)\s*(?:\(\s*\))?\s*;`)
-	reStrLit    = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*"`)
-	reCallName  = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	// exit; die(); die("Access Denied"); (a plain string: nothing in it runs)
+	reStopNow      = regexp.MustCompile(`^(?:exit|die)\s*(?:\(\s*(?:'[^'\\]*'|"[^"\\$]*")?\s*\))?\s*(?:;|\?>)`)
+	reHaltCompiler = regexp.MustCompile(`(?i)__halt_compiler`)
+	reStrLit       = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*"`)
+	reCallName     = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 )
 
 // plantedMode is a file's permission bits, or -1.

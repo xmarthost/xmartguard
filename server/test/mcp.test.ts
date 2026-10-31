@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { toText } from '../src/routes/mcp.js';
+import { contentPart, toText } from '../src/routes/mcp.js';
 import { Client, OWNER, startHarness, type Harness } from './helpers.js';
 import { createOwner } from '../src/routes/users.js';
 
@@ -314,5 +314,30 @@ describe('tool result text', () => {
   });
   it('leaves short results whole', () => {
     expect(JSON.parse(toText({ events: [{ id: 1, ip: '1.2.3.4' }], total: 1 }))).toEqual({ events: [{ id: 1, ip: '1.2.3.4' }], total: 1 });
+  });  // A finding's file of 95-330 KB (business600: a Joomla component's
+  // model, Akeeba's restore.php) is read in parts, to its end.
+  it('pages a long file content', () => {
+    const content = 'a'.repeat(40_000) + 'b'.repeat(40_000) + 'c'.repeat(15_000);
+    const r = { finding: { id: 7 }, content, truncated: false };
+    let off = 0;
+    let read = '';
+    for (let i = 0; i < 5; i++) {
+      const p = contentPart(r, off);
+      expect(p.content.length).toBeLessThanOrEqual(40_000);
+      expect(p.content_length).toBe(95_000);
+      expect(p.content_offset).toBe(off);
+      expect(p.finding.id).toBe(7);
+      read += p.content;
+      if (p.content_next === undefined) {
+        expect(p.truncated).toBe(false);
+        break;
+      }
+      expect(p.truncated).toBe(true);
+      off = p.content_next;
+    }
+    expect(read).toBe(content);
+    expect(contentPart(r, 999_999).content).toBe('');
+    expect(contentPart(r, -5).content_offset).toBe(0);
+    expect(contentPart({ content: '', binary: true }, 0).content).toBe('');
   });
 });

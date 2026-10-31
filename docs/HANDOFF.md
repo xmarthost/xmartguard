@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.7** (see `VERSION`).
+- Current release: **0.24.8** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.7 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.8 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.7: `--branch backup-0.24.6`; see "Rollback" under 0.24.7 below);
+  0.24.8: `--branch backup-0.24.7`; see "Rollback" under 0.24.8 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,47 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.8: Joomla admin saves on LiteSpeed, Joomla page cache**
+  (2026-10-31). Customer joomlash (business600: joomlashare.ir/.net/.org,
+  joomlashares.com, fajoomla.ir, joomlatranslate.com/.ir, proshare.ir;
+  behind Cloudflare).
+  - WAF: after 0.23.32 the customer's own administrator saves were still
+    refused (2026-10-27/28, address 64.204.164.x, not on any list): Admin
+    Tools' .htaccess Maker (932260 + 932160, score 10), Global
+    Configuration (941100 + 941160, 10), File Explorer (30), jDownloads
+    (25), RSForm (10). Neither the admin-area lift nor the session lift
+    (threshold 30) applied, though both should have: on this LiteSpeed
+    engine a header condition (Sec-Fetch-Site or Cookie) does not match.
+    Not proven (no request headers in the log). New `joomlaAdminSetup`
+    (7700063, phase 2): a POST to /administrator/ (index.php) with
+    Joomla's form token (a field named with 32 hex characters) is refused
+    from score 60 on (`joomlaAdminThreshold`); on an address with a bad
+    reputation 30 (7701063). No header needed. The same body without the
+    token, a token-shaped field on the front end or in another admin
+    file, and an attack tool's request (score 60+) are still refused. The
+    sites get daily SQL injection (com_phocacart) and secret-file probes:
+    the WAF stays on for them.
+  - Scanner: Joomla page cache files (administrator/cache/page/*.php:
+    `<?php die("Access Denied"); ?>#x#` and the saved page, code samples
+    and all) were quarantined as `PHP.Suspicious.EncodedPayload` again and
+    again. `inertPHP` now reads die/exit with a plain string (no `$`, no
+    backslash) or `?>` as stopping at once, not a phar (`__HALT_COMPILER`),
+    and such a file is not judged by its text (analyze, Match); hash, ClamAV
+    and LMD bytes still apply.
+  - Portal MCP: `get_finding_content` takes `offset` and pages a file in
+    40,000-character parts (`content_next`). JSitemap Pro's
+    AjaxserverModel.php (95 KB, `SplitFunctionName`, AI 60 % "clean") and
+    Akeeba Kickstart's restore.php (330 KB, `FileDropper`) still flag on
+    0.24.5 and could not be read past the first 40-60 KB: read them in
+    full after this update before any restore or engine change. Both come
+    from "Pro" packages on a site that shares commercial extensions
+    (nulled packages often carry backdoors). The customer's own restores
+    (cPanel plugin) do not clear content for the server (by design), so
+    their files came back to quarantine a minute later.
+  - Tests: Apache `TestAdminAreaSavesWithoutRuleRemoval` (new cases),
+    `TestFleetJoomlaPageCache` (fails on 0.24.7), server `pages a long
+    file content`.
+  - **Rollback**: `backup-0.24.7`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.7: server dashboard opens at once** (2026-10-31). A
   server not opened for a while took 10 s and more: `dashboard.get`
   counted whole tables (millions of WAF events) on every open, on the

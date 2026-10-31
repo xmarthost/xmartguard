@@ -541,11 +541,17 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 			return final(d)
 		}
 	}
-	if d := analyze(ext, content); d != nil {
-		return final(capHeuristic(path, ext, d))
-	}
-	if r := Match(ext, content); r != nil {
-		return final(&Detection{r.Category, r.Name})
+	// A PHP file that stops before running anything (a Joomla page cache
+	// file holds the saved page, code samples and all, after
+	// '<?php die("Access Denied"); ?>') is not judged by its text; known
+	// malware bytes still are (below).
+	if !(bigPHPExts[ext] && inertPHP(content)) {
+		if d := analyze(ext, content); d != nil {
+			return final(capHeuristic(path, ext, d))
+		}
+		if r := Match(ext, content); r != nil {
+			return final(&Detection{r.Category, r.Name})
+		}
 	}
 	// ClamAV-format databases (installed ClamAV, subscriptions).
 	if d := clamCheck(content); d != nil {

@@ -50,6 +50,24 @@ export function toText(data: unknown): string {
   return text.slice(0, MAX_TEXT) + '\n… (truncated; use limit or filters)';
 }
 
+const CONTENT_PART = 40_000;
+
+/** contentPart is one part of a finding's content: a file of 95-330 KB
+ *  (a component's model, an archive tool) is read in parts, not cut off at
+ *  the first one. */
+export function contentPart(r: Record<string, any>, offset: number): Record<string, any> {
+  if (typeof r.content !== 'string') return r;
+  const all = r.content as string;
+  const from = Math.min(Math.max(0, Math.floor(offset)), all.length);
+  const to = Math.min(all.length, from + CONTENT_PART);
+  const out: Record<string, any> = { ...r, content: all.slice(from, to), content_offset: from, content_length: all.length };
+  if (to < all.length) {
+    out.content_next = to;
+    out.truncated = true;
+  }
+  return out;
+}
+
 interface TokenCtx {
   id: string;
   accountId: string;
@@ -192,16 +210,18 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
     },
     {
       name: 'get_finding_content',
-      description: 'The content of a detected file (read from quarantine when it was moved there) with the lines the AI marked as injected. Use it to judge false positives.',
-      inputSchema: obj({ server, id: { type: 'integer', description: 'Finding id from list_findings.' } }, ['server', 'id']),
-      run: async (ctx, a) => {
-        const r = (await agent(ctx, a.server, 'finding.content', { id: Number(a.id) })) as Record<string, any>;
-        if (typeof r.content === 'string' && r.content.length > 40_000) {
-          r.content = r.content.slice(0, 40_000);
-          r.truncated = true;
-        }
-        return r;
-      },
+      description:
+        'The content of a detected file (read from quarantine when it was moved there) with the lines the AI marked as injected. Use it to judge false positives. ' +
+        'A long file comes in parts of 40,000 characters: pass offset (content_next) for the next part.',
+      inputSchema: obj(
+        {
+          server,
+          id: { type: 'integer', description: 'Finding id from list_findings.' },
+          offset: { type: 'integer', minimum: 0, description: 'Character to start at (content_next of the previous part).' },
+        },
+        ['server', 'id'],
+      ),
+      run: async (ctx, a) => contentPart((await agent(ctx, a.server, 'finding.content', { id: Number(a.id) })) as Record<string, any>, Number(a.offset) || 0),
     },
     {
       name: 'list_scans',

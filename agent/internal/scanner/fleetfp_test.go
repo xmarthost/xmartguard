@@ -1422,3 +1422,42 @@ func TestFleetLibrariesOfFullScan(t *testing.T) {
 		}
 	}
 }
+
+// business600 joomlash (2026-10-27): Joomla's page cache files
+// (administrator/cache/page/<hash>-cache-page-<hash>.php) were quarantined
+// as PHP.Suspicious.EncodedPayload again and again: '<?php die("Access
+// Denied"); ?>' and then the saved page, whose articles show code. Nothing
+// after the die runs. A die that runs code, a string that interpolates, a
+// phar stub and code before the die are still judged.
+func TestFleetJoomlaPageCache(t *testing.T) {
+	s := newScanner(t)
+	page := `<!DOCTYPE html><html><body><article><h1>Decode a payload</h1><pre>eval(base64_decode($_POST['p']));</pre><pre>` +
+		strings.Repeat("QWxsIHRoZSB3b3JsZCdzIGEgc3RhZ2UsIGFuZCBhbGwgdGhlIG1lbiBhbmQgd29tZW4gbWVyZWx5IHBsYXllcnMu", 60) + `</pre></article></body></html>`
+	cache := `<?php die("Access Denied"); ?>#x#a:2:{s:4:"body";s:` + fmt.Sprint(len(page)) + `:"` + page + `";s:7:"headers";a:0:{}}`
+	path := "/home/u/public_html/administrator/cache/page/43e9356a2131a56aa57f050ccd40faa6-cache-page-8b9bba353f2b40a92b0e0cd9ee7f5acd.php"
+	if d := s.checkContent(path, ".php", []byte(cache)); d != nil {
+		t.Errorf("Joomla page cache: %s", d.Signature)
+	}
+	for _, stop := range []string{"<?php exit; ?>", "<?php die(); ?>", "<?php die('No direct access') ?>", "\xef\xbb\xbf<?php\nexit;\n?>"} {
+		if !inertPHP([]byte(stop + "\n<?php eval($_POST['c']); ?>")) {
+			t.Errorf("%q not read as stopping at once", stop)
+		}
+	}
+	payload := "<?php eval(base64_decode($_POST['p'])); ?>"
+	bad := map[string]string{
+		"die that runs code":       `<?php die(eval(base64_decode($_POST['p']))); ?>` + page,
+		"interpolating string":     `<?php die("{${eval(base64_decode($_POST['p']))}}"); ?>` + page,
+		"phar stub":                `<?php die(); __HALT_COMPILER(); ?>` + payload,
+		"code before the die":      `<?php eval(base64_decode($_POST['p'])); die("Access Denied"); ?>` + page,
+		"die only in a condition":  `<?php if (!defined('X')) die("Access Denied"); eval(base64_decode($_POST['p'])); ?>`,
+		"die inside a later block": `<?php $a = 1; ?><?php die("Access Denied"); ?>` + payload,
+	}
+	for name, body := range bad {
+		if inertPHP([]byte(body)) {
+			t.Errorf("%s: read as inert", name)
+		}
+		if d := s.checkContent(path, ".php", []byte(body)); d == nil {
+			t.Errorf("%s: not caught", name)
+		}
+	}
+}
