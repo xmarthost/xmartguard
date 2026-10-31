@@ -78,7 +78,15 @@ interface EngineIssue {
   what: string;
   reason: string;
   kind: 'unsupported' | 'probe';
+  effect?: 'none' | 'covered' | 'gap' | 'kept';
+  note?: string;
 }
+const effectStyle: Record<string, [string, string]> = {
+  gap: ['protection gap', 'bg-red-50 text-red-700'],
+  kept: ['kept on purpose', 'bg-amber-50 text-amber-700'],
+  covered: ['covered', 'bg-emerald-50 text-emerald-700'],
+  none: ['no effect here', 'bg-slate-100 text-slate-600'],
+};
 interface EngineReport {
   engine: string;
   checked_at: number;
@@ -109,7 +117,9 @@ function EngineIssues({ e }: { e: EngineReport }) {
                 {i.kind === 'probe' ? 'Self-test' : i.rule ? `Rule ${i.rule}` : 'Rule'}
                 {i.source ? ` (${sourceName[i.source] ?? i.source}${i.file ? `, ${i.file}` : ''})` : i.file ? ` (${i.file})` : ''}
               </span>
+              {i.effect && effectStyle[i.effect] && <span className={`ml-1 rounded px-1.5 py-0.5 ${effectStyle[i.effect][1]}`}>{effectStyle[i.effect][0]}</span>}
               : <code className="break-all text-slate-500">{i.what}</code> — {i.reason}
+              {i.note && <div className="text-slate-500">{i.note}</div>}
             </li>
           ))}
         </ul>

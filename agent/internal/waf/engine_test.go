@@ -28,6 +28,20 @@ SecRule &TX:TOTAL_ARG_LENGTH "@eq 1" \
         "t:none,\
         setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'"
 SecRule FILES_COMBINED_SIZE "@gt %{tx.combined_file_sizes}" "id:920410,phase:2,block,t:none"
+SecRule &MULTIPART_PART_HEADERS:_charset_ "!@eq 0" \
+    "id:922100,\
+    phase:2,\
+    block,\
+    chain"
+    SecRule REQBODY_PROCESSOR "@streq MULTIPART" "t:none"
+SecRule REQBODY_PROCESSOR "!@rx (?:URLENCODED|MULTIPART|XML|JSON)" \
+    "id:901340,\
+    phase:1,\
+    pass,\
+    nolog,\
+    chain"
+    SecRule REQBODY_PROCESSOR "!@rx (?:URLENCODED|MULTIPART|XML|JSON)" \
+        "ctl:requestBodyProcessor=URLENCODED"
 `), 0o644)
 	os.WriteFile(filepath.Join(dir, "xpguard-rules.conf"), []byte(`SecRule REQUEST_FILENAME "@rx /x$" "id:7700999,phase:1,pass,nolog,chain"
   SecRule MATCHED_VARS_NAMES "@rx ^ARGS:x" "t:none"
@@ -51,6 +65,12 @@ SecRule FILES_COMBINED_SIZE "@gt %{tx.combined_file_sizes}" "id:920410,phase:2,b
 		// Every worker logs the load: counted once.
 		ts(-8*time.Second) + ` ERROR   [ModSecurity] ARGS_COMBINED_SIZE "@gt %{tx.total_arg_length}" "t:none": Rule not supported.`,
 		ts(-7*time.Second) + ` Directive 'SecAuditLog' is not allowed in current context.`,
+		ts(-7*time.Second) + ` ERROR   [ModSecurity] unknown server variable while parsing: MULTIPART_PART_HEADERS:_charset_`,
+		ts(-7*time.Second) + ` ERROR   [ModSecurity] &MULTIPART_PART_HEADERS:_charset_ "!@eq 0"     "id:922100,    phase:2,    block,    chain": Rule not supported.`,
+		ts(-7*time.Second) + ` ERROR   [ModSecurity] unknown server variable while parsing: REQBODY_PROCESSOR`,
+		ts(-7*time.Second) + ` ERROR   [ModSecurity] REQBODY_PROCESSOR "!@rx (?:URLENCODED|MULTIPART|XML|JSON)"     "id:901340,    phase:1,    pass,    nolog,    chain": Rule not supported.`,
+		ts(-7*time.Second) + ` ERROR   [ModSecurity] unknown server variable while parsing: REQBODY_PROCESSOR`,
+		ts(-7*time.Second) + ` ERROR   [ModSecurity] REQBODY_PROCESSOR "!@rx (?:URLENCODED|MULTIPART|XML|JSON)"         "ctl:requestBodyProcessor=URLENCODED": Rule not supported.`,
 		ts(-5*time.Second) + ` [NOTICE] [1234] [T0] [HTTP:x] not ModSecurity`,
 	}, "\n")), 0o644)
 	m := &Manager{RulesDir: dir}
@@ -68,9 +88,13 @@ SecRule FILES_COMBINED_SIZE "@gt %{tx.combined_file_sizes}" "id:920410,phase:2,b
 		source string
 		reason string
 	}{
-		{`ARGS_COMBINED_SIZE "@gt %{tx.total_arg_length}" "t:none"`, 920390, "owasp_crs", "920390) is not enforced"},
-		{`FILES_COMBINED_SIZE "@gt %{tx.combined_file_sizes}" "t:none"`, 920410, "owasp_crs", "920410) is not enforced"},
-		{`MATCHED_VARS_NAMES "@rx ^ARGS:x" "t:none"`, 7700999, "xpguard", "does not know the variable MATCHED_VARS_NAMES"},
+		{`ARGS_COMBINED_SIZE "@gt %{tx.total_arg_length}"`, 920390, "owasp_crs", "920390) is not enforced"},
+		{`FILES_COMBINED_SIZE "@gt %{tx.combined_file_sizes}"`, 920410, "owasp_crs", "920410) is not enforced"},
+		{`MATCHED_VARS_NAMES "@rx ^ARGS:x"`, 7700999, "xpguard", "does not know the variable MATCHED_VARS_NAMES"},
+		// As business100 logged them (0.24.17): a counted variable, and a
+		// chain whose first rule and link both log a line.
+		{`&MULTIPART_PART_HEADERS:_charset_ "!@eq 0"`, 922100, "owasp_crs", "does not know the variable MULTIPART_PART_HEADERS:_charset_"},
+		{`REQBODY_PROCESSOR "!@rx (?:URLENCODED|MULTIPART|XML|JSON)"`, 901340, "owasp_crs", "does not know the variable REQBODY_PROCESSOR"},
 		{`%{TIME_EPOCH}`, 0, "", "cannot expand %{TIME_EPOCH}"},
 		{`directive SecAuditLog`, 0, "", "only at server level"},
 	}
@@ -84,7 +108,10 @@ SecRule FILES_COMBINED_SIZE "@gt %{tx.combined_file_sizes}" "id:920410,phase:2,b
 			t.Errorf("%q: got %+v", w.what, is)
 		}
 	}
-	if len(r.Issues) != len(want) || r.LoadAt == 0 || !strings.HasPrefix(r.Summary, "5 rule(s) the engine skips.") {
+	if by[`&MULTIPART_PART_HEADERS:_charset_ "!@eq 0"`].Effect != "gap" || by[`REQBODY_PROCESSOR "!@rx (?:URLENCODED|MULTIPART|XML|JSON)"`].Effect != "covered" || by[`MATCHED_VARS_NAMES "@rx ^ARGS:x"`].Effect != "" {
+		t.Errorf("effects: %+v", r.Issues)
+	}
+	if len(r.Issues) != len(want) || r.LoadAt == 0 || !strings.HasPrefix(r.Summary, "7 rule(s) the engine skips: 3 leave a protection gap, 3 not reviewed yet, 1 do nothing with xPGuard's settings or are covered.") {
 		t.Fatalf("report: %+v", r)
 	}
 	// Apache: no log reading; the configuration test refuses what it

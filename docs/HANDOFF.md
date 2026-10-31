@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.17** (see `VERSION`).
+- Current release: **0.24.18** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.17 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.18 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.17: `--branch backup-0.24.16`; see "Rollback" under 0.24.17 below);
+  0.24.18: `--branch backup-0.24.17`; see "Rollback" under 0.24.18 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -103,6 +103,46 @@ project. It holds the rules, the current state and what is still open.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.18: exclusions work without removal by tag** (2026-10-31).
+  First engine reports (0.24.17; business100, s1.cobuildhost and the
+  other LiteSpeed servers alike): 12 CRS rules skipped, all for unknown
+  variables. REQBODY_PROCESSOR: 901340 (covered: the content type policy
+  refuses types CRS has no parser for), 920400 (no effect: needs
+  tx.max_file_size), 920240 (no effect: PL2), 920539 (kept: see below).
+  UNIQUE_ID: 901410 (no effect: sampling). MULTIPART_PART_HEADERS: 922100,
+  922120, 922130 (protection gap: multipart header tricks; uploads still
+  scanned by 7700101) and their helpers 922140/922150/922160. Lifts now
+  pass on s1.cobuildhost and business100; score probes as before.
+  - **920539 / 920540**: CRS switches 920540 (`\uXXXX` escapes) off for
+    JSON because Apache's JSON parser decodes them. On LiteSpeed 920539
+    is skipped and 920540 matched JSON posts (business100: /wp-json/wp/v2/
+    posts and comments, score 10-15), so LiteSpeed puts the escapes in
+    ARGS undecoded and 920540 is the only guard against escaped attacks
+    there. Left on on purpose ("kept").
+  - **Exclusions by family flag**: `removeTags()` (WordPress admin, admin-
+    ajax, REST writes, customizer, app saves, cPanel mail setup) also sets
+    every family flag; the families are now 930, 931, 932, 933, 934, 941,
+    942, 943. The removal rules moved to 7700940 (bad reputation) and
+    7700941-7700980 (0.24.17's 7700879-7700899 had no room). Tag and
+    range removals stay for Apache. `TestExclusionsWithoutTagRemovalWithCRS`
+    strips `ctl:ruleRemoveByTag`, `ruleRemoveTargetByTag` and id ranges
+    from the rules (as LiteSpeed may ignore them): a logged-in editor's
+    wp-admin and REST saves pass, the same content to another script is
+    refused; fails without the flags (checked). Target removals
+    (`removeTagTargets`: cookies of static files, comment fields,
+    password fields, WooCommerce Store API) cannot be flags (they would
+    take whole rules out) and still do nothing on LiteSpeed.
+  - New self-test ways: `remove_range`, `remove_by_tag`, `family_flag`
+    (7700094-7700096). If remove_range is refused on LiteSpeed, the
+    whitelist's ranges do nothing there (stricter, not looser).
+  - Engine report format 2: short rule text (variables and operator), one
+    line per rule, `effect` (none, covered, gap, kept) with a note for the
+    known CRS rules, summary counting gaps; an older report is rebuilt at
+    once. Portal shows the effect as a badge.
+  - Next: a LiteSpeed replacement for the multipart header checks (922100,
+    922120, 922130) needs a variable LiteSpeed fills for multipart parts;
+    probe REQUEST_BODY / FILES on a multipart post first.
+  - **Rollback**: `backup-0.24.17`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.17: engine report; relaxations take rule families out**
   (2026-10-31).
   - **Engine report** (`engine.go`, `waf.status` → `status.engine`,

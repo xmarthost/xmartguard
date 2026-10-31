@@ -24,12 +24,13 @@ import (
 // engine. The other families (SQL injection above all) still check the
 // request under the raised threshold.
 
-// IDFamilyRemove: the family removal rules (7700880-7700899), and
-// IDFamilyStrict the rule before them that withdraws the flags for an
-// address with a bad reputation.
+// IDFamilyRemove: the family removal rules (7700941-7700980, five per
+// family), and IDFamilyStrict the rule before them that withdraws the
+// flags for an address with a bad reputation. (0.24.17 used 7700879-
+// 7700899; eight families did not fit below the CAPTCHA gate's 7700900.)
 const (
-	IDFamilyRemove = 7700880
-	IDFamilyStrict = 7700879
+	IDFamilyRemove = 7700941
+	IDFamilyStrict = 7700940
 )
 
 // familyChunk is how many rule ids one removal rule carries.
@@ -41,6 +42,22 @@ var crsFamilies = []struct{ flag, file, name string }{
 	{"xg_no_rce", "932", "remote command execution"},
 	{"xg_no_php", "933", "PHP injection"},
 	{"xg_no_xss", "941", "cross-site scripting"},
+	// The rest of the injection families xPGuard's exclusions take out
+	// (removeTags), for engines that ignore removal by tag or range.
+	{"xg_no_rfi", "931", "remote file inclusion"},
+	{"xg_no_gen", "934", "generic injection"},
+	{"xg_no_sqli", "942", "SQL injection"},
+	{"xg_no_fix", "943", "session fixation"},
+}
+
+// allFamilyFlags: every family, for the exclusions that take all the
+// injection rules out (removeTags).
+func allFamilyFlags() string {
+	var s []string
+	for _, f := range crsFamilies {
+		s = append(s, "setvar:tx."+f.flag+"=1")
+	}
+	return strings.Join(s, ",")
 }
 
 var reCRSRuleID = regexp.MustCompile(`["',\s]id:(\d+)`)

@@ -380,6 +380,12 @@ var mechProbes = []struct{ name, phase, actions, cond string }{
 	{"cond_filename_end", "1", "chain", `SecRule REQUEST_FILENAME "@rx /cond_filename_end$"`},
 	{"cond_query_string", "1", "chain", `SecRule QUERY_STRING "@rx (?:^|&)k=ck_[0-9a-f]{40}(?:&|$)"`},
 	{"cond_request_uri", "1", "chain", `SecRule REQUEST_URI "@rx [?&]k=ck_[0-9a-f]{40}(?:&|$)"`},
+	// Removal by a range of ids and by tag (xPGuard's exclusions and the
+	// whitelist use both; the family flags work without them).
+	{"remove_range", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveById=941000-941999", ""},
+	{"remove_by_tag", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveByTag=attack-xss", ""},
+	// The family flag xPGuard's relaxations and exclusions set.
+	{"family_flag", "1", "setvar:tx.xg_soft=0,setvar:tx.xg_no_xss=1", ""},
 }
 
 // IDScoreProbe: the self-test's score probes (/xpguard-crs-selftest/score/

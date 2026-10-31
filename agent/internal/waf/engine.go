@@ -37,10 +37,37 @@ type EngineIssue struct {
 	Reason string `json:"reason"`
 	// Kind: "unsupported" (from the error log) or "probe" (self-test).
 	Kind string `json:"kind"`
+	// Effect of the skipped rule on this fleet, when known: "none" (it
+	// does nothing with xPGuard's settings), "covered" (something else
+	// does its job), "gap" (protection is missing), "kept" (a rule CRS
+	// would switch off stays on, on purpose). Note says why.
+	Effect string `json:"effect,omitempty"`
+	Note   string `json:"note,omitempty"`
+}
+
+// crsRuleNotes: what a CRS rule LiteSpeed skips costs (CRS 4.30, PL 1,
+// xPGuard's crs-setup; business100 and s1.cobuildhost, 2026-10-31).
+var crsRuleNotes = map[int]struct{ effect, note string }{
+	901340: {"covered", "only for request bodies of a type CRS has no parser for; xPGuard's content type policy refuses other types"},
+	901410: {"none", "only used to sample a share of requests; xPGuard has CRS check every request"},
+	920400: {"none", "only with tx.max_file_size, which xPGuard does not set"},
+	920240: {"none", "paranoia level 2; xPGuard runs level 1"},
+	920539: {"kept", "CRS turns 920540 (\\uXXXX escapes) off for JSON because Apache's JSON parser decodes them; LiteSpeed's leaves them in ARGS (920540 matched JSON posts on business100), so 920540 stays on there as the guard against escaped attacks: a JSON post with \\u escapes scores 5"},
+	922100: {"gap", "multipart charset tricks are not checked; uploaded files are still scanned (7700101)"},
+	922110: {"gap", "multipart part content types are not checked; uploaded files are still scanned (7700101)"},
+	922120: {"gap", "multipart Content-Transfer-Encoding is not checked; uploaded files are still scanned (7700101)"},
+	922130: {"gap", "multipart header characters are not checked; uploaded files are still scanned (7700101)"},
+	922140: {"none", "counter for 922110"},
+	922150: {"none", "collects part content types for 922110"},
+	922160: {"none", "counter for 922100"},
+	920390: {"gap", "the total size of all arguments is not limited"},
+	920410: {"gap", "the total size of uploaded files is not limited by the WAF (PHP's own limits still apply)"},
 }
 
 // EngineReport is shown in the portal with the WAF status.
 type EngineReport struct {
+	// Format: a report of an older agent is built again at once.
+	Format    int    `json:"format,omitempty"`
 	Engine    string `json:"engine"`
 	CheckedAt int64  `json:"checked_at"`
 	// LoadAt is when the engine loaded the configuration the log lines are
@@ -51,6 +78,9 @@ type EngineReport struct {
 }
 
 const kvEngineReport = "waf_engine_report"
+
+// engineFormat: 2 since 0.24.18 (short rule text, effects).
+const engineFormat = 2
 
 // engineLogTail: how much of the end of the error log is read.
 const engineLogTail = 8 << 20
@@ -231,7 +261,7 @@ func (m *Manager) unsupportedIssues(lines []logLine, files []string) []EngineIss
 		}
 		seen[what] = true
 		is := EngineIssue{What: what, Kind: "unsupported"}
-		if lastVar != "" && strings.HasPrefix(what, lastVar) {
+		if lastVar != "" && strings.HasPrefix(strings.TrimLeft(what, "&!"), strings.TrimLeft(lastVar, "&!")) {
 			is.Reason = "the engine does not know the variable " + lastVar + ": the rule never runs" + hintFor(lastVar)
 		} else {
 			is.Reason = "the engine does not support this rule (an operator, action or variable it cannot read): the rule never runs"
@@ -262,6 +292,21 @@ func (m *Manager) unsupportedIssues(lines []logLine, files []string) []EngineIss
 		}
 		if is.File == "" && curFile != "" {
 			is.File, is.Source = filepath.Base(curFile), m.ruleSource(curFile)
+		}
+		// Shown short: variables and operator (the engine logs the actions too).
+		is.What = key
+		if n, ok := crsRuleNotes[is.Rule]; ok && is.Source == "owasp_crs" {
+			is.Effect, is.Note = n.effect, n.note
+		}
+		// One issue per rule and text (each chain link logs its own line).
+		dup := false
+		for _, o := range issues {
+			if o.Rule == is.Rule && o.What == is.What {
+				dup = true
+			}
+		}
+		if dup {
+			continue
 		}
 		issues = append(issues, is)
 	}
@@ -302,6 +347,9 @@ func probeIssues(st *SelfTest) []EngineIssue {
 		"remove_949110":     "ctl:ruleRemoveById does nothing: no relaxation can work on this engine",
 		"detection_only":    "ctl:ruleEngine=DetectionOnly does nothing",
 		"allow":             "the allow action does not stop the CRS",
+		"remove_range":      "ctl:ruleRemoveById with a range of ids does nothing: xPGuard's exclusions also set family flags whose rules name each id, and a whitelisted domain keeps every xPGuard rule (stricter, not looser)",
+		"remove_by_tag":     "ctl:ruleRemoveByTag does nothing: xPGuard's exclusions also set family flags whose rules name each id",
+		"family_flag":       "the family flags do not take rules out: xPGuard's relaxations and exclusions do not work on this engine",
 	}
 	var ways []string
 	for k := range st.Ways {
@@ -357,7 +405,7 @@ func probeIssues(st *SelfTest) []EngineIssue {
 // checkEngine builds the report after an apply (and its self-test). A
 // load not in the log tail keeps the previous load's findings.
 func (m *Manager) checkEngine(t Target, crsVersion string, st *SelfTest) *EngineReport {
-	r := &EngineReport{Engine: t.WebServer, CheckedAt: time.Now().Unix()}
+	r := &EngineReport{Format: engineFormat, Engine: t.WebServer, CheckedAt: time.Now().Unix()}
 	if t.LiteSpeed {
 		files, _ := filepath.Glob(filepath.Join(m.RulesDir, "*.conf"))
 		if crsVersion != "" {
@@ -369,6 +417,9 @@ func (m *Manager) checkEngine(t Target, crsVersion string, st *SelfTest) *Engine
 		var lines []logLine
 		// The log at most every 10 minutes (applies come often; a load's
 		// lines stay in the tail read).
+		if prev != nil && prev.Format != engineFormat {
+			prev = nil
+		}
 		if prev == nil || time.Since(time.Unix(prev.CheckedAt, 0)) >= 10*time.Minute || prev.Engine != t.WebServer {
 			at, lines = readEngineLog(t.ErrorLogs)
 		} else {
@@ -390,12 +441,19 @@ func (m *Manager) checkEngine(t Target, crsVersion string, st *SelfTest) *Engine
 	if r.Issues == nil {
 		r.Issues = []EngineIssue{}
 	}
-	n, p := 0, 0
+	n, p, gaps, unknown := 0, 0, 0, 0
 	for _, is := range r.Issues {
-		if is.Kind == "unsupported" {
-			n++
-		} else {
+		switch {
+		case is.Kind != "unsupported":
 			p++
+		case is.Effect == "gap":
+			n++
+			gaps++
+		case is.Effect == "":
+			n++
+			unknown++
+		default:
+			n++
 		}
 	}
 	switch {
@@ -404,7 +462,18 @@ func (m *Manager) checkEngine(t Target, crsVersion string, st *SelfTest) *Engine
 	case n == 0:
 		r.Summary = "The error log shows no rule the engine skipped."
 	default:
-		r.Summary = fmt.Sprintf("%d rule(s) the engine skips.", n)
+		r.Summary = fmt.Sprintf("%d rule(s) the engine skips", n)
+		var parts []string
+		if gaps > 0 {
+			parts = append(parts, fmt.Sprintf("%d leave a protection gap", gaps))
+		}
+		if unknown > 0 {
+			parts = append(parts, fmt.Sprintf("%d not reviewed yet", unknown))
+		}
+		if rest := n - gaps - unknown; rest > 0 {
+			parts = append(parts, fmt.Sprintf("%d do nothing with xPGuard's settings or are covered", rest))
+		}
+		r.Summary += ": " + strings.Join(parts, ", ") + "."
 	}
 	if p == 0 {
 		r.Summary += " The self-test found no difference in how rules are relaxed."

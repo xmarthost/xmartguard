@@ -145,6 +145,10 @@ func removeTags() string {
 	// older CRS packages) do not honour removal by tag, and an admin's save
 	// was then still refused by the XSS rules.
 	ctl = append(ctl, "ctl:ruleRemoveById=930000-934999", "ctl:ruleRemoveById=941000-943999")
+	// And as family flags, whose rules (familyRemoveSetup) name each id:
+	// LiteSpeed's engine ignores removal by tag (self-test way
+	// remove_by_tag), and its engine report showed which ways it honours.
+	ctl = append(ctl, allFamilyFlags())
 	return strings.Join(ctl, ",")
 }
 
