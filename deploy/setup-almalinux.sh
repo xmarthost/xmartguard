@@ -376,7 +376,14 @@ if [ "$MODE" = cpanel ]; then
   for m in ea-apache24-mod_proxy ea-apache24-mod_proxy_http ea-apache24-mod_proxy_wstunnel ea-apache24-mod_headers; do
     rpm -q "$m" >/dev/null 2>&1 || dnf -y -q install "$m" >/dev/null 2>&1 || warn "could not install $m"
   done
-  httpd -M 2>/dev/null | grep -q proxy_http_module || die "Apache mod_proxy_http is not available (install it in WHM > EasyApache 4)"
+  # By its EasyApache package or module file first: with LiteSpeed serving
+  # (business900, 2026-10-31) "httpd -M" lists no Apache modules.
+  proxy_http_ok() {
+    rpm -q ea-apache24-mod_proxy_http >/dev/null 2>&1 && return 0
+    [ -e /etc/apache2/modules/mod_proxy_http.so ] && return 0
+    httpd -M 2>/dev/null | grep -q proxy_http_module
+  }
+  proxy_http_ok || die "Apache mod_proxy_http is not available (install it in WHM > EasyApache 4)"
   ok "Apache proxy modules present"
 
   # The domain must belong to a cPanel account so Apache has a vhost and AutoSSL can issue a certificate.

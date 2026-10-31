@@ -125,6 +125,11 @@ project. It holds the rules, the current state and what is still open.
   - Tests: Apache `TestAdminAreaSavesWithoutRuleRemoval` (WooCommerce
     cases), `TestCRSSelfTestEveryLevel` (lifts), CRS 4.18 and 4.30;
     `TestFleetJExtStoreLicenseAddress` (fails on 0.24.8).
+  - Setup script: on business900 (portal host, LiteSpeed) the update
+    stopped at "Apache mod_proxy_http is not available" after the portal
+    had already restarted on the new code: `httpd -M` listed no modules
+    there. mod_proxy_http is now found by its EasyApache package or module
+    file first.
   - **Rollback**: `backup-0.24.8`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.8: Joomla admin saves on LiteSpeed, Joomla page cache**
   (2026-10-31). Customer joomlash (business600: joomlashare.ir/.net/.org,
