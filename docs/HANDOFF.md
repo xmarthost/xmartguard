@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.12** (see `VERSION`).
+- Current release: **0.24.13** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.12 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.13 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.12: `--branch backup-0.24.11`; see "Rollback" under 0.24.12 below);
+  0.24.13: `--branch backup-0.24.12`; see "Rollback" under 0.24.13 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,22 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.13: LiteSpeed reads no ARGS_GET** (2026-10-31).
+  business600 `ways` on 0.24.12: cond_tx_lt, cond_tx_count and
+  cond_args_names (phase 2) pass, so the "@lt" guard was not the cause
+  (0.24.12 removed it anyway; harmless with the lowest-first order);
+  cond_args_get (`ARGS_GET:k`) is refused: LiteSpeed's engine does not
+  fill ARGS_GET. The WooCommerce API rule read the key from ARGS_GET; it
+  now reads `REQUEST_URI` ([?&]consumer_key=ck_…). The Joomla rule's
+  every link passes alone except its path test, `REQUEST_FILENAME "@rx
+  …administrator/(?:index\.php)?$"` (probes used @beginsWith): probably
+  the "$" anchor; it now tests REQUEST_URI up to the query. New probes:
+  cond_filename_end, cond_query_string, cond_request_uri.
+  - Open: 14 other uses of ARGS_GET in the WAF rules (customizer,
+    theme colour CSS, beacons, central CAPTCHA …) are likely dead on
+    LiteSpeed; move them to REQUEST_URI/QUERY_STRING once the probes say
+    which is read.
+  - **Rollback**: `backup-0.24.12`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.12: relaxations without the "@lt" guard** (2026-10-31).
   business600 (LiteSpeed) `self_test.ways` on 0.24.11: none 403;
   thr_single, thr_chain, thr_phase2, remove_949110, detection_only,

@@ -168,7 +168,9 @@ func adminAreaSetup() string {
 // address with a bad reputation only the session threshold applies.
 func joomlaAdminSetup() string {
 	head := func(id int) string {
-		return fmt.Sprintf(`SecRule REQUEST_FILENAME "@rx (?:^|/)administrator/(?:index\.php)?$" "id:%d,phase:2,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, id) + "\n" +
+		// The path from REQUEST_URI, up to the query: on LiteSpeed a path
+		// test ending in "$" never matched (self-test, business600).
+		return fmt.Sprintf(`SecRule REQUEST_URI "@rx ^[^?]*/administrator/(?:index\.php)?(?:\?|$)" "id:%d,phase:2,pass,t:none,t:urlDecodeUni,t:lowercase,nolog,chain"`, id) + "\n" +
 			`  SecRule REQUEST_METHOD "@streq POST" "t:none,chain"` + "\n" +
 			// ARGS_NAMES: the collection CRS itself reads on every engine.
 			`  SecRule ARGS_NAMES "@rx ^[0-9a-f]{32}$" "t:none,chain"` + "\n"
@@ -332,8 +334,10 @@ func wcRestKeysSetup() string {
 	}
 	set := fmt.Sprintf("setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d", sessionThreshold)
 	return "# WooCommerce REST API writes with the shop's API keys (xPGuard).\n" +
-		head(IDWCRestKeys) + `  SecRule ARGS_GET:consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,` + set + `"` + "\n" +
-		head(IDWCRestKeys+1000) + `  SecRule ARGS_GET:oauth_consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,` + set + `"` + "\n" +
+		// The key read from REQUEST_URI: LiteSpeed's engine does not fill
+		// ARGS_GET (self-test, business600).
+		head(IDWCRestKeys) + `  SecRule REQUEST_URI "@rx [?&]consumer_key=ck_[0-9a-f]{40}(?:&|$)" "t:none,` + set + `"` + "\n" +
+		head(IDWCRestKeys+1000) + `  SecRule REQUEST_URI "@rx [?&]oauth_consumer_key=ck_[0-9a-f]{40}(?:&|$)" "t:none,` + set + `"` + "\n" +
 		head(IDWCRestKeys+2000) + `  SecRule REQUEST_HEADERS:Authorization "@rx ^basic\s+[a-z0-9+/=]{20,}$" "t:none,t:lowercase,` + set + `"` + "\n"
 }
 
@@ -358,6 +362,9 @@ var mechProbes = []struct{ name, phase, actions, cond string }{
 	{"cond_tx_count", "1", "chain", `SecRule &TX:xg_strict "@eq 0"`},
 	{"cond_args_get", "1", "chain", `SecRule ARGS_GET:k "@rx ^ck_[0-9a-f]{40}$"`},
 	{"cond_args_names", "2", "chain", `SecRule ARGS_NAMES "@rx ^[0-9a-f]{32}$"`},
+	{"cond_filename_end", "1", "chain", `SecRule REQUEST_FILENAME "@rx /cond_filename_end$"`},
+	{"cond_query_string", "1", "chain", `SecRule QUERY_STRING "@rx (?:^|&)k=ck_[0-9a-f]{40}(?:&|$)"`},
+	{"cond_request_uri", "1", "chain", `SecRule REQUEST_URI "@rx [?&]k=ck_[0-9a-f]{40}(?:&|$)"`},
 }
 
 func mechProbeSetup() string {
