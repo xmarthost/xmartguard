@@ -167,6 +167,12 @@ project. It holds the rules, the current state and what is still open.
   - Next: read the engine reports of the LiteSpeed servers; for each
     skipped CRS rule that matters, write an xPGuard replacement (direct
     deny, phase 2, variables LiteSpeed reads) with a test.
+  - Apache sweep (each test alone, include removed between): CRS 4.30
+    all pass except `TestExclusionsWithCRS` (fails on 0.24.16 too); CRS
+    4.18 all pass except `TestCRSSelfTestEveryLevel` "probe without a
+    way: HTTP 404" (4.18 scores the probe body lower; fails on 0.24.16
+    too). A sweep run as one `go test` skips most Apache tests once an
+    include is left behind: run them one by one.
   - **Rollback**: `backup-0.24.16`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.16: whitelisted domains keep the relaxations**
   (2026-10-31). The customer retried at 11:35-11:37 UTC (0.24.15): the
