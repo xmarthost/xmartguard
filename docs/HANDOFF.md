@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.9** (see `VERSION`).
+- Current release: **0.24.10** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.9 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.10 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.9: `--branch backup-0.24.8`; see "Rollback" under 0.24.9 below);
+  0.24.10: `--branch backup-0.24.9`; see "Rollback" under 0.24.10 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,23 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.10: duplicate WAF rule ids** (2026-10-31). 0.24.9's
+  WooCommerce API rule used 7700065, which the soft block's IPDB marks
+  (`IDSoftStrictIPDB`+i: 7700064-7700066) already use, and 0.24.8's Joomla
+  rule used 7700063 (`IDMarkSuspect`+1, the CAPTCHA suspects). On
+  business900 cPanel's Apache configuration check refused the rules
+  ("Found another rule with the same id") and the portal setup stopped.
+  LiteSpeed accepts duplicates and may keep only one of them, which can
+  explain why the Joomla relaxation never applied on business600. Now
+  `IDJoomlaAdmin` = 7700070 (+1000) and `IDWCRestKeys` = 7700072 (+1000,
+  +2000); 7700070-7700099 were free. New Apache test
+  `TestEveryRuleIDOnceOnApache` turns every feature on (soft block,
+  CAPTCHA suspects, IPDB marks, trusted and country lists, CRS) and fails
+  on a repeated id; it fails with 0.24.9's id. Lesson: derived ids (+i,
+  +1, +1000, +5000) are not in a grep of the constants; run this test
+  for every new rule id.
+  - **Rollback**: `backup-0.24.9` has the duplicate ids; roll back to
+    `backup-0.24.7` instead if needed.
 - **Release 0.24.9: WAF relaxations checked on every server; WooCommerce
   API writes; JExtStore license address; CJdropshipping** (2026-10-31).
   - joomlash (business600, 0.24.8 installed): File Explorer (score 40),
@@ -99,7 +116,7 @@ project. It holds the rules, the current state and what is still open.
     ("passes" or "refused (HTTP 403)"). Read it on business600 after the
     update before changing anything else.
   - WooCommerce REST API writes with the shop's API keys
-    (`wcRestKeysSetup`, 7700065/7701065/7702065: consumer_key, OAuth
+    (`wcRestKeysSetup`, 7700072/7701072/7702072 since 0.24.10: consumer_key, OAuth
     consumer key, Basic authentication; POST/PUT/PATCH/DELETE to
     wc/v1-3) are refused from score 30. ssshoesmaker.com (business900):
     CJdropshipping's product listing refused as XSS (941100, 941160,

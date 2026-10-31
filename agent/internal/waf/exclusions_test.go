@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -596,6 +597,49 @@ func TestForgedEditorRestRouteWithCRS(t *testing.T) {
 	for _, uri := range []string{"/shop.php?" + attack + "&rest_route=/wp/v2/posts", "/shop.php?rest_route=/x&" + attack} {
 		if got := sendBody(t, "shop.example.com", "GET", uri, "", "", forged...); got != 403 {
 			t.Errorf("%s with forged editor markers: got %d, want 403", uri, got)
+		}
+	}
+}
+
+// 0.24.9 put the WooCommerce API rule on 7700065, an id the soft block's
+// IPDB marks (7700064+i) already used, and 0.24.8's Joomla rule on
+// 7700063 (the CAPTCHA suspects' second rule): cPanel's Apache refused the
+// whole configuration on business900. With every feature on, each rule id
+// is used once and Apache loads the rules.
+func TestEveryRuleIDOnceOnApache(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	m := crsManager(t, src, `{"waf":{"enabled":true,"level":"normal","wordpress":true,"webshell":true,"generic":true,"sensitive_files":true,"bad_bots":true,"ipdb_post":true,"tor":"post","login_urls":["/wp-login.php"]},"captcha":{"central":true}}`, "", func(m *Manager) {
+		m.IPDBIPs = func() []string { return []string{"192.0.2.0/24"} }
+		m.TrustedIPs = func() []string { return []string{"66.249.64.0/19"} }
+		m.TrustedCountryIPs = func() []string { return []string{"39.32.0.0/11"} }
+		m.Central = func() *Central {
+			return &Central{URL: "https://captcha.xpguard.test/v", ServerID: "49c5f26a-f37e-40e0-9eed-62ef53a8a85a", Suspects: []string{"198.51.100.0/24"}}
+		}
+	})
+	if st := m.Status(); st.Error != "" {
+		t.Fatalf("WAF error: %s", st.Error)
+	}
+	seen := map[string]string{}
+	reID := regexp.MustCompile(`\bid:(\d+)`)
+	files, _ := filepath.Glob(filepath.Join(m.RulesDir, "*.conf"))
+	if len(files) < 2 {
+		t.Fatalf("rule files %v", files)
+	}
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		for _, id := range reID.FindAllStringSubmatch(string(b), -1) {
+			if prev, ok := seen[id[1]]; ok {
+				t.Errorf("rule id %s in %s and %s", id[1], prev, filepath.Base(f))
+			}
+			seen[id[1]] = filepath.Base(f)
+		}
+	}
+	for _, id := range []string{"7700065", "7700070", "7700072", "7700064", "7700038"} {
+		if seen[id] == "" {
+			t.Errorf("rule %s not rendered (the test no longer covers it)", id)
 		}
 	}
 }

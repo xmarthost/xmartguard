@@ -39,12 +39,12 @@ const (
 	IDAdminArea = 7700058
 	// IDJoomlaAdmin: a Joomla administrator save with its form token (no
 	// header needed); +1000 on an address with a bad reputation.
-	IDJoomlaAdmin = 7700063
+	IDJoomlaAdmin = 7700070
 	// joomlaAdminThreshold: such a save is refused from this score on.
 	joomlaAdminThreshold = 60
 	// IDWCRestKeys: a WooCommerce REST API write sent with the shop's API
 	// keys (+1000 OAuth, +2000 Basic authentication).
-	IDWCRestKeys = 7700065
+	IDWCRestKeys = 7700072
 	// IDAppSave: a web application admin's save marked before the CRS
 	// setup (tx.xg_app_save, the WHMCS admin area); +1000 on an address
 	// with a bad reputation.
