@@ -78,3 +78,36 @@ func TestFailedLoginNotifies(t *testing.T) {
 		t.Fatalf("told: %v", got)
 	}
 }
+
+// business600 (LiteSpeed, 2026-10-31): the self-test's score probes were
+// refused even under threshold 100, and which rule refused them was not
+// in the log (self-test lines are dropped). The probes' lines are kept
+// now as "selftest", never counted or banned; the plain self-test URLs
+// stay out.
+func TestSelfTestProbesLogged(t *testing.T) {
+	m := learnManager(t)
+	fw := &banRecorder{}
+	m.Firewall = fw
+	st := newTailState()
+	line := func(uri, uid string) Event {
+		e, ok := ParseLine(`[Sat Oct 31 10:10:55.471444 2026] [security2:error] [pid 1:tid 1] [client 127.0.0.1:45142] [client 127.0.0.1] ModSecurity: Access denied with code 403 (phase 2). Matched "Operator ` + "`" + `Ge' with parameter ` + "`" + `10' against variable ` + "`" + `TX:BLOCKING_INBOUND_ANOMALY_SCORE' (Value: ` + "`" + `40' ) [file "/x/REQUEST-949-BLOCKING-EVALUATION.conf"] [line "9"] [id "949110"] [msg "Inbound Anomaly Score Exceeded (Total Score: 40)"] [hostname "127.0.0.1"] [uri "` + uri + `"] [unique_id "` + uid + `"]`)
+		if !ok {
+			t.Fatal("line not parsed")
+		}
+		return e
+	}
+	for i := 0; i < 12; i++ {
+		m.handleEvent(line("/xpguard-crs-selftest/score/joomla_100", "S"+string(rune('a'+i))), st)
+	}
+	m.handleEvent(line("/xpguard-crs-selftest", "P1"), st)
+	m.handleEvent(line("/xpguard-waf-selftest", "P2"), st)
+	var n, other int
+	m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category = 'selftest' AND uri LIKE '/xpguard-crs-selftest/score/%'`).Scan(&n)
+	m.DB.QueryRow(`SELECT count(*) FROM waf_events WHERE category != 'selftest'`).Scan(&other)
+	if n != 12 || other != 0 {
+		t.Fatalf("selftest rows %d, others %d", n, other)
+	}
+	if len(fw.ips) != 0 {
+		t.Fatalf("banned: %v", fw.ips)
+	}
+}

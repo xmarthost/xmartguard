@@ -91,8 +91,11 @@ func probePost(path, body string) (int, error) {
 // liftChecks posts what a relaxation is for and must let through, with
 // signals the CRS alone refuses: a Joomla administrator save with its form
 // token and a WooCommerce REST product write with API keys.
-// The relaxations' test saves (also posted to the score probes).
+// The relaxations' test saves (also posted to the score probes), and the
+// ways' weak attack, with a form token for the cond probes.
 var (
+	wayBody = "description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`) +
+		"&0123456789abcdef0123456789abcdef=1"
 	liftBodyJoomla = "task=apply&custhead=" + url.QueryEscape("RewriteCond %{HTTP_USER_AGENT} (wget|curl|python-requests|libwww-perl) [NC]\nRewriteRule .* - [F]") +
 		"&cgibin=" + url.QueryEscape("/usr/local/cgi-bin/php.cgi") + "&exceptiondirs=" + url.QueryEscape("cli\nbin\ntmp") + "&0123456789abcdef0123456789abcdef=1"
 	liftBodyWC = "name=Shoes&description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`)
@@ -211,9 +214,7 @@ func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 // wayChecks posts the same weak attack (script in a form field, refused at
 // the default threshold) to each way's probe address.
 func wayChecks() map[string]string {
-	// With a form token and a key in the address for the cond probes.
-	body := "description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`) +
-		"&0123456789abcdef0123456789abcdef=1"
+	body := wayBody
 	key := "?k=ck_" + strings.Repeat("0a", 20)
 	out := map[string]string{}
 	if code, err := probePost(crsTestPath+"/mech/none"+key, body); err == nil {
@@ -235,7 +236,7 @@ func wayChecks() map[string]string {
 
 // scoreChecks posts each test save under each fixed threshold.
 func scoreChecks() map[string]string {
-	bodies := map[string]string{"joomla": liftBodyJoomla, "wc": liftBodyWC}
+	bodies := map[string]string{"joomla": liftBodyJoomla, "wc": liftBodyWC, "xss": wayBody}
 	out := map[string]string{}
 	for _, b := range scoreProbeBodies {
 		for _, t := range scoreProbeThresholds {

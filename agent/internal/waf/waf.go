@@ -1429,7 +1429,17 @@ func (m *Manager) handleEvent(ev Event, t *tailState) {
 		}
 		return
 	}
-	if isSelfTest(ev) || !t.dedupe.add(ev.UID) {
+	if isSelfTest(ev) {
+		// The self-test's probes of how the engine relaxes and scores
+		// (/xpguard-crs-selftest/...) stay in the log as "selftest", never
+		// counted or banned: which rule refused one, at what score.
+		if strings.Contains(ev.URI, crsTestPath+"/") && t.dedupe.add(ev.UID) {
+			ev.Category = "selftest"
+			m.record(ev)
+		}
+		return
+	}
+	if !t.dedupe.add(ev.UID) {
 		return
 	}
 	// Summary lines without the request or reason duplicate a full entry.

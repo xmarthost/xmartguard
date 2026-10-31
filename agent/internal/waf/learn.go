@@ -294,7 +294,7 @@ func (m *Manager) Learn(now int64) (bool, error) {
 		}
 		return changed, nil
 	}
-	rows, err := m.DB.Query(`SELECT at, ip, host, uri, rule_id, msg, detail FROM waf_events WHERE at >= ? AND category != 'login'`, now-learnWindow)
+	rows, err := m.DB.Query(`SELECT at, ip, host, uri, rule_id, msg, detail FROM waf_events WHERE at >= ? AND category NOT IN ('login', 'selftest')`, now-learnWindow)
 	if err != nil {
 		return changed, err
 	}

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.14** (see `VERSION`).
+- Current release: **0.24.15** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.14 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.15 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.14: `--branch backup-0.24.13`; see "Rollback" under 0.24.14 below);
+  0.24.15: `--branch backup-0.24.14`; see "Rollback" under 0.24.15 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,22 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.15: probe lines in the WAF log** (2026-10-31).
+  business600 (agent 0.24.13 at 10:03 UTC, 0.24.14 at 10:10 UTC; each
+  result checked to come from that version by its new probes): `scores`
+  refused for both test saves under every threshold, even 100, while the
+  ways' XSS body passes under 10000. The customer's real saves scored 10
+  on that server (08:20-08:28 UTC, the last ones; none since the
+  updates, and no CJ request on business900 since). So something other
+  than the score compared with the threshold refuses them, or the
+  threshold is read differently; unknown, because self-test lines were
+  dropped from the log. Now lines of /xpguard-crs-selftest/... probes are
+  kept as category "selftest" (rule, message with the total score),
+  never counted, banned, learned (learn.go) or in the monthly report;
+  the XSS body has score probes too (7700870-7700874). Next: read the
+  "selftest" rows on business600 (waf_events q "/score/") and decide from
+  the refusing rule.
+  - **Rollback**: `backup-0.24.14`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.14: score probes** (2026-10-31). business600 on
   0.24.13: lifts still refused. `ways`: cond_request_uri and
   cond_filename_end pass, cond_query_string and cond_args_get refused

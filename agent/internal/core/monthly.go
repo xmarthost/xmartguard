@@ -66,7 +66,7 @@ func (a *Agent) monthReport(user string, month time.Time) MonthReport {
 		r.StillOpen = a.Scanner.Stats().OpenFindings
 	}
 	r.Sites = a.siteScores(user)
-	if rows, err := a.DB.Query(`SELECT host, count(*) AS n FROM waf_events WHERE action LIKE 'Access denied%' AND at >= ? AND at < ?`+uw+` AND host != '' GROUP BY host ORDER BY n DESC LIMIT 5`, ua...); err == nil {
+	if rows, err := a.DB.Query(`SELECT host, count(*) AS n FROM waf_events WHERE action LIKE 'Access denied%' AND category != 'selftest' AND at >= ? AND at < ?`+uw+` AND host != '' GROUP BY host ORDER BY n DESC LIMIT 5`, ua...); err == nil {
 		for rows.Next() {
 			var h string
 			var n int

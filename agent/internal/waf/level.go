@@ -374,7 +374,7 @@ var mechProbes = []struct{ name, phase, actions, cond string }{
 const IDScoreProbe = 7700850
 
 var (
-	scoreProbeBodies     = []string{"joomla", "wc"}
+	scoreProbeBodies     = []string{"joomla", "wc", "xss"}
 	scoreProbeThresholds = []int{20, 30, 45, 60, 100}
 )
 
