@@ -577,6 +577,14 @@ func TestCRSSelfTestEveryLevel(t *testing.T) {
 				t.Errorf("%s: way %s: %s", level, p.name, st.Ways[p.name])
 			}
 		}
+		// Apache shows rules the fields, file names and field names of an
+		// upload form (multipart probes, 0.24.19).
+		for _, k := range []string{"args", "files", "files_names"} {
+			if st.Multipart[k] != "seen" {
+				t.Errorf("%s: multipart %s: %s", level, k, st.Multipart[k])
+			}
+		}
+		t.Logf("%s: multipart %v", level, st.Multipart)
 		// The score probes: both test saves pass under 100 on Apache.
 		if st.Scores["wc_100"] != "passes" || st.Scores["joomla_100"] != "passes" {
 			t.Errorf("%s: scores %v", level, st.Scores)

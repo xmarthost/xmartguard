@@ -42,6 +42,9 @@ type SelfTest struct {
 	// Scores: whether each test save passes under each threshold (its
 	// score is below the lowest that passes).
 	Scores map[string]string `json:"scores,omitempty"`
+	// Multipart: which parts of an upload form the engine shows to rules
+	// ("seen" or "not seen"; multipartProbes).
+	Multipart map[string]string `json:"multipart,omitempty"`
 }
 
 // isSelfTest reports whether an event came from the agent's own check.
@@ -61,6 +64,11 @@ func probe(path string) (int, error) {
 
 // probePost posts a form body (tests of the relaxations).
 func probePost(path, body string) (int, error) {
+	return probePostType(path, "application/x-www-form-urlencoded", body)
+}
+
+// probePostType posts a body of the given content type.
+func probePostType(path, ctype, body string) (int, error) {
 	c := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: &http.Transport{
@@ -76,7 +84,7 @@ func probePost(path, body string) (int, error) {
 			return 0, err
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (xPGuard WAF self-test)")
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Content-Type", ctype)
 		res, err := c.Do(req)
 		if err != nil {
 			last = err
@@ -206,6 +214,7 @@ func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 			st.Lifts = liftChecks()
 			st.Ways = wayChecks()
 			st.Scores = scoreChecks()
+			st.Multipart = multipartChecks()
 		}
 	}
 	return st
@@ -250,6 +259,50 @@ func scoreChecks() map[string]string {
 			default:
 				out[name] = "passes"
 			}
+		}
+	}
+	return out
+}
+
+// multipartBoundary and multipartBody: an upload form with a text field and
+// a small text file whose part names a Content-Transfer-Encoding (what
+// CRS 922120 looks for). Harmless.
+const multipartBoundary = "xgprobe7MA4YWxkTrZu0gW"
+
+var multipartBody = strings.Join([]string{
+	"--" + multipartBoundary,
+	`Content-Disposition: form-data; name="xg_field"`,
+	"",
+	"xg-mp-value",
+	"--" + multipartBoundary,
+	`Content-Disposition: form-data; name="xg_upload"; filename="xg-probe.txt"`,
+	"Content-Type: text/plain",
+	"Content-Transfer-Encoding: 8bit",
+	"",
+	"xPGuard self-test",
+	"--" + multipartBoundary + "--",
+	"",
+}, "\r\n")
+
+// multipartChecks posts the upload to each multipart probe: refused means
+// the engine showed the rule what it tests.
+func multipartChecks() map[string]string {
+	out := map[string]string{}
+	ct := "multipart/form-data; boundary=" + multipartBoundary
+	// The control: no probe rule; refused means something else refuses
+	// the upload and the answers below say nothing.
+	if code, err := probePostType(crsTestPath+"/mp/none", ct, multipartBody); err != nil || code == 403 {
+		return map[string]string{"none": fmt.Sprintf("refused (HTTP %d): the probes are unreliable", code)}
+	}
+	for _, p := range multipartProbes {
+		code, err := probePostType(crsTestPath+"/mp/"+p.name, ct, multipartBody)
+		switch {
+		case err != nil:
+			out[p.name] = err.Error()
+		case code == 403:
+			out[p.name] = "seen"
+		default:
+			out[p.name] = "not seen"
 		}
 	}
 	return out

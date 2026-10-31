@@ -134,6 +134,20 @@ func TestEngineReportProbes(t *testing.T) {
 		Lifts: map[string]string{"joomla_admin_save": "passes", "woocommerce_api_write": "refused (HTTP 403)"},
 	}
 	got := probeIssues(ls)
+	// Upload forms (0.24.19): a part Apache shows and this engine does not.
+	ls.Multipart = map[string]string{"args": "seen", "files": "not seen", "files_names": "seen", "request_body": "not seen"}
+	ls.Ways["remove_target_ids"] = "refused (HTTP 403)"
+	more := probeIssues(ls)
+	if len(more) != len(got)+2 || !strings.Contains(more[len(more)-1].What+more[len(more)-2].What+more[len(more)-3].What, "upload files") {
+		t.Errorf("multipart and target probes: %+v", more)
+	}
+	for _, is := range more {
+		if strings.Contains(is.What, "request_body") || strings.Contains(is.What, "upload args") {
+			t.Errorf("reported %+v", is)
+		}
+	}
+	delete(ls.Ways, "remove_target_ids")
+	ls.Multipart = nil
 	text := ""
 	for _, is := range got {
 		if is.Kind != "probe" {

@@ -1497,6 +1497,9 @@ func whiteDomainKeep() map[int]bool {
 	for i := range mechProbes {
 		keep[IDMechProbe+i] = true
 	}
+	for i := 0; i <= len(multipartProbes); i++ {
+		keep[IDMultipartProbe+i] = true
+	}
 	for i := 0; i < len(scoreProbeBodies)*10; i++ {
 		keep[IDScoreProbe+i] = true
 	}

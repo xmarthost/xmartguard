@@ -386,6 +386,39 @@ var mechProbes = []struct{ name, phase, actions, cond string }{
 	{"remove_by_tag", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveByTag=attack-xss", ""},
 	// The family flag xPGuard's relaxations and exclusions set.
 	{"family_flag", "1", "setvar:tx.xg_soft=0,setvar:tx.xg_no_xss=1", ""},
+	// Taking one collection out of rules by id (a range, and single ids):
+	// how the field exclusions (password, comment, Store API, static-file
+	// cookies) could work where ctl:ruleRemoveTargetByTag does not.
+	{"remove_target_range", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveTargetById=941000-941999;ARGS", ""},
+	{"remove_target_ids", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveTargetById=941100;ARGS,ctl:ruleRemoveTargetById=941110;ARGS,ctl:ruleRemoveTargetById=941120;ARGS,ctl:ruleRemoveTargetById=941160;ARGS", ""},
+}
+
+// IDMultipartProbe: rules that refuse the self-test's multipart posts to
+// /xpguard-crs-selftest/mp/<name> when the named variable holds what was
+// sent: which parts of an upload form the engine shows to rules
+// (LiteSpeed does not fill MULTIPART_PART_HEADERS, so CRS 922100/922120/
+// 922130 never run there).
+const IDMultipartProbe = 7700875
+
+// multipartProbes: name and the test that matches the probe's upload.
+var multipartProbes = []struct{ name, test string }{
+	{"args", `ARGS:xg_field "@streq xg-mp-value"`},
+	{"files", `FILES "@streq xg-probe.txt"`},
+	{"files_names", `FILES_NAMES "@streq xg_upload"`},
+	{"request_body", `REQUEST_BODY "@contains content-transfer-encoding"`},
+}
+
+func multipartProbeSetup() string {
+	var b strings.Builder
+	b.WriteString("# Self-test only: what this engine shows of an upload form (xPGuard).\n")
+	// Only the probes' own rules may refuse these posts (not the CRS score,
+	// which LiteSpeed raises, nor the soft block); /mp/none must pass.
+	fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mp/" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_soft=0,ctl:ruleRemoveById=949110"`+"\n", crsTestPath, IDMultipartProbe+len(multipartProbes))
+	for i, p := range multipartProbes {
+		fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mp/%s" "id:%d,phase:2,t:none,deny,status:403,nolog,chain"`+"\n", crsTestPath, p.name, IDMultipartProbe+i)
+		b.WriteString("  SecRule " + p.test + ` "t:none,t:lowercase"` + "\n")
+	}
+	return b.String()
 }
 
 // IDScoreProbe: the self-test's score probes (/xpguard-crs-selftest/score/

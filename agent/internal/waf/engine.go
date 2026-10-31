@@ -333,23 +333,25 @@ func probeIssues(st *SelfTest) []EngineIssue {
 	}
 	var out []EngineIssue
 	why := map[string]string{
-		"remove_xss_tag":    "ctl:ruleRemoveTargetByTag does nothing here: exclusions written that way (in CRS plugins and vendor rules) do not apply; xPGuard's relaxations remove rules by id instead",
-		"cond_args_get":     "a phase-1 rule does not see ARGS_GET of a POST request (GET requests are seen); xPGuard reads such values from REQUEST_URI",
-		"cond_query_string": "a phase-1 rule does not see QUERY_STRING of a POST request; xPGuard reads it from REQUEST_URI",
-		"cond_args_names":   "ARGS_NAMES (form field names) is not filled: the Joomla form-token relaxation cannot apply",
-		"cond_request_uri":  "REQUEST_URI conditions do not match: the WooCommerce API key relaxation cannot apply",
-		"cond_tx_count":     "counting a TX variable (&TX:x) does not work: reputation checks in relaxations cannot apply",
-		"cond_tx_lt":        "comparing a TX variable does not work",
-		"cond_filename_end": "a REQUEST_FILENAME pattern ending in $ does not match",
-		"thr_single":        "setting the anomaly threshold in phase 1 does nothing",
-		"thr_chain":         "setting the anomaly threshold from a chained rule does nothing",
-		"thr_phase2":        "setting the anomaly threshold in phase 2 does nothing",
-		"remove_949110":     "ctl:ruleRemoveById does nothing: no relaxation can work on this engine",
-		"detection_only":    "ctl:ruleEngine=DetectionOnly does nothing",
-		"allow":             "the allow action does not stop the CRS",
-		"remove_range":      "ctl:ruleRemoveById with a range of ids does nothing: xPGuard's exclusions also set family flags whose rules name each id, and a whitelisted domain keeps every xPGuard rule (stricter, not looser)",
-		"remove_by_tag":     "ctl:ruleRemoveByTag does nothing: xPGuard's exclusions also set family flags whose rules name each id",
-		"family_flag":       "the family flags do not take rules out: xPGuard's relaxations and exclusions do not work on this engine",
+		"remove_xss_tag":      "ctl:ruleRemoveTargetByTag does nothing here: exclusions written that way (in CRS plugins and vendor rules) do not apply; xPGuard's relaxations remove rules by id instead",
+		"cond_args_get":       "a phase-1 rule does not see ARGS_GET of a POST request (GET requests are seen); xPGuard reads such values from REQUEST_URI",
+		"cond_query_string":   "a phase-1 rule does not see QUERY_STRING of a POST request; xPGuard reads it from REQUEST_URI",
+		"cond_args_names":     "ARGS_NAMES (form field names) is not filled: the Joomla form-token relaxation cannot apply",
+		"cond_request_uri":    "REQUEST_URI conditions do not match: the WooCommerce API key relaxation cannot apply",
+		"cond_tx_count":       "counting a TX variable (&TX:x) does not work: reputation checks in relaxations cannot apply",
+		"cond_tx_lt":          "comparing a TX variable does not work",
+		"cond_filename_end":   "a REQUEST_FILENAME pattern ending in $ does not match",
+		"thr_single":          "setting the anomaly threshold in phase 1 does nothing",
+		"thr_chain":           "setting the anomaly threshold from a chained rule does nothing",
+		"thr_phase2":          "setting the anomaly threshold in phase 2 does nothing",
+		"remove_949110":       "ctl:ruleRemoveById does nothing: no relaxation can work on this engine",
+		"detection_only":      "ctl:ruleEngine=DetectionOnly does nothing",
+		"allow":               "the allow action does not stop the CRS",
+		"remove_range":        "ctl:ruleRemoveById with a range of ids does nothing: xPGuard's exclusions also set family flags whose rules name each id, and a whitelisted domain keeps every xPGuard rule (stricter, not looser)",
+		"remove_by_tag":       "ctl:ruleRemoveByTag does nothing: xPGuard's exclusions also set family flags whose rules name each id",
+		"family_flag":         "the family flags do not take rules out: xPGuard's relaxations and exclusions do not work on this engine",
+		"remove_target_range": "ctl:ruleRemoveTargetById with a range of ids does nothing: field exclusions cannot be written that way here",
+		"remove_target_ids":   "ctl:ruleRemoveTargetById with single ids does nothing: field exclusions cannot be written that way here",
 	}
 	var ways []string
 	for k := range st.Ways {
@@ -388,6 +390,17 @@ func probeIssues(st *SelfTest) []EngineIssue {
 		}
 		out = append(out, EngineIssue{Kind: "probe", What: "score " + b,
 			Reason: fmt.Sprintf("a test save Apache scores under 20 was refused here at threshold %d and passes %s: this engine scores a request again after it passed the first check, so a raised threshold is not reliable; xPGuard's relaxations take whole rule families out instead", refused[len(refused)-1], pass)})
+	}
+	// Upload forms: what Apache shows rules and this engine does not.
+	mpWhy := map[string]string{
+		"args":        "form fields of an upload form (ARGS) are not shown to rules: injections in upload forms are not checked",
+		"files":       "uploaded file names (FILES) are not shown to rules: CRS checks of upload names do not run",
+		"files_names": "upload field names (FILES_NAMES) are not shown to rules",
+	}
+	for _, k := range []string{"args", "files", "files_names"} {
+		if v, ok := st.Multipart[k]; ok && v != "seen" {
+			out = append(out, EngineIssue{Kind: "probe", What: "upload " + k, Reason: mpWhy[k] + " (self-test: " + v + ")"})
+		}
 	}
 	var lifts []string
 	for k := range st.Lifts {

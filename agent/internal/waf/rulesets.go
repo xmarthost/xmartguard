@@ -283,7 +283,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		// Lower thresholds first: a relaxation sets its value without
 		// comparing (LiteSpeed's engine ignored the "@lt" guards), so a later,
 		// higher one must not be overwritten by a lower one.
-		setupText += wcRestKeysSetup() + mechProbeSetup()
+		setupText += wcRestKeysSetup() + mechProbeSetup() + multipartProbeSetup()
 		if lv := m.level(); lv != "strict" {
 			setupText += sessionSetup() + editorSetup() + autodiscoverSetup()
 			post += sessionPost()

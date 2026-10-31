@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.18** (see `VERSION`).
+- Current release: **0.24.19** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.18 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.19 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.18: `--branch backup-0.24.17`; see "Rollback" under 0.24.18 below);
+  0.24.19: `--branch backup-0.24.18`; see "Rollback" under 0.24.19 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -103,6 +103,30 @@ project. It holds the rules, the current state and what is still open.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.19: probes for field exclusions and upload forms**
+  (2026-10-31). The Joomla customer (joomlashares.com, business600)
+  confirmed everything works after 0.24.18. Two open LiteSpeed questions
+  get self-test probes; the fixes follow from their answers:
+  - Ways `remove_target_range` and `remove_target_ids`
+    (7700097-7700098): does `ctl:ruleRemoveTargetById` (range, single
+    ids) work where `ruleRemoveTargetByTag` does not? If yes, write the
+    field exclusions of `removeTagTargets` (7700014, 7700017, 7700019,
+    7700023) by id as well.
+  - Multipart probes (`self_test.multipart`, rules 7700875-7700879): an
+    upload form (a text field and a small text file whose part has
+    Content-Transfer-Encoding) is posted to /xpguard-crs-selftest/mp/
+    <args|files|files_names|request_body>; each rule refuses it when its
+    variable shows what was sent ("seen"). 7700879 takes 949110 and the
+    soft block out for these paths and /mp/none is the control (refused
+    = the answers are unreliable). Apache (CRS 4.30 and 4.18, every
+    level): args, files, files_names seen, request_body not seen. The
+    engine report lists an upload part Apache shows and the engine does
+    not. If LiteSpeed shows none of the part headers, 922100/922120/
+    922130 cannot be replaced by a rule and stay a gap (uploads are still
+    scanned by 7700101).
+  - Tests: `TestCRSSelfTestEveryLevel` (multipart seen on Apache),
+    `TestEngineReportProbes`.
+  - **Rollback**: `backup-0.24.18`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.18: exclusions work without removal by tag** (2026-10-31).
   First engine reports (0.24.17; business100, s1.cobuildhost and the
   other LiteSpeed servers alike): 12 CRS rules skipped, all for unknown
