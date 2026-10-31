@@ -350,8 +350,8 @@ func probeIssues(st *SelfTest) []EngineIssue {
 		"remove_range":        "ctl:ruleRemoveById with a range of ids does nothing: xPGuard's exclusions also set family flags whose rules name each id, and a whitelisted domain keeps every xPGuard rule (stricter, not looser)",
 		"remove_by_tag":       "ctl:ruleRemoveByTag does nothing: xPGuard's exclusions also set family flags whose rules name each id",
 		"family_flag":         "the family flags do not take rules out: xPGuard's relaxations and exclusions do not work on this engine",
-		"remove_target_range": "ctl:ruleRemoveTargetById with a range of ids does nothing: field exclusions cannot be written that way here",
-		"remove_target_ids":   "ctl:ruleRemoveTargetById with single ids does nothing: field exclusions cannot be written that way here",
+		"remove_target_range": "ctl:ruleRemoveTargetById with a range of ids does nothing: no field can be taken out of a rule here; xPGuard's comment exclusion takes SQL injection out of the whole comment post instead, password fields stay checked for PHP injection",
+		"remove_target_ids":   "ctl:ruleRemoveTargetById with single ids does nothing: no field can be taken out of a rule here (see remove_target_range)",
 	}
 	var ways []string
 	for k := range st.Ways {

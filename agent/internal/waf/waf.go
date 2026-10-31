@@ -86,6 +86,8 @@ type Manager struct {
 	SelfTestWait time.Duration
 	// NoSelfTest disables the self-test (unit tests without a web server).
 	NoSelfTest bool
+	// liteSpeedRules renders LiteSpeed's variant on Apache (tests).
+	liteSpeedRules bool
 
 	// One web server reload at a time, and address lists not more often
 	// than ListReloadGap allows (see install).
@@ -537,13 +539,16 @@ func (m *Manager) apply(mode applyMode) error {
 				opts.VerifiedBots = m.VerifiedBots()
 			}
 			opts.Dynamic = m.dynamic()
+			opts.Dynamic.LiteSpeed = t.LiteSpeed || m.liteSpeedRules
 			opts.IPDBMarks = m.ipdbMarks(cfg)
 			if cfg.UploadScan {
 				opts.InspectPath = InspectScript(m.RulesDir, m.AgentBin)
 			}
 			rules = Render(cfg, opts)
 		} else {
-			rules = RenderExclusionsOnly(cfg, m.dynamic())
+			dyn := m.dynamic()
+			dyn.LiteSpeed = t.LiteSpeed || m.liteSpeedRules
+			rules = RenderExclusionsOnly(cfg, dyn)
 		}
 		rules = selfTestRule + "\n" + rules
 		bots := m.listFiles(cfg)

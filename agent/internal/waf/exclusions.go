@@ -114,6 +114,12 @@ type Dynamic struct {
 	CPanelOff []string
 	// ExemptFile lists the addresses the WAF never inspects ("" = none).
 	ExemptFile string
+	// LiteSpeed: the rules are for LiteSpeed's engine, which ignores
+	// ctl:ruleRemoveTargetById/ByTag (self-test ways remove_xss_tag,
+	// remove_target_ids, remove_target_range on business600, 0.24.19):
+	// field exclusions that can take a family out of the whole request
+	// safely do so there instead.
+	LiteSpeed bool
 }
 
 // injectionTags are the CRS tags of rules that inspect request content for
@@ -205,7 +211,15 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule REQUEST_FILENAME "@rx \.%s$" "t:none,t:urlDecodeUni,t:lowercase,%s"`, staticExts, removeTagTargets("REQUEST_COOKIES"))
 	}
 	if !off[IDWPCommentText] {
-		w(`SecRule REQUEST_FILENAME "@rx /wp-comments-post\.php$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:comment,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:author,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:url"`, IDWPCommentText)
+		// LiteSpeed: the field removals do nothing, so the comment post skips
+		// the SQL injection family whole (WordPress stores comments with
+		// prepared statements; its other fields are numbers it casts). XSS
+		// and the other families still check it.
+		commentLS := ""
+		if dyn.LiteSpeed {
+			commentLS = familyFlags("942") + ","
+		}
+		w(`SecRule REQUEST_FILENAME "@rx /wp-comments-post\.php$" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,%sctl:ruleRemoveTargetByTag=attack-sqli;ARGS:comment,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:author,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:url"`, IDWPCommentText, commentLS)
 	}
 	if !off[IDPasswordArgs] {
 		var ctl []string

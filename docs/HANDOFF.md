@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.19** (see `VERSION`).
+- Current release: **0.24.20** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.19 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.20 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.19: `--branch backup-0.24.18`; see "Rollback" under 0.24.19 below);
+  0.24.20: `--branch backup-0.24.19`; see "Rollback" under 0.24.20 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -103,6 +103,33 @@ project. It holds the rules, the current state and what is still open.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.20: LiteSpeed comment exclusion** (2026-10-31).
+  0.24.19's probes on business600: `remove_target_ids` and
+  `remove_target_range` refused, so LiteSpeed takes no field out of a
+  rule in any way (tag or id). Multipart: args, files, files_names seen,
+  request_body not seen, the same as Apache; MULTIPART_PART_HEADERS does
+  not exist there, so 922100/922120/922130 cannot be replaced by a rule
+  and stay a gap (uploads are still scanned by 7700101).
+  The four field exclusions on LiteSpeed:
+  - 7700014 (WooCommerce Store API): removes by tag, which works there.
+  - 7700017 (static-file cookies): LiteSpeed sends static files without
+    ModSecurity (its documentation), nothing to do.
+  - 7700019 (comment fields): rendered for LiteSpeed
+    (`Dynamic.LiteSpeed`, from the detected target) it also sets
+    `tx.xg_no_sqli=1`: the comment post skips the SQL injection family
+    whole (WordPress stores comments with prepared statements and casts
+    its ID fields); XSS and the rest still check it. SQL injection in
+    comment_post_ID is let through there (WordPress casts it to a number).
+  - 7700023 (password fields): not changed. Taking PHP injection out of a
+    whole request because it has a field named "password" would let any
+    request skip it by adding one. A password that reads like PHP code
+    can be refused on LiteSpeed.
+  - `TestCommentExclusionOnLiteSpeedWithCRS` (Apache with the field
+    removals taken out, as LiteSpeed ignores them): with the LiteSpeed
+    rendering a programming blog comment quoting SQL passes; with the
+    Apache rendering it is refused (the case this fixes); scripts in a
+    comment and SQL to another script are refused in both.
+  - **Rollback**: `backup-0.24.19`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.19: probes for field exclusions and upload forms**
   (2026-10-31). The Joomla customer (joomlashares.com, business600)
   confirmed everything works after 0.24.18. Two open LiteSpeed questions
