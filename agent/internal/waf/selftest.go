@@ -203,13 +203,16 @@ func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 // wayChecks posts the same weak attack (script in a form field, refused at
 // the default threshold) to each way's probe address.
 func wayChecks() map[string]string {
-	body := "description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`)
+	// With a form token and a key in the address for the cond probes.
+	body := "description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`) +
+		"&0123456789abcdef0123456789abcdef=1"
+	key := "?k=ck_" + strings.Repeat("0a", 20)
 	out := map[string]string{}
-	if code, err := probePost(crsTestPath+"/mech/none", body); err == nil {
+	if code, err := probePost(crsTestPath+"/mech/none"+key, body); err == nil {
 		out["none"] = fmt.Sprintf("HTTP %d", code)
 	}
 	for _, p := range mechProbes {
-		code, err := probePost(crsTestPath+"/mech/"+p.name, body)
+		code, err := probePost(crsTestPath+"/mech/"+p.name+key, body)
 		switch {
 		case err != nil:
 			out[p.name] = err.Error()

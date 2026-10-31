@@ -110,8 +110,7 @@ func editorSetup() string {
 		// (several rules) is not.
 		fmt.Sprintf(`SecRule TX:xg_wp_area "@eq 1" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDEditorCookie+1000) + "\n" +
 		`  SecRule TX:xg_wp_editor "@eq 1" "t:none,chain"` + "\n" +
-		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n" +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@ge 1" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold) + "\n" +
 		// The same editor saving from their own wp-admin page (Elementor's
 		// HTML widget, page builders, code snippets score 35-80): the browser
 		// says the request came from the same site (Sec-Fetch-Site) and the
@@ -154,8 +153,7 @@ func adminAreaSetup() string {
 		head(IDAdminArea) +
 		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.xg_session=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n" +
 		head(IDAdminArea+1000) +
-		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n" +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@ge 1" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold) + "\n" +
 		joomlaAdminSetup()
 }
 
@@ -177,11 +175,9 @@ func joomlaAdminSetup() string {
 	}
 	return "# Joomla administrator saves with the form token (xPGuard WAF level).\n" +
 		head(IDJoomlaAdmin) +
-		`  SecRule &TX:xg_strict "@eq 0" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, joomlaAdminThreshold, joomlaAdminThreshold) + "\n" +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, joomlaAdminThreshold) + "\n" +
 		head(IDJoomlaAdmin+1000) +
-		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@ge 1" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold) + "\n"
 }
 
 // adminAreaSegments name an application's admin area: not "dashboard" or
@@ -211,8 +207,7 @@ func sessionSetup() string {
 		`  SecRule &REQUEST_COOKIES_NAMES:/^wordpress_/ "@eq 0" "t:none,chain"` + "\n" +
 		`  SecRule &REQUEST_COOKIES_NAMES:/^w(?:p_w)?oocommerce_/ "@eq 0" "t:none,chain"` + "\n" +
 		`  SecRule REQUEST_FILENAME "!@rx /wp-(?:admin|json|content|includes|comments-post|login)" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n" +
-		`  SecRule &TX:xg_strict "@eq 0" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_session=1,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n" +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_session=1,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold) + "\n" +
 		// The same told by the browser's Sec-Fetch-Site and read from the
 		// Cookie header: no macro and no cookie collection, which
 		// LiteSpeed's engine did not honour (see adminAreaSetup).
@@ -220,8 +215,7 @@ func sessionSetup() string {
 		`  SecRule REQUEST_HEADERS:Cookie "@rx (?i)(?:^|;)\s*(?:[^=;\s]*(?:sess|xsrf|csrf|token|logged_in|auth|remember)[^=;\s]*|[^=;\s]*sid|[0-9a-f]{32})=" "t:none,chain"` + "\n" +
 		`  SecRule REQUEST_HEADERS:Cookie "!@rx (?:^|;)\s*(?:wordpress_|wp_woocommerce_|woocommerce_)" "t:none,chain"` + "\n" +
 		`  SecRule REQUEST_FILENAME "!@rx /wp-(?:admin|json|content|includes|comments-post|login)" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n" +
-		`  SecRule &TX:xg_strict "@eq 0" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_session=1,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_session=1,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold) + "\n"
 }
 
 // sessionPost runs after the OWASP CRS: script injection in a relaxed
@@ -260,8 +254,7 @@ func appSaveSetup() string {
 		fmt.Sprintf(`SecRule TX:xg_app_save "@eq 1" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDAppSave) + "\n" +
 		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.xg_session=0,setvar:tx.xg_editor=1,setvar:tx.inbound_anomaly_score_threshold=%d"`, editorThreshold) + "\n" +
 		fmt.Sprintf(`SecRule TX:xg_app_save "@eq 1" "id:%d,phase:1,pass,t:none,nolog,chain"`, IDAppSave+1000) + "\n" +
-		`  SecRule &TX:xg_strict "@ge 1" "t:none,chain"` + "\n" +
-		fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@ge 1" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold) + "\n"
 }
 
 // autodiscoverSetup lets mail clients' Autodiscover requests through:
@@ -337,11 +330,11 @@ func wcRestKeysSetup() string {
 		return fmt.Sprintf(`SecRule REQUEST_METHOD "@rx ^(?:POST|PUT|PATCH|DELETE)$" "id:%d,phase:1,pass,t:none,nolog,chain"`, id) + "\n" +
 			`  SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wc/v[1-3]/" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n"
 	}
-	set := fmt.Sprintf(`  SecRule TX:inbound_anomaly_score_threshold "@lt %d" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold, sessionThreshold) + "\n"
+	set := fmt.Sprintf("setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d", sessionThreshold)
 	return "# WooCommerce REST API writes with the shop's API keys (xPGuard).\n" +
-		head(IDWCRestKeys) + `  SecRule ARGS_GET:consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,chain"` + "\n" + set +
-		head(IDWCRestKeys+1000) + `  SecRule ARGS_GET:oauth_consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,chain"` + "\n" + set +
-		head(IDWCRestKeys+2000) + `  SecRule REQUEST_HEADERS:Authorization "@rx ^basic\s+[a-z0-9+/=]{20,}$" "t:none,t:lowercase,chain"` + "\n" + set
+		head(IDWCRestKeys) + `  SecRule ARGS_GET:consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,` + set + `"` + "\n" +
+		head(IDWCRestKeys+1000) + `  SecRule ARGS_GET:oauth_consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,` + set + `"` + "\n" +
+		head(IDWCRestKeys+2000) + `  SecRule REQUEST_HEADERS:Authorization "@rx ^basic\s+[a-z0-9+/=]{20,}$" "t:none,t:lowercase,` + set + `"` + "\n"
 }
 
 // IDMechProbe: rules that only answer the self-test's posts to
@@ -351,14 +344,20 @@ func wcRestKeysSetup() string {
 const IDMechProbe = 7700080
 
 // mechProbes: name, phase and actions of each way.
-var mechProbes = []struct{ name, phase, actions string }{
-	{"thr_single", "1", "setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"},
-	{"thr_chain", "1", "chain"},
-	{"thr_phase2", "2", "setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"},
-	{"remove_949110", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveById=949110"},
-	{"remove_xss_tag", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveTargetByTag=attack-xss;ARGS"},
-	{"detection_only", "1", "setvar:tx.xg_soft=0,ctl:ruleEngine=DetectionOnly"},
-	{"allow", "1", "allow"},
+// A cond probe raises the threshold only after one more condition of the
+// kind the relaxations use (cond: that rule without its actions).
+var mechProbes = []struct{ name, phase, actions, cond string }{
+	{"thr_single", "1", "setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000", ""},
+	{"thr_chain", "1", "chain", `SecRule REQUEST_METHOD "@streq POST"`},
+	{"thr_phase2", "2", "setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000", ""},
+	{"remove_949110", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveById=949110", ""},
+	{"remove_xss_tag", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveTargetByTag=attack-xss;ARGS", ""},
+	{"detection_only", "1", "setvar:tx.xg_soft=0,ctl:ruleEngine=DetectionOnly", ""},
+	{"allow", "1", "allow", ""},
+	{"cond_tx_lt", "1", "chain", `SecRule TX:inbound_anomaly_score_threshold "@lt 10000"`},
+	{"cond_tx_count", "1", "chain", `SecRule &TX:xg_strict "@eq 0"`},
+	{"cond_args_get", "1", "chain", `SecRule ARGS_GET:k "@rx ^ck_[0-9a-f]{40}$"`},
+	{"cond_args_names", "2", "chain", `SecRule ARGS_NAMES "@rx ^[0-9a-f]{32}$"`},
 }
 
 func mechProbeSetup() string {
@@ -371,7 +370,7 @@ func mechProbeSetup() string {
 		}
 		fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mech/%s" "id:%d,phase:%s,t:none,nolog,%s"`+"\n", crsTestPath, p.name, IDMechProbe+i, p.phase, act)
 		if p.actions == "chain" {
-			b.WriteString(`  SecRule REQUEST_METHOD "@streq POST" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"` + "\n")
+			b.WriteString("  " + p.cond + ` "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"` + "\n")
 		}
 	}
 	return b.String()

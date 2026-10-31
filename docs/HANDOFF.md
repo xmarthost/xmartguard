@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.11** (see `VERSION`).
+- Current release: **0.24.12** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.11 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.12 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.11: `--branch backup-0.24.10`; see "Rollback" under 0.24.11 below);
+  0.24.12: `--branch backup-0.24.11`; see "Rollback" under 0.24.12 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,27 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.12: relaxations without the "@lt" guard** (2026-10-31).
+  business600 (LiteSpeed) `self_test.ways` on 0.24.11: none 403;
+  thr_single, thr_chain, thr_phase2, remove_949110, detection_only,
+  allow "passes"; remove_xss_tag refused. So LiteSpeed does honour a
+  chained rule setting the threshold. The one link every relaxation had
+  and no passing probe had: `SecRule TX:inbound_anomaly_score_threshold
+  "@lt N"` (raise only, never lower). It is gone from all of them (the
+  setvar sits on the previous link), and the setups run lowest first
+  (WooCommerce API 30, session 30, editor and admin area 100000, Joomla
+  token 60 in phase 2, WHMCS app saves 100000 last), so a later one never
+  lowers an earlier, higher one. Known cost: at level low (CRS 20,
+  verified visitors 40) a session request now gets 30. New cond probes
+  check each remaining link type on the engine: cond_tx_lt (the removed
+  guard, to confirm), cond_tx_count (&TX:xg_strict), cond_args_get
+  (ARGS_GET:k), cond_args_names (ARGS_NAMES, phase 2).
+  `TestCustomerFalsePositivesWithCRS`: a Joomla save with the token and
+  no same-site headers, or from another site, passes the WAF since 0.24.8
+  (Joomla refuses a forged token); without the token it is refused.
+  After the update read business600 `self_test.lifts` (both should pass)
+  and `ways`.
+  - **Rollback**: `backup-0.24.11`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.11: which relaxations LiteSpeed honours** (2026-10-31).
   0.24.10's self-test, same rules on both servers:
   business700 (Apache) `lifts` joomla_admin_save and

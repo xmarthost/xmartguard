@@ -280,14 +280,18 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 			}
 			crs.Detail += "; weak signals from clean visitors get the CAPTCHA page"
 		}
-		// Every level: the WHMCS admin exclusion was always on (audit of
-		// my.galaxyhoster.com's General Settings save on LiteSpeed).
-		setupText += appSaveSetup() + wcRestKeysSetup() + mechProbeSetup()
+		// Lower thresholds first: a relaxation sets its value without
+		// comparing (LiteSpeed's engine ignored the "@lt" guards), so a later,
+		// higher one must not be overwritten by a lower one.
+		setupText += wcRestKeysSetup() + mechProbeSetup()
 		if lv := m.level(); lv != "strict" {
 			setupText += sessionSetup() + editorSetup() + autodiscoverSetup()
 			post += sessionPost()
 			crs.Detail += "; WAF level " + lv + ": logged-in WordPress users are not blocked while editing; requests from a site's own pages with a session have threshold " + fmt.Sprint(sessionThreshold)
 		}
+		// Every level: the WHMCS admin exclusion was always on (audit of
+		// my.galaxyhoster.com's General Settings save on LiteSpeed).
+		setupText += appSaveSetup()
 		crs4 := !strings.HasPrefix(rs.CRS.Version, "3.")
 		if crs4 {
 			setupText += contentTypeSetup()

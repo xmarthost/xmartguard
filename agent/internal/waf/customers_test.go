@@ -107,8 +107,12 @@ func TestCustomerFalsePositivesWithCRS(t *testing.T) {
 		{"POST without User-Agent to a script", "site.example.com", "POST", "/old/includes/up.php", form, "a=1", []string{"User-Agent: "}, 403},
 		{"Joomla administrator saving an e-mail template", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, joomlaAdmin, 200},
 		{"Joomla administrator saving a file in File Explorer", "joomla.example.ir", "POST", "/administrator/index.php?option=com_ffexplorer&task=save", form, "content=" + urlEncode(`<?php defined('_JEXEC') or die; echo '<script src="/media/site.js"></script>'; ?>`), joomlaAdmin, 200},
-		{"Same save without the browser's same-site headers", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, []string{joomla}, 403},
-		{"Same save sent from another site", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, []string{joomla, "Sec-Fetch-Site: cross-site", "Referer: https://evil.example/administrator/x"}, 403},
+		// Since 0.24.8 Joomla's form token alone lifts the threshold (no
+		// header: LiteSpeed's engine); Joomla checks the token, so a page of
+		// another site cannot forge the save.
+		{"Same save without the browser's same-site headers", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, []string{joomla}, 200},
+		{"Same save sent from another site (Joomla refuses the token)", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, template, []string{joomla, "Sec-Fetch-Site: cross-site", "Referer: https://evil.example/administrator/x"}, 200},
+		{"Same save without the form token or same-site headers", "joomla.example.ir", "POST", "/administrator/index.php?option=com_rsmembership&view=configuration", form, strings.TrimSuffix(template, "&5f2b8c1d9e4a7f3b6c0d8e2a1b9f4c7d=1"), []string{joomla}, 403},
 		{"Script in a Joomla visitor's form still refused", "joomla.example.ir", "POST", "/index.php?option=com_contact", form, visitorXSS, []string{joomla, "Referer: https://joomla.example.ir/contact"}, 403},
 		{"Payment callback without User-Agent", "site.example.com", "POST", "/modules/gateways/callback/jazzcash.php", form, "a=1", []string{"User-Agent: "}, 200},
 		{"Webhook without User-Agent", "site.example.com", "POST", "/app/webhook.php", form, "a=1", []string{"User-Agent: "}, 200},
