@@ -296,6 +296,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		if crs4 {
 			setupText += contentTypeSetup()
 		}
+		setupText += familyRemoveSetup(dir)
 		files[setup] = setupText
 		fmt.Fprintf(&inc, "\n# OWASP Core Rule Set %s\nInclude %s\nInclude %s\n", rs.CRS.Version, setup, filepath.Join(dir, "rules", "*.conf"))
 		if crs4 {

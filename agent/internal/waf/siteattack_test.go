@@ -173,6 +173,11 @@ func TestSiteAttackOnApache(t *testing.T) {
 	if code, _ := get("websoulhost.com", "/wp-login.php", "*/*"); code != 403 {
 		t.Fatalf("script on the attacked site's login page: %d", code)
 	}
+	// The WAF self-test's probe of a login or admin save is not gated
+	// (business600, 2026-10-31: the Joomla lift probe got the gate's 403).
+	if code, _ := get("websoulhost.com", crsTestPath+"/wp-login.php", "*/*"); code != 404 {
+		t.Fatalf("self-test probe on the attacked site's login path: %d", code)
+	}
 	// Its other pages, xmlrpc.php (apps), and other sites stay as they are.
 	for _, c := range [][2]string{{"websoulhost.com", "/xg-ok.html"}, {"shop.example.com", "/wp-login.php"}, {"evilwebsoulhost.com", "/wp-login.php"}} {
 		if code, _ := get(c[0], c[1], html); code != 200 {

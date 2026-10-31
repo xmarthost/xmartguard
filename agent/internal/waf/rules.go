@@ -1049,6 +1049,10 @@ func Render(c settings.WAF, o Options) string {
 		gateRule := func(id int, cond, action, msg, browser string) {
 			w(`SecRule REQUEST_FILENAME "@rx (?:%s)(?:/|$)" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,%s,log,msg:'%s',tag:'xpguard/captcha',chain"`,
 				strings.Join(urls, "|"), id, action, msg)
+			// Not the WAF self-test's probes (no such page exists): on
+			// LiteSpeed the Joomla save probe got this 403 instead of the
+			// answer of the rules it tests (business600, 2026-10-31).
+			w(`  SecRule REQUEST_FILENAME "!@beginsWith %s/" "t:none,chain"`, crsTestPath)
 			if !ct.All {
 				w(`  SecRule TX:xg_suspect "@eq 1" "t:none,chain"`)
 			}
@@ -1486,6 +1490,10 @@ func whiteDomainKeep() map[int]bool {
 		}
 	}
 	keep[IDEditorAdmin] = true
+	keep[IDFamilyStrict] = true
+	for id := IDFamilyRemove; id < IDFamilyRemove+len(crsFamilies)*5; id++ {
+		keep[id] = true
+	}
 	for i := range mechProbes {
 		keep[IDMechProbe+i] = true
 	}

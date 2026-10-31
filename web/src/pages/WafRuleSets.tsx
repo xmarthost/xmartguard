@@ -67,8 +67,55 @@ interface ServerRow {
     error?: string;
     rule_sets?: SetState[];
     vendors?: { vendor_id: string; name: string; enabled: boolean; update: boolean }[];
-    status?: { web_server?: string; logs?: string[]; warning?: string };
+    status?: { web_server?: string; logs?: string[]; warning?: string; engine?: EngineReport };
   } | null;
+}
+// What the server's ModSecurity engine skips or does differently (agent 0.24.17+).
+interface EngineIssue {
+  rule?: number;
+  source?: string;
+  file?: string;
+  what: string;
+  reason: string;
+  kind: 'unsupported' | 'probe';
+}
+interface EngineReport {
+  engine: string;
+  checked_at: number;
+  load_at?: number;
+  issues: EngineIssue[];
+  summary: string;
+}
+const sourceName: Record<string, string> = { owasp_crs: 'OWASP CRS', xpguard: 'xPGuard', other: 'other rules' };
+
+function EngineIssues({ e }: { e: EngineReport }) {
+  const [open, setOpen] = useState(false);
+  const n = e.issues.length;
+  return (
+    <div className="mt-1.5 text-xs">
+      <div className={n ? 'text-amber-700' : 'text-slate-500'}>
+        Engine check: {e.summary}
+        {n > 0 && (
+          <button className="ml-1 underline" onClick={() => setOpen(!open)}>
+            {open ? 'hide' : `show ${n}`}
+          </button>
+        )}
+      </div>
+      {open && (
+        <ul className="mt-1 space-y-1 border-l-2 border-amber-200 pl-2 text-slate-600">
+          {e.issues.map((i, k) => (
+            <li key={k}>
+              <span className="font-medium text-navy-900">
+                {i.kind === 'probe' ? 'Self-test' : i.rule ? `Rule ${i.rule}` : 'Rule'}
+                {i.source ? ` (${sourceName[i.source] ?? i.source}${i.file ? `, ${i.file}` : ''})` : i.file ? ` (${i.file})` : ''}
+              </span>
+              : <code className="break-all text-slate-500">{i.what}</code> — {i.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 interface Data {
   config: Config;
@@ -565,6 +612,7 @@ export default function WafRuleSets() {
                   WHM vendors on this server: {s.status.vendors.map((v) => `${v.name || v.vendor_id} (${v.enabled ? 'on' : 'off'}${v.update ? ', auto-update' : ''})`).join(', ')}
                 </div>
               )}
+              {s.status?.status?.engine && <EngineIssues e={s.status.status.engine} />}
               {!!s.status?.status?.logs?.length && <div className="mt-1 text-xs text-slate-400">Reads hits from: {s.status.status.logs.join(', ')}</div>}
               {s.status?.status?.warning && <div className="mt-1 text-xs text-amber-700">{s.status.status.warning}</div>}
               {s.status?.error && <div className="mt-1 text-xs text-red-700">{s.status.error}</div>}

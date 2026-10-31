@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.16** (see `VERSION`).
+- Current release: **0.24.17** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.16 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.17 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.16: `--branch backup-0.24.15`; see "Rollback" under 0.24.16 below);
+  0.24.17: `--branch backup-0.24.16`; see "Rollback" under 0.24.17 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,89 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **WAF direction agreed with the owner (2026-10-31).** Free rules only:
+  OWASP CRS stays (the only free, regularly updated set; Imunify360's WAF
+  needs its paid licence, ImunifyAV has no WAF, coraza-coreruleset is the
+  same CRS packaged for the Coraza engine). Three layers: (1) xPGuard's
+  own rules, direct deny in phase 2 with no score, written in the style of
+  Malware.Expert's (ideas only, nothing copied) and only with variables
+  and operators that work on Apache and LiteSpeed alike; (2) the CRS,
+  unmodified, from the official release; (3) exclusions (CRS plugins,
+  ours). When the owner reports a new CRS release: read its changelog,
+  run the Apache sweep, check a LiteSpeed server's engine report, then
+  set the version in the portal. LiteSpeed's own documentation
+  (docs.litespeedtech.com/lsws/cp/cpanel/mod_security/, pasted by the
+  owner; the session's network blocks that host) says it is "not
+  possible to be 100% compatible with Apache", that XML parsing, Lua and
+  PDF functions are not supported, that static files skip ModSecurity,
+  that only Serial audit logs exist, and that its "Rule not supported"
+  errors "can simply be ignored". If an article cannot be fetched, stop
+  and ask the owner to paste it.
+- **Release 0.24.17: engine report; relaxations take rule families out**
+  (2026-10-31).
+  - **Engine report** (`engine.go`, `waf.status` → `status.engine`,
+    portal: WAF Rule Sets » Rollout, "Engine check"). After each apply
+    (log read at most every 10 minutes) the agent reads the newest
+    configuration load in LiteSpeed's error log (lines within two minutes
+    of the newest `[ModSecurity]` line): `unknown server variable`,
+    `failed to parse a modsec variable`, `Rule not supported`, `Directive
+    … not allowed in current context`. Each skipped rule is named with
+    its id (the chain's first rule, found by variables and operator in
+    the CRS files and ours, or in the file of the last `Processing config
+    file` line), owner (OWASP CRS, xPGuard, other) and reason, with what
+    it costs for the known ones (ARGS_COMBINED_SIZE → 920390 not
+    enforced, FILES_COMBINED_SIZE → 920410, REQBODY_ERROR, XML…). The
+    self-test's findings are added as "probe" issues: a refused way (with
+    why), score probes refused at 30 or more, refused lifts. Kept in the
+    store (`waf_engine_report`), so a load no longer in the log tail keeps
+    its findings. Apache: no log reading (its config test refuses what it
+    cannot read). Tests: `TestEngineReportFromLiteSpeedLog` (inert lines
+    from LiteSpeed's documentation), `TestEngineReportProbes`
+    (business600's and business700's self-test results),
+    `TestEngineReportMapsRealCRS` (XG_CRS_DIR).
+  - **Correction to 0.24.13/0.24.14**: LiteSpeed does fill ARGS_GET in
+    phase 1 for GET requests (business600: 7700510 165,339 hits and
+    7700303 329 in 24 hours, both phase-1 ARGS_GET rules). The probes only
+    showed that a POST's query string is not seen in phase 1. So the
+    phase-1 ARGS_GET rules (user enumeration, shop filters, cart spam,
+    customizer, beacons) work; only relaxations for POSTs must read
+    REQUEST_URI.
+  - **Score on LiteSpeed**: Apache (business700) passes every score probe
+    under 20; LiteSpeed (business600) refuses the WooCommerce test save at
+    21 under threshold 20 and at 54 under 30 and 45 (passes from 60), the
+    Joomla one at 39 under 20 and 30. A request that passes the first
+    check is scored again higher (CJ: 13 → 39). Cause inside LiteSpeed's
+    engine, not found. So no threshold is safe there.
+  - **Relaxations by rule family** (`crsfamily.go`). The Joomla
+    administrator save with the form token now also sets
+    `tx.xg_no_lfi/rce/php/xss` (CRS 930, 932, 933, 941) and the
+    WooCommerce REST write with API keys `tx.xg_no_xss` (941). Rules
+    7700880-7700899 (phase 2, after the relaxations, before the CRS)
+    take those families out of that request with
+    `ctl:ruleRemoveById=<id>` per id (20 per rule), the ids read from the
+    installed CRS release's files (a new release brings its ids). A rule
+    that does not run scores nothing on any engine. 7700879 withdraws the
+    flags for an address with a bad reputation (`&TX:xg_strict`). SQL
+    injection (942) and the protocol rules still check; the Joomla
+    threshold went from 60 to 30 (SQL injection with a token, 20 on
+    Apache, was let through under 60 before). Whitelisted domains keep
+    7700879-7700899. `TestAdminAreaSavesWithoutRuleRemoval`: a File
+    Explorer save scoring 85 and a product write scoring 45+ pass with
+    token/keys and are refused without; SQL injection with a token or
+    keys refused. Fails without `familyRemoveSetup` (checked).
+    `TestFamilyRemoveSetupRealCRS` (4.30 and 4.18).
+  - **Self-test probes not gated**: the CAPTCHA gate (7700906 "not a
+    browser") answered the Joomla lift probe on business600, so the lift
+    always read "refused". Gate rules now skip `/xpguard-crs-selftest/`
+    (no such page exists). `TestSiteAttackOnApache` checks it (fails
+    without the change, checked).
+  - Joomla customer: the "not fixed" ticket of 2026-10-31 lists saves of
+    11:35-11:37 UTC, before 0.24.16 (12:30 UTC); none from that address
+    after it. Ask for a retest after 0.24.17 and read only later lines.
+  - Next: read the engine reports of the LiteSpeed servers; for each
+    skipped CRS rule that matters, write an xPGuard replacement (direct
+    deny, phase 2, variables LiteSpeed reads) with a test.
+  - **Rollback**: `backup-0.24.16`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.16: whitelisted domains keep the relaxations**
   (2026-10-31). The customer retried at 11:35-11:37 UTC (0.24.15): the
   .htaccess Maker and Global Configuration saves still refused at score

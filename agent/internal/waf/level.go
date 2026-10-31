@@ -41,7 +41,7 @@ const (
 	// header needed); +1000 on an address with a bad reputation.
 	IDJoomlaAdmin = 7700070
 	// joomlaAdminThreshold: such a save is refused from this score on.
-	joomlaAdminThreshold = 60
+	joomlaAdminThreshold = 30
 	// IDWCRestKeys: a WooCommerce REST API write sent with the shop's API
 	// keys (+1000 OAuth, +2000 Basic authentication).
 	IDWCRestKeys = 7700072
@@ -157,15 +157,29 @@ func adminAreaSetup() string {
 		joomlaAdminSetup()
 }
 
+// joomlaAdminFamilies: the CRS families Joomla administrator saves set off
+// (joomlashares.com, business600: .htaccess Maker 932160/932260, Global
+// Configuration 941100/941160, File Explorer 930120/932140/932160 scoring
+// 40, jDownloads 932230/932235/932250): taken out of a save with the form
+// token; SQL injection is still checked.
+var joomlaAdminFamilies = []string{"930", "932", "933", "941"}
+
+// wcRestFamilies: product HTML in WooCommerce REST writes (CJdropshipping:
+// 941100, 941160).
+var wcRestFamilies = []string{"941"}
+
 // joomlaAdminSetup lifts the threshold for Joomla administrator saves told
 // by Joomla's own form token: every save posts a field named with 32 hex
 // characters. It needs no request header: on LiteSpeed (joomlashares.com,
 // business600, 2026-10-27/28) Global Configuration, Admin Tools' .htaccess
 // Maker, File Explorer and jDownloads saves scoring 10-30 were still
 // refused with the Sec-Fetch-Site lifts above in place. Joomla checks the
-// token and the login itself; a request without them changes nothing, and
-// one with many attack signals (60 and more) is still refused. On an
-// address with a bad reputation only the session threshold applies.
+// token and the login itself; a request without them changes nothing.
+// Since 0.24.17 such a save also skips joomlaAdminFamilies (LiteSpeed
+// scores a request again after the first check, so no threshold is safe
+// there) and the threshold is 30 for what still checks it (SQL injection,
+// protocol). On an address with a bad reputation only the session
+// threshold applies, without skipping families.
 func joomlaAdminSetup() string {
 	head := func(id int) string {
 		// The path from REQUEST_URI, up to the query: on LiteSpeed a path
@@ -177,7 +191,7 @@ func joomlaAdminSetup() string {
 	}
 	return "# Joomla administrator saves with the form token (xPGuard WAF level).\n" +
 		head(IDJoomlaAdmin) +
-		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, joomlaAdminThreshold) + "\n" +
+		fmt.Sprintf(`  SecRule &TX:xg_strict "@eq 0" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d,%s"`, joomlaAdminThreshold, familyFlags(joomlaAdminFamilies...)) + "\n" +
 		head(IDJoomlaAdmin+1000) +
 		fmt.Sprintf(`  SecRule &TX:xg_strict "@ge 1" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`, sessionThreshold) + "\n"
 }
@@ -322,17 +336,18 @@ func contentTypeSetup() string {
 
 // wcRestKeysSetup lifts the threshold for WooCommerce REST API writes sent
 // with the shop's API keys: dropshipping and sync services (CJdropshipping,
-// ssshoesmaker.com on business900, 2026-10-30/31) post product HTML to
-// /wp-json/wc/v3/products, which CRS read as XSS (941100, 941160; score
+// ssshoesmaker.com on s1.cobuildhost.com, 2026-10-30/31) post product HTML
+// to /wp-json/wc/v3/products, which CRS read as XSS (941100, 941160; score
 // 13-15) and refused. WooCommerce checks the keys: a request with wrong
-// ones changes nothing. One with many attack signals (30 and more) is
-// still refused.
+// ones changes nothing. Since 0.24.17 such a write skips the XSS family
+// (wcRestFamilies; LiteSpeed raised 13 to 39 under threshold 30); the
+// other attack signals still count, from 30 on.
 func wcRestKeysSetup() string {
 	head := func(id int) string {
 		return fmt.Sprintf(`SecRule REQUEST_METHOD "@rx ^(?:POST|PUT|PATCH|DELETE)$" "id:%d,phase:1,pass,t:none,nolog,chain"`, id) + "\n" +
 			`  SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wc/v[1-3]/" "t:none,t:urlDecodeUni,t:lowercase,chain"` + "\n"
 	}
-	set := fmt.Sprintf("setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d", sessionThreshold)
+	set := fmt.Sprintf("setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d,%s", sessionThreshold, familyFlags(wcRestFamilies...))
 	return "# WooCommerce REST API writes with the shop's API keys (xPGuard).\n" +
 		// The key read from REQUEST_URI: LiteSpeed's engine does not fill
 		// ARGS_GET (self-test, business600).
