@@ -577,6 +577,10 @@ func TestCRSSelfTestEveryLevel(t *testing.T) {
 				t.Errorf("%s: way %s: %s", level, p.name, st.Ways[p.name])
 			}
 		}
+		// The score probes: both test saves pass under 100 on Apache.
+		if st.Scores["wc_100"] != "passes" || st.Scores["joomla_100"] != "passes" {
+			t.Errorf("%s: scores %v", level, st.Scores)
+		}
 		// (At the low level, threshold 20, the weak probe passes anyway.)
 		if level != "low" && !strings.HasPrefix(st.Ways["none"], "HTTP 403") {
 			t.Errorf("%s: probe without a way: %s", level, st.Ways["none"])
@@ -647,7 +651,7 @@ func TestEveryRuleIDOnceOnApache(t *testing.T) {
 			seen[id[1]] = filepath.Base(f)
 		}
 	}
-	for _, id := range []string{"7700065", "7700070", "7700072", "7700064", "7700038", "7700080", "7700086"} {
+	for _, id := range []string{"7700065", "7700070", "7700072", "7700064", "7700038", "7700080", "7700086", "7700850", "7700864"} {
 		if seen[id] == "" {
 			t.Errorf("rule %s not rendered (the test no longer covers it)", id)
 		}

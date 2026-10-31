@@ -367,6 +367,17 @@ var mechProbes = []struct{ name, phase, actions, cond string }{
 	{"cond_request_uri", "1", "chain", `SecRule REQUEST_URI "@rx [?&]k=ck_[0-9a-f]{40}(?:&|$)"`},
 }
 
+// IDScoreProbe: the self-test's score probes (/xpguard-crs-selftest/score/
+// <body>_<threshold>): the relaxations' own test saves under fixed
+// thresholds, to learn what the engine scores them (LiteSpeed has no
+// libinjection; the scores differ from Apache's).
+const IDScoreProbe = 7700850
+
+var (
+	scoreProbeBodies     = []string{"joomla", "wc"}
+	scoreProbeThresholds = []int{20, 30, 45, 60, 100}
+)
+
 func mechProbeSetup() string {
 	var b strings.Builder
 	b.WriteString("# Self-test only: which ways of relaxing this engine honours (xPGuard).\n")
@@ -378,6 +389,12 @@ func mechProbeSetup() string {
 		fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mech/%s" "id:%d,phase:%s,t:none,nolog,%s"`+"\n", crsTestPath, p.name, IDMechProbe+i, p.phase, act)
 		if p.actions == "chain" {
 			b.WriteString("  " + p.cond + ` "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"` + "\n")
+		}
+	}
+	for bi, body := range scoreProbeBodies {
+		for ti, t := range scoreProbeThresholds {
+			fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/score/%s_%d" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`+"\n",
+				crsTestPath, body, t, IDScoreProbe+bi*10+ti, t)
 		}
 	}
 	return b.String()

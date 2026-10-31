@@ -39,6 +39,9 @@ type SelfTest struct {
 	Lifts map[string]string `json:"lifts,omitempty"`
 	// Ways: which ways of relaxing the engine honours (mechProbes).
 	Ways map[string]string `json:"ways,omitempty"`
+	// Scores: whether each test save passes under each threshold (its
+	// score is below the lowest that passes).
+	Scores map[string]string `json:"scores,omitempty"`
 }
 
 // isSelfTest reports whether an event came from the agent's own check.
@@ -88,14 +91,18 @@ func probePost(path, body string) (int, error) {
 // liftChecks posts what a relaxation is for and must let through, with
 // signals the CRS alone refuses: a Joomla administrator save with its form
 // token and a WooCommerce REST product write with API keys.
+// The relaxations' test saves (also posted to the score probes).
+var (
+	liftBodyJoomla = "task=apply&custhead=" + url.QueryEscape("RewriteCond %{HTTP_USER_AGENT} (wget|curl|python-requests|libwww-perl) [NC]\nRewriteRule .* - [F]") +
+		"&cgibin=" + url.QueryEscape("/usr/local/cgi-bin/php.cgi") + "&exceptiondirs=" + url.QueryEscape("cli\nbin\ntmp") + "&0123456789abcdef0123456789abcdef=1"
+	liftBodyWC = "name=Shoes&description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`)
+)
+
 func liftChecks() map[string]string {
-	token := "0123456789abcdef0123456789abcdef=1"
 	checks := map[string]struct{ path, body string }{
-		"joomla_admin_save": {crsTestPath + "/administrator/index.php?option=com_admintools&view=htaccessmaker",
-			"task=apply&custhead=" + url.QueryEscape("RewriteCond %{HTTP_USER_AGENT} (wget|curl|python-requests|libwww-perl) [NC]\nRewriteRule .* - [F]") +
-				"&cgibin=" + url.QueryEscape("/usr/local/cgi-bin/php.cgi") + "&exceptiondirs=" + url.QueryEscape("cli\nbin\ntmp") + "&" + token},
+		"joomla_admin_save": {crsTestPath + "/administrator/index.php?option=com_admintools&view=htaccessmaker", liftBodyJoomla},
 		"woocommerce_api_write": {crsTestPath + "/wp-json/wc/v3/products?consumer_key=ck_" + strings.Repeat("0a", 20) + "&consumer_secret=cs_" + strings.Repeat("1b", 20),
-			"name=Shoes&description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`)},
+			liftBodyWC},
 	}
 	out := map[string]string{}
 	for name, c := range checks {
@@ -195,6 +202,7 @@ func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 		if st.CRS == "blocked" {
 			st.Lifts = liftChecks()
 			st.Ways = wayChecks()
+			st.Scores = scoreChecks()
 		}
 	}
 	return st
@@ -220,6 +228,27 @@ func wayChecks() map[string]string {
 			out[p.name] = fmt.Sprintf("refused (HTTP %d)", code)
 		default:
 			out[p.name] = "passes"
+		}
+	}
+	return out
+}
+
+// scoreChecks posts each test save under each fixed threshold.
+func scoreChecks() map[string]string {
+	bodies := map[string]string{"joomla": liftBodyJoomla, "wc": liftBodyWC}
+	out := map[string]string{}
+	for _, b := range scoreProbeBodies {
+		for _, t := range scoreProbeThresholds {
+			name := fmt.Sprintf("%s_%d", b, t)
+			code, err := probePost(fmt.Sprintf("%s/score/%s", crsTestPath, name), bodies[b])
+			switch {
+			case err != nil:
+				out[name] = err.Error()
+			case code == 403 || code == 406 || (code >= 300 && code < 400):
+				out[name] = fmt.Sprintf("refused (HTTP %d)", code)
+			default:
+				out[name] = "passes"
+			}
 		}
 	}
 	return out

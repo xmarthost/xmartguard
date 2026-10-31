@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.13** (see `VERSION`).
+- Current release: **0.24.14** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.13 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.14 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.13: `--branch backup-0.24.12`; see "Rollback" under 0.24.13 below);
+  0.24.14: `--branch backup-0.24.13`; see "Rollback" under 0.24.14 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,19 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.14: score probes** (2026-10-31). business600 on
+  0.24.13: lifts still refused. `ways`: cond_request_uri and
+  cond_filename_end pass, cond_query_string and cond_args_get refused
+  (LiteSpeed fills neither QUERY_STRING nor ARGS_GET). Every link of the
+  WooCommerce and Joomla lifts now passes alone, so the likeliest cause
+  left is the score: LiteSpeed has no libinjection and may score the test
+  saves above 30 / 60. The self-test now posts both test saves under
+  fixed thresholds 20, 30, 45, 60, 100 (rules 7700850-7700864,
+  /xpguard-crs-selftest/score/<joomla|wc>_<t>) and reports
+  `self_test.scores`. Next: if a body passes under its lift's threshold
+  but the lift is refused, the chain is at fault; otherwise raise the
+  thresholds for these authenticated saves on LiteSpeed.
+  - **Rollback**: `backup-0.24.13`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.13: LiteSpeed reads no ARGS_GET** (2026-10-31).
   business600 `ways` on 0.24.12: cond_tx_lt, cond_tx_count and
   cond_args_names (phase 2) pass, so the "@lt" guard was not the cause
