@@ -83,6 +83,46 @@ project. It holds the rules, the current state and what is still open.
 - **WHMCS**: a WHMCS module (feature 18) is not wanted; customers buy on
   the website.
 
+## Open for Monday (2026-11-02), after the owner's full scans
+
+Review of the last 12 hours of findings (2026-10-31, 05:30-17:30 UTC, all
+17 servers on 0.24.20). Scanner false positives to fix in the engine
+(with fleetfp_test.go fixtures), not by restoring:
+- **Empty-file hash as malicious**: findings `XG.AI.Malicious` with sha256
+  e3b0c442…b855 (the empty file) and size 0 (business700: topspeed
+  scripts/fvf.php and update_slider.php, clickcre xstore
+  parse-video/index.html), all with the reason "Obfuscated backdoor in
+  mu-plugins". The same hash with reason on business400 flightap
+  dash/al.php (size 456421: hashed while being written). The AI verdict
+  store holds the empty hash as malicious: never ask about, store or apply
+  a verdict for an empty file or the empty hash.
+- **Admin panel upload scripts as PHP.Webshell.Uploader** (AI clean 100,
+  left quarantined): braznsurgical `__agileadmin/product_*.php`,
+  `gallery.php`, `catalogue_edit.php` (business100), bashspowear
+  `bwadmin/product_add.php`, hastycointernati and harrod
+  `softpanel/add_*.php` (business900). Custom admin CRUD pages with an
+  upload form.
+- **Libraries**: PhpSpreadsheet `Shared/Xlsx/AgileEncryption.php`
+  (PHP.Suspicious.EncodedPayload, business900 qhub), penci-feeds
+  `bootstrap.php` (PHP.WebShell.FunctionBypass, business200, two sites,
+  same hash), EWWW Image Optimizer `binaries/pngquant-linux`
+  (Binary.ELF.InWordPressContent, s1 bcconservative, in wp-content/upgrade).
+- topspeed `scripts/functions.php` (PHP.Suspicious.RawUploadName, AI clean)
+  quarantined, restored and quarantined again within minutes: check the
+  loop.
+- Correct quarantines with a wrong AI "clean": Tiny File Manager as
+  `wp-content/log.php` and `wp-admin/includes/log.php` (business600
+  globalon), the dropper `plugin.zip` (business100 jamiaqadria).
+Active reinfections (the site keeps writing new copies; the owner/customer
+must clean the entry point): business200.websoulhost alhafeezenterpri
+(e315e231.zip / d4bb8bf4.zip every few minutes), business300 eurythmi
+(crux-archiver-vox.php, ~15 copies) and biochemi, s5 yoursitebytech
+(drift-extension-jet, 41a3e1ef.zip), server1 biggerbr (vivid-enhancer-vox
+in plugins and mu-plugins, three sites), business600 activat2
+(traitement.php card phishing, 4 copies), business200 safarmu1 (bd-*
+plugins, byte-guard-plus).
+WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
+
 ## How things work (recent, easy to get wrong)
 
 - **WAF direction agreed with the owner (2026-10-31).** Free rules only:
