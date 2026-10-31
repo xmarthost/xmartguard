@@ -240,3 +240,59 @@ func TestAdminAreaSavesWithoutRuleRemoval(t *testing.T) {
 		}
 	}
 }
+
+// business600 (2026-10-31): joomlashare.ir and the customer's other domains
+// were in waf.whitelist_domains, which took out xPGuard's rules
+// 7700003-7709999 whole, the relaxations among them, while the OWASP CRS
+// still blocked: their administrator saves scoring 10 were refused through
+// every relaxation fix since 0.23.28. A whitelisted domain now keeps the
+// relaxations and loses only xPGuard's blocking rules.
+func TestWhitelistedDomainKeepsRelaxations(t *testing.T) {
+	removed := func(id int) bool {
+		for _, p := range strings.Split(whiteDomainRemovals(), ",") {
+			r := strings.TrimPrefix(p, "ctl:ruleRemoveById=")
+			lo, hi, ok := strings.Cut(r, "-")
+			if !ok {
+				hi = lo
+			}
+			a, b := atoi(lo), atoi(hi)
+			if id >= a && id <= b {
+				return true
+			}
+		}
+		return false
+	}
+	for _, id := range []int{IDJoomlaAdmin, IDJoomlaAdmin + 1000, IDWCRestKeys, IDWCRestKeys + 2000, IDAdminArea, IDSessionSite + 1000, IDEditorCookie, IDEditorAdmin, IDAppSave, IDSessionXSS, IDWPAdminExcl, IDWHMCSAdminFetch} {
+		if removed(id) {
+			t.Errorf("relaxation %d removed for whitelisted domains", id)
+		}
+	}
+	for _, id := range []int{IDDisable, IDContentType, IDSoftDeny, IDCentralNoBrowser, 7700301, 7700201, 7700601, 7701001, 7703001} {
+		if !removed(id) {
+			t.Errorf("blocking rule %d kept for whitelisted domains", id)
+		}
+	}
+	src := os.Getenv("XG_CRS_DIR")
+	if src == "" {
+		t.Skip("set XG_CRS_DIR to an OWASP CRS 4 checkout")
+	}
+	crsManager(t, src, `{"waf":{"enabled":true,"level":"normal","wordpress":true,"whitelist_domains":["joomla.example.ir"]}}`, "off", nil)
+	form := "application/x-www-form-urlencoded"
+	joomla := "Cookie: 5f2b8c1d9e4a7f3b6c0d8e2a1b9f4c7d=k3l9m2n8p4q7r1s5t6u0v2w8x3"
+	htmaker := "task=apply&custhead=" + urlEncode("RewriteCond %{HTTP_USER_AGENT} (wget|curl|python-requests|libwww-perl) [NC]\nRewriteRule .* - [F]") +
+		"&cgibin=" + urlEncode("/usr/local/cgi-bin/php.cgi") + "&exceptiondirs=" + urlEncode("cli\nbin\ntmp")
+	cases := []struct {
+		name, host, uri, body string
+		want                  int
+	}{
+		{"Whitelisted domain: .htaccess Maker save with the token", "joomla.example.ir", "/administrator/index.php?option=com_admintools&view=htaccessmaker", htmaker + "&0123456789abcdef0123456789abcdef=1", 200},
+		{"Whitelisted domain: the same without the token", "joomla.example.ir", "/administrator/index.php?option=com_admintools&view=htaccessmaker", htmaker, 403},
+		{"Whitelisted domain: xPGuard's own block rule stays off", "joomla.example.ir", "/wp-content/uploads/x.php", "a=1", 200},
+		{"Other domain: xPGuard's own block rule applies", "other.example.ir", "/wp-content/uploads/x.php", "a=1", 403},
+	}
+	for _, c := range cases {
+		if got := sendBody(t, c.host, "POST", c.uri, form, c.body, joomla); (got == 403) != (c.want == 403) || got == 0 {
+			t.Errorf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+}

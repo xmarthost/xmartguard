@@ -699,7 +699,7 @@ func Render(c settings.WAF, o Options) string {
 		for _, d := range c.WhitelistDomains {
 			alt = append(alt, strings.ReplaceAll(regexp.QuoteMeta(d), `\*`, `[^.]+`))
 		}
-		w(`SecRule SERVER_NAME "@rx ^(?:%s)$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=7700003-7709999"`, strings.Join(alt, "|"), IDWhiteDomains)
+		w(`SecRule SERVER_NAME "@rx ^(?:%s)$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,%s"`, strings.Join(alt, "|"), IDWhiteDomains, whiteDomainRemovals())
 	}
 	if o.Trusted {
 		// Crawlers and monitors keep their User-Agent: the bot rules, the
@@ -1465,3 +1465,62 @@ func quoteAll(l []string) []string {
 // reAPIHeader: header names (lowercase) of authenticated API calls and
 // signed webhooks; such calls skip the IPDB POST rule.
 var reAPIHeader = regexp.MustCompile(`^(?:authorization|x-api-key|api-key|apikey|x-auth-token|x-access-token|x-[a-z0-9-]*-(?:token|key|hmac[a-z0-9-]*)|[a-z0-9-]*signature[a-z0-9-]*)$`)
+
+// whiteDomainKeep are xPGuard rules a whitelisted domain keeps: the ones
+// that let its saves through (exclusions, the session, editor, admin-area,
+// WHMCS, Joomla and WooCommerce API relaxations, the XSS cap that goes with
+// the session relaxation, trusted-service marks, self-test probes). Before
+// 0.24.16 the whitelist took out 7700003-7709999 whole: on joomlashare.ir
+// and joomlashares.com (business600) every relaxation was gone while the
+// OWASP CRS still blocked, so the customer's administrator saves scoring 10
+// were refused from 0.23.28 to 0.24.15.
+func whiteDomainKeep() map[int]bool {
+	keep := map[int]bool{IDTrusted: true, IDTrustedCF: true, IDCPanelOff: true, IDWHMCSAdminFetch: true}
+	for id := IDWPAdminExcl; id <= 7700029; id++ {
+		keep[id] = true // exclusions
+	}
+	for _, id := range []int{IDEditorCookie, IDEditorAuth, IDAutodiscover, IDSessionHost, IDSessionSite, IDSessionXSS, IDWPUser,
+		IDAdminArea, IDAppSave, IDJoomlaAdmin, IDWCRestKeys} {
+		for _, off := range []int{0, 1000, 2000} {
+			keep[id+off] = true
+		}
+	}
+	keep[IDEditorAdmin] = true
+	for i := range mechProbes {
+		keep[IDMechProbe+i] = true
+	}
+	for i := 0; i < len(scoreProbeBodies)*10; i++ {
+		keep[IDScoreProbe+i] = true
+	}
+	return keep
+}
+
+// whiteDomainRemovals takes out every other xPGuard rule of
+// 7700003-7709999 (ctl:ruleRemoveById, which LiteSpeed honours too).
+func whiteDomainRemovals() string {
+	keep := whiteDomainKeep()
+	var parts []string
+	start := -1
+	flush := func(end int) {
+		if start < 0 {
+			return
+		}
+		if start == end {
+			parts = append(parts, fmt.Sprintf("ctl:ruleRemoveById=%d", start))
+		} else {
+			parts = append(parts, fmt.Sprintf("ctl:ruleRemoveById=%d-%d", start, end))
+		}
+		start = -1
+	}
+	for id := 7700003; id <= 7709999; id++ {
+		if keep[id] {
+			flush(id - 1)
+			continue
+		}
+		if start < 0 {
+			start = id
+		}
+	}
+	flush(7709999)
+	return strings.Join(parts, ",")
+}
