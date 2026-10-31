@@ -67,6 +67,7 @@ type Agent struct {
 	syncSettings  bool
 	// summary caches the database-heavy part of the metrics summary.
 	summary summaryCache
+	dash    dashCache
 	// applyFn replaces applySettings in tests.
 	applyFn     func(context.Context, settingsJob) (string, error)
 	mailGuard   atomic.Pointer[mail.EximGuardStatus]
@@ -353,6 +354,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.intelLoop(ctx)
 	go a.centralLoop(ctx)
 	go a.hostNetsLoop(ctx)
+	go a.dashboardLoop(ctx)
 	// Put back system files that older rules quarantined (root's temp
 	// files, SpamAssassin's compiled rules).
 	go func() {

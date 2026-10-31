@@ -267,6 +267,22 @@ func (a *Agent) countWindow(q string, days int) periodCount {
 	return c
 }
 
+// countPeriods is countWindow with the all-time count known (nil: count it).
+func (a *Agent) countPeriods(q string, days int, overall any) periodCount {
+	n, ok := overall.(int64)
+	if !ok {
+		return a.countWindow(q, days)
+	}
+	now := store.Now()
+	span := int64(days) * 86400
+	c := periodCount{Overall: n}
+	_ = a.DB.QueryRow(q, now-span, now+1).Scan(&c.Current)
+	_ = a.DB.QueryRow(q, now-2*span, now-span).Scan(&c.Previous)
+	// The kept total can be minutes older than the window just counted.
+	c.Overall = max(c.Overall, c.Current+c.Previous)
+	return c
+}
+
 type dayPoint struct {
 	Day string `json:"day"`
 	N   int64  `json:"n"`
@@ -370,13 +386,14 @@ func (a *Agent) alerts() alertSet {
 	return alertSet{alerts, ipsListed, domSum.Flagged}
 }
 
-// Dashboard is the server overview.
-func (a *Agent) Dashboard(days int) map[string]any {
-	if days != 7 && days != 30 && days != 90 {
-		days = 30
-	}
-	threats := a.countWindow(`SELECT count(*) FROM findings WHERE created_at >= ? AND created_at < ?`, days)
-	web := a.countWindow(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? AND at < ?`, days)
+// dashboard counts the server overview (Dashboard keeps it).
+func (a *Agent) dashboard(days int) map[string]any {
+	days = dashDays(days)
+	// The all-time counts of findings and WAF blocks are the server card's
+	// (counted every few minutes): two fewer passes over whole tables.
+	card := a.summary.get(a.heavySummary).card
+	threats := a.countPeriods(`SELECT count(*) FROM findings WHERE created_at >= ? AND created_at < ?`, days, card["virus_attacks"])
+	web := a.countPeriods(`SELECT count(*) FROM waf_events WHERE category IN ('waf','bot') AND action LIKE 'Access denied%' AND at >= ? AND at < ?`, days, card["web_attacks"])
 	conns := a.countWindow(`SELECT coalesce(sum(packets),0) FROM drop_stats WHERE minute >= ? AND minute < ?`, days)
 
 	dayExpr := func(col string) string { return `strftime('%Y-%m-%d', ` + col + `, 'unixepoch')` }
@@ -406,8 +423,9 @@ func (a *Agent) Dashboard(days int) map[string]any {
 			"domains_blacklisted": al.domainsListed,
 			"db_infections":       cmsCounts.DBInfected,
 		},
-		"alerts":   al.list,
-		"services": a.ServiceHealth(),
+		"alerts":     al.list,
+		"services":   a.ServiceHealth(),
+		"updated_at": store.Now(),
 	}
 }
 

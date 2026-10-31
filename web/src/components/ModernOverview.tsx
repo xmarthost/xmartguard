@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
@@ -7,6 +7,7 @@ import {
 import { useAgent } from './controls';
 import { serverPageLink } from '../safeLink';
 import { PageLoader } from './ui';
+import { ago } from '../format';
 import { ServiceStrip, change, compact, type Alert, type Dash } from './AttackOverview';
 import { IconTile, Sparkline, TONES, type Tone } from './ModernBits';
 
@@ -164,7 +165,21 @@ function SeriesChart({ data, color, name, line, height = 'h-64' }: { data: { day
 
 /** The Modern style's server dashboard (same data as AttackOverview). */
 export default function ModernOverview({ serverId, online, days, setDays }: { serverId: string; online: boolean; days: number; setDays?: (d: number) => void }) {
-  const { data, error } = useAgent<Dash>(online ? serverId : undefined, 'dashboard.get', { days }, 60_000, { cache: true });
+  const { data, error, reload } = useAgent<Dash>(online ? serverId : undefined, 'dashboard.get', { days }, 60_000, { cache: true });
+  // The agent answers at once with its kept counts and counts again in the
+  // background when they are old: ask again shortly for the new ones.
+  const retries = useRef(0);
+  const updated = data?.updated_at;
+  useEffect(() => {
+    if (!updated || Date.now() / 1000 - updated < 90) {
+      retries.current = 0;
+      return;
+    }
+    if (retries.current >= 3) return;
+    retries.current++;
+    const t = setTimeout(reload, 10_000);
+    return () => clearTimeout(t);
+  }, [updated, data, reload]);
   const [allAlerts, setAllAlerts] = useState(false);
   const [wk1, setWk1] = useState(false);
   const [ln1, setLn1] = useState(false);
@@ -220,6 +235,7 @@ export default function ModernOverview({ serverId, online, days, setDays }: { se
   return (
     <div className="space-y-5">
       {data.services && data.services.length > 0 && <ServiceStrip services={data.services} />}
+      {updated && <div className="-mt-3 text-right text-xs text-slate-400">Updated {ago(new Date(updated * 1000).toISOString())}</div>}
       <div className="grid gap-5 md:grid-cols-3">
         <Kpi tone="red" icon={<ShieldAlert />} p={data.threats} label="Threats Stopped" series={threatSeries} />
         <Kpi tone="blue" icon={<Globe />} p={data.web_attacks} label="Web Attacks Blocked" series={web.map((r) => r.n)} />

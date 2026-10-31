@@ -27,6 +27,8 @@ export interface Dash {
   summary: { outdated_cms: number; cms_issues: number; ips_blacklisted: number; domains_blacklisted: number; db_infections: number };
   alerts: Alert[];
   services?: Service[];
+  /** When the agent counted it (unix seconds; agents from 0.24.7). */
+  updated_at?: number;
 }
 interface Service {
   name: string;

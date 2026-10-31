@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.6** (see `VERSION`).
+- Current release: **0.24.7** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.6 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.7 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.6: `--branch backup-0.24.5`; see "Rollback" under 0.24.6 below);
+  0.24.7: `--branch backup-0.24.6`; see "Rollback" under 0.24.7 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,19 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.7: server dashboard opens at once** (2026-10-31). A
+  server not opened for a while took 10 s and more: `dashboard.get`
+  counted whole tables (millions of WAF events) on every open, on the
+  agent's only database connection (2M events: 7.4 s). Now the agent keeps
+  the answer per period (`dashcache.go`): an open gets the kept one at
+  once, one older than a minute is counted again in the background, and
+  the 30-day view is counted every 10 minutes (first at 2 minutes after
+  start), so even a first open shows numbers at most minutes old. The
+  all-time totals come from the server card's counts (two fewer passes).
+  The answer carries `updated_at`; the page shows "Updated ... ago" and,
+  when it got old counts, asks again after 10 s (up to 3 times).
+  Tests: `TestDashboardKeptAndRefreshed`, `TestDashboardUpdatedAt`.
+  - **Rollback**: `backup-0.24.6`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.6: false positives of the full scans of 2026-10-30**
   (all servers; reviewed while the scans ran).
   - `Htaccess.Hacked.SearchCloaking` (0.24.2) took Softaculous's "Enable bot
