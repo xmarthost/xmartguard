@@ -36,9 +36,19 @@ func TestFamilyRemoveSetupRealCRS(t *testing.T) {
 			t.Errorf("id %d outside the range", id)
 		}
 	}
-	// No other family's rules (SQL injection stays checked).
-	if strings.Contains(s, "=942") || strings.Contains(s, "=949") {
-		t.Fatal("removes SQL injection or the blocking evaluation")
+	// Never the blocking evaluation; and the relaxations for Joomla saves
+	// and WooCommerce API writes leave SQL injection checked (only the
+	// exclusions of removeTags, which took 942 out by tag before, set it).
+	if strings.Contains(s, "=949") {
+		t.Fatal("removes the blocking evaluation")
+	}
+	for _, f := range [][]string{joomlaAdminFamilies, wcRestFamilies} {
+		if strings.Contains(familyFlags(f...), "xg_no_sqli") {
+			t.Fatalf("relaxation %v skips SQL injection", f)
+		}
+	}
+	if !strings.Contains(removeTags(), "setvar:tx.xg_no_sqli=1") {
+		t.Fatal("exclusions do not set the SQL injection flag")
 	}
 	if !strings.Contains(s, `SecRule &TX:xg_strict "@ge 1"`) {
 		t.Fatal("no withdrawal for a bad reputation")

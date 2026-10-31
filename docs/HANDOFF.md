@@ -142,6 +142,10 @@ project. It holds the rules, the current state and what is still open.
   - Next: a LiteSpeed replacement for the multipart header checks (922100,
     922120, 922130) needs a variable LiteSpeed fills for multipart parts;
     probe REQUEST_BODY / FILES on a multipart post first.
+  - Apache sweep (each test alone): only the two known failures
+    (`TestExclusionsWithCRS` on 4.30, `TestCRSSelfTestEveryLevel` on
+    4.18, both on 0.24.16 too); `TestWooReviewWithCRS` once "connection
+    refused" (Apache not up), passed twice alone.
   - **Rollback**: `backup-0.24.17`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.17: engine report; relaxations take rule families out**
   (2026-10-31).
