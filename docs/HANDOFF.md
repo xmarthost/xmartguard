@@ -146,6 +146,18 @@ project. It holds the rules, the current state and what is still open.
     (`TestExclusionsWithCRS` on 4.30, `TestCRSSelfTestEveryLevel` on
     4.18, both on 0.24.16 too); `TestWooReviewWithCRS` once "connection
     refused" (Apache not up), passed twice alone.
+  - **Result on the fleet (0.24.18, business600 and business100):** ways
+    `remove_range`, `remove_by_tag` and `family_flag` all pass. So
+    LiteSpeed does honour ctl:ruleRemoveById ranges and
+    ctl:ruleRemoveByTag (the old notes saying it ignores removal by tag
+    were wrong; the whitelist's ranges work); only
+    ctl:ruleRemoveTargetByTag does nothing (`remove_xss_tag`). The flags
+    are a second safeguard. Still not working on LiteSpeed: the target
+    removals of `removeTagTargets` (7700017 static-file cookies, 7700019
+    comment fields, 7700023 password fields, 7700014 WooCommerce Store
+    API PHP rules). Next: probe ctl:ruleRemoveTargetById on LiteSpeed and,
+    if it works, write those exclusions by id range; and probe which
+    variable LiteSpeed fills for multipart parts (922100/922120/922130).
   - **Rollback**: `backup-0.24.17`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.17: engine report; relaxations take rule families out**
   (2026-10-31).
