@@ -125,7 +125,9 @@ project. It holds the rules, the current state and what is still open.
     922130 cannot be replaced by a rule and stay a gap (uploads are still
     scanned by 7700101).
   - Tests: `TestCRSSelfTestEveryLevel` (multipart seen on Apache),
-    `TestEngineReportProbes`.
+    `TestEngineReportProbes`. Apache sweep: only the two known failures;
+    `TestWooReviewWithCRS` again once "connection refused" (Apache not
+    up), passed twice alone.
   - **Rollback**: `backup-0.24.18`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.18: exclusions work without removal by tag** (2026-10-31).
   First engine reports (0.24.17; business100, s1.cobuildhost and the
