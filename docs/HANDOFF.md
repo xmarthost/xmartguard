@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.15** (see `VERSION`).
+- Current release: **0.24.16** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.15 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.16 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.15: `--branch backup-0.24.14`; see "Rollback" under 0.24.15 below);
+  0.24.16: `--branch backup-0.24.15`; see "Rollback" under 0.24.16 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,31 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.16: whitelisted domains keep the relaxations**
+  (2026-10-31). The customer retried at 11:35-11:37 UTC (0.24.15): the
+  .htaccess Maker and Global Configuration saves still refused at score
+  10 (rule 949110). Cause: business600's `waf.whitelist_domains` lists
+  joomlashare.ir/.net/.org, joomlashares.com, joomlatranslate.com and
+  proshare.ir, and a whitelisted domain had `ctl:ruleRemoveById=
+  7700003-7709999`: every xPGuard rule went, the relaxations among them,
+  while the OWASP CRS still blocked. So no relaxation fix since 0.23.28
+  ever reached these domains (on Apache either). Now
+  `whiteDomainRemovals` takes out every xPGuard rule except
+  `whiteDomainKeep`: the exclusions (7700010-7700029), the session,
+  editor, admin-area, WHMCS, Joomla and WooCommerce API relaxations
+  (with their +1000/+2000 variants), the session XSS cap, trusted
+  marks, cPanel-off and the self-test probes. Blocking rules (content
+  type, soft deny, CAPTCHA gates, 7700100+) still go.
+  `TestWhitelistedDomainKeepsRelaxations` (unit + Apache): fails with
+  the old removal (the token save refused), passes now.
+  - Not fixed here: on LiteSpeed the score rises with the threshold.
+    s1.cobuildhost.com ssshoesmaker.com (CJdropshipping, not business900
+    as written under 0.24.9: a parallel-query mix-up): the same product
+    POST scored 13 before and 39 at 11:49 UTC with the WooCommerce lift
+    (30) in place; the self-test's XSS body 21 under threshold 20, 54
+    under 30 and 45. Cause unknown (rules counted more than once?). Next:
+    compare with how cPGuard runs CRS on LiteSpeed (no copying).
+  - **Rollback**: `backup-0.24.15`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.15: probe lines in the WAF log** (2026-10-31).
   business600 (agent 0.24.13 at 10:03 UTC, 0.24.14 at 10:10 UTC; each
   result checked to come from that version by its new probes): `scores`
