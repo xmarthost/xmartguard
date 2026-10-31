@@ -343,3 +343,36 @@ func wcRestKeysSetup() string {
 		head(IDWCRestKeys+1000) + `  SecRule ARGS_GET:oauth_consumer_key "@rx ^ck_[0-9a-f]{40}$" "t:none,chain"` + "\n" + set +
 		head(IDWCRestKeys+2000) + `  SecRule REQUEST_HEADERS:Authorization "@rx ^basic\s+[a-z0-9+/=]{20,}$" "t:none,t:lowercase,chain"` + "\n" + set
 }
+
+// IDMechProbe: rules that only answer the self-test's posts to
+// /xpguard-crs-selftest/mech/<name>, each relaxing in one way, to learn
+// which ways a web server's engine honours (on LiteSpeed, business600,
+// 2026-10-31, raising the threshold from a chained rule did nothing).
+const IDMechProbe = 7700080
+
+// mechProbes: name, phase and actions of each way.
+var mechProbes = []struct{ name, phase, actions string }{
+	{"thr_single", "1", "setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"},
+	{"thr_chain", "1", "chain"},
+	{"thr_phase2", "2", "setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"},
+	{"remove_949110", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveById=949110"},
+	{"remove_xss_tag", "1", "setvar:tx.xg_soft=0,ctl:ruleRemoveTargetByTag=attack-xss;ARGS"},
+	{"detection_only", "1", "setvar:tx.xg_soft=0,ctl:ruleEngine=DetectionOnly"},
+	{"allow", "1", "allow"},
+}
+
+func mechProbeSetup() string {
+	var b strings.Builder
+	b.WriteString("# Self-test only: which ways of relaxing this engine honours (xPGuard).\n")
+	for i, p := range mechProbes {
+		act := "pass," + p.actions
+		if p.actions == "allow" {
+			act = "allow" // a disruptive action of its own, not with pass
+		}
+		fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mech/%s" "id:%d,phase:%s,t:none,nolog,%s"`+"\n", crsTestPath, p.name, IDMechProbe+i, p.phase, act)
+		if p.actions == "chain" {
+			b.WriteString(`  SecRule REQUEST_METHOD "@streq POST" "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"` + "\n")
+		}
+	}
+	return b.String()
+}

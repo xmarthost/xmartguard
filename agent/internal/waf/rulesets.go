@@ -282,7 +282,7 @@ func (m *Manager) extras(t Target) (string, map[string]string, []RuleSetState) {
 		}
 		// Every level: the WHMCS admin exclusion was always on (audit of
 		// my.galaxyhoster.com's General Settings save on LiteSpeed).
-		setupText += appSaveSetup() + wcRestKeysSetup()
+		setupText += appSaveSetup() + wcRestKeysSetup() + mechProbeSetup()
 		if lv := m.level(); lv != "strict" {
 			setupText += sessionSetup() + editorSetup() + autodiscoverSetup()
 			post += sessionPost()

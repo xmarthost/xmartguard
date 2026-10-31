@@ -37,6 +37,8 @@ type SelfTest struct {
 	// web server's engine reads differently shows here (joomlashares.com
 	// on LiteSpeed: the header-based lifts never applied).
 	Lifts map[string]string `json:"lifts,omitempty"`
+	// Ways: which ways of relaxing the engine honours (mechProbes).
+	Ways map[string]string `json:"ways,omitempty"`
 }
 
 // isSelfTest reports whether an event came from the agent's own check.
@@ -192,7 +194,30 @@ func runSelfTest(crs bool, captchaURL string, wait time.Duration) SelfTest {
 		}
 		if st.CRS == "blocked" {
 			st.Lifts = liftChecks()
+			st.Ways = wayChecks()
 		}
 	}
 	return st
+}
+
+// wayChecks posts the same weak attack (script in a form field, refused at
+// the default threshold) to each way's probe address.
+func wayChecks() map[string]string {
+	body := "description=" + url.QueryEscape(`<p onclick="zoom()">Leather shoes</p><img src="x.jpg" onerror="this.style.display='none'">`)
+	out := map[string]string{}
+	if code, err := probePost(crsTestPath+"/mech/none", body); err == nil {
+		out["none"] = fmt.Sprintf("HTTP %d", code)
+	}
+	for _, p := range mechProbes {
+		code, err := probePost(crsTestPath+"/mech/"+p.name, body)
+		switch {
+		case err != nil:
+			out[p.name] = err.Error()
+		case code == 403 || code == 406 || (code >= 300 && code < 400):
+			out[p.name] = fmt.Sprintf("refused (HTTP %d)", code)
+		default:
+			out[p.name] = "passes"
+		}
+	}
+	return out
 }

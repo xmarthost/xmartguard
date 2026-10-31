@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.10** (see `VERSION`).
+- Current release: **0.24.11** (see `VERSION`).
 
 ## Working rules
 
@@ -34,7 +34,7 @@ project. It holds the rules, the current state and what is still open.
   restored.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
-  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.10 too), then push to `main`:
+  `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.11 too), then push to `main`:
   ```
   git push -q -u origin <branch> && git fetch -q origin main && git merge-base --is-ancestor origin/main HEAD && git push -q origin HEAD:main
   ```
@@ -44,7 +44,7 @@ project. It holds the rules, the current state and what is still open.
   curl -fsSL https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/setup-almalinux.sh -o /root/setup.sh && bash /root/setup.sh --domain app.xpguard.org --email support@xmarthost.com --billing-site https://xpguard.org
   ```
   Rollback is the same command with `--branch backup-<version>` (for
-  0.24.10: `--branch backup-0.24.9`; see "Rollback" under 0.24.10 below);
+  0.24.11: `--branch backup-0.24.10`; see "Rollback" under 0.24.11 below);
   agents never downgrade on their own (0.23.0), so they are put back by
   hand.
 - **Commits**: no AI model names in commits or code. End each commit with
@@ -85,6 +85,24 @@ project. It holds the rules, the current state and what is still open.
 
 ## How things work (recent, easy to get wrong)
 
+- **Release 0.24.11: which relaxations LiteSpeed honours** (2026-10-31).
+  0.24.10's self-test, same rules on both servers:
+  business700 (Apache) `lifts` joomla_admin_save and
+  woocommerce_api_write "passes"; business600 (LiteSpeed) both "refused
+  (HTTP 403)". So on LiteSpeed's engine raising
+  tx.inbound_anomaly_score_threshold from a chained rule does nothing:
+  every threshold relaxation of xPGuard (session, editor, admin area,
+  WHMCS, Joomla, WooCommerce API) may have been without effect on the
+  LiteSpeed servers (most of the fleet). The self-test now also posts the
+  same weak attack to /xpguard-crs-selftest/mech/<way>, each relaxed in
+  one way by rules 7700080-7700086 (`mechProbes`): thr_single (one
+  SecRule setting the threshold), thr_chain, thr_phase2, remove_949110
+  (ctl:ruleRemoveById), remove_xss_tag (ctl:ruleRemoveTargetByTag),
+  detection_only (ctl:ruleEngine), allow; "none" is the control
+  (403 at levels normal and strict). Results in waf.status
+  `self_test.ways`. Next: read business600's `ways` and move the
+  relaxations to a way LiteSpeed honours.
+  - **Rollback**: `backup-0.24.10`; agents: `cp -a /opt/xpguard/bin/xpguard-agent.prev /opt/xpguard/bin/xpguard-agent && systemctl restart xpguard-agent`.
 - **Release 0.24.10: duplicate WAF rule ids** (2026-10-31). 0.24.9's
   WooCommerce API rule used 7700065, which the soft block's IPDB marks
   (`IDSoftStrictIPDB`+i: 7700064-7700066) already use, and 0.24.8's Joomla

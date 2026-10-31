@@ -571,6 +571,16 @@ func TestCRSSelfTestEveryLevel(t *testing.T) {
 		if st.Lifts["woocommerce_api_write"] != "passes" || (level != "strict") != (st.Lifts["joomla_admin_save"] == "passes") {
 			t.Errorf("%s: lifts %v", level, st.Lifts)
 		}
+		// On Apache every way of relaxing works; without one the probe is refused.
+		for _, p := range mechProbes {
+			if st.Ways[p.name] != "passes" {
+				t.Errorf("%s: way %s: %s", level, p.name, st.Ways[p.name])
+			}
+		}
+		// (At the low level, threshold 20, the weak probe passes anyway.)
+		if level != "low" && !strings.HasPrefix(st.Ways["none"], "HTTP 403") {
+			t.Errorf("%s: probe without a way: %s", level, st.Ways["none"])
+		}
 	}
 }
 
@@ -637,7 +647,7 @@ func TestEveryRuleIDOnceOnApache(t *testing.T) {
 			seen[id[1]] = filepath.Base(f)
 		}
 	}
-	for _, id := range []string{"7700065", "7700070", "7700072", "7700064", "7700038"} {
+	for _, id := range []string{"7700065", "7700070", "7700072", "7700064", "7700038", "7700080", "7700086"} {
 		if seen[id] == "" {
 			t.Errorf("rule %s not rendered (the test no longer covers it)", id)
 		}
