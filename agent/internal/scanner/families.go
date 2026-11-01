@@ -61,6 +61,7 @@ var (
 	reWPLoad       = regexp.MustCompile(`(?i)wp-load\.php|wp-blog-header\.php`)
 	reAuthCookie   = regexp.MustCompile(`(?i)\bwp_set_auth_cookie\s*\(|\bwp_set_current_user\s*\(`)
 	reCreateUser   = regexp.MustCompile(`(?i)\bwp_(?:create|insert)_user\s*\(`)
+	reCLIOnly      = regexp.MustCompile(`(?i)^\s*<\?php\s*(?:declare\s*\([^)]*\)\s*;\s*)?if\s*\(\s*(?:PHP_SAPI|php_sapi_name\s*\(\s*\))\s*!==?\s*['"]cli['"]\s*\)\s*\{?\s*(?:exit|die)\b`)
 	reAdminRole    = regexp.MustCompile(`(?i)['"]administrator['"]|->set_role\s*\(`)
 	reDisableFuncs = regexp.MustCompile(`(?i)\bini_set\s*\(\s*['"](?:disable_functions|open_basedir|safe_mode)['"]`)
 	// A list of exec-family names: 'system', 'exec', 'shell_exec', …
@@ -240,7 +241,9 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 		return &verdict{CatVirus, "PHP.Obfuscated.EvalTemplate"}
 	}
 	// Small scripts that load WordPress to log in as, or create, an admin.
-	if n < 20000 && m(reWPLoad) && m(reAdminRole) {
+	// (Not a developer's command-line script that stops unless run from a
+	// shell: tools/sync-figma-*.php of a site's own theme, metasynctech.)
+	if n < 20000 && m(reWPLoad) && m(reAdminRole) && !reCLIOnly.Match(s[:min(len(s), 400)]) {
 		if m(reAuthCookie) {
 			return &verdict{CatVirus, "PHP.Backdoor.WPAdminLogin"}
 		}

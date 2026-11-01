@@ -187,7 +187,8 @@ func inertPHP(content []byte) bool {
 	}
 	code := stripPHPComments(c[5:])
 	code = bytes.TrimSpace(code)
-	if reStopNow.Match(code) {
+	// Nothing after the tag ("<?php\n", 6 bytes): no code to run.
+	if len(code) == 0 || reStopNow.Match(code) {
 		return true
 	}
 	if !bytes.HasPrefix(code, []byte("return")) {

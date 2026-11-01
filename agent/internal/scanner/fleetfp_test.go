@@ -1594,4 +1594,20 @@ func TestFleetFullScanOwnPages(t *testing.T) {
 			t.Errorf("%s: %+v", name, d)
 		}
 	}
+
+	// A theme's own command-line tools (metasynctech tools/sync-figma-*.php)
+	// log in as the first administrator, but stop unless run from a shell.
+	cli := "<?php\n/** Run: php tools/sync-figma-footer.php */\nif ( PHP_SAPI !== 'cli' ) { exit( 1 ); }\nrequire dirname( __DIR__, 4 ) . '/wp-load.php';\n" +
+		"$admins = get_users( array( 'role' => 'administrator', 'number' => 1 ) );\nwp_set_current_user( $admins[0]->ID );\nupdate_field( 'footer_logo', 12, 'option' );\necho \"done\\n\";\n"
+	if d := analyze(".php", []byte(cli)); d != nil {
+		t.Errorf("command-line tool: %+v", d)
+	}
+	web := strings.Replace(cli, "if ( PHP_SAPI !== 'cli' ) { exit( 1 ); }\n", "if ( $_GET['k'] !== 'x' ) { exit( 1 ); }\n", 1)
+	if d := analyze(".php", []byte(web)); d == nil || d.Signature != "PHP.Backdoor.WPAdminLogin" {
+		t.Errorf("web login: %+v", d)
+	}
+	// An empty hidden file left by a kit ("<?php\n") runs nothing.
+	if !inertPHP([]byte("<?php\n")) || inertPHP([]byte("<?php\neval($_POST[1]);")) {
+		t.Errorf("empty PHP file")
+	}
 }

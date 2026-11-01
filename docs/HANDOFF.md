@@ -146,6 +146,30 @@ fixtures, each fails on the old code; the attacker's shapes stay caught):
   end or the line (a page's include of header.php is not an include of
   the "bg.png" in its CSS).
 
+Second round (same day): samples of every group the AI called malicious
+or suspicious or did not judge (110 files read, 1-3 per signature, other
+accounts each): 101 correct, 6 false, 3 unsure. Every large group held
+(Htaccess.PHPLock 1325, Webshell.Uploader 167, ClickFix 158, worksec.php
+148, the .sc_ campaign zips and loaders, ~/.cache/.<sha1> daemons, which
+are malware: a process keeps them coming back, kill it). False:
+metasynctech theme tools/*.php (4, WPAdminLogin; restored), the
+nwebsolutiontool admin pages (left for the owner, unsafe uploads), a
+6-byte "<?php" hidden file, the Installatron worker it-api.php
+(zetasolve; a migration leftover, safe to delete). More engine fixes:
+- PHP.Backdoor.WPAdminLogin: not a file that exits unless PHP_SAPI is
+  "cli" (a developer's command-line tool cannot be reached from the web).
+- inertPHP: "<?php" with nothing after it runs nothing.
+For the owner: hidden admins made by the backdoors must be removed from
+the databases (wp_update: nsantosm, moomalsa, isoqar; admindefault:
+nsantosm; root: uqpblrxn); infected genuine files need a clean copy
+(woodmart vc-functions.php, hello-elementor elementor-functions.php,
+Elementor placeholder-image.php, wp-includes class-wp-widget-recent-
+comments.php of uqpblrxn); rktradco's casino posts are in its database;
+webdesynix's .sc_ loader names paths of innov8webs (check account
+isolation on business200.websoulhost); xmartgd keeps cPGuard's quarantine
+inside public_html (the scanner reads it: decide whether other products'
+quarantine folders are skipped).
+
 Plan for the next fixes (same review of the 10 servers still scanning,
 then one release with all fixes):
 1. Encoded data that never runs (PHP.Suspicious.EncodedPayload: test
@@ -167,7 +191,9 @@ then one release with all fixes):
 7. Disguised.MarkupInImage on an HTTrack meta-refresh stub saved as .jpg.
 8. The split base64 name of the seoaal theme ($f($read_more_text), output
    only).
-9. vps900 essentia full scan stuck (1,360 files in 18 hours) and
+9. Installatron worker (signed commands) and other products' quarantine
+   folders.
+10. vps900 essentia full scan stuck (1,360 files in 18 hours) and
    business500 slow on the "nobody" unit: scanner stall to find.
 
 ## Open for Monday (2026-11-02), after the owner's full scans
