@@ -546,7 +546,11 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	// '<?php die("Access Denied"); ?>') is not judged by its text; known
 	// malware bytes still are (below).
 	if !(bigPHPExts[ext] && inertPHP(content)) {
-		if d := analyze(ext, content); d != nil {
+		// (Encoded data in a package's own tests - keccak and bitwasp test
+		// vectors, SwiftMailer's NTLM samples, geo-io's WKB fixtures - is
+		// test data: that weak sign there is no finding, the rules below
+		// still read the file.)
+		if d := analyze(ext, content); d != nil && !packageTestData(path, d) {
 			return final(capHeuristic(path, ext, d))
 		}
 		if r := Match(ext, content); r != nil {
@@ -1671,6 +1675,10 @@ var (
 	rePackageTests  = regexp.MustCompile(`/(?:vendor/[^/]+|node_modules/(?:@[^/]+/)?[^/]+|wp-content/(?:plugins|themes)/[^/]+)/(?:[^/]+/)*tests?/`)
 	reComposerPkg   = regexp.MustCompile(`/vendor/[^/]+/[^/]+/`)
 )
+
+func packageTestData(path string, d *Detection) bool {
+	return d.Signature == "PHP.Suspicious.EncodedPayload" && rePackageTests.MatchString(path)
+}
 
 func capHeuristic(path, ext string, d *Detection) *Detection {
 	// Composer packages (PHPStan) start from their own .phar.

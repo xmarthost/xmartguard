@@ -1610,4 +1610,54 @@ func TestFleetFullScanOwnPages(t *testing.T) {
 	if !inertPHP([]byte("<?php\n")) || inertPHP([]byte("<?php\neval($_POST[1]);")) {
 		t.Errorf("empty PHP file")
 	}
+
+	// PayPal Payments: a long settings line, a closure and an instanceof
+	// assert. An assert of code built on one long line stays caught.
+	long := strings.Repeat("'k' => array('title' => __('Google Pay Button', 'x'), 'type' => 'checkbox'), ", 40)
+	paypal := "<?php\nnamespace WooCommerce\\PayPalCommerce\\Googlepay;\nreturn array('wcgateway.settings.fields' => function (array $fields, $container): array {\n" +
+		"$insert_after = function (array $a, string $k, array $n): array { return array_merge($a, $n); };\n$dm = $container->get('wcgateway.display-manager');\nassert($dm instanceof DisplayManager);\n" +
+		"return $insert_after($fields, 'h', array(" + long + "));\n});\n"
+	if d := analyze(".php", []byte(paypal)); d != nil {
+		t.Errorf("PayPal settings: %+v", d)
+	}
+	packed := "<?php $f='str'.'rev'; $x=$f('abc'); assert($x instanceof Foo); eval(base64_decode('" + strings.Repeat("ZWNobyAxOw==", 300) + "'));"
+	if d := analyze(".php", []byte(packed)); d == nil || d.Category != CatVirus {
+		t.Errorf("packed eval next to a type assert: %+v", d)
+	}
+
+	// Fixed commands and escaped arguments; raw request data stays caught.
+	for name, body := range map[string]string{
+		"log viewer local IP": "<?php\nnamespace Opcodes\\LogViewer\\Utils;\nclass Utils { public static function localIp() { if (isset($_SERVER['SERVER_ADDR'])) { return $_SERVER['SERVER_ADDR']; }\n$ip = shell_exec(\"hostname -I | awk '{print $1}'\");\nreturn trim($ip); } }\n",
+		"ffmpeg on an upload":  "<?php\nsession_start();\n$in = $_FILES['video']['tmp_name'];\n$out = 'skills/' . uniqid() . '.mp4';\nexec('ffmpeg -i ' . escapeshellarg($_FILES['video']['tmp_name']) . ' -vcodec libx264 ' . escapeshellarg($out), $o, $rc);\n",
+	} {
+		if d := analyze(".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	for name, body := range map[string]string{
+		"command from the request": "<?php\nif (isset($_GET['c'])) { system($_GET['c']); }\n",
+		"argument not escaped":     "<?php\nexec('ping -c 1 ' . $_POST['host'] . ' ' . escapeshellarg('x'), $o);\n",
+	} {
+		if d := analyze(".php", []byte(body)); d == nil || d.Category != CatVirus {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+
+	// Test vectors in a package's tests folder; the same blob in a theme's
+	// own file is still reported, and a shell in a tests folder still caught.
+	s := newScanner(t)
+	var noise []byte
+	for h := sha256.Sum256([]byte("vector")); len(noise) < 768; h = sha256.Sum256(h[:]) {
+		noise = append(noise, h[:]...)
+	}
+	vec := "<?php\nnamespace kornrunner;\nfinal class KeccakTest extends TestCase { public function testVectors() { $raw = base64_decode('" + base64.StdEncoding.EncodeToString(noise) + "');\n$this->assertSame(64, strlen(Keccak::hash($raw, 256))); } }\n"
+	if d := s.checkContent("/home/u/public_html/vendor/kornrunner/keccak/test/KeccakTest.php", ".php", []byte(vec)); d != nil {
+		t.Errorf("package test vectors: %+v", d)
+	}
+	if d := s.checkContent("/home/u/public_html/wp-content/themes/x/functions.php", ".php", []byte(vec)); d == nil {
+		t.Errorf("the same outside tests: not reported")
+	}
+	if d := s.checkContent("/home/u/public_html/vendor/a/b/tests/x.php", ".php", []byte("<?php\nif (isset($_GET['c'])) { system($_GET['c']); }\n")); d == nil {
+		t.Errorf("shell in a tests folder: not caught")
+	}
 }

@@ -106,7 +106,10 @@ func analyzePHP(content []byte) *verdict {
 	}
 	nr := func(a, b *regexp.Regexp, window int) bool { return may(a, low) && may(b, low) && near(s, a, b, window) }
 
-	evalOrAssert := m(reEvalSink)
+	// assert($x instanceof Type) and assert(is_string($x)) check a type and
+	// run no code (WooCommerce PayPal Payments asserts its services on one
+	// long line of settings; business900, 2026-11-01).
+	evalOrAssert := m(reEvalSink) && (!may(reTypeAssert, low) || reEvalSink.Match(reTypeAssert.ReplaceAll(reBoolAssert.ReplaceAll(s, []byte("check(")), []byte("check("))))
 	decoders := cnt(reDecoder)
 	hasInput := m(reInput)
 	longBlob := m(reLongB64)
@@ -150,7 +153,11 @@ func analyzePHP(content []byte) *verdict {
 	if (m(reSink) || m(reExecBare)) && hasInput && nr(reSinkOrExec, reWebInput, 200) {
 		// Not a method of that name (Afterlogic DAV's public function
 		// exec()) nor a fixed command (Yii's exec('whoami')).
-		if c := reSinkFixed.ReplaceAll(s, nil); reSinkOrExec.Match(c) && near(c, reSinkOrExec, reWebInput, 200) {
+		// Nor request data passed through escapeshellarg() (ffmpeg on an
+		// upload, a school portal's save_skill_upload.php).
+		c := reShellEscaped.ReplaceAll(reSinkFixed.ReplaceAll(s, nil), []byte("''"))
+		escaped := len(c) != len(s) && m(reShellEscaped)
+		if reSinkOrExec.Match(c) && near(c, reSinkOrExec, reWebInput, 200) && (!escaped || argOnInput(reSinkArgs, c)) {
 			return &verdict{CatVirus, "PHP.Backdoor.CommandInjection"}
 		}
 	}
@@ -660,11 +667,23 @@ func evalOnInput(s []byte) bool {
 
 // reSinkFixed: a function declaration named like a command function, or a
 // command call whose whole argument is a string with no variable in it.
-var reSinkFixed = regexp.MustCompile(`(?i)\bfunction\s+&?\s*(?:system|exec|shell_exec|passthru|proc_open|popen|pcntl_exec)\s*\(|\b(?:system|exec|shell_exec|passthru|popen)\s*\(\s*(?:'[^'$\\]*'|"[^"$\\{]*")\s*[,)]`)
+// (A fixed command may name awk's fields: "hostname -I | awk '{print $1}'",
+// Laravel log-viewer; "$1" is no PHP variable.)
+var reSinkFixed = regexp.MustCompile(`(?i)\bfunction\s+&?\s*(?:system|exec|shell_exec|passthru|proc_open|popen|pcntl_exec)\s*\(|\b(?:system|exec|shell_exec|passthru|popen)\s*\(\s*(?:'[^'$\\]*'|"(?:[^"$\\{]|\$\d|\{(?:print|printf)\b)*")\s*[,)]`)
+
+// reSinkArgs: a command call and its arguments (group 1).
+var reSinkArgs = regexp.MustCompile(`(?i)(?:^|[^\w$>:\\])(?:system|shell_exec|passthru|proc_open|popen|pcntl_exec|exec)\s*\(([^;]{0,300})`)
+
+// reShellEscaped: an escapeshellarg()/escapeshellcmd() call (one level of
+// inner parentheses).
+var reShellEscaped = regexp.MustCompile(`(?i)\bescapeshell(?:arg|cmd)\s*\((?:[^()]|\([^()]*\))*\)`)
 
 // reBoolAssert: assert() of a type or presence check, which runs no code
 // (OpenTelemetry, php-saml: assert(is_string($value)) on a value from
 // $_SERVER or $_REQUEST). A call inside it is still read on its own.
+// reTypeAssert: assert() of an instanceof check.
+var reTypeAssert = regexp.MustCompile(`(?i)\bassert\s*\(\s*\$[\w>-]+\s+instanceof\s+[\w\\]+\s*\)`)
+
 var reBoolAssert = regexp.MustCompile(`(?i)\bassert\s*\(\s*!?\s*(?:is_\w+|isset|empty|in_array|array_key_exists|ctype_\w+|method_exists|function_exists|class_exists|property_exists|file_exists|is_a|is_subclass_of)\s*\(`)
 
 var reLiteralMail = regexp.MustCompile(`(?i)\$(\w+)\s*=\s*["'][\w.+-]+@[\w-]+(?:\.[\w-]+)+["']\s*;`)

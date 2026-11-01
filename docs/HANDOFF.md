@@ -256,6 +256,22 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.21: scanner false positives of the full scans**
+  (2026-11-01). The owner asked for the release after the review of the
+  7 finished servers (not waiting for the other 10). Fixes, each with an
+  inert fixture in fleetfp_test.go TestFleetFullScanOwnPages that fails
+  on 0.24.20: Webshell.Uploader (extension list, login in an included
+  file, a database record), Spam.Mailer (contact form with a copy to the
+  visitor), Planted.HiddenFile (updater `.temp.<ns>.` copies beside the
+  file), SplitFunctionName (Codestar helpers), IncludeNonPHP (stops at the
+  PHP block's end), WPAdminLogin (command-line-only tools), inertPHP (an
+  empty "<?php"), evalOrAssert (assert of instanceof/type checks runs
+  nothing: PayPal Payments' PackedOneLiner), CommandInjection (awk's $1
+  in a fixed command; request data only inside escapeshellarg), and
+  EncodedPayload in a package's tests folder (test vectors). Still open:
+  see "Plan for the next fixes" below (vendor file writers, rule words in
+  security plugins, new $class factories, seraphinite, penci, HTTrack
+  stub, seoaal, Installatron, other products' quarantine, scan stalls).
 - **Release 0.24.20: LiteSpeed comment exclusion** (2026-10-31).
   0.24.19's probes on business600: `remove_target_ids` and
   `remove_target_range` refused, so LiteSpeed takes no field out of a
