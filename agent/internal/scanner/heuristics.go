@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"math"
 	"regexp"
 	"strconv"
@@ -167,7 +168,9 @@ func analyzePHP(content []byte) *verdict {
 	// 6. A function whose NAME comes from the request: $_POST['f'](...),
 	// call_user_func($_GET['f']), or $f = $_POST['f']; ... $f(...).
 	// (Calling a callback with request data as arguments is ordinary code.)
-	if hasInput && (m(reInputCall) || m(reCallUserInput) || (may(reTaintAssign, low) && taintedCall(s))) {
+	// (Not text in a single-quoted string: Yii's requirements page says
+	// 'Make sure $_SERVER["PATH_INFO"] (or $_SERVER["PHP_SELF"]) is set'.)
+	if hasInput && ((m(reInputCall) && reInputCall.Match(reSingleQuoted.ReplaceAll(s, []byte("''")))) || m(reCallUserInput) || (may(reTaintAssign, low) && taintedCall(s))) {
 		return &verdict{CatVirus, "PHP.Backdoor.DynamicCall"}
 	}
 	// 7. goto-flattened obfuscation with an execution sink.
@@ -334,6 +337,16 @@ func readableText(b []byte) bool {
 // hasCodeBlob reports a long quoted base64 string that is not an image.
 // A hex string that decodes to plain text or HTML (a licence holder's name
 // as a link) is data, not a payload.
+// jsonBlob: base64 of a JSON object or array with no code in its text.
+func jsonBlob(b []byte) bool {
+	raw, err := base64.StdEncoding.DecodeString(string(b))
+	if err != nil {
+		return false
+	}
+	raw = bytes.TrimSpace(raw)
+	return len(raw) > 1 && (raw[0] == '{' || raw[0] == '[') && json.Valid(raw) && !reCodeLike.Match(raw)
+}
+
 func hasCodeBlob(s []byte) bool {
 	for _, loc := range reLongB64.FindAllIndex(s, 64) {
 		blob := s[loc[0]+1 : loc[1]]
@@ -344,6 +357,11 @@ func hasCodeBlob(s []byte) bool {
 		// Certificates and keys (an SSL test certificate, a payment
 		// gateway's RSA key) are data: DER (an ASN.1 sequence) or PEM.
 		if certOrKey(blob[:len(blob)-1]) {
+			continue
+		}
+		// Settings saved as base64 JSON (VillaTheme's CURCY:
+		// json_decode(base64_decode($data_init), true) into update_option).
+		if jsonBlob(blob[:len(blob)-1]) {
 			continue
 		}
 		img := false
@@ -681,6 +699,9 @@ var reShellEscaped = regexp.MustCompile(`(?i)\bescapeshell(?:arg|cmd)\s*\((?:[^(
 // reBoolAssert: assert() of a type or presence check, which runs no code
 // (OpenTelemetry, php-saml: assert(is_string($value)) on a value from
 // $_SERVER or $_REQUEST). A call inside it is still read on its own.
+// reSingleQuoted: a single-quoted PHP string (no variables run in it).
+var reSingleQuoted = regexp.MustCompile(`'(?:[^'\\]|\\.)*'`)
+
 // reTypeAssert: assert() of an instanceof check.
 var reTypeAssert = regexp.MustCompile(`(?i)\bassert\s*\(\s*\$[\w>-]+\s+instanceof\s+[\w\\]+\s*\)`)
 

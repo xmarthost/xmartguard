@@ -120,6 +120,7 @@ func bigBase64(content []byte) bool {
 }
 
 var (
+	reTempName   = regexp.MustCompile(`(?i)^\s*tempnam\s*\(\s*sys_get_temp_dir\s*\(\s*\)`)
 	reMoveUpload = regexp.MustCompile(`\bmove_uploaded_file\s*\(([^;]{0,300})`)
 	reAssignVar  = regexp.MustCompile(`\$(\w+)\s*=\s*([^;]{0,300});`)
 )
@@ -134,6 +135,12 @@ func savesUnderSentName(content []byte) bool {
 	for round := 0; round < 3; round++ {
 		for _, a := range assigns {
 			rhs := a[2]
+			// A random name in the system's temporary folder, made from the
+			// sent name only as a seed (PHPMailer's examples:
+			// tempnam(sys_get_temp_dir(), sha1($_FILES['userfile']['name']))).
+			if reTempName.Match(rhs) {
+				continue
+			}
 			hit := reOrigName.Match(rhs)
 			for v := range tainted {
 				if hit {

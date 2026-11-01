@@ -256,6 +256,39 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.22: false positives from the 10 servers still scanning**
+  (2026-11-01). The owner asked for samples of the running scans (8,715
+  findings collected read-only, nothing restored there: the owner restores
+  after the scans finish) and a release. Fixes, fixtures in
+  TestFleetFullScanOwnPages, each failing on 0.24.21:
+  - `.log` is a log, never a renamed script: cPanel's
+    `~/logs/<domain>.php.error.log` had been read as PHP and quarantined
+    as PHP.Planted.InLogsFolder (business500 ~307, business600 ~382, all
+    live error logs; restore them once the scans finish).
+  - Uploader: a destination from tempnam(sys_get_temp_dir(), ...) is no
+    sent name (PHPMailer examples, 272 on six servers).
+  - Package tests (`tests`/`Tests`): EncodedPayload, HaltCompilerPayload
+    and GotoFlow there are samples (PHP_CodeSniffer .inc, Symfony router
+    fixtures); hidden files there too unless random-named or mode 000.
+  - DynamicCall: `$_SERVER[..] (` inside a single-quoted string is text
+    (Yii requirements messages, 28 on business800).
+  - inertPHP: exit(0) (Sucuri audit queue), and a guard then only text
+    (CodeIgniter application/logs/log-*.php).
+  - EncodedPayload: base64 JSON settings with no code (CURCY).
+  - /var/imunify360 is never scanned or acted on (23 cleanup_storage
+    copies on business600).
+  Seen in the samples, for the owner: the `.<32hex>system/` and lscache
+  worksec.php campaign on business800 glammyco (many still "detected"),
+  business500 loomloop, s5 lawyerspoint, superfast minahsp1; malware in
+  cPanel folders (.cphorde, .subaccounts, ssl/, tmp/webalizer,
+  tmp/awstats) on s1 dialaca1, business800 tacinfoc and javeriaj,
+  superfast oservice; PHPLock floods at faranhos (business500), kskardu
+  (s5), glammyco (business800); vps900 scan 44 has no findings (stuck).
+  Not fixed yet (probable, unread): wpbingo lookbook DynamicCall,
+  PrestaShop AdminModules/AdminImport RawUploadName, Seraphinite and
+  cache plugins' Cloaking, goodlayers-core, getID3 demo, LightnCandy,
+  laravel-sign-in-with-apple, SuiteCRM IncludeNonPHP, js-beautify
+  unpacker, GoDaddy ManageWP worker (needs a manifest check, not a rule).
 - **Release 0.24.21: scanner false positives of the full scans**
   (2026-11-01). The owner asked for the release after the review of the
   7 finished servers (not waiting for the other 10). Fixes, each with an

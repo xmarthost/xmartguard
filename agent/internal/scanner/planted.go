@@ -149,6 +149,11 @@ func plantedByName(path string, mode func(string) int) *Detection {
 	if !strings.HasPrefix(base, ".") || devDotfile(base) {
 		return nil
 	}
+	// A package's own tests keep hidden samples (PHP_CodeSniffer's .inc
+	// cases, atoum's .atoum.php): the content rules still read them.
+	if rePackageTests.MatchString(path) && !reHiddenRandomPHP.MatchString(base) && mode(path) != 0 {
+		return nil
+	}
 	switch {
 	case reHiddenRandomPHP.MatchString(base):
 		return &Detection{CatVirus, "PHP.Planted.HiddenRandomName"}
@@ -191,6 +196,12 @@ func inertPHP(content []byte) bool {
 	if len(code) == 0 || reStopNow.Match(code) {
 		return true
 	}
+	// A guard and then only text (CodeIgniter's application/logs/log-*.php:
+	// "defined('BASEPATH') OR exit(...); ?>" and the log lines, which quote
+	// attackers' requests): whatever the guard does, no code follows.
+	if m := reGuardThenText.FindIndex(code); m != nil && !bytes.Contains(code[m[1]:], []byte("<?")) {
+		return true
+	}
 	if !bytes.HasPrefix(code, []byte("return")) {
 		return false
 	}
@@ -208,10 +219,12 @@ func inertPHP(content []byte) bool {
 var (
 	reLoadsCode = regexp.MustCompile(`(?i)\b(?:include|require|include_once|require_once|eval|new|static|self|parent)\b|::|<<<`)
 	// exit; die(); die("Access Denied"); (a plain string: nothing in it runs)
-	reStopNow      = regexp.MustCompile(`^(?:exit|die)\s*(?:\(\s*(?:'[^'\\]*'|"[^"\\$]*")?\s*\))?\s*(?:;|\?>)`)
-	reHaltCompiler = regexp.MustCompile(`(?i)__halt_compiler`)
-	reStrLit       = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*"`)
-	reCallName     = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+	// (exit(0) too: Sucuri's audit queue and failed-login files.)
+	reStopNow       = regexp.MustCompile(`^(?:exit|die)\s*(?:\(\s*(?:'[^'\\]*'|"[^"\\$]*"|\d+)?\s*\))?\s*(?:;|\?>)`)
+	reGuardThenText = regexp.MustCompile(`(?i)^(?:defined\s*\(\s*['"]\w+['"]\s*\)\s*(?:or|\|\|)\s*(?:exit|die)\s*(?:\(\s*(?:'[^'\\]*'|"[^"\\$]*")?\s*\))?\s*;?\s*\?>)`)
+	reHaltCompiler  = regexp.MustCompile(`(?i)__halt_compiler`)
+	reStrLit        = regexp.MustCompile(`'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*"`)
+	reCallName      = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 )
 
 // plantedMode is a file's permission bits, or -1.

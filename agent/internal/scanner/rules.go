@@ -172,6 +172,12 @@ func extOf(name string) string {
 		return ""
 	}
 	ext := base[i:]
+	// A log a server writes is no renamed script: cPanel names PHP's error
+	// log per domain, ~/logs/example_com.php.error.log (689 live logs were
+	// quarantined as planted PHP on business500 and business600, 2026-11-01).
+	if ext == ".log" {
+		return ext
+	}
 	// A PHP file renamed for backup (fix.php.backup.20260318120936,
 	// wp-config.php.bak) still runs if it is ever included: scan it as PHP.
 	if ext != ".suspected" && !ScriptExts[ext] || backupExts[ext] {

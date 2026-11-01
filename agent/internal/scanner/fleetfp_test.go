@@ -1671,4 +1671,73 @@ func TestFleetFullScanOwnPages(t *testing.T) {
 	if d := markupInImage(".jpg", []byte(spam)); d == nil {
 		t.Errorf("redirect with a script: not reported")
 	}
+
+	// Fixes from the samples of the 10 servers still scanning.
+	codevz := "<?php if ( ! defined( 'ABSPATH' ) ) { die; }\nif ( ! function_exists( 'codevz_add_field' ) ) { function codevz_add_field( $field = array() ) { $class = 'Codevz_Field_' . $field['type']; if ( class_exists( $class ) ) { $element = new $class( $field ); $element->output(); } } }\n" +
+		"if ( ! function_exists( 'codevz_encode_string' ) ) {\n  function codevz_encode_string( $string ) {\n    return rtrim( strtr( call_user_func( 'base'. '64' .'_encode', addslashes( gzcompress( serialize( $string ), 9 ) ) ), '+/', '-_' ), '=' );\n  }\n}\n" +
+		"if ( ! function_exists( 'codevz_decode_string' ) ) {\n  function codevz_decode_string( $string ) {\n    return unserialize( gzuncompress( stripslashes( call_user_func( 'base'. '64' .'_decode', rtrim( strtr( $string, '-_', '+/' ), '=' ) ) ) ) );\n  }\n}\n" +
+		"function codevz_get_var( $var, $default = '' ) { if ( isset( $_POST[$var] ) ) { return $_POST[$var]; } return $default; }\n"
+	yii := "<?php\nreturn array(\n'Make sure $_SERVER[\"PATH_INFO\"] (or $_SERVER[\"PHP_SELF\"] and $_SERVER[\"SCRIPT_NAME\"]) contains proper value.' => '',\n);\n"
+	mailer := "<?php\n$msg = '';\nif (array_key_exists('userfile', $_FILES)) {\n    $uploadfile = tempnam(sys_get_temp_dir(), sha1($_FILES['userfile']['name']));\n    if (move_uploaded_file($_FILES['userfile']['tmp_name'], $uploadfile)) {\n        $mail = new PHPMailer();\n        $mail->addAttachment($uploadfile, 'My uploaded file');\n    }\n}\n?>\n<form method=\"post\" enctype=\"multipart/form-data\"><input name=\"userfile\" type=\"file\"></form>\n"
+	for name, body := range map[string]string{"Codevz helpers": codevz, "Yii requirements text": yii} {
+		if d := analyze(".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	if d := pluginInjectors([]byte(mailer), has(mailer)); d != nil {
+		t.Errorf("PHPMailer example: %+v", d)
+	}
+	if d := analyze(".php", []byte("<?php\n$_GET['f']($_GET['a']);\n")); d == nil {
+		t.Errorf("function named by the request: not caught")
+	}
+	if got := extOf("example_com.php.error.log"); got != ".log" {
+		t.Errorf("PHP error log read as %s", got)
+	}
+	if got := extOf("shell.php.bak"); got != ".php" {
+		t.Errorf("renamed script read as %s", got)
+	}
+	sc := s.checkContent("/home/u/public_html/vendor/squizlabs/php_codesniffer/src/Standards/Generic/Tests/PHP/LowerCaseKeywordUnitTest.inc", ".php",
+		[]byte("<?php\n$x = Array(1);\nEVAL('foo');\n__HALT_COMPILER(); // keywords\nfunction\n"))
+	if sc != nil {
+		t.Errorf("code sniffer sample: %+v", sc)
+	}
+	if d := plantedByName("/home/u/public_html/vendor/a/b/tests/.atoum.php", func(string) int { return 0o644 }); d != nil {
+		t.Errorf("atoum settings in tests: %+v", d)
+	}
+	if d := plantedByName("/home/u/public_html/vendor/a/b/tests/.sys_9f3a1c7e2b.php", func(string) int { return 0o644 }); d == nil {
+		t.Errorf("random hidden name in tests: not reported")
+	}
+
+	// Logs kept behind an exit: they quote attackers' requests as text.
+	for name, body := range map[string]string{
+		"Sucuri audit queue": "<?php exit(0); ?>\n{\"1793500000\":\"blocked request cmd=uname IndoXploit\"}\n",
+		"CodeIgniter log":    "<?php defined('BASEPATH') OR exit('No direct script access allowed'); ?>\n\nERROR - 2026-10-30 --> 404 Page Not Found: wso.php?act=IndoXploit\n",
+	} {
+		if !inertPHP([]byte(body)) {
+			t.Errorf("%s: not inert", name)
+		}
+	}
+	if inertPHP([]byte("<?php defined('BASEPATH') OR exit('No direct script access allowed'); ?>\n<?php system($_GET['c']);")) {
+		t.Errorf("guard then code: inert")
+	}
+	if inertPHP([]byte("<?php defined('BASEPATH') OR exit('No direct script access allowed');\nclass Welcome extends CI_Controller {}")) {
+		t.Errorf("a controller behind the guard: inert")
+	}
+
+	// CURCY's settings as base64 JSON; base64 code next to eval stays.
+	var cfg strings.Builder
+	cfg.WriteString("{")
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&cfg, "\"currency_%d\":{\"rate\":\"1.%d\",\"pos\":\"left\",\"decimals\":\"2\"},", i, i)
+	}
+	cfg.WriteString("\"end\":1}")
+	curcy := "<?php\nclass WOOMULTI_CURRENCY_F { public function activate() { $data_init = '" + base64.StdEncoding.EncodeToString([]byte(cfg.String())) + "';\nupdate_option('woo_multi_currency_params', json_decode(base64_decode($data_init), true)); } }\n"
+	if d := analyze(".php", []byte(curcy)); d != nil {
+		t.Errorf("CURCY defaults: %+v", d)
+	}
+
+	// Another product's own storage is never scanned or acted on.
+	if !systemPath("/var/imunify360/cleanup_storage/1700000000_x.php") || systemPath("/var/www/html/x.php") {
+		t.Errorf("Imunify360 storage")
+	}
 }

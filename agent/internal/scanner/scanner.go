@@ -149,7 +149,10 @@ func New(db *sql.DB, st *settings.Store, log *slog.Logger) *Scanner {
 func QuarantineDir() string { return filepath.Join(store.StateDir(), "quarantine") }
 
 // forbidden are never scanned or acted on.
-var forbidden = []string{"/proc", "/sys", "/dev", "/run", "/boot", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"}
+// (/var/imunify360 holds Imunify360's own cleanup storage: copies of the
+// files it cleaned, kept by that product, not a site's files; 23 were
+// quarantined on business600, 2026-11-01.)
+var forbidden = []string{"/proc", "/sys", "/dev", "/run", "/boot", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/var/imunify360"}
 
 // scannable are writable temp areas inside forbidden trees that malware
 // uses (/dev/shm); they are scanned like any other directory.
@@ -1672,12 +1675,19 @@ func NewOffline() *Scanner {
 // plugin or theme) is capped.
 var (
 	reBuilderThumbs = regexp.MustCompile(`/wp-content/uploads/(?:master_addons|elementor|envato-elements|templately|starter-templates|astra-sites|ocdi)/`)
-	rePackageTests  = regexp.MustCompile(`/(?:vendor/[^/]+|node_modules/(?:@[^/]+/)?[^/]+|wp-content/(?:plugins|themes)/[^/]+)/(?:[^/]+/)*tests?/`)
+	rePackageTests  = regexp.MustCompile(`/(?:vendor/[^/]+|node_modules/(?:@[^/]+/)?[^/]+|wp-content/(?:plugins|themes)/[^/]+)/(?:[^/]+/)*(?:tests?|Tests?)/`)
 	reComposerPkg   = regexp.MustCompile(`/vendor/[^/]+/[^/]+/`)
 )
 
 func packageTestData(path string, d *Detection) bool {
-	return d.Signature == "PHP.Suspicious.EncodedPayload" && rePackageTests.MatchString(path)
+	switch d.Signature {
+	case "PHP.Suspicious.EncodedPayload", "PHP.Obfuscated.HaltCompilerPayload", "PHP.Obfuscated.GotoFlow":
+		// Test vectors, a code sniffer's keyword samples ending in
+		// __HALT_COMPILER(), a router dumper's generated goto matchers
+		// (Symfony Routing/Tests/Fixtures).
+		return rePackageTests.MatchString(path)
+	}
+	return false
 }
 
 func capHeuristic(path, ext string, d *Detection) *Detection {
