@@ -371,6 +371,12 @@ func configLoader(content []byte) *Detection {
 	return nil
 }
 
+func httrackStub(content []byte) bool {
+	low := bytes.ToLower(content)
+	return len(content) < 4096 && bytes.Contains(low, []byte("httrack")) && !bytes.Contains(low, []byte("<script")) &&
+		!bytes.Contains(low, []byte("<iframe")) && !bytes.Contains(low, []byte("<form"))
+}
+
 // markupInImage flags image files that are really HTML or script pages
 // (SEO spam and phishing pages hidden under image names).
 func markupInImage(ext string, content []byte) *Detection {
@@ -386,7 +392,10 @@ func markupInImage(ext string, content []byte) *Detection {
 		// A cached HTML error page (a CDN or avatar cache saving a 404 page as
 		// .jpg) is harmless; spam and phishing pages carry scripts,
 		// frames or redirects.
-		if reActiveMarkup.Match(content) && !reSavedErrorPage.Match(content) {
+		// (Nor HTTrack's stub for a page it did not copy: a small page with
+		// a meta refresh to the original address and no script, saved under
+		// the image's name; business900, 2026-11-01.)
+		if reActiveMarkup.Match(content) && !reSavedErrorPage.Match(content) && !httrackStub(content) {
 			return &Detection{CatSuspicious, "Disguised.MarkupInImage"}
 		}
 	}

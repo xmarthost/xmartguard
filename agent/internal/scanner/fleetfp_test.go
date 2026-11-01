@@ -1660,4 +1660,15 @@ func TestFleetFullScanOwnPages(t *testing.T) {
 	if d := s.checkContent("/home/u/public_html/vendor/a/b/tests/x.php", ".php", []byte("<?php\nif (isset($_GET['c'])) { system($_GET['c']); }\n")); d == nil {
 		t.Errorf("shell in a tests folder: not caught")
 	}
+
+	// HTTrack's stub for a page it did not copy, saved as the image; a
+	// redirect page with a script under an image name stays reported.
+	stub := "<HTML>\n<!-- Created by HTTrack Website Copier/3.49-2 [XR&CO'2014] -->\n<HEAD><META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html;charset=UTF-8\"><META HTTP-EQUIV=\"Refresh\" CONTENT=\"0; URL=https://shop.example.com/uploads/categories/x.jpg\"><TITLE>Page has moved</TITLE></HEAD>\n<BODY><A HREF=\"https://shop.example.com/uploads/categories/x.jpg\"><h3>Click here...</h3></A></BODY>\n</HTML>\n"
+	if d := markupInImage(".jpg", []byte(stub)); d != nil {
+		t.Errorf("HTTrack stub: %+v", d)
+	}
+	spam := strings.Replace(stub, "<TITLE>", "<script>top.location='https://spam.example'</script><TITLE>", 1)
+	if d := markupInImage(".jpg", []byte(spam)); d == nil {
+		t.Errorf("redirect with a script: not reported")
+	}
 }
