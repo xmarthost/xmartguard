@@ -20,7 +20,10 @@ var (
 	// if (@is_file("/literal/path")) @include_once "…";
 	reSilentLoader = regexp.MustCompile(`(?i)if\s*\(\s*@?\s*(?:is_file|file_exists|is_readable)\s*\(\s*["'][^"']{3,300}["']\s*\)\s*\)\s*\{?\s*@\s*(?:include|require)(?:_once)?\b`)
 	// include/require of an image, archive, font, log or data file.
-	reIncludeNonPHP = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?[^;]{0,200}?\.(?:ico|png|jpe?g|gif|tiff?|bmp|webp|zip|gz|log|dat|tmp|bak|swp|mp3|mp4|pdf|woff2?|ttf|eot)['"]\s*\)?\s*;`)
+	// (The argument stops at the end of the PHP block or the line: a page's
+	// <?php include('header.php') ?> is not an include of the "bg.png");
+	// of its CSS further down.)
+	reIncludeNonPHP = regexp.MustCompile(`(?i)\b(?:include|require)(?:_once)?\b\s*\(?[^;<>\n]{0,200}?\.(?:ico|png|jpe?g|gif|tiff?|bmp|webp|zip|gz|log|dat|tmp|bak|swp|mp3|mp4|pdf|woff2?|ttf|eot)['"]\s*\)?\s*;`)
 	// include/require through a stream wrapper that runs code from inside an
 	// archive, the request body or the address itself: zip://up.jpg#x.php,
 	// data://text/plain;base64,…, php://input.
@@ -258,7 +261,11 @@ func families(s, low []byte, n int, library, compiledView, evalOrAssert, varFunc
 		return &verdict{CatVirus, "PHP.Dropper.SelfDeleting"}
 	}
 	// Function names split into pieces so text searches miss them.
-	if name := splitName(s); name != "" && (evalOrAssert || varFunc || decoders >= 1) && !(!evalOrAssert && splitDecodesURLs(s, name)) {
+	// (Not the Codestar Framework's option helpers, copied into many themes'
+	// core plugins: call_user_func('base' . '64_decode', ...) packs and
+	// unpacks the theme's own settings, in a file that runs nothing.)
+	if name := splitName(s); name != "" && (evalOrAssert || varFunc || decoders >= 1) && !(!evalOrAssert && splitDecodesURLs(s, name)) &&
+		!(!evalOrAssert && !m(reSink) && !m(reExecBare) && codestarHelpers(s)) {
 		return &verdict{CatVirus, "PHP.Obfuscated.SplitFunctionName"}
 	}
 	// A front-end hook that prints content fetched from elsewhere with TLS
@@ -406,6 +413,32 @@ func splitName(s []byte) string {
 	}
 	return ""
 }
+
+// codestarHelpers: the Codestar Framework's cs_encode_string and
+// cs_decode_string (base64 of the serialized settings, its name split).
+func codestarHelpers(s []byte) bool {
+	if !reCodestarFunc.Match(s) {
+		return false
+	}
+	for _, m := range reStrPieces.FindAllIndex(s, 50) {
+		name := joinPieces(s[m[0]:m[1]])
+		if name != "base64_decode" && name != "base64_encode" {
+			continue
+		}
+		// Every split base64 name is call_user_func's function, packing or
+		// unpacking a value.
+		if !reCodestarCall.Match(s[max(0, m[0]-40):m[0]]) {
+			return false
+		}
+	}
+	return true
+}
+
+var (
+	reCodestarCall = regexp.MustCompile(`call_user_func\s*\(\s*$`)
+	// The helpers that serialize settings.
+	reCodestarFunc = regexp.MustCompile(`function\s+\w*(?:decode|encode)_string\s*\(\s*\$\w+\s*\)\s*\{\s*return\s+(?:unserialize|rtrim)\s*\(`)
+)
 
 // JExtStore's Joomla extensions (JSitemap, JComments, GDPR …) spell
 // str_rot13 in pieces to build their own license and update address:

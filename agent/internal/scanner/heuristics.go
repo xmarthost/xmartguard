@@ -222,8 +222,12 @@ func analyzePHP(content []byte) *verdict {
 	// run without a time limit or delete themselves.
 	// An application's form that also takes the subject from the request
 	// is an open relay (anyone can send any mail through it): still flagged.
+	// A contact form that also sends the visitor a copy (mail($from, ...)
+	// next to mail("info@site", ...)) mails its own fixed address with a
+	// subject it writes itself; a relay has no address of its own.
 	if m(reMailInput) && hasInput && argOnInput(reMailTo, s) && !library && n < 60000 &&
-		(!m(reAppInclude) || m(reMailerTool) || argOnInput(reMailSubject, s)) {
+		(!m(reAppInclude) || m(reMailerTool) || argOnInput(reMailSubject, s)) &&
+		!(mailsOwnAddress(s) && !m(reMailerTool) && !argOnInput(reMailSubject, s)) {
 		return &verdict{CatSuspicious, "PHP.Spam.Mailer"}
 	}
 
@@ -662,6 +666,33 @@ var reSinkFixed = regexp.MustCompile(`(?i)\bfunction\s+&?\s*(?:system|exec|shell
 // (OpenTelemetry, php-saml: assert(is_string($value)) on a value from
 // $_SERVER or $_REQUEST). A call inside it is still read on its own.
 var reBoolAssert = regexp.MustCompile(`(?i)\bassert\s*\(\s*!?\s*(?:is_\w+|isset|empty|in_array|array_key_exists|ctype_\w+|method_exists|function_exists|class_exists|property_exists|file_exists|is_a|is_subclass_of)\s*\(`)
+
+var reLiteralMail = regexp.MustCompile(`(?i)\$(\w+)\s*=\s*["'][\w.+-]+@[\w-]+(?:\.[\w-]+)+["']\s*;`)
+
+// mailsOwnAddress: a mail() call whose recipient is an address written in
+// the file, directly ("info@site") or through a variable set to one.
+func mailsOwnAddress(s []byte) bool {
+	vars := map[string]bool{}
+	for _, m := range reLiteralMail.FindAllSubmatch(s, 20) {
+		vars[string(m[1])] = true
+	}
+	for _, m := range reMailTo.FindAllSubmatch(s, 50) {
+		arg := bytes.Trim(bytes.TrimSpace(m[1]), `"'<>`)
+		if reMailAddr.Match(arg) {
+			return true
+		}
+		if v := reBareVar.FindSubmatch(bytes.TrimSpace(m[1])); v != nil && vars[string(v[1])] {
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	reMailAddr = regexp.MustCompile(`^[\w.+-]+@[\w-]+(?:\.[\w-]+)+$`)
+	// A recipient that is one variable, quoted or not: $to, "<$to>".
+	reBareVar = regexp.MustCompile(`^["'<]*\$(\w+)[>"']*$`)
+)
 
 // argOnInput reports a call (captured argument text in group 1) that takes
 // request data or a variable assigned from it.

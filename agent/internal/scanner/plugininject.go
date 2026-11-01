@@ -34,10 +34,19 @@ var (
 
 	// The uploader: its own form, the file kept under the name it came
 	// with, nothing checked.
-	reUploadForm   = regexp.MustCompile(`(?i)enctype\s*=\s*\\?["']?multipart/form-data`)
-	reOrigName     = regexp.MustCompile(`\$_FILES\s*\[[^\]]+\]\s*\[\s*['"]name['"]\s*\]`)
-	reUploadChecks = regexp.MustCompile(`(?i)\b(?:pathinfo|wp_check_filetype\w*|wp_handle_upload|in_array|preg_match|getimagesize|finfo_\w+|mime_content_type|strrchr|sanitize_file_name)\s*\(|PATHINFO_EXTENSION`)
-	reAuth         = regexp.MustCompile(`(?i)\b(?:session_start|password_verify|current_user_can|wp_verify_nonce|check_admin_referer|is_user_logged_in)\s*\(|\$_SESSION\b|PHP_AUTH_USER|\bABSPATH\b|['"](?:pass|password|pwd|passwd|auth|token)['"]`)
+	reUploadForm = regexp.MustCompile(`(?i)enctype\s*=\s*\\?["']?multipart/form-data`)
+	reOrigName   = regexp.MustCompile(`\$_FILES\s*\[[^\]]+\]\s*\[\s*['"]name['"]\s*\]`)
+	// (A comparison of the extension with fixed names is a check too:
+	// $ext == "jpg" || $ext == "png", the image pages of a site's own admin.)
+	reUploadChecks = regexp.MustCompile(`(?i)\b(?:pathinfo|wp_check_filetype\w*|wp_handle_upload|in_array|preg_match|getimagesize|finfo_\w+|mime_content_type|strrchr|sanitize_file_name)\s*\(|PATHINFO_EXTENSION|\$\w+\s*[!=]==?\s*["']\.?(?:jpe?g|png|gif|webp|bmp|pdf|docx?|xlsx?|csv|txt|mp[34]|svg|zip)["']`)
+	// (A page of a site's own admin often checks the login in a file it
+	// includes: include_once("chksession.php").)
+	reAuth = regexp.MustCompile(`(?i)\b(?:session_start|password_verify|current_user_can|wp_verify_nonce|check_admin_referer|is_user_logged_in)\s*\(|\$_SESSION\b|PHP_AUTH_USER|\bABSPATH\b|['"](?:pass|password|pwd|passwd|auth|token)['"]|\b(?:include|require)(?:_once)?\s*\(?\s*['"][^'"]*(?:session|auth|login|logged)[^'"]*\.php['"]`)
+	// A page of a site's own application: it writes a record about the
+	// upload to its database. The one-page uploaders dropped by attackers
+	// keep no records.
+	reDBWrite = regexp.MustCompile(`(?i)\b(?:INSERT\s+INTO|UPDATE\s+` + "`?" + `\w+` + "`?" + `\s+SET|REPLACE\s+INTO)\b`)
+	reDBCall  = regexp.MustCompile(`(?i)\bmysqli?_query\s*\(|->\s*(?:query|prepare|exec|execute)\s*\(|\bpg_query\s*\(`)
 
 	// open_basedir (or disable_functions) switched off from the script.
 	reBasedirOff = regexp.MustCompile(`(?i)ini_set\s*\(\s*['"](?:open_basedir|disable_functions)['"]\s*,\s*(?:null|''|""|false|0)\s*\)`)
@@ -68,7 +77,8 @@ func pluginInjectors(content []byte, has func(string) bool) *Detection {
 			return &Detection{CatVirus, "PHP.Obfuscated.EscapedInput"}
 		}
 		if len(content) < 8<<10 && has("move_uploaded_file") && reUploadForm.Match(content) && reOrigName.Match(content) &&
-			!reUploadChecks.Match(content) && !reAuth.Match(content) && savesUnderSentName(content) {
+			!reUploadChecks.Match(content) && !reAuth.Match(content) && !(reDBWrite.Match(content) && reDBCall.Match(content)) &&
+			savesUnderSentName(content) {
 			return &Detection{CatVirus, "PHP.Webshell.Uploader"}
 		}
 	} else if bytes.Contains(content, []byte(`$_GET["\`)) || bytes.Contains(content, []byte(`$_POST["\`)) {

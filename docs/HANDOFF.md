@@ -83,6 +83,93 @@ project. It holds the rules, the current state and what is still open.
 - **WHMCS**: a WHMCS module (feature 18) is not wanted; customers buy on
   the website.
 
+## Full-scan review, part 1 (2026-11-01): 7 finished servers, not released
+
+The owner's full scans (started 2026-10-31 ~21:48 UTC) finished on
+business200.websoulhost, server100, business200.mypowerful, business900,
+business400, business700 and cloud2 (3,100 findings; business700 and
+cloud2 none). Each signature family was reviewed: AI-clean ones by their
+content (67 representative files read), the rest by place and family.
+The owner said: no release and no stopping scans until all servers are
+reviewed; one release at the end.
+
+Restored as false positives (action restore, 445 files): softpanel
+add_*.php on ~40 business900 accounts, PHPMailer examples, PayPal Payments
+modules, Codestar helpers (codestar-framework, carriar/plumco/cascara/
+ukrdevs cores, claue, codevz-plus), RealHomes admin tabs, seraphinite
+common.php, penci-feeds, thim-core, gt3 wbc_importer, sb infinite scroll,
+PhpSpreadsheet, phpBB captcha, vendor tests (keccak, bitwasp, swiftmailer,
+geo-io, Symfony fixtures, php_codesniffer), Dolibarr, aMember License and
+new-rewrite, ManageWP worker (gdcorp), PxPSmarty, Duplicator installer
+copy, getID3 demo, Swift Performance cache, WCUF, OJS backup, log-viewer,
+EMCP malware audit, ui2pdf, WooCommerce/Elementor/Redux `.temp.<ns>.`
+copies, the techicon contact forms and rightmovedispatcher contact page.
+Two failed: the site already had a new copy (signsbradford seraphinite,
+vipflare ImageCreate).
+
+Correct detections where the AI said clean (left quarantined): the
+PHPLock .htaccess family (the "suspected" extension list and shell names
+in the allow list), the alhafeezenterpri hello-elementor *.zip
+(orbit-patcher-ultra), the fake plugins yeost-seo (KodBox file manager),
+analytics_<ts>/lndex.php (credential harvester), cdn-enabler-<ts> (GAwp
+hidden admin), wp-lazyload-<random>-module, wpueditors (creates a user,
+sends API keys out), microattribute-metacollect and wp-pup-plugin (random
+word decoys), the injected nulled Porto functions.php, Mailer Pro
+f/goods.php, the phishing page in .well-known/acme-challenge/cm-trash.
+The casino pages of nsantosm (183, external lambercheesehub.com script)
+and rktradco (78) are planted doorways.
+
+Left for the owner (site code, not malware, but unsafe or unreadable):
+upload pages that keep any file under its sent name with no login
+(trust4invest and nasrentrader dicons.php, nwebsolutiontool add-blog,
+gallery, app-setting, create-account, the gym uploadImageprofile.php),
+propertyManagement.php (include of $_GET['tab']), xc911 (eval loader
+with a fake SourceGuardian banner), the SentinelGuard licence loader of
+app.waleedsubscriptions.com (eval of code decrypted with a remote key),
+x-simple-ai-agent (goto-obfuscated), youchoo .user.ini (auto_prepend of
+wp-config.php: check wp-config), TestEmail.php, school-management zips.
+
+Engine fixes made (fleetfp_test.go TestFleetFullScanOwnPages, inert
+fixtures, each fails on the old code; the attacker's shapes stay caught):
+- PHP.Webshell.Uploader: an extension compared with fixed names counts as
+  a check; a login checked in an included session/auth/login file counts
+  as a login; a page that writes a record to its database (INSERT/UPDATE
+  and a query call) is application code.
+- PHP.Spam.Mailer: a contact form that also mails its own fixed address,
+  with a subject it writes itself and no mailer-tool marks, is not a relay.
+- PHP.Planted.HiddenFile: `.temp.<16-20 digits>.<name>.php` beside
+  `<name>.php` is an updater's copy.
+- PHP.Obfuscated.SplitFunctionName: the Codestar cs_encode_string /
+  cs_decode_string helpers (every split base64 name is call_user_func's
+  function, no eval and no shell call in the file).
+- PHP.Loader.IncludeNonPHP: the include argument stops at the PHP block's
+  end or the line (a page's include of header.php is not an include of
+  the "bg.png" in its CSS).
+
+Plan for the next fixes (same review of the 10 servers still scanning,
+then one release with all fixes):
+1. Encoded data that never runs (PHP.Suspicious.EncodedPayload: test
+   vectors, PayPal Apple Pay hex, phpBB glyphs, settings blobs, licence
+   nags): count base64/hex only when it reaches eval, include, a dynamic
+   call or a file write.
+2. PHP.Obfuscated.PackedOneLiner on generated settings arrays (PayPal
+   Payments services.php/extensions.php).
+3. PHP.Backdoor.FileDropper and PHP.Uploader.MoveUploadedFile in vendor
+   and site code (Duplicator, WCUF, Swift cache, aMember, AltumCode,
+   session-gated admin pages): small body, request-named path, no login
+   and no type check is the dropper; the rest is not.
+4. PHP.Backdoor.CommandInjection only with request data reaching the
+   shell unescaped (log-viewer hostname -I, ffmpeg with escapeshellarg).
+5. Rule words inside security plugins (emcp-tools, search-nulled scanner).
+6. PHP.Backdoor.DynamicCall on `new $class` widget factories (thim-core,
+   ACF Extended); PHP.SEO.Cloaking on cache plugins (seraphinite);
+   PHP.WebShell.FunctionBypass on penci-feeds (ini_set safe_mode only).
+7. Disguised.MarkupInImage on an HTTrack meta-refresh stub saved as .jpg.
+8. The split base64 name of the seoaal theme ($f($read_more_text), output
+   only).
+9. vps900 essentia full scan stuck (1,360 files in 18 hours) and
+   business500 slow on the "nobody" unit: scanner stall to find.
+
 ## Open for Monday (2026-11-02), after the owner's full scans
 
 Review of the last 12 hours of findings (2026-10-31, 05:30-17:30 UTC, all

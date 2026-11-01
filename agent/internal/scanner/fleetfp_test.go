@@ -1493,3 +1493,105 @@ func TestFleetJExtStoreLicenseAddress(t *testing.T) {
 		}
 	}
 }
+
+// The full scans of 2026-11-01 (business900, server100, business200):
+// a site's own admin pages that upload images (softpanel add_awards.php
+// on 40 accounts: the login is checked in an included file and only jpg,
+// png and gif are kept; blog and logo pages that write the upload to their
+// database), contact forms that send the visitor a copy, and updater copies
+// beside the files they replace. Inert shapes; the attacker's one-page
+// uploader and a mail relay next to them stay caught.
+func TestFleetFullScanOwnPages(t *testing.T) {
+	form := "<form method=\"post\" enctype=\"multipart/form-data\"><input type=\"file\" name=\"large\"></form>\n"
+	has := func(b string) func(string) bool { return func(w string) bool { return strings.Contains(b, w) } }
+	for name, body := range map[string]string{
+		"admin page, session in an include, extension list": "<?php\ninclude_once(\"connection.php\");\ninclude_once(\"chksession.php\");\n$GALLERY_PATH = \"awards/\";\n" +
+			"$ext = strtolower(end(explode('.', $_FILES['large']['name'])));\nif ($ext == \"jpg\" || $ext == \"png\" || $ext == \"gif\") {\n// $tmp = session_id() . time() . \".$ext\";\n$tmp = \"large-$id.$ext\";\nmove_uploaded_file($_FILES['large']['tmp_name'], $GALLERY_PATH . $tmp); }\n?>\n" + form,
+		"blog page writing to its database": "<?php\ninclude ('dashboard_header.php');\nif (isset($_FILES['blog_image'])) { $blog_image = $_FILES['blog_image']['name']; $img = \"upload/\" . basename($_FILES['blog_image']['name']);\n" +
+			"move_uploaded_file($_FILES['blog_image']['tmp_name'], $img); }\n$q = \"INSERT INTO blog (blog_name, blog_image) VALUES ('$n', '$blog_image')\";\nmysqli_query($connect, $q);\n?>\n" + form,
+		"logo page updating a record": "<?php\ninclude 'db.php';\n$logo = $_FILES['currency_logo']['name'];\n$target_file = 'uploads/' . basename($logo);\nif (move_uploaded_file($_FILES['currency_logo']['tmp_name'], $target_file)) {\n" +
+			"$sql = \"UPDATE gateway_currencies SET image='$logo' WHERE id='$id'\";\n$conn->query($sql); }\n?>\n" + form,
+	} {
+		if d := pluginInjectors([]byte(body), has(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	// The attacker's uploader: no login, no check, no record, the sent name.
+	shell := "<?php\nif (isset($_POST['go'])) { $n = $_FILES['f']['name']; @move_uploaded_file($_FILES['f']['tmp_name'], $n); echo 'ok'; }\n?>\n" + form
+	if d := pluginInjectors([]byte(shell), has(shell)); d == nil || d.Signature != "PHP.Webshell.Uploader" {
+		t.Errorf("uploader: %+v", d)
+	}
+	// Even when it names a table in a comment-free string it never runs.
+	shellSQL := strings.Replace(shell, "echo 'ok';", "echo 'INSERT INTO x';", 1)
+	if d := pluginInjectors([]byte(shellSQL), has(shellSQL)); d == nil {
+		t.Errorf("uploader with an SQL word: not caught")
+	}
+
+	contact := map[string]string{
+		"copy to the sender": "<?php\nif (isset($_POST['submit'])) {\n$to = \"info@example.com\";\n$from = $_POST['email'];\n$subject = \"Form submission\";\n$subject2 = \"Copy of your form submission\";\n" +
+			"$message2 = \"Here is a copy of your message\\n\\n\" . $_POST['message'];\nmail(\"<$to>\", \"<$subject>\", \"$message2\", \"From:<$from>\");\nmail(\"<$from>\", \"<$subject2>\", \"$message2\", \"From:<$to>\");\n}\n?>\n<form method=\"post\"><input name=\"email\"></form>\n",
+		"copy inside a page": "<html><body><?php if (isset($_POST['submit'])) { $to = \"admin@example.com\"; $from = $_POST['email']; $subject2 = \"Copy of your form submission\";\n" +
+			"mail($to, \"Form submission\", $_POST['message'], \"From:\" . $from); mail($from, $subject2, $_POST['message'], \"From:\" . $to); } ?></body></html>\n",
+	}
+	for name, body := range contact {
+		if d := analyze(".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	for name, body := range map[string]string{
+		"relay":                  "<?php\n$to = $_POST['to'];\nmail($to, $_POST['subject'], $_POST['body'], 'From: a@b.c');\necho 'sent';\n",
+		"relay with own address": "<?php\n$me = \"log@example.com\";\nmail($_POST['to'], $_POST['subject'], $_POST['body']);\nmail($me, 'sent', $_POST['to']);\n",
+		"silent relay":           "<?php\nerror_reporting(0);\n$me = \"log@example.com\";\nmail($_POST['to'], 'Hello', $_POST['body']);\nmail($me, 'sent', $_POST['to']);\n",
+	} {
+		if d := analyze(".php", []byte(body)); d == nil || d.Signature != "PHP.Spam.Mailer" {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+
+	// Updater copies, only beside the file they copy.
+	dir := filepath.Join(t.TempDir(), "home", "u")
+	exists := map[string]bool{}
+	for _, rel := range []string{
+		"public_html/wp-content/plugins/woocommerce/includes/rest-api/Server.php",
+		"public_html/wp-content/plugins/woocommerce/includes/rest-api/.temp.1746060994093943920.Server.php",
+		"public_html/wp-content/plugins/elementor/core/editor/.temp.1746138958971757052.editor.php",
+	} {
+		p := filepath.Join(dir, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("<?php /* inert test fixture */"), 0o644)
+		exists["/home/u/"+rel] = true
+	}
+	mode := func(p string) int {
+		if exists[p] {
+			return 0o644
+		}
+		return -1
+	}
+	if d := plantedByName("/home/u/public_html/wp-content/plugins/woocommerce/includes/rest-api/.temp.1746060994093943920.Server.php", mode); d != nil {
+		t.Errorf("updater copy: %+v", d)
+	}
+	if d := plantedByName("/home/u/public_html/wp-content/plugins/elementor/core/editor/.temp.1746138958971757052.editor.php", mode); d == nil {
+		t.Errorf("a .temp. copy with nothing beside it: not reported")
+	}
+
+	// Codestar Framework option helpers (codestar-framework, carriar-core,
+	// plumco-core, cascara-core, ukrdevs-restaurant-core), and a static page
+	// that includes its header and has CSS images further down.
+	codestar := "<?php\nif ( ! function_exists( 'cs_encode_string' ) ) {\n  function cs_encode_string( $string ) {\n    return rtrim( strtr( call_user_func( 'base' . '64' . '_encode', addslashes( gzcompress( serialize( $string ), 9 ) ) ), '+/', '-_' ), '=' );\n  }\n}\n" +
+		"if ( ! function_exists( 'cs_decode_string' ) ) {\n  function cs_decode_string( $string ) {\n    return unserialize( gzuncompress( stripcslashes( call_user_func( 'base' . '64' . '_decode', rtrim( strtr( $string, '-_', '+/' ), '=' ) ) ) ) );\n  }\n}\n" +
+		"function cs_get_option( $option_name = '', $default = '' ) { $options = apply_filters( 'cs_get_option', get_option( CS_OPTION ), $option_name, $default ); return $options; }\n"
+	page := "<?php include('includes/header.php') ?>\n<div class=\"hero\" style=\"background:url('img/bg.png');\">Terms</div>\n<?php include('includes/footer.php') ?>\n"
+	for name, body := range map[string]string{"Codestar helpers": codestar, "page with includes": page} {
+		if d := analyze(".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	for name, body := range map[string]string{
+		"split decoder into eval": "<?php\nfunction cs_decode_string( $string ) {\n  return unserialize( call_user_func( 'base' . '64' . '_decode', $string ) );\n}\neval(call_user_func('base' . '64' . '_decode', $_POST['x']));\n",
+		"include of an image":     "<?php include('wp-content/uploads/2026/10/x.png'); ?>\n",
+	} {
+		if d := analyze(".php", []byte(body)); d == nil || d.Category != CatVirus {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}

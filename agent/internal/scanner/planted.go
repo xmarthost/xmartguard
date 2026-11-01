@@ -110,6 +110,10 @@ func plantedInCore(path string) *Detection {
 // underscore may come first).
 var reHiddenRandomPHP = regexp.MustCompile(`(?i)^\.(?:[a-z]{2,12}[_-])?[0-9a-f]{8,}\.(?:php\d?|phtml|inc)$`)
 
+// reUpdaterTemp: ".temp.1746060994092300511.Server.php" (group 1: the
+// name of the file it is a copy of).
+var reUpdaterTemp = regexp.MustCompile(`^\.temp\.\d{16,20}\.([^/]+\.php)$`)
+
 // devDotfiles are hidden PHP files that developer tools put into plugins
 // and packages (code style, IDE and test settings), and applications'
 // settings (Laravel 4's .env.php, .env.local.php, PsySH's .psysh.php,
@@ -152,6 +156,13 @@ func plantedByName(path string, mode func(string) int) *Detection {
 		// Hidden and with no permission at all: a dormant copy kept for
 		// switching back on.
 		return &Detection{CatVirus, "PHP.Planted.HiddenDormant"}
+	}
+	// An updater's working copy: ".temp.<nanoseconds>.<name>" written
+	// beside the file it replaces (WooCommerce, Elementor and Redux files
+	// under .wp-toolkit_R and plugin folders, business200, 2026-11-01).
+	// Only with that file next to it; the content rules still read it.
+	if m := reUpdaterTemp.FindStringSubmatch(base); m != nil && mode(filepath.Join(filepath.Dir(path), m[1])) >= 0 {
+		return nil
 	}
 	return &Detection{CatSuspicious, "PHP.Planted.HiddenFile"}
 }
