@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"errors"
 	"regexp"
 )
 
@@ -63,8 +64,64 @@ var (
 	reEscapedInput = regexp.MustCompile(`\$_(?:GET|POST|REQUEST|COOKIE|FILES|SERVER)\s*\[\s*["'](?:\\x[0-9a-fA-F]{2}|\\[0-7]{1,3}){2,}["']\s*\]`)
 )
 
+// The fake Cloudflare check of October 2026 (server1.superfast, 2026-11-02:
+// expresswrap.ae and five other sites, three waves from 2026-10-09): one
+// line appended to the active theme's functions.php, a wp_footer hook that
+// prints only a script loading another script, named by a few random
+// mixed-case letters, from the attacker's domain (karmazarbaza.com,
+// franfrbar.com, frclau.com: kbS0.js, cA.js). The page it shows is built
+// in the visitor's browser, so no text of it is ever on the server.
+// A site's own chat or analytics snippet sets its options first
+// (window.$crisp, dataLayer) or names its script (l.js, gtm.js, widget.js).
+var reFooterLoader = regexp.MustCompile(`add_action\s*\(\s*['"](?:wp_footer|wp_head|wp_body_open|login_footer|login_head|admin_footer)['"]\s*,\s*function\s*\([^)]*\)\s*\{\s*echo\s*['"]\s*<script[^>]*>\s*(?:var|let|const)\s+\w+\s*=\s*document\.createElement\s*\(\s*\\?["']script\\?["']\s*\)\s*;\s*\w+\.src\s*=\s*\\?["']https?://[A-Za-z0-9.-]+\.[A-Za-z]{2,}/([A-Za-z0-9]{1,10})\.js\\?["']`)
+
+// footerLoader: a hook printing only a loader for a randomly named script
+// at the root of another domain (both cases in its name: kbS0, cA).
+func footerLoader(content []byte) bool {
+	for _, m := range reFooterLoader.FindAllSubmatch(content, 20) {
+		name := m[1]
+		if bytes.ContainsAny(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") && bytes.ContainsAny(name, "abcdefghijklmnopqrstuvwxyz") {
+			return true
+		}
+	}
+	return false
+}
+
+// footerLoaderCuts: the lines that hold only a loader hook (the campaign
+// appends each as one line of its own).
+func footerLoaderCuts(content []byte) []Cut {
+	var cuts []Cut
+	for i, line := range bytes.Split(content, []byte("\n")) {
+		l := bytes.TrimSpace(line)
+		if bytes.HasPrefix(l, []byte("add_action")) && bytes.HasSuffix(l, []byte(";")) && bytes.Count(l, []byte("add_action")) == 1 && footerLoader(l) {
+			cuts = append(cuts, Cut{From: i + 1, To: i + 1})
+		}
+	}
+	return cuts
+}
+
+// trimFooterLoader puts a quarantined file back without its loader lines.
+func (s *Scanner) trimFooterLoader(id int64, maxPercent int) error {
+	r, err := s.load(id)
+	if err != nil {
+		return err
+	}
+	content, err := readFinding(r.qpath)
+	if err != nil {
+		return err
+	}
+	cuts := footerLoaderCuts(content)
+	if len(cuts) == 0 {
+		return errors.New("the loader is not on lines of its own")
+	}
+	return s.Trim(id, cuts, maxPercent)
+}
+
 // pluginInjectors judges PHP content alone (kitFamilies).
 func pluginInjectors(content []byte, has func(string) bool) *Detection {
+	if has("createElement") && footerLoader(content) {
+		return &Detection{CatVirus, "PHP.Injector.FooterScriptLoader"}
+	}
 	if has("all_plugins") && reSelfHide.Match(content) && reFrontPrint.Match(content) &&
 		(reSplitScript.Match(content) || bigBase64(content)) {
 		return &Detection{CatVirus, "PHP.Backdoor.SelfHidingInjector"}

