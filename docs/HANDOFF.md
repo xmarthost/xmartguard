@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.24** (see `VERSION`).
+- Current release: **0.24.25** (see `VERSION`).
 
 ## Working rules
 
@@ -256,6 +256,29 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.25: quarantined zips rechecked** (2026-11-03).
+  - After 0.24.24 `findings.recheck` cleared joomlash's restore.php (both
+    copies, the full 330 KB file), kickstart.txt and AjaxserverModel.php;
+    restored with `findings.recheck_apply` ids 1852, 1840, 1844, 2897 on
+    the owner's word. The quarantined extension zips (Archive.*:
+    com_akeebabackup-pro.zip, JExtStore zips, diginix-opslag_3.0.0.zip)
+    were "skipped": recheck only judged scripts. A quarantined .zip with
+    an Archive.* signature is now judged by its members (scanZip, as the
+    scan does). Fixture: TestFleetRecheckQuarantinedZip (fails on 0.24.24).
+    Next: recheck ids 3772, 1851, 1845, 1842, 1841, 1838, 1837 on
+    business600 and restore the clean ones.
+  - Fleet check of real search crawlers (7 days, connector): Google
+    addresses (66.249.x) had ~45,000 403s: 7700508 (crawler on
+    add-to-cart/wishlist/compare links, ~38,000, mostly ayantraders.pk on
+    server1.superfast), 7700510/7700509 (shop filters, fixed in 0.24.24),
+    7700309 (wp-includes PHP files), 7700201 (error_log), CRS only on
+    /php.ini, 7701511 (remove_item links). 7700507 (fake Googlebot) never
+    hit a real Google address; no CAPTCHA; fw.check shows Google and Bing
+    as TRUSTED-SERVICE. Bing (40.77.167.x, 157.55.39.x, 207.46.13.x,
+    52.167.144.x): junk and spam-link URLs (repeated folders, %0A,
+    setup-config.php, php.ini), 7700303 ?author=1, 7700508 compare links.
+    7700508 stays for search engines on purpose (each add-to-cart writes
+    a session and runs the shop uncached; these URLs are never indexed).
 - **Release 0.24.24: Google's other crawlers on shop filters, Akeeba
   Kickstart** (2026-11-03). Four support tickets checked with the
   connector.

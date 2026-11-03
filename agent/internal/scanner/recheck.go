@@ -86,7 +86,11 @@ func (s *Scanner) Recheck(f RecheckFilter, keep func(sha string) bool) (RecheckR
 	for _, it := range items {
 		ext := extOf(filepath.Base(it.Path))
 		content, err := os.ReadFile(it.qpath)
-		if err != nil || !ScriptExts[ext] {
+		// A zip is judged by its members, like the scan does (extension
+		// packages caught by a rule fixed since: business600 joomlash, Akeeba
+		// Backup Pro's and JExtStore's zips, 2026-11-03).
+		zipped := ext == ".zip" && strings.HasPrefix(it.Signature, "Archive.")
+		if err != nil || (!ScriptExts[ext] && !zipped) {
 			rep.Skipped++
 			continue
 		}
@@ -100,6 +104,14 @@ func (s *Scanner) Recheck(f RecheckFilter, keep func(sha string) bool) (RecheckR
 		// now), not by its content: stays.
 		if strings.HasPrefix(it.Signature, "PHP.Planted.") {
 			rep.Still++
+			continue
+		}
+		if zipped {
+			if scanZip(it.qpath, int64(len(content))) != nil {
+				rep.Still++
+				continue
+			}
+			rep.Clean = append(rep.Clean, it.RecheckItem)
 			continue
 		}
 		if d := s.checkContent(it.Path, ext, content); d != nil {
