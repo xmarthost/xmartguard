@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.20** (see `VERSION`).
+- Current release: **0.24.24** (see `VERSION`).
 
 ## Working rules
 
@@ -256,6 +256,48 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.24: Google's other crawlers on shop filters, Akeeba
+  Kickstart** (2026-11-03). Four support tickets checked with the
+  connector.
+  - WAF: batquitraders.com (business200, batquitr) had Google's crawlers
+    from Google's own addresses (66.249.79.6/.7) refused by 7700510 on
+    brand filter URLs: Storebot-Google and GoogleOther do not say
+    "Googlebot", and 7700509/7700510 exempted search engines by
+    User-Agent only. New marker 7703510: a trusted address (tx.xg_trusted)
+    whose User-Agent names a search engine (google, bingbot, applebot,
+    yandex, duckduck, baiduspider …) sets tx.xg_search, and 7700509,
+    7700510 and 7701510 skip it (guardChains, so LiteSpeed too). The same
+    User-Agent from elsewhere and AI crawlers from their own networks
+    (GPTBot) are still refused on filters. Tests:
+    TestShopFilterRulesLetVerifiedSearchEnginesThrough, Apache
+    TestRealAndFakeCrawlersOnApache (new cases fail on 0.24.23).
+  - Scanner: Akeeba Kickstart's restore.php (Akeeba Backup Pro package,
+    330 KB, 2025 build) and Akeeba Solo's kickstart.txt (joomlash,
+    business600) were PHP.Backdoor.FileDropper / Disguised.PHPFile: the
+    only request read, getQueryParam() ($_REQUEST), sits right above
+    debugMsg(), which appends to a fixed debug.txt, so the 200-byte
+    "request near a write" test matched across two functions. The
+    dropper test now needs both in the same function (`nearInFunc`: no
+    named function starts between them). Droppers at the top level or in
+    one function are still caught. Fixture: TestFleetAkeebaRestoreDebugLog
+    (fails on 0.24.23). The first 40 KB of the quarantined copy were read
+    (vendor code); the quarantined copies still need a recheck after the
+    update (findings.recheck) before anything is restored.
+  - Checked, no engine change (the blocks were right): metorbix.com and
+    batquitraders.com 7700506/7700507 hits all come from 104.28.x
+    (Cloudflare WARP, the customer's own tools) with "Mozilla/5.0" alone
+    or a Googlebot User-Agent; real Googlebot never comes from there.
+    46.4.220.84 (Hetzner) walking per_row/shop_view combinations is
+    7700509 doing its job. transformplasticsurgeryclinic.com (business500):
+    7700503/7700507 refused GPTBot/ClaudeBot/Googlebot User-Agents from
+    Google Cloud (35.x, 34.x: SEO audit tools that fake crawler names);
+    35.201.234.8 also probed /proc/self/environ and
+    x-middleware-subrequest (Next.js CVE), so its CAPTCHA was right. Real
+    crawlers from their published networks are trusted and never get the
+    CAPTCHA. batquitraders.com port 80 "500, Server: Pingora": no xPGuard
+    code answers with 500 or names Pingora; HTTPS works on the server, so
+    the 500 comes from a proxy in front of the site (its DNS), not from
+    the server.
 - **Release 0.24.23: the fake Cloudflare check loader** (2026-11-02).
   expresswrap.ae (server1.superfast, user expressw) showed a fake
   "Verify you are human / Performance & security by Cloudflare" page a

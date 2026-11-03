@@ -217,7 +217,10 @@ func analyzePHP(content []byte) *verdict {
 	// (Not when the only decoding is of a canvas image sent as a data URI
 	// (Chamilo's badge editor), nor when it writes only to data files named
 	// in the code, a debug log (Retina Images).)
-	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders > dataURIDecodes(s)) && nr(reWriteSinkFile, reUserInput, 200) && m(reFileWrite) &&
+	// (The request read and the write in the same function: Akeeba
+	// Kickstart's getQueryParam() reads $_REQUEST right above debugMsg(),
+	// which appends to a fixed debug.txt.)
+	if m(reWriteSink) && m(reUserInput) && (m(reChr) || decoders > dataURIDecodes(s)) && nr(reWriteSinkFile, reUserInput, 200) && nearInFunc(s, reWriteSinkFile, reUserInput, 200) && m(reFileWrite) &&
 		!(n > 20000 && m(reWPGuard) && !m(reChr) && !m(reHardDecoder)) && !writesDataOnly(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.FileDropper"}
 	}
@@ -563,6 +566,29 @@ func near(s []byte, a, b *regexp.Regexp, window int) bool {
 				d = -d
 			}
 			if d <= window {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// reFuncStart is the start of a named function or method.
+var reFuncStart = regexp.MustCompile(`(?i)\bfunction\s+&?\s*[a-z_\x80-\xff][a-z0-9_\x80-\xff]*\s*\(`)
+
+// nearInFunc is near, but only for matches no named function starts
+// between: code that reads the request in one function and writes a file
+// in the next is two helpers, not a request written to a file.
+func nearInFunc(s []byte, a, b *regexp.Regexp, window int) bool {
+	am := a.FindAllIndex(s, -1)
+	bm := b.FindAllIndex(s, -1)
+	for _, x := range am {
+		for _, y := range bm {
+			lo, hi := x[0], y[0]
+			if lo > hi {
+				lo, hi = hi, lo
+			}
+			if hi-lo <= window && !reFuncStart.Match(s[lo:hi]) {
 				return true
 			}
 		}

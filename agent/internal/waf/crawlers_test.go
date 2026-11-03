@@ -70,6 +70,8 @@ func TestRealAndFakeCrawlersOnApache(t *testing.T) {
 	trusted := []string{"198.51.100.0/24"}
 	m := &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), RulesDir: filepath.Join(dir, "waf"), NoSelfTest: true,
 		TrustedIPs: func() []string { return trusted }}
+	// The shop filter rule as on the servers (approved there).
+	m.Intel = func() *Intel { return &Intel{Enforce: []int{IDShopScrape}} }
 	exec.Command("apache2ctl", "start").Run()
 	defer exec.Command("apache2ctl", "stop").Run()
 	defer func() {
@@ -129,11 +131,48 @@ func TestRealAndFakeCrawlersOnApache(t *testing.T) {
 	check("fake GPTBot behind Cloudflare", send(cfAddr, "/", gpt, "CF-Connecting-IP: 203.0.113.9"), 403)
 	check("forged X-Forwarded-For behind Cloudflare", send(cfAddr, "/", gpt, "CF-Connecting-IP: 203.0.113.9", "X-Forwarded-For: 198.51.100.7"), 403)
 	check("CF-Connecting-IP not from Cloudflare", send("", "/", gpt, "CF-Connecting-IP: 198.51.100.7"), 403)
+	// Shop filters (batquitraders.com, 2026-11-03): Google's shopping
+	// crawler names no "Googlebot"; from elsewhere it is a scraper.
+	storebot := "Mozilla/5.0 (X11; Linux x86_64; Storebot-Google/1.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+	check("fake Storebot-Google on many filter values", send("", "/shop/?filter_product_brand=202,119,197", storebot), 403)
+	check("fake Storebot-Google on a sort URL", send("", "/shop/?orderby=date", storebot), 403)
+	check("fake GoogleOther on many filter values", send("", "/shop/?filter_product_brand=202,119,197", "Mozilla/5.0 (compatible; GoogleOther)"), 403)
 
 	// From a trusted address: the real crawlers.
 	trusted = []string{"127.0.0.0/8"}
 	apply()
 	for _, ua := range []string{gpt, claude, semrush} {
 		check("real "+ua, send("", "/", ua), 0)
+	}
+	check("real Storebot-Google on many filter values", send("", "/shop/?filter_product_brand=202,119,197", storebot), 0)
+	check("real Storebot-Google on many filters", send("", "/shop/?filter_a=1&filter_b=2&filter_c=3", storebot), 0)
+	check("real Storebot-Google on a sort URL", send("", "/shop/?orderby=date&per_page=24", storebot), 0)
+	check("real GoogleOther on many filter values", send("", "/shop/?filter_product_brand=202,119,197", "Mozilla/5.0 (compatible; GoogleOther)"), 0)
+	check("AI crawler from its own network on many filter values", send("", "/shop/?filter_product_brand=202,119,197", gpt), 403)
+	check("AI crawler from its own network on a sort URL", send("", "/shop/?orderby=date&per_page=24", gpt), 403)
+}
+
+// batquitraders.com (business200, 2026-11-03): Google's crawlers from
+// Google's own addresses (66.249.79.x) were refused on brand filter URLs by
+// 7700510: Storebot-Google and GoogleOther do not say "Googlebot". The
+// shop filter rules now let search engines from their published
+// addresses through; the same User-Agent from anywhere else and AI
+// crawlers from their own networks are still refused.
+func TestShopFilterRulesLetVerifiedSearchEnginesThrough(t *testing.T) {
+	c := settings.Defaults().WAF
+	c.BadBots = true
+	out := Render(c, Options{Dir: "/r", Trusted: true})
+	i := strings.Index(out, fmt.Sprintf("id:%d,", IDShopScrape+3000))
+	if i < 0 || !strings.Contains(out[i-60:i], `SecRule &TX:xg_trusted "@eq 1"`) || !strings.Contains(out[i:i+400], "setvar:tx.xg_search=1") {
+		t.Fatal("verified search engines are not marked")
+	}
+	for _, id := range []int{IDCrawlerFacets, IDShopScrape, IDShopScrape + 1000} {
+		j := strings.Index(out, fmt.Sprintf("id:%d,", id))
+		if j < i || !strings.Contains(out[j:j+700], `SecRule &TX:xg_search "@eq 0"`) {
+			t.Errorf("rule %d does not skip verified search engines (or runs before the marker)", id)
+		}
+	}
+	if strings.Contains(Render(c, Options{Dir: "/r"}), "xg_search") {
+		t.Error("marker rendered without a trusted list")
 	}
 }

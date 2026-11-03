@@ -1175,6 +1175,16 @@ func Render(c settings.WAF, o Options) string {
 			w(`SecRule ARGS_NAMES "@rx ^(?:add[-_]to[-_](?:cart|wishlist|compare)|wishlist_add|yith_wcwl_add)" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Crawler adding to cart or wishlist blocked',tag:'xpguard/bot',chain"`, IDCrawlerCart)
 			w(`  `+crawler, "")
 		}
+		if o.Trusted && (!off[IDCrawlerFacets] || !off[IDShopScrape]) {
+			// Search engine crawlers from their published addresses: Google's
+			// shopping and research crawlers (Storebot-Google, GoogleOther)
+			// name no "Googlebot" but crawl from the same addresses
+			// (batquitraders.com on business200, 2026-11-03: 66.249.79.x
+			// refused on brand filters). AI crawlers from their own networks
+			// stay on the filter rules.
+			w(`SecRule &TX:xg_trusted "@eq 1" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDShopScrape+3000)
+			w(`  SecRule REQUEST_HEADERS:User-Agent "@rx (?:google|bingbot|bingpreview|msnbot|adidxbot|applebot|yandex|duckduck|baiduspider)" "t:none,t:lowercase,setvar:tx.xg_search=1"`)
+		}
 		if !off[IDCrawlerFacets] {
 			w(`SecRule ARGS_GET_NAMES "@rx ^(?:filter_[a-z0-9_-]+|query_type_[a-z0-9_-]+|orderby|min_price|max_price|per_page|rating_filter|product_count|shop_view|pa_[a-z0-9_-]+)$" "id:%d,phase:1,t:none,t:lowercase,deny,status:403,log,msg:'xPGuard - Crawler on shop filter URLs blocked',tag:'xpguard/bot',chain"`, IDCrawlerFacets)
 			w(`  `+crawler, ",chain")
@@ -1352,6 +1362,11 @@ func Render(c settings.WAF, o Options) string {
 	// The shop filter rules test the same-site marker (IDShopScrape+2000 and
 	// +5000; a negated header test would not match a request without the
 	// header).
+	// (Search engines from their published addresses first: each guard
+	// goes right after the chain's first rule.)
+	if o.Trusted {
+		out = guardChains(out, `SecRule &TX:xg_search "@eq 0" "t:none,chain"`, IDCrawlerFacets, IDShopScrape, IDShopScrape+1000)
+	}
 	out = guardChains(out, `SecRule &TX:xg_same_origin "@eq 0" "t:none,chain"`, IDShopScrape, IDShopScrape+1000)
 	// And for the theme colour stylesheets (IDThemeColorCSS).
 	out = guardChains(out, `SecRule &TX:xg_color_css "@eq 0" "t:none,chain"`, IDStaticPHP, IDPHPInAssets)
