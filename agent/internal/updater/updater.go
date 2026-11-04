@@ -120,6 +120,10 @@ func update(ctx context.Context, hc *http.Client, portal, expectSHA, self string
 	if got != published[0] || (expectSHA != "" && got != expectSHA) {
 		return "", errors.New("checksum mismatch; update aborted")
 	}
+	// Signed by the owner's release key (signature.go), when the agent has one.
+	if err := verifyRelease(ReleaseKey, bin, func() ([]byte, error) { return retry(portal+"/downloads/"+name+".sig", 4096) }); err != nil {
+		return "", err
+	}
 	tmp := self + ".new"
 	if err := os.WriteFile(tmp, bin, 0o755); err != nil {
 		return "", err

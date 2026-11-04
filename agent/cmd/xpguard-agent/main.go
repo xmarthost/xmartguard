@@ -128,6 +128,9 @@ func main() {
 		err = cmdCLI(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(version.Version)
+	case "release-key":
+		// The public key updates must be signed with (empty: none yet).
+		fmt.Println(strings.ReplaceAll(strings.TrimSpace(updater.ReleaseKey), `\n`, "\n"))
 	case "help", "--help", "-h":
 		usage()
 	default:

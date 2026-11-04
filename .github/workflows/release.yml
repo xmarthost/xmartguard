@@ -1,0 +1,90 @@
+name: Release
+
+# Builds the agent for every new VERSION on main, signs each binary with
+# the owner's release key (the Actions secret XPGUARD_SIGNING_KEY, an
+# Ed25519 private key in PEM) and publishes them as the GitHub release
+# v<VERSION>. The portal takes its agent binaries from this release
+# (scripts/fetch-agent.sh), and agents with the public key built in
+# (agent/internal/updater/signature.go) take only binaries it signed. The
+# private key is never on the portal or in the repository.
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: Version
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="$(cat VERSION)"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+            echo "v$v is already released"
+          fi
+      - name: Build
+        if: steps.v.outputs.exists != '1'
+        run: OUT=dist/release bash scripts/build-agent.sh
+      - name: Sign
+        id: sign
+        if: steps.v.outputs.exists != '1'
+        env:
+          KEY: ${{ secrets.XPGUARD_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          built="$(cd agent && go run ./cmd/xpguard-agent release-key | tr -d ' \n\r')"
+          if [ -z "$KEY" ]; then
+            if [ -n "$built" ]; then
+              echo "::error::The agent has a release key but the secret XPGUARD_SIGNING_KEY is not set: no unsigned release is published."
+              exit 1
+            fi
+            # Before the owner set up the key: no release; the portal
+            # builds the agent itself (scripts/fetch-agent.sh).
+            echo "::notice::XPGUARD_SIGNING_KEY is not set yet: no signed release for this version."
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          k="$RUNNER_TEMP/release-key.pem"
+          printf '%s\n' "$KEY" > "$k"
+          trap 'rm -f "$k" "$RUNNER_TEMP/pub.pem" "$RUNNER_TEMP/sig.raw"' EXIT
+          openssl pkey -in "$k" -pubout -out "$RUNNER_TEMP/pub.pem"
+          # The key in the agent's source must be this key's public half,
+          # or the agents would refuse the release.
+          ours="$(tr -d ' \n\r' < "$RUNNER_TEMP/pub.pem")"
+          if [ -n "$built" ] && [ "$built" != "$ours" ]; then
+            echo "::error::The public key in agent/internal/updater/signature.go is not the public half of XPGUARD_SIGNING_KEY."
+            exit 1
+          fi
+          for f in dist/release/xpguard-agent-linux-amd64 dist/release/xpguard-agent-linux-arm64; do
+            openssl pkeyutl -sign -inkey "$k" -rawin -in "$f" -out "$RUNNER_TEMP/sig.raw"
+            openssl pkeyutl -verify -pubin -inkey "$RUNNER_TEMP/pub.pem" -rawin -in "$f" -sigfile "$RUNNER_TEMP/sig.raw"
+            base64 -w0 "$RUNNER_TEMP/sig.raw" > "$f.sig"
+          done
+      - name: Publish
+        if: steps.v.outputs.exists != '1' && steps.sign.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.v.outputs.version }}"
+          gh release create "v$v" dist/release/* --target "$GITHUB_SHA" --title "xPGuard $v" \
+            --notes "Agent $v built and signed by the release workflow from $GITHUB_SHA."

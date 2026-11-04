@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.25** (see `VERSION`).
+- Current release: **0.24.26** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,52 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.26: release signing, fake Adobe download kit** (2026-11-04).
+  - **Release signing (owner's choice: key in GitHub).** Agents with a
+    release key built in (`agent/internal/updater/signature.go`,
+    `ReleaseKey`, an Ed25519 public key in PEM) take an update only with
+    a valid `<binary>.sig` (base64 of the Ed25519 signature of the
+    binary) from the portal, whatever its checksum says: a portal taken
+    over cannot run its own agent on the fleet. The private key is the
+    GitHub Actions secret `XPGUARD_SIGNING_KEY`; `.github/workflows/
+    release.yml` builds the agents on every VERSION change on main, signs
+    them (openssl pkeyutl -rawin), checks the key in the source is the
+    secret's public half, and publishes the GitHub release v<VERSION>
+    (binaries, .sha256, .sig). The portal's image takes its agents from
+    that release (`scripts/fetch-agent.sh`, sha256 checked); while the
+    agent has no key it builds them itself when there is no release, as
+    before; with a key it waits up to 15 minutes for the release and
+    otherwise fails the build (never an unsigned agent). `/downloads/`
+    serves `.sig`; `xpguard-agent release-key` prints the built-in key.
+    0.24.26 has **no key yet**: the owner creates it (commands below),
+    saves the private key as the secret and sends the public key; the
+    next release puts it in `ReleaseKey`, and from that release on every
+    update must be signed. Key commands (on the owner's PC; Git Bash on
+    Windows): `openssl genpkey -algorithm ed25519 -out xpguard-release.pem`
+    and `openssl pkey -in xpguard-release.pem -pubout`. A lost private key:
+    agents keep running but take no update until reinstalled with a new
+    key (keep a backup). The first install (install.sh) still trusts the
+    portal it is run from (the owner runs it). Test:
+    `TestUpdateNeedsReleaseSignature`.
+  - **Fake Adobe download kit** (server100, aloradecor.com, Hetzner abuse
+    from Outseer as a RAT; uploaded into WordPress as `a/adobelanding/`
+    and none of it had a finding): a checkbox "I'm not a robot" that only
+    sets a session flag (`Phishing.FakeCaptcha.CheckboxGate`), a visitor
+    logger to a Telegram bot (`Phishing.Collector.TelegramVisitLogger`:
+    the visitor's address and a geo lookup sent to api.telegram.org, then
+    a redirect, no form fields), a page saying the document "requires the
+    latest version of Adobe Acrobat" that downloads by itself from another
+    site (`Phishing.FakeUpdate.DownloadLure`), and download.php, a
+    one-line 301 to a ScreenConnect access client
+    (`Malware.Redirect.RemoteAccessInstaller`: a redirect, not a link, to
+    a remote-access installer from a small file or for an unattended
+    `e=Access` session; IT companies linking their support client stay
+    clean). The earlier ClickFix rule needs a clipboard command and
+    Win+R/Ctrl+V steps; this kit has none, which is why it passed. All
+    four script files of the real kit are caught (local check). Fixture:
+    `TestFleetFakeAdobeDownloadKit`. The account aloradecor was a target
+    of ecommupscale's symlink farm (wp-config.php, .env, .accesshash,
+    2026-10-22): its credentials should be changed.
 - **Release 0.24.25: quarantined zips rechecked** (2026-11-03).
   - After 0.24.24 `findings.recheck` cleared joomlash's restore.php (both
     copies, the full 330 KB file), kickstart.txt and AjaxserverModel.php;

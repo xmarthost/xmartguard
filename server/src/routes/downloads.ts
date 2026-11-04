@@ -6,7 +6,9 @@ import type { Config } from '../config.js';
 
 // Only these files are ever served from downloadsDir. Agents before 0.11
 // (and their installers) ask for the program by its old name.
-const ALLOWED = /^(?:xpguard|xmartguard)-agent-linux-(amd64|arm64)(\.sha256)?$/;
+// The .sig file is the release signature agents with a release key check
+// (agent/internal/updater/signature.go).
+const ALLOWED = /^(?:xpguard|xmartguard)-agent-linux-(amd64|arm64)(\.sha256|\.sig)?$/;
 
 /**
  * Serves the one-line installer scripts (with this portal's URL baked in) and
@@ -47,7 +49,7 @@ export function downloadRoutes(app: FastifyInstance, cfg: Config): void {
     if (!found) return reply.code(404).send({ error: 'not found' });
     reply.header('Cache-Control', 'no-cache');
     reply.header('Content-Length', found.size);
-    if (file.endsWith('.sha256')) {
+    if (file.endsWith('.sha256') || file.endsWith('.sig')) {
       // A short text, sent whole: a stream starting "80" (a hash) would be
       // mislabelled gzip by the compression (see looksCompressed in app.ts).
       reply.type('text/plain; charset=utf-8');
