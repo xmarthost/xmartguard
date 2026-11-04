@@ -65,7 +65,23 @@ jobs:
           fi
           umask 077
           k="$RUNNER_TEMP/release-key.pem"
-          printf '%s\n' "$KEY" > "$k"
+          # Windows line ends and spaces around the paste are dropped; a key
+          # pasted without its BEGIN/END lines is wrapped.
+          key="$(printf '%s\n' "$KEY" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$')"
+          if ! printf '%s\n' "$key" | grep -q -- '-----BEGIN'; then
+            key="$(printf -- '-----BEGIN PRIVATE KEY-----\n%s\n-----END PRIVATE KEY-----' "$(printf '%s' "$key" | tr -d ' \n')")"
+          fi
+          printf '%s\n' "$key" > "$k"
+          # What was pasted, without any of the key itself.
+          echo "secret: $(printf '%s\n' "$key" | wc -l) lines; header: $(printf '%s\n' "$key" | grep -o -- '-----BEGIN [A-Z ]*-----' | head -1)"
+          if printf '%s\n' "$key" | grep -q 'BEGIN PUBLIC KEY'; then
+            echo "::error::XPGUARD_SIGNING_KEY holds the PUBLIC key. It must be the private key file xpguard-release.pem (-----BEGIN PRIVATE KEY-----)."
+            exit 1
+          fi
+          if ! openssl pkey -in "$k" -noout 2>/dev/null; then
+            echo "::error::XPGUARD_SIGNING_KEY is not a readable private key. Paste the whole xpguard-release.pem, from -----BEGIN PRIVATE KEY----- to -----END PRIVATE KEY-----."
+            exit 1
+          fi
           trap 'rm -f "$k" "$RUNNER_TEMP/pub.pem" "$RUNNER_TEMP/sig.raw"' EXIT
           openssl pkey -in "$k" -pubout -out "$RUNNER_TEMP/pub.pem"
           # The key in the agent's source must be this key's public half,
