@@ -18,7 +18,9 @@ import (
 // own agent on the servers (the way cPGuard's fleet was attacked,
 // 2026-11-02). Empty: updates are checked by their checksum only.
 // It is written here, in the source, so every build carries it.
-var ReleaseKey = ""
+var ReleaseKey = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEApXbDMebscfweJdqWISr97R790PM9Lz4dP4oGAWMXUoY=
+-----END PUBLIC KEY-----`
 
 // errUnsigned: the portal has no valid signature for the binary.
 var errUnsigned = errors.New("the update has no valid release signature; update refused")

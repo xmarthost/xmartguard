@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.26** (see `VERSION`).
+- Current release: **0.24.27** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,16 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.27: the release key is in the agent** (2026-11-04). The
+  owner made the key and saved the private half as the GitHub secret
+  `XPGUARD_SIGNING_KEY`; its public half is now `ReleaseKey`
+  (MCowBQYDK2VwAyEApXbDMebscfweJdqWISr97R790PM9Lz4dP4oGAWMXUoY=). 0.24.27
+  is the last update the fleet takes by checksum only (agents up to
+  0.24.26 have no key); from 0.24.27 on every agent update must carry the
+  Release workflow's signature. The portal image now waits for the GitHub
+  release v<VERSION> (up to 15 minutes after a push) and never builds an
+  unsigned agent. If the Release workflow fails ("not the public half"),
+  the secret is not this key's private half. Test: `TestBuiltInReleaseKey`.
 - **Release 0.24.26: release signing, fake Adobe download kit** (2026-11-04).
   - **Release signing (owner's choice: key in GitHub).** Agents with a
     release key built in (`agent/internal/updater/signature.go`,
