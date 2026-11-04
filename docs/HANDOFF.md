@@ -83,6 +83,62 @@ project. It holds the rules, the current state and what is still open.
 - **WHMCS**: a WHMCS module (feature 18) is not wanted; customers buy on
   the website.
 
+## Security review after the cPGuard compromise (2026-11-03/04), owner decisions pending
+
+cPGuard's own portal was compromised (2026-11-02 ~02:08-03:20 UTC: billing app
+first, then the portal pushed the attacker's code to agents as root). A
+second session checked xPGuard against the same path. No code changed; its
+HANDOFF commit (f8f61e8) was never pushed (GitHub 403), so it is written here.
+
+Fleet check (connector, 30 days): the attack addresses 94.183.188.91,
+5.182.208.167, 5.182.208.206 appear in no WAF or firewall event on any of
+the 17 servers, portal server business900 included. Not a full proof: the
+WAF logs only blocked or watched requests. 5.182.208.x is the provider of
+business400 (5.182.209.115); nothing there either. Open question for the
+owner: was cPGuard installed on any of our servers during that window? If
+so: change root password, SSH keys and MySQL root password there, and check
+`/var/tmp/.cpg91511_sh`, `/etc/cron.d/i93677`, `/var/tmp/.i93677/`.
+
+Weak points on the same attack path:
+1. Critical: agent updates trust the portal alone. The updater downloads the
+   binary and checks the sha256 the same portal gives; no offline signing
+   key. A hacked portal can run its own agent as root on every server.
+   `portal.move` can also send agents to another portal.
+2. Critical: the portal (app.xpguard.org) and the billing site (xpguard.org)
+   run on business900, a shared cPanel server with ~590 customer sites. A
+   local root from any site there gives the portal and then the fleet.
+   Advice: move portal and billing to a small VPS of their own.
+3. High: the portal is built with `curl .../main/setup.sh | bash` from
+   GitHub main. A taken GitHub account gives the portal. Advice: 2FA,
+   branch protection on main, review of Actions secrets.
+4. Medium: the MCP connector token can run actions on every server
+   (delete, firewall, settings). Advice: expiry and an IP restriction.
+5. Medium: two fake customer accounts together can list an address in the
+   IPDB (one alone cannot; trusted services are never listed). Advice: weigh
+   account age or a paid plan.
+6. Low: keep a full log of admin and billing requests on the portal, so an
+   attack's request can be found afterwards (still to check).
+Already strong: agent messages are signed (Ed25519 per server); a
+customer's AI knowledge stays in that account; learned names need the
+owner's approval before the fleet uses them; agents refuse WAF rules with
+`exec:`, `proxy:` and `setenv:` (a portal rule cannot run code); updates
+only over https with certificate checks, never a downgrade.
+
+Release signing plan (waiting for the owner): an Ed25519 key that is never
+on the portal; every agent binary signed; the public key built into the
+agent, which refuses an update without a valid signature whatever the
+portal says. Two ways explained to the owner: (1) the private key as the
+GitHub Actions secret `XPGUARD_SIGNING_KEY`, CI signs each release (advised;
+needs 2FA on GitHub); (2) the key on the owner's PC or USB, a one-line
+signature pasted into the portal per release. The owner generates the key
+with a command we give (the key never goes through a chat); only the
+public key is shared. The first release with the check is the last one
+accepted unsigned. A lost key: agents keep running but take no update until
+reinstalled with a new key, so keep a backup of the private key.
+Also asked: add cPGuard's public IOCs (file paths, hashes) to the scanner?
+They are threat intelligence, not cPGuard code or signatures, but the hard
+limit says nothing of cPGuard, so the owner decides.
+
 ## Full-scan review, part 1 (2026-11-01): 7 finished servers, not released
 
 The owner's full scans (started 2026-10-31 ~21:48 UTC) finished on
