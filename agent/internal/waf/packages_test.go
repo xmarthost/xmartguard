@@ -160,6 +160,9 @@ func TestPackagesOnApache(t *testing.T) {
 		{"/wp-admin/admin-ajax.php?action=revslider_show_image&img=../wp-config.php", browser},
 		{"/wp-admin/admin-ajax.php?action=duplicator_download&file=..%2Fwp-config.php", browser},
 		{"/wp-content/litespeed/debug/debug.log", browser},
+		// A shell in a css folder does not pass as a theme stylesheet.
+		{"/assets/front/css/styles.php?cmd=id", browser}, {"/assets/front/css/styles.php?color=191919&cmd=whoami", browser},
+		{"/assets/front/css/cloud.php?color=191919", browser}, {"/assets/front/css/styles.php?file=191919", browser},
 	}
 	for _, a := range attacks {
 		if code := send("GET", a.uri, a.hdr, ""); code != 403 {
@@ -195,6 +198,11 @@ func TestPackagesOnApache(t *testing.T) {
 		{"GET", "/image/catalog/logo.png", browser, ""}, {"GET", "/api/orders?page=2", map[string]string{"User-Agent": "okhttp/4.12"}, ""},
 		{"POST", "/ipn.php", map[string]string{"User-Agent": "PayPal IPN ( https://www.paypal.com/ipn )"}, "txn_id=1"},
 		{"GET", "/wp-admin/admin-ajax.php?action=revslider_show_image&img=slide1.jpg", browser, ""},
+		// Theme stylesheets built by PHP (s5, 2026-11-04), also as the page
+		// prints the link (&amp;) and for Google's renderer.
+		{"GET", "/assets/front/css/styles.php?color=191919&header_color=ffffff&menu_hover_color=02020c", browser, ""},
+		{"GET", "/assets/front/css/styles.php?color=191919&amp;header_color=ffffff&amp;menu_color=ff5500", browser, ""},
+		{"GET", "/wp-content/themes/shop/css/custom-style.php?primary_color=%23f7931a&ver=2.4.1", browser, ""},
 	}
 	for _, n := range normal {
 		if code := send(n.method, n.uri, n.hdr, n.body); code == 403 || code == 0 {

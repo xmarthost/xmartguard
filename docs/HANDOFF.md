@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.27** (see `VERSION`).
+- Current release: **0.24.28** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,32 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.28: theme stylesheets built by PHP; search engine review**
+  (2026-11-04). Review after 0.24.27 of every WAF, firewall and CAPTCHA
+  event of Google (66.249.64.0/19) and Bing (40.77.167, 157.55.39,
+  207.46.13) addresses in 24 hours on all 17 servers. The firewall and
+  the CAPTCHA stopped none of them; no fake-bot rule (7700506/7700507) and
+  no shop filter rule (7700509/7700510) refused a real one. What the WAF
+  refused them were URLs that are not pages: add-to-cart, wishlist and
+  compare links (7700508, kept on purpose: never indexed, and a 403 only
+  drops that URL), wp-includes PHP files (7700309), error_log (7700201),
+  "/wp-*.php" (7700311), php.ini, repeated folders, uploads listing, and
+  `?author=N` (7700303: WordPress only redirects it to /author/<name>/,
+  which stays open, so it is kept). Most of server100's 9,600 were
+  ayantraders.pk spam URLs (`/?items/<digits>_sthml&add-to-cart=`) left
+  in Google from an old hack. **One real fault, fixed:** a shop script's
+  theme stylesheet `assets/front/css/styles.php?color=191919&header_color=
+  ffffff…` (sanitarydepot.pk, sanjhihatti.com on s5) was refused by
+  7700321 for every visitor and for Google's renderer (~30,000 in 7 days),
+  so the pages showed without their theme. IDThemeColorCSS only knew
+  css/color*.php. New: IDThemeColorCSS+1000/+2000 allow a GET of a
+  css-folder PHP named style/colour/theme/skin/custom/dynamic when a
+  parameter is named after a colour and every value is a colour (or a
+  version like 2.4.1); one other value (a command) and the file stays
+  refused. The page's HTML-escaped link (`&amp;`) works too. Tests:
+  `TestPackagesOnApache` (real Apache + ModSecurity: three stylesheets
+  pass, four shell requests in css folders stay 403),
+  `TestExclusionsWithoutRuleRemovalAtRunTime` (the marker for LiteSpeed).
 - **Release 0.24.27: the release key is in the agent** (2026-11-04). The
   owner made the key and saved the private half as the GitHub secret
   `XPGUARD_SIGNING_KEY`; its public half is now `ReleaseKey`

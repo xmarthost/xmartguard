@@ -49,6 +49,9 @@ func TestExclusionsWithoutRuleRemovalAtRunTime(t *testing.T) {
 	if !strings.Contains(strings.Join(chainOf(out, IDThemeColorCSS), "\n"), "setvar:tx.xg_color_css=1") {
 		t.Error("colour stylesheet not marked")
 	}
+	if ch := strings.Join(chainOf(out, IDThemeColorCSS+2000), "\n"); !strings.Contains(ch, "setvar:tx.xg_color_css=1") || !strings.Contains(ch, "&TX:xg_color_bad") {
+		t.Errorf("theme stylesheet not marked, or marked with other values: %q", ch)
+	}
 	for _, id := range []int{IDStaticPHP, IDPHPInAssets} {
 		if ch := chainOf(out, id); len(ch) < 2 || ch[1] != `SecRule &TX:xg_color_css "@eq 0" "t:none,chain"` {
 			t.Errorf("rule %d does not skip colour stylesheets: %q", id, ch)

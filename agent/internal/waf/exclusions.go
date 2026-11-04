@@ -233,6 +233,21 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule REQUEST_FILENAME "@rx /css/+[a-z0-9_-]*colou?rs?[a-z0-9_-]*\.php$" "t:none,t:urlDecodeUni,t:lowercase,chain"`)
 		// LiteSpeed ignores the removal: the two rules also test the marker.
 		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,setvar:tx.xg_color_css=1,ctl:ruleRemoveById=%d,ctl:ruleRemoveById=%d"`, IDStaticPHP, IDPHPInAssets)
+		// The theme stylesheet under another name (sanitarydepot.pk and
+		// sanjhihatti.com on s5, 2026-11-04: css/styles.php?color=191919&
+		// header_color=ffffff…, refused ~4,000 times a day for every visitor
+		// and for Google's page renderer, so the shop showed without its
+		// theme). Allowed only when every value is a colour (or a ?ver=1.2
+		// version) and a parameter is named after a colour: a shell
+		// in a css folder reads commands, not colours. The page may print
+		// the link HTML-escaped (&amp;): the names then start with "amp;".
+		w(`SecRule REQUEST_FILENAME "%s" "id:%d,phase:1,t:none,t:urlDecodeUni,t:lowercase,pass,nolog,chain"`, themeStyleFile, IDThemeColorCSS+1000)
+		w(`  SecRule ARGS_GET "!@rx ^(?:#?[0-9a-f]{3,8}|[0-9]+(?:\.[0-9]+)+)$" "t:none,t:lowercase,setvar:tx.xg_color_bad=1"`)
+		w(`SecRule REQUEST_METHOD "@rx ^(?:GET|HEAD)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDThemeColorCSS+2000)
+		w(`  SecRule REQUEST_FILENAME "%s" "t:none,t:urlDecodeUni,t:lowercase,chain"`, themeStyleFile)
+		w(`  SecRule &TX:xg_color_bad "@eq 0" "t:none,chain"`)
+		w(`  SecRule ARGS_GET_NAMES "@rx colou?r" "t:none,t:lowercase,chain"`)
+		w(`  SecRule ARGS_GET "@rx ^#?[0-9a-f]{3,8}$" "t:none,t:lowercase,setvar:tx.xg_color_css=1"`)
 	}
 	if !off[IDSiteBeacons] {
 		w(`SecRule ARGS_GET:ob "@streq open-bridge/events" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleRemoveById=920420,ctl:ruleRemoveById=%d"`, IDSiteBeacons, IDContentType)
@@ -417,6 +432,10 @@ func domainRx(d string) string {
 	}
 	return `^(?:www\.)?` + regexp.QuoteMeta(d) + `$`
 }
+
+// themeStyleFile is a stylesheet a theme builds with PHP in a css folder
+// (styles.php, theme-style.php, custom-css.php, skin.php, dynamic.php).
+const themeStyleFile = `@rx /css/+[a-z0-9_-]*(?:style|colou?r|theme|skin|custom|dynamic)[a-z0-9_-]*\.php$`
 
 // allowRule reports xPGuard's exclusion rules (they let requests through).
 func allowRule(id int) bool {
