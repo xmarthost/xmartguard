@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.29** (see `VERSION`).
+- Current release: **0.24.30** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,10 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.30: root's files stay unscanned** (2026-11-05). Owner's
+  decision: `xpguard-agent check` skips files owned by root again, like
+  the running agent (0.24.29 had made the manual check read them).
+  Everything else of 0.24.29 stays.
 - **Release 0.24.29: four server audits (DeepSeek MCP) checked**
   (2026-11-05). The owner's WHM assistant audited business200.websoul,
   superfast (its report said Apache and 0.21.24: it is LiteSpeed),
@@ -359,8 +363,6 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
     restart left that day's changes to no scheduled scan. Daily/weekly
     now start at the last finished whole-server scan when that is older
     (up to 7 days, `sweepSince`). `TestDailyScanCoversAnInterruptedDay`.
-  - `xpguard-agent check PATH` also checks root's files (the admin asked
-    for them); the running agent still skips them.
   - **Wrong claims (left as is):** "CRS off on customer vhosts / SQLi 200
     on real domains": the tests came from the server's own address,
     which `exempt-ips.txt` never inspects; the same SQLi/XSS from

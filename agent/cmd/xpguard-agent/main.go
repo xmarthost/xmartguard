@@ -392,10 +392,6 @@ func cmdCheck(args []string) error {
 	cfg.MaxFileSizeMB = 20
 	cfg.WhitelistPaths = append(cfg.WhitelistPaths, settings.DefaultScanWhitelist...)
 	cfg.BlacklistNames = append(cfg.BlacklistNames, settings.DefaultScanBlacklist...)
-	// The admin asked for these files: root's are checked too (the running
-	// agent skips them, as a website can only write as its own user; test
-	// files made as root looked like misses, server audit 2026-11-05).
-	scanner.ScanRootFiles = true
 	sc := scanner.NewOffline()
 	sc.NoHash = *noHash
 	// Same ClamAV-format databases as the running agent (installed ClamAV
