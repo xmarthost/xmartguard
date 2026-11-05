@@ -551,6 +551,7 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 		}
 	}
 	m.reloadPending = false
+	m.markLoaded()
 	// A visitor who solved the CAPTCHA is sent back when this returns:
 	// give LiteSpeed's new server processes a moment to take over.
 	if urgent && t.LiteSpeed {

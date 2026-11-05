@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.28** (see `VERSION`).
+- Current release: **0.24.29** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,92 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.29: four server audits (DeepSeek MCP) checked**
+  (2026-11-05). The owner's WHM assistant audited business200.websoul,
+  superfast (its report said Apache and 0.21.24: it is LiteSpeed),
+  business500 and s1. Every claim checked against the code and the live
+  logs. **Fixed:**
+  - **WAF bypass through the self-test probes (real, found while
+    checking a claim).** The probe rules (`IDMechProbe` 7700080+,
+    `IDScoreProbe` 7700850+, `IDMultipartProbe`) relaxed the WAF (allow, DetectionOnly, threshold up to
+    10000, 949110 removed) for any request to
+    `/xpguard-crs-selftest/mech|score|mp/...`, from anyone; WordPress and
+    other front controllers answer that path, so an attack sent there
+    reached the site with no rule. Each probe now chains to
+    `REQUEST_HEADERS:X-XPGuard-Probe` = the agent's key
+    (`<rules dir>/selftest.key`, 0600, made once); disruptive actions on
+    the first link, setvar/ctl on the last. Tests:
+    `TestSelfTestProbesNeedTheKey`; `TestCRSSelfTestEveryLevel` (Apache +
+    CRS 4.18: every way still passes with the key; allow, DetectionOnly
+    and score_100 with an attack and no key are 403).
+  - **Ban evasion**: `isSelfTest` treated any event whose URI merely
+    contained `/xpguard-waf-selftest` or `/xpguard-crs-selftest` (also in
+    the query string) as the self-test: never counted, never banned. Now
+    only a self-test path asked from a loopback address. Test
+    `TestSelfTestEventsOnlyFromThisServer`.
+  - **Self-test after every Apply**: business500 ran it 1,059 times a day
+    (every 20-80 s, 15,866 log rows a day) though most applies loaded
+    nothing. A passed result is used again until the web server loads new
+    rules (`markLoaded`) or an hour passes; a failure is retested at once.
+    Test `TestSelfTestOnlyAfterALoad`.
+  - **Scanner, hidden runner name**: `$f="\x73\x79\x73\x74\x65\x6d";
+    $f($_GET['c'])` and `$a='sys'.'tem'; $a(...)` were not caught (the
+    plain one-liners, EICAR and base64 eval were). New
+    `PHP.Backdoor.HiddenFunctionName` (hiddenname.go): a variable whose
+    literal value, spelled in pieces or escapes, is system/exec/
+    shell_exec/passthru/popen/proc_open/pcntl_exec/assert/create_function
+    and is called with request data. `TestFleetHiddenFunctionNameShell`
+    (inert fixtures; plain names, harmless functions in pieces, names
+    never called with the request stay clean).
+  - **BoldGrid Backup locator** (business500 liberato, 5,073 quarantines
+    of `wp-content/.boldgrid-backup-locator.php`, recreated by the
+    plugin): code that only refuses a direct request and returns a fixed
+    text is inert (`guardThenReturn`); with request data, another call,
+    an include or a variable call it stays a finding.
+    `TestFleetBoldGridLocator`.
+  - **Daily scan after a restart**: a daily scan cut short by the agent's
+    restart left that day's changes to no scheduled scan. Daily/weekly
+    now start at the last finished whole-server scan when that is older
+    (up to 7 days, `sweepSince`). `TestDailyScanCoversAnInterruptedDay`.
+  - `xpguard-agent check PATH` also checks root's files (the admin asked
+    for them); the running agent still skips them.
+  - **Wrong claims (left as is):** "CRS off on customer vhosts / SQLi 200
+    on real domains": the tests came from the server's own address,
+    which `exempt-ips.txt` never inspects; the same SQLi/XSS from
+    127.0.0.1 on digitalvortax.site was refused (942100, 941100) and
+    attackers are refused on the named domains (aafmanpower.ae 942151);
+    the `SecRuleEngine Off` blocks in httpd.conf are cPanel's proxy
+    subdomain vhosts (cpanel./webmail.), one per domain. TRACE/PUT 200:
+    same own-address test (911100 refused it from 127.0.0.1). Trusted
+    list "AWS ranges": only services' official addresses (100.24.x,
+    98.84.x are not in it). Agent socket 0666: SO_PEERCRED decides (root
+    admin, users their own account). CAPTCHA ports public: the pass is
+    sent there directly. Htaccess.Hacked.PHPLock "false positive": the
+    files deny py/exe/php/suspected and allow only index.php in plugin and
+    wp-includes folders: the malware lock, real (s1 greenbi1,
+    tvtodaynews; the signature was paused for mass quarantine). macOS
+    `__MACOSX/._*.php`: excluded since 0.23.x (old rows). EICAR: detected
+    (`EICAR-Test-Signature`); the realtime/manual "misses" were files made
+    as root. Feeds "stale": written only when the portal's LMD feed
+    changes. trim_max_percent is file trimming, not the database. Log
+    rotation, AI fallback, max_file_size (PHP read at both ends) as
+    before.
+  - **Valid, owner to decide:** CRS threshold 10 at level normal (a
+    single critical rule, e.g. `?id=1' OR '1'='1` or an onerror XSS in a
+    POST, passes; level strict = 5 with soft block); PK in
+    ignored_countries also skips brute-force and DoS bans for PK
+    addresses and doubles their CRS threshold; fleet servers' addresses
+    exempt from each other's WAF; auto_suspend off, no notification
+    e-mail, no Safe Browsing key; ClamAV on but no ClamAV databases on
+    business500 (our engine scans; install freshclam or switch it off);
+    WAF events 35 days (business500 ~245k rows/day, 2.7 GB database).
+    Account clean-ups: btkrate (business500) mu-plugins
+    wpmaintenance-cache.php comes back (1,472 times: a dropper elsewhere,
+    cron or database), PHPLock .htaccess on s1 accounts.
+  - Known: `TestCRSSelfTestEveryLevel` "normal: probe without a way: HTTP
+    404" fails before and after this change (the weak probe passes at
+    threshold 10). After the update check business600 `waf.status`
+    `self_test.ways` (all "passes" expected with the key).
 - **Release 0.24.28: theme stylesheets built by PHP; search engine review**
   (2026-11-04). Review after 0.24.27 of every WAF, firewall and CAPTCHA
   event of Google (66.249.64.0/19) and Bing (40.77.167, 157.55.39,

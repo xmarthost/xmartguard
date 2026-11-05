@@ -1,11 +1,17 @@
 package waf
 
 import (
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -47,11 +53,90 @@ type SelfTest struct {
 	Multipart map[string]string `json:"multipart,omitempty"`
 }
 
-// isSelfTest reports whether an event came from the agent's own check.
+// isSelfTest reports whether an event came from the agent's own check:
+// a self-test path asked from this server (the agent asks 127.0.0.1).
+// Before, any request whose address merely contained the name (also in
+// its query string) was never counted or banned, so an attacker could
+// add "&x=/xpguard-waf-selftest" to every attack (2026-11-05).
 func isSelfTest(e Event) bool {
-	return e.RuleID == IDSelfTest || strings.Contains(e.URI, selfTestPath) || strings.Contains(e.URI, crsTestPath) ||
+	if e.IP != "" {
+		if ip := net.ParseIP(e.IP); ip == nil || !ip.IsLoopback() {
+			return false
+		}
+	}
+	path := e.URI
+	if i := strings.IndexAny(path, "?#"); i >= 0 {
+		path = path[:i]
+	}
+	for _, p := range []string{selfTestPath, crsTestPath,
 		// Names used before xPGuard (old log lines).
-		strings.Contains(e.URI, "/xmartguard-waf-selftest") || strings.Contains(e.URI, "/xmartguard-crs-selftest")
+		"/xmartguard-waf-selftest", "/xmartguard-crs-selftest"} {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return e.RuleID == IDSelfTest
+}
+
+// probeHeader carries the agent's key on its self-test requests; the
+// probe rules relax only for it (probeGuard).
+const probeHeader = "X-XPGuard-Probe"
+
+var (
+	probeKeyMu sync.Mutex
+	probeKey   string
+)
+
+// loadProbeKey reads the self-test key from dir (made once, root only)
+// and uses it for the probe rules and requests.
+func loadProbeKey(dir string) string {
+	probeKeyMu.Lock()
+	defer probeKeyMu.Unlock()
+	f := filepath.Join(dir, "selftest.key")
+	if b, err := os.ReadFile(f); err == nil {
+		if k := strings.TrimSpace(string(b)); len(k) == 32 {
+			probeKey = k
+			return k
+		}
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return probeKey
+	}
+	k := hex.EncodeToString(buf)
+	if err := os.WriteFile(f, []byte(k+"\n"), 0o600); err != nil {
+		// No place to keep it: a key for this run (the next apply
+		// renders the rules with it again).
+		if probeKey == "" {
+			probeKey = k
+		}
+		return probeKey
+	}
+	probeKey = k
+	return k
+}
+
+// currentProbeKey is the key in use (a fresh one if none was loaded).
+func currentProbeKey() string {
+	probeKeyMu.Lock()
+	k := probeKey
+	probeKeyMu.Unlock()
+	if k != "" {
+		return k
+	}
+	buf := make([]byte, 16)
+	rand.Read(buf)
+	probeKeyMu.Lock()
+	defer probeKeyMu.Unlock()
+	if probeKey == "" {
+		probeKey = hex.EncodeToString(buf)
+	}
+	return probeKey
+}
+
+// probeGuard is the condition every relaxing probe rule chains to.
+func probeGuard() string {
+	return fmt.Sprintf(`SecRule REQUEST_HEADERS:%s "@streq %s"`, probeHeader, currentProbeKey())
 }
 
 // SelfTestURLs are tried in order (variables for tests).
@@ -85,6 +170,7 @@ func probePostType(path, ctype, body string) (int, error) {
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (xPGuard WAF self-test)")
 		req.Header.Set("Content-Type", ctype)
+		req.Header.Set(probeHeader, currentProbeKey())
 		res, err := c.Do(req)
 		if err != nil {
 			last = err
@@ -147,6 +233,7 @@ func probeLoc(path string) (int, string, error) {
 			return 0, "", err
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (xPGuard WAF self-test)")
+		req.Header.Set(probeHeader, currentProbeKey())
 		res, err := c.Do(req)
 		if err != nil {
 			last = err

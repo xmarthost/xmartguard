@@ -82,6 +82,9 @@ type Manager struct {
 	ruleSets RuleSets
 	states   []RuleSetState
 	selfTest *SelfTest
+	// loadedAt: when the web server last loaded changed rules (a reload);
+	// testedAt: when the last self-test ran (selfTestDue).
+	loadedAt, testedAt time.Time
 	// SelfTestWait: how long the self-test waits for a reload (tests set 0).
 	SelfTestWait time.Duration
 	// NoSelfTest disables the self-test (unit tests without a web server).
@@ -597,7 +600,15 @@ func (m *Manager) apply(mode applyMode) error {
 				captchaURL = c.URL
 			}
 		}
-		r := runSelfTest(crsActive, captchaURL, wait)
+		var r SelfTest
+		if prev := m.reusableSelfTest(crsActive); prev != nil {
+			r = *prev
+		} else {
+			m.mu.Lock()
+			m.testedAt = time.Now()
+			m.mu.Unlock()
+			r = runSelfTest(crsActive, captchaURL, wait)
+		}
 		st = &r
 		for i := range states {
 			if states[i].ID == "owasp_crs" && states[i].State == "active" && r.CRS != "" && r.CRS != "blocked" {
@@ -639,6 +650,35 @@ func (m *Manager) apply(mode applyMode) error {
 		m.Log.Error("waf apply failed", "err", err)
 	}
 	return err
+}
+
+// selfTestMaxAge: a self-test result is used again for this long while the
+// web server has loaded no new rules.
+var selfTestMaxAge = time.Hour
+
+// reusableSelfTest is the last self-test's result when nothing was loaded
+// since and it passed. Apply runs for every address list, CAPTCHA and
+// settings change, mostly without a reload: the self-test (some 60 local
+// requests and their log lines) ran after each, every 20 to 80 seconds on
+// business500 (1,059 runs and 15,866 log rows a day, 2026-11-05).
+func (m *Manager) reusableSelfTest(crs bool) *SelfTest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prev := m.selfTest
+	if prev == nil || !prev.OK || m.testedAt.IsZero() || !m.loadedAt.Before(m.testedAt) || time.Since(m.testedAt) >= selfTestMaxAge {
+		return nil
+	}
+	if crs != (prev.CRS != "") || (crs && prev.CRS != "blocked") {
+		return nil
+	}
+	return prev
+}
+
+// markLoaded records that the web server loaded new rules.
+func (m *Manager) markLoaded() {
+	m.mu.Lock()
+	m.loadedAt = time.Now()
+	m.mu.Unlock()
 }
 
 // RuleSetStates reports each portal rule set's state after the last Apply.

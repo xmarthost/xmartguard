@@ -173,6 +173,11 @@ func analyzePHP(content []byte) *verdict {
 	if hasInput && ((m(reInputCall) && reInputCall.Match(reSingleQuoted.ReplaceAll(s, []byte("''")))) || m(reCallUserInput) || (may(reTaintAssign, low) && taintedCall(s))) {
 		return &verdict{CatVirus, "PHP.Backdoor.DynamicCall"}
 	}
+	// 6b. The runner's name spelled in pieces or escapes, then called with
+	// the request ($f = "\x73\x79\x73\x74\x65\x6d"; $f($_GET['c'])).
+	if hasInput && hiddenNameCall(s) {
+		return &verdict{CatVirus, "PHP.Backdoor.HiddenFunctionName"}
+	}
 	// 7. goto-flattened obfuscation with an execution sink.
 	if goto_ >= 8 && (evalOrAssert || decoders >= 1 || m(reSink)) && !readableGotos(s) {
 		return &verdict{CatVirus, "PHP.Obfuscated.GotoFlow"}

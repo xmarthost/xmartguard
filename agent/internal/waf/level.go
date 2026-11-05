@@ -413,7 +413,8 @@ func multipartProbeSetup() string {
 	b.WriteString("# Self-test only: what this engine shows of an upload form (xPGuard).\n")
 	// Only the probes' own rules may refuse these posts (not the CRS score,
 	// which LiteSpeed raises, nor the soft block); /mp/none must pass.
-	fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mp/" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_soft=0,ctl:ruleRemoveById=949110"`+"\n", crsTestPath, IDMultipartProbe+len(multipartProbes))
+	fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mp/" "id:%d,phase:1,pass,t:none,nolog,chain"`+"\n", crsTestPath, IDMultipartProbe+len(multipartProbes))
+	b.WriteString("  " + probeGuard() + ` "t:none,setvar:tx.xg_soft=0,ctl:ruleRemoveById=949110"` + "\n")
 	for i, p := range multipartProbes {
 		fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mp/%s" "id:%d,phase:2,t:none,deny,status:403,nolog,chain"`+"\n", crsTestPath, p.name, IDMultipartProbe+i)
 		b.WriteString("  SecRule " + p.test + ` "t:none,t:lowercase"` + "\n")
@@ -435,20 +436,34 @@ var (
 func mechProbeSetup() string {
 	var b strings.Builder
 	b.WriteString("# Self-test only: which ways of relaxing this engine honours (xPGuard).\n")
+	// Every probe relaxes only for the agent's own requests (the key in
+	// its header): the paths alone are open to anyone, and a website's
+	// front controller (WordPress, Laravel) answers any path, so a
+	// visitor's attack sent to /xpguard-crs-selftest/mech/allow passed
+	// all rules (2026-11-05). Disruptive actions sit on the chain's first
+	// rule (they run only when the whole chain matches); setvar and ctl
+	// on its last.
 	for i, p := range mechProbes {
-		act := "pass," + p.actions
+		act := "pass"
 		if p.actions == "allow" {
 			act = "allow" // a disruptive action of its own, not with pass
 		}
-		fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mech/%s" "id:%d,phase:%s,t:none,nolog,%s"`+"\n", crsTestPath, p.name, IDMechProbe+i, p.phase, act)
-		if p.actions == "chain" {
+		fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/mech/%s" "id:%d,phase:%s,t:none,nolog,%s,chain"`+"\n", crsTestPath, p.name, IDMechProbe+i, p.phase, act)
+		switch p.actions {
+		case "chain":
+			b.WriteString("  " + probeGuard() + ` "t:none,chain"` + "\n")
 			b.WriteString("  " + p.cond + ` "t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=10000"` + "\n")
+		case "allow":
+			b.WriteString("  " + probeGuard() + ` "t:none"` + "\n")
+		default:
+			b.WriteString("  " + probeGuard() + ` "t:none,` + p.actions + `"` + "\n")
 		}
 	}
 	for bi, body := range scoreProbeBodies {
 		for ti, t := range scoreProbeThresholds {
-			fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/score/%s_%d" "id:%d,phase:1,pass,t:none,nolog,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d"`+"\n",
-				crsTestPath, body, t, IDScoreProbe+bi*10+ti, t)
+			fmt.Fprintf(&b, `SecRule REQUEST_FILENAME "@beginsWith %s/score/%s_%d" "id:%d,phase:1,pass,t:none,nolog,chain"`+"\n",
+				crsTestPath, body, t, IDScoreProbe+bi*10+ti)
+			fmt.Fprintf(&b, "  %s \"t:none,setvar:tx.xg_soft=0,setvar:tx.inbound_anomaly_score_threshold=%d\"\n", probeGuard(), t)
 		}
 	}
 	return b.String()

@@ -202,6 +202,9 @@ func inertPHP(content []byte) bool {
 	if m := reGuardThenText.FindIndex(code); m != nil && !bytes.Contains(code[m[1]:], []byte("<?")) {
 		return true
 	}
+	if guardThenReturn(code) {
+		return true
+	}
 	if !bytes.HasPrefix(code, []byte("return")) {
 		return false
 	}
@@ -215,6 +218,36 @@ func inertPHP(content []byte) bool {
 	// 'x.php';" runs that file).
 	return !bytes.Contains(bare, []byte("$")) && !bytes.Contains(bare, []byte("`")) && !reLoadsCode.Match(bare)
 }
+
+// guardThenReturn: code that refuses a direct request and otherwise only
+// returns a fixed text (BoldGrid Backup's wp-content/.boldgrid-backup-
+// locator.php returns its backup folder; business500 liberato,
+// 2026-11-05: quarantined as a hidden PHP file and rewritten by the
+// plugin 5,073 times). Only test functions and header(); no request data
+// but SCRIPT_FILENAME, no variable call, no other file.
+func guardThenReturn(code []byte) bool {
+	if !reReturnLiteral.Match(code) {
+		return false
+	}
+	bare := reStrLit.ReplaceAll(code, nil)
+	if bytes.Contains(bare, []byte("`")) || reLoadsCode.Match(bare) || reVarCall.Match(bare) || reRequestData.Match(code) {
+		return false
+	}
+	for _, m := range reCallName.FindAllSubmatch(bare, -1) {
+		if !guardCalls[strings.ToLower(string(m[1]))] {
+			return false
+		}
+	}
+	return true
+}
+
+var (
+	reReturnLiteral = regexp.MustCompile(`\breturn\s*(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\$]|\\.)*")\s*;\s*(?:\?>\s*)?$`)
+	reVarCall       = regexp.MustCompile(`\$\w+\s*(?:\[[^\]]*\]\s*)*\(|\)\s*\(`)
+	reRequestData   = regexp.MustCompile(`(?i)\$_(?:GET|POST|REQUEST|COOKIE|FILES|ENV)\b|\$GLOBALS|php://|\$_SERVER\s*\[\s*(?:['"](?:HTTP_|QUERY|REQUEST_URI|PATH_INFO|ARGV)|[^'"\s])`)
+	guardCalls      = map[string]bool{"if": true, "isset": true, "realpath": true, "count": true, "get_included_files": true,
+		"header": true, "defined": true, "exit": true, "die": true, "basename": true, "dirname": true, "strtolower": true, "is_string": true, "http_response_code": true}
+)
 
 var (
 	reLoadsCode = regexp.MustCompile(`(?i)\b(?:include|require|include_once|require_once|eval|new|static|self|parent)\b|::|<<<`)

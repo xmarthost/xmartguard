@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -592,6 +593,19 @@ func TestCRSSelfTestEveryLevel(t *testing.T) {
 		// (At the low level, threshold 20, the weak probe passes anyway.)
 		if level != "low" && !strings.HasPrefix(st.Ways["none"], "HTTP 403") {
 			t.Errorf("%s: probe without a way: %s", level, st.Ways["none"])
+		}
+		// A visitor without the agent's key gets no way (2026-11-05: an
+		// attack sent to /mech/allow passed every rule).
+		attack := crsTestPath + "/mech/allow?" + crsProbeQuery()
+		for _, p := range []string{attack, crsTestPath + "/mech/detection_only?" + crsProbeQuery(), crsTestPath + "/score/xss_100?" + crsProbeQuery()} {
+			res, err := http.Get("http://127.0.0.1" + p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			if res.StatusCode != 403 {
+				t.Errorf("%s: %s without the key: HTTP %d", level, p, res.StatusCode)
+			}
 		}
 	}
 }

