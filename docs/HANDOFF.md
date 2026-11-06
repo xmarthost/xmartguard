@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.31** (see `VERSION`).
+- Current release: **0.24.32** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,27 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.32: login copies that send to Telegram from the browser**
+  (2026-11-06). Spaceship suspended recaptcha.world (the old CAPTCHA
+  domain) for phishing: its report was a CAPTCHA link
+  (`v?s=<business200 websoul>&h=glasgowfitness.com&u=/wp-content/
+  maintenance/assets/HOT2.htm`), i.e. our CAPTCHA in front of a hacked
+  customer site, which then sent the visitor on to the phishing page.
+  HOT2.htm: a Microsoft sign-in copy (title "Sign in to your Microsoft
+  account"), address and two passwords posted from the browser to a
+  Telegram bot with the visitor's IP; it sat in WP Toolkit's maintenance
+  folder (template.phtml, timer.js, Plesk logo: legitimate, keep). No
+  finding: `Phishing.CloneLoginPage` needed a known brand title and a
+  form posting to .php. New `Phishing.Credentials.TelegramExfil` (virus):
+  html/htm/php/phtml with `api.telegram.org/bot`, a password field (HTML
+  or script) and a browser-side send (fetch, XMLHttpRequest, jQuery,
+  sendBeacon, a form to the bot). The brand list also knows "Microsoft
+  account". Test `TestFleetClientSideTelegramPhish` (inert fixture; WP
+  Toolkit's page, an order form to Telegram, a site's own login stay
+  clean). The owner's reply to Spaceship explains the CAPTCHA link; the
+  new CAPTCHA domain xpguardcaptcha.site is already visited by the same
+  abuse scanner range (85.237.212.x): hacked sites behind it must be
+  cleaned fast.
 - **Release 0.24.31: self-healing kits on s1 (cron, ~/logs, hex worm)**
   (2026-11-06). The owner's server assistant found load 20 on s1 and sent
   an evidence zip (password `infected`; kept out of the repository).

