@@ -2,10 +2,12 @@ package captcha
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +61,67 @@ func TestSiteRewriteDropsQuery(t *testing.T) {
 	}
 	if pr.Out.Host != "shop.example" {
 		t.Fatalf("host %s", pr.Out.Host)
+	}
+}
+
+// business900 hosts the portal's CAPTCHA domain: a banned or IPDB-listed
+// visitor sent to that page must reach it (the web server, the portal),
+// not this server's CAPTCHA again ("redirected you too many times",
+// 2026-11-06). Other websites still get the check.
+func TestPortalDomainOnThisServerPassesThrough(t *testing.T) {
+	var gotHost, gotXFF, gotURI, gotBody string
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost, gotXFF, gotURI = r.Host, r.Header.Get("X-Forwarded-For"), r.URL.RequestURI()
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Security-Policy", "frame-ancestors https://shop.example.com")
+		w.Write([]byte("portal page"))
+	}))
+	defer site.Close()
+	dst := netip.MustParseAddrPort(strings.TrimPrefix(site.URL, "http://"))
+	sitePorts[dst.Port()] = true
+	defer delete(sitePorts, dst.Port())
+
+	s, _ := newServer(t)
+	s.ServerID = "15d69a72-653a-47b6-90f6-fde737bce061"
+	s.Settings.Patch([]byte(`{"captcha":{"central":true,"central_url":"https://xpguardcaptcha.site/v","central_mode":"site"},"waf":{"enabled":true}}`))
+	do := func(method, host, target, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, target, strings.NewReader(body))
+		r.Host = host
+		r.Header.Set("Accept", "text/html")
+		r.Header.Set("X-Forwarded-For", "1.1.1.1")
+		r.RemoteAddr = "37.203.35.18:5000"
+		r = r.WithContext(context.WithValue(r.Context(), origDstKey{}, dst))
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, r)
+		return w
+	}
+	w := do("GET", "XpGuardCaptcha.site", "/v?s=x&ip=37.203.35.18&h=shop.example.com&fs=1&u=/wp-login.php", "")
+	if w.Code != 200 || w.Body.String() != "portal page" || w.Header().Get("X-Frame-Options") != "" {
+		t.Fatalf("portal page: %d %q %v", w.Code, w.Body.String(), w.Header())
+	}
+	if gotHost != "XpGuardCaptcha.site" || gotXFF != "37.203.35.18" || gotURI != "/v?s=x&ip=37.203.35.18&h=shop.example.com&fs=1&u=/wp-login.php" {
+		t.Fatalf("sent %q %q %q", gotHost, gotXFF, gotURI)
+	}
+	if w.Header().Get("Content-Security-Policy") == "" {
+		t.Fatal("portal headers dropped")
+	}
+	// The answer (a POST without text/html) reaches the portal too.
+	if w := do("POST", "xpguardcaptcha.site", "/v/verify", `{"a":1}`); w.Code != 200 || gotBody != `{"a":1}` {
+		t.Fatalf("verify: %d %q", w.Code, gotBody)
+	}
+	// Any other website: the check, as before.
+	gotURI = ""
+	if w := do("GET", "shop.example.com", "/blog/", ""); w.Code == 200 && w.Body.String() == "portal page" || gotURI != "" {
+		t.Fatal("another website passed through")
+	}
+	// Not a redirected website connection (the CAPTCHA port itself): not proxied.
+	r := httptest.NewRequest("GET", "/v", nil)
+	r.Host = "xpguardcaptcha.site"
+	if servePortal(httptest.NewRecorder(), r, "xpguardcaptcha.site") {
+		t.Fatal("proxied without a redirected connection")
+	}
+	if portalHost("http://x.test/v") != "" || portalHost("https://X.test/v") != "x.test" {
+		t.Fatal("portal host")
 	}
 }

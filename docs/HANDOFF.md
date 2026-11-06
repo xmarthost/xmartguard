@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.35** (see `VERSION`).
+- Current release: **0.24.36** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,24 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.36: the portal's CAPTCHA domain is never caught by the
+  firewall of the server hosting it** (2026-11-06). The owner tested the
+  new site page from a VPN (37.203.35.18, IPDB-listed): business400's
+  `https://kendricklamar-store.com/xpguard-verify/` opened, but the
+  framed `xpguardcaptcha.site/v` said "redirected you too many times".
+  xpguardcaptcha.site (and app.xpguard.org) are hosted on business900;
+  its firewall sends every web connection of an IPDB-listed or banned
+  address to the agent's CAPTCHA server, which sent the visitor to the
+  portal's page, i.e. back to itself, endlessly. Any blocked visitor of
+  any business900 website looped the same way. Now the agent's CAPTCHA
+  server sends a request whose Host is the CentralURL host straight on to
+  the web server (any method, path and query; `X-Forwarded-For` set to the
+  address it saw, a visitor's own header dropped; the portal trusts the
+  fleet's servers as proxies, `server/src/proxy.ts`). Only for connections
+  the firewall redirected from ports 80/443. Test
+  `TestPortalDomainOnThisServerPassesThrough`. Note: run the agent tests
+  with `go test -p 1 ./...` here; core and firewall share the kernel's
+  tables and fail at random when run in parallel.
 - **Release 0.24.35: site-mode CAPTCHA on the website's own address,
   no port** (2026-11-06). The owner asked that site mode stop using port
   7743 and run on the website's own domain. New: every website serves

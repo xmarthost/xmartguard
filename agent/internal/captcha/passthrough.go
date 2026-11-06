@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -119,12 +120,69 @@ func originalDst(c net.Conn) (netip.AddrPort, bool) {
 	return out, found && out.Port() != 0
 }
 
+// sitePorts are the website ports whose redirected connections may be
+// sent on to the website (tests add theirs).
+var sitePorts = map[uint16]bool{80: true, 443: true}
+
+// portalHost is the host of the portal's CAPTCHA page (CentralURL), "" when
+// none is set.
+func portalHost(centralURL string) string {
+	u, err := url.Parse(centralURL)
+	if err != nil || u.Scheme != "https" {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// servePortal sends a request for the portal's CAPTCHA domain, when this
+// server hosts it, on to the web server untouched: a banned or IPDB-listed
+// visitor is sent to that very page, and catching its connections there
+// sent it to the page again, endlessly ("xpguardcaptcha.site redirected you
+// too many times", business900 hosting the portal, 2026-11-06). The portal
+// is the check itself; it learns the visitor's address from
+// X-Forwarded-For (it trusts the fleet's servers as proxies).
+func servePortal(w http.ResponseWriter, r *http.Request, portal string) bool {
+	if portal == "" || hostOf(r.Host) != portal {
+		return false
+	}
+	dst, ok := r.Context().Value(origDstKey{}).(netip.AddrPort)
+	if !ok || !sitePorts[dst.Port()] {
+		return false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	visitor := clientIP(r)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(p *httputil.ProxyRequest) {
+			p.Out.URL.Scheme = scheme
+			p.Out.URL.Host = dst.String()
+			p.Out.Host = r.Host
+			// Only the address this server saw: a header the visitor sent
+			// could name any address.
+			p.Out.Header.Set("X-Forwarded-For", visitor)
+			p.Out.Header.Set("X-Forwarded-Proto", scheme)
+		},
+		Transport: &http.Transport{
+			TLSClientConfig:       &tls.Config{ServerName: portal, InsecureSkipVerify: true}, //nolint:gosec // this server's own website
+			ResponseHeaderTimeout: 20 * time.Second,
+			DisableKeepAlives:     true,
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "The CAPTCHA page did not answer.", http.StatusBadGateway)
+		},
+	}
+	proxy.ServeHTTP(w, r)
+	return true
+}
+
 // serveFromSite answers a machine-file request with the website's own
 // response: the request goes to the address the visitor connected to,
 // from this server (local traffic is not redirected again).
 func serveFromSite(w http.ResponseWriter, r *http.Request) bool {
 	dst, ok := r.Context().Value(origDstKey{}).(netip.AddrPort)
-	if !ok || (dst.Port() != 80 && dst.Port() != 443) || !MachinePath(r) {
+	if !ok || !sitePorts[dst.Port()] || !MachinePath(r) {
 		return false
 	}
 	host := r.Host
