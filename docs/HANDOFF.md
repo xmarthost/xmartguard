@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.36** (see `VERSION`).
+- Current release: **0.24.37** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,18 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.37: the portal's answer is not cut off on the server
+  hosting it** (2026-11-06). Retest of 0.24.36 from the IPDB-listed VPN:
+  the page opened, the check was recorded `passed, via site-page` on the
+  portal, but the browser showed "Network error": the portal answers only
+  after the website's server reloads its web server for the pass (10-30
+  s, up to 90), and the agent's CAPTCHA server cut the proxied request
+  at its own 20 s limits. Requests passed to the portal now get 2 minutes
+  (per-request deadlines, ResponseHeaderTimeout). Test
+  `TestPortalSlowAnswerOutlivesServerLimits` (fails without the fix).
+  Open idea for the owner: make a site-page pass instant like the old
+  port mode (a ticket traded for the shared pass cookie instead of the
+  pass list, which needs that reload).
 - **Release 0.24.36: the portal's CAPTCHA domain is never caught by the
   firewall of the server hosting it** (2026-11-06). The owner tested the
   new site page from a VPN (37.203.35.18, IPDB-listed): business400's

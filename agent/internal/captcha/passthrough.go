@@ -124,6 +124,10 @@ func originalDst(c net.Conn) (netip.AddrPort, bool) {
 // sent on to the website (tests add theirs).
 var sitePorts = map[uint16]bool{80: true, 443: true}
 
+// portalWait is how long a request to the portal may take: longer than the
+// portal waits for a website's server to let a visitor in (90 seconds).
+var portalWait = 2 * time.Minute
+
 // portalHost is the host of the portal's CAPTCHA page (CentralURL), "" when
 // none is set.
 func portalHost(centralURL string) string {
@@ -154,6 +158,13 @@ func servePortal(w http.ResponseWriter, r *http.Request, portal string) bool {
 		scheme = "https"
 	}
 	visitor := clientIP(r)
+	// The portal answers a solved check only once the website's server has
+	// let the visitor in (a web server reload: up to 90 seconds); this
+	// server's own limits (20 seconds) cut that answer off ("Network
+	// error" after a passed check, business900, 2026-11-06).
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(portalWait))
+	_ = rc.SetWriteDeadline(time.Now().Add(portalWait))
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(p *httputil.ProxyRequest) {
 			p.Out.URL.Scheme = scheme
@@ -166,7 +177,7 @@ func servePortal(w http.ResponseWriter, r *http.Request, portal string) bool {
 		},
 		Transport: &http.Transport{
 			TLSClientConfig:       &tls.Config{ServerName: portal, InsecureSkipVerify: true}, //nolint:gosec // this server's own website
-			ResponseHeaderTimeout: 20 * time.Second,
+			ResponseHeaderTimeout: portalWait,
 			DisableKeepAlives:     true,
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {

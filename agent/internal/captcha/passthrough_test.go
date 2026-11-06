@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A banned address must not reach other pages of the site through the
@@ -123,5 +124,41 @@ func TestPortalDomainOnThisServerPassesThrough(t *testing.T) {
 	}
 	if portalHost("http://x.test/v") != "" || portalHost("https://X.test/v") != "x.test" {
 		t.Fatal("portal host")
+	}
+}
+
+// The portal answers a solved check only after the website's server let
+// the visitor in (a web server reload, often 10-30 seconds): the answer
+// must reach the browser past this server's own short time limits
+// ("Network error" after a passed check, 2026-11-06).
+func TestPortalSlowAnswerOutlivesServerLimits(t *testing.T) {
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(600 * time.Millisecond)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer site.Close()
+	dst := netip.MustParseAddrPort(strings.TrimPrefix(site.URL, "http://"))
+	sitePorts[dst.Port()] = true
+	defer delete(sitePorts, dst.Port())
+	// This server as it runs: short read and write limits (20 s there).
+	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(context.WithValue(r.Context(), origDstKey{}, dst))
+		if !servePortal(w, r, "xpguardcaptcha.site") {
+			http.Error(w, "not proxied", 500)
+		}
+	}))
+	front.Config.ReadTimeout, front.Config.WriteTimeout = 200*time.Millisecond, 200*time.Millisecond
+	front.Start()
+	defer front.Close()
+	req, _ := http.NewRequest("POST", front.URL+"/v/verify", strings.NewReader(`{"a":1}`))
+	req.Host = "xpguardcaptcha.site"
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("answer cut off: %v", err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || string(b) != `{"ok":true}` {
+		t.Fatalf("%d %q", res.StatusCode, b)
 	}
 }
