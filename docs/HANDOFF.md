@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.34** (see `VERSION`).
+- Current release: **0.24.35** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,32 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.35: site-mode CAPTCHA on the website's own address,
+  no port** (2026-11-06). The owner asked that site mode stop using port
+  7743 and run on the website's own domain. New: every website serves
+  `https://<website>/xpguard-verify/` (port 443, the website's own
+  certificate) by one global Apache alias (`xpguard-verify.conf` in
+  `/etc/apache2/conf.d` on cPanel, `/etc/httpd/conf.d` on RHEL,
+  `conf-enabled` on Debian; LiteSpeed reads the same includes) to
+  `/usr/local/share/xpguard/verify/index.html`, a static page like the
+  hostname page that frames the portal's check with `fs=1`. The portal
+  lets that website frame it once its server confirms the website is its
+  own (`siteConfirmed`, as before), the pass goes through the pass list
+  (`via: site-page`) and the page sends the visitor back. The WAF sends
+  suspects to `https://%{Host}/xpguard-verify/?...` and does not inspect
+  that path (rule 7700073, after URL decoding and `..` normalising; the
+  folder serves no scripts). The alias is written by the WAF apply when
+  site mode is on (switched to a comment, not removed, after); the page
+  is used only once the 10-minute self-test fetches it on the server's
+  hostname; until then, or where the web server does not honour the
+  alias, the old port mode stays automatically. Hostname and portal modes
+  unchanged. A website without a valid certificate shows the browser's
+  warning on that page, as it would on its own pages. Tests: captcha
+  `TestSitePage`, `TestCheckSitePage`; waf `TestSitePageRedirect`,
+  `TestSiteAliasPath`, `TestSitePageOnApache` (alias on any Host, scripts
+  403, `../` past the page still gated); core
+  `TestSiteModeWithoutPortFallsBack`; portal captcha test (frame-ancestors
+  for the confirmed website only, verify via site-page).
 - **Release 0.24.34: remote-eval loaders, open file manager, Alfa CGI/SSI**
   (2026-11-06). bitepestcontrol.com (superfast, bitepest): the owner's
   assistant found a stolen WordPress admin (`admin1`, March 2026) that

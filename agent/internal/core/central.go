@@ -67,6 +67,10 @@ type central struct {
 	// "Not Secure" warning); hostFWErr why not.
 	hostFW    atomic.Value // string
 	hostFWErr atomic.Value // string
+	// sitePage: the check's page on every website's own address works
+	// (site mode without a port); siteErr why not.
+	sitePage atomic.Bool
+	siteErr  atomic.Value // string
 	// Login attacks: when each website last met the threshold (it stays
 	// guarded loginAttackHold after), and a nudge for centralLoop after a
 	// failed login (checked at once, not at the next minute).
@@ -134,7 +138,54 @@ func (a *Agent) syncHostPage(ctx context.Context) bool {
 	a.central.hostFWErr.Store(fwWhy)
 	a.central.hostPage.Store(next)
 	a.central.hostErr.Store(why)
-	return before != next
+	siteChanged := a.syncSitePage(ctx)
+	return before != next || siteChanged
+}
+
+// syncSitePage sets up the check's page on every website's own address
+// (site mode) and tests it on the server's hostname, which the alias
+// serves like any website. Until the web server serves it (the alias is
+// written by the next WAF apply, which reloads the web server), suspects
+// keep going to the CAPTCHA port. It reports whether the page came into
+// or went out of use.
+func (a *Agent) syncSitePage(ctx context.Context) bool {
+	before := a.central.sitePage.Load()
+	cur := a.Settings.Get()
+	ok, why := false, ""
+	if captcha.SiteWanted(cur) {
+		host := captcha.ServerHostname()
+		switch {
+		case host == "":
+			why = "the server hostname is not a full domain name"
+		default:
+			if err := captcha.InstallSitePage(cur.Captcha.CentralURL); err != nil {
+				why = err.Error()
+			} else if err := captcha.CheckSitePage(ctx, host, cur.Captcha.CentralURL, sysinfo.IPs()); err != nil {
+				why = err.Error()
+			} else {
+				ok = true
+			}
+		}
+		if why != "" {
+			a.Log.Info("the CAPTCHA page on the websites' own address is not in use yet; visitors go to the CAPTCHA port", "err", why)
+		}
+	} else {
+		captcha.RemoveSitePage()
+	}
+	a.central.sitePage.Store(ok)
+	a.central.siteErr.Store(why)
+	return before != ok
+}
+
+// siteAlias is the waf.Manager hook: the alias of the check's page on every
+// website, wanted in site mode.
+func (a *Agent) siteAlias() (string, bool) {
+	cur := a.Settings.Get()
+	if captcha.SiteWanted(cur) {
+		_ = captcha.InstallSitePage(cur.Captcha.CentralURL)
+		return captcha.SiteAliasConf(), true
+	}
+	return captcha.SiteAliasOff, false
 }
 
 // centralWAF is the waf.Manager hook: nil when the central CAPTCHA is off
@@ -149,7 +200,12 @@ func (a *Agent) centralWAF() *waf.Central {
 	all := captcha.GateWanted(cur)
 	w := &waf.Central{URL: c.CentralURL, ServerID: a.Cfg.ServerID, All: all, Pass: a.centralPassList()}
 	if captcha.SiteWanted(cur) {
-		w.Site, w.Slots, w.HTTPSPort = true, a.sitePasses.Slots(time.Now()), c.HTTPSPort
+		if a.central.sitePage.Load() {
+			// On the website's own address without a port.
+			w.SitePage = true
+		} else {
+			w.Site, w.Slots, w.HTTPSPort = true, a.sitePasses.Slots(time.Now()), c.HTTPSPort
+		}
 	}
 	if !all {
 		w.Suspects = a.centralSuspects()

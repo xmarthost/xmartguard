@@ -421,6 +421,9 @@ const (
 	// mode) is not inspected (a static page; its link holds the page the
 	// visitor wanted, which may look like an attack).
 	IDHostPage = 7700068
+	// IDSitePage: the CAPTCHA page on every website's own address (site
+	// mode without a port) is not inspected (a static page by an alias).
+	IDSitePage = 7700073
 	// IDMarkHosting marks visitors of the login pages from hosting, cloud
 	// and VPS networks (Central.Hosting): stolen passwords are used from
 	// rented servers.
@@ -519,6 +522,11 @@ type Central struct {
 	// (https://<hostname>/xpguard-check/, hostname mode): suspects are sent
 	// there instead of URL, and pass through the pass list.
 	HostPage string
+	// SitePage: suspects are sent to the check's page on the website they
+	// opened (https://<website>/xpguard-verify/, site mode without a port;
+	// the web server serves it by a global alias) and pass through the pass
+	// list. Used instead of Site when the page works.
+	SitePage bool
 	// Hosting: visitors of SiteLoginURLs from hosting, cloud and VPS
 	// networks (HostingNets, hostnets) are suspects, except HostingExempt
 	// (the server's allowed addresses, the fleet) and trusted services.
@@ -526,6 +534,9 @@ type Central struct {
 	HostingNets   []string
 	HostingExempt []string
 }
+
+// SitePagePath is the check's page on every website (captcha.SitePagePath).
+const SitePagePath = "/xpguard-verify/"
 
 // reHostPage is a hostname page address the rules may hold.
 var reHostPage = regexp.MustCompile(`^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+/xpguard-check/$`)
@@ -1070,6 +1081,12 @@ func Render(c settings.WAF, o Options) string {
 			host := strings.TrimSuffix(strings.TrimPrefix(ct.HostPage, "https://"), "/xpguard-check/")
 			w(`SecRule REQUEST_FILENAME "@beginsWith /xpguard-check/" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,ctl:ruleEngine=Off,chain"`, IDHostPage)
 			w(`  SecRule SERVER_NAME "@streq %s" "t:none,t:lowercase"`, host)
+		}
+		if !site && ct.SitePage {
+			// On the website's own address, port 443: the page frames the
+			// portal's check (no CAPTCHA port; captcha.SitePagePath).
+			redirect = fmt.Sprintf("redirect:https://%%{REQUEST_HEADERS.Host}%s?s=%s&ip=%%{REMOTE_ADDR}&h=%%{REQUEST_HEADERS.Host}&u=%%{REQUEST_URI}", SitePagePath, ct.ServerID)
+			w(`SecRule REQUEST_FILENAME "@beginsWith %s" "id:%d,phase:1,t:none,t:urlDecodeUni,t:normalizePath,t:lowercase,pass,nolog,ctl:ruleEngine=Off"`, SitePagePath, IDSitePage)
 		}
 		if site {
 			// Through the portal's page, which sends the visitor on to this

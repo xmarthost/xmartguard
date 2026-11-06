@@ -82,6 +82,9 @@ type Manager struct {
 	ruleSets RuleSets
 	states   []RuleSetState
 	selfTest *SelfTest
+	// SiteAlias is the web server configuration of the CAPTCHA page on
+	// every website (captcha.SiteAliasConf) and whether it is wanted.
+	SiteAlias func() (string, bool)
 	// loadedAt: when the web server last loaded changed rules (a reload);
 	// testedAt: when the last self-test ran (selfTestDue).
 	loadedAt, testedAt time.Time

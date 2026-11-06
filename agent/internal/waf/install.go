@@ -261,6 +261,21 @@ func Detect() Target {
 	return Target{Name: "", WebServer: "unknown"}
 }
 
+// SiteAliasPath is where the web server reads the CAPTCHA page's alias
+// ("" where xPGuard does not write Apache configuration: LiteSpeed's own
+// rule sets).
+func SiteAliasPath(t Target) string {
+	switch t.Name {
+	case "cpanel":
+		return "/etc/apache2/conf.d/xpguard-verify.conf"
+	case "rhel":
+		return "/etc/httpd/conf.d/xpguard-verify.conf"
+	case "debian":
+		return "/etc/apache2/conf-enabled/xpguard-verify.conf"
+	}
+	return ""
+}
+
 // On cPanel the agent's ModSecurity file is included from WHM's user rules
 // file, like other security products do.
 const (
@@ -377,6 +392,17 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	}
 	for name, body := range botFiles {
 		files[filepath.Join(dir, name)] = body
+	}
+	// The CAPTCHA page on every website's own address: a global alias
+	// (site mode without a port). Written when wanted, and switched off
+	// (not removed) once written.
+	if p := SiteAliasPath(t); p != "" && m.SiteAlias != nil {
+		body, on := m.SiteAlias()
+		if on {
+			files[p] = body
+		} else if _, err := os.Stat(p); err == nil {
+			files[p] = body
+		}
 	}
 	if t.LiteSpeed && !t.Plain {
 		if p := staleRuleSetFile(); p != "" {

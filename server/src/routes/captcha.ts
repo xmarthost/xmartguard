@@ -380,6 +380,9 @@ export function parseParams(rawUrl: string) {
     k: head.get('k') === 'fw' ? 'fw' : '',
     // fh=1: shown in a frame on this server's hostname page (hostname mode).
     fh: head.get('fh') === '1',
+    // fs=1: shown in a frame on the website's own address without a port
+    // (site mode; the agent's page at /xpguard-verify/ on every website).
+    fs: head.get('fs') === '1',
     // pf: site mode, the browser did not reach the website's CAPTCHA port
     // (t: no answer in time, e: refused or a certificate error).
     pf: head.get('pf') === 't' || head.get('pf') === 'e' ? (head.get('pf') as string) : '',
@@ -591,7 +594,10 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     const frame = !p.preview && p.frame && p.n !== '' && !onPortal;
     // (Also for a preview: CAPTCHA page » Test, on the hostname.)
     const hostFrame = !frame && p.fh && !onPortal && reHost.test(serverHost) && serverHost.includes('.');
-    const kind = { ...(p.k ? { k: p.k } : {}), ...(p.pf ? { pf: p.pf } : {}), ...(hostFrame ? { fh: '1' } : {}) };
+    // On the website's own address: framed by that website only, once its
+    // server confirms the website is its own (below).
+    const siteFrame = !frame && !hostFrame && p.fs && !onPortal && !p.preview;
+    const kind = { ...(p.k ? { k: p.k } : {}), ...(p.pf ? { pf: p.pf } : {}), ...(hostFrame ? { fh: '1' } : {}), ...(siteFrame ? { fs: '1' } : {}) };
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true, ...(hostFrame ? { fh: '1' } : {}) } : frame ? { s: p.s, ip: p.ip, h: p.h, n: p.n, ...kind, u: p.u } : { s: p.s, ip: p.ip, h: p.h, ...kind, u: p.u };
     const design = (p.preview && p.design) || config.design;
     // The page names the website only when its server confirms the site is
@@ -621,7 +627,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     }
     // In a frame only on a website its server confirmed (the frame is on
     // the website's own address).
-    const framedBy = frame && site === 'yes' ? p.h.replace(/\.$/, '') : hostFrame && site === 'yes' ? serverHost : '';
+    const framedBy =
+      (frame || siteFrame) && site === 'yes' ? p.h.replace(/\.$/, '') : hostFrame && site === 'yes' ? serverHost : '';
     if (framedBy) (req as FastifyRequest & { xgFrame?: boolean }).xgFrame = true;
     return html(
       reply,
@@ -634,7 +641,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         design,
         countdown: config.countdown,
         frame: frame && site === 'yes',
-        parentOrigin: hostFrame && site === 'yes' ? `https://${serverHost}` : '',
+        parentOrigin:
+          hostFrame && site === 'yes' ? `https://${serverHost}` : siteFrame && site === 'yes' ? `https://${p.h.replace(/\.$/, '')}` : '',
       }),
       200,
       framedBy,
@@ -663,6 +671,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     k: z.enum(['fw']).optional(),
     pf: z.enum(['t', 'e']).optional(),
     fh: z.literal('1').optional(),
+    fs: z.literal('1').optional(),
     preview: z.boolean().optional(),
   });
   app.post(
@@ -697,7 +706,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       // Where it was solved: on the website's own address (site mode), on
       // this page because the website's CAPTCHA port did not answer, or
       // here in portal mode ('').
-      const via = b.data.n ? 'site' : b.data.fh ? 'hostname' : b.data.pf === 't' ? 'port-timeout' : b.data.pf === 'e' ? 'port-refused' : '';
+      const via = b.data.n ? 'site' : b.data.fs ? 'site-page' : b.data.fh ? 'hostname' : b.data.pf === 't' ? 'port-timeout' : b.data.pf === 'e' ? 'port-refused' : '';
       const rec = (result: string, method: string, solver: string, reason = '') => record(accountId, p.s, p.ip, p.h, result, method, solver, reason, source, via);
       const run = async (): Promise<{ code: number; body: unknown }> => {
         const ip = visitorIP(req, cfg.trustProxy);

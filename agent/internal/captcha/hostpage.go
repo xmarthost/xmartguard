@@ -65,7 +65,11 @@ func HostPageURL(hostname string) string { return "https://" + hostname + HostPa
 // check (its origin only) that the visitor passed, goes back to the
 // website. The way back is built here from the link (https, the site's
 // name, a path on it), never taken from the message.
-func HostPageHTML(portalURL string) string {
+func HostPageHTML(portalURL string) string { return framePageHTML(portalURL, hostPageMarker, "fh") }
+
+// framePageHTML is the frame page with its marker and the parameter that
+// tells the portal where it is framed (fh: the hostname, fs: the website).
+func framePageHTML(portalURL, marker, frameParam string) string {
 	u, err := url.Parse(portalURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return ""
@@ -77,7 +81,7 @@ func HostPageHTML(portalURL string) string {
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>Security check</title>
-<!-- ` + hostPageMarker + ` -->
+<!-- ` + marker + ` -->
 <style>html,body{margin:0;height:100%;background:#f8fafc;font-family:system-ui,sans-serif;color:#334155}iframe{position:fixed;inset:0;width:100%;height:100%;border:0;display:block}p{text-align:center;margin-top:40vh}</style>
 </head><body><noscript><p>Please turn on JavaScript to continue.</p></noscript>
 <script>(function(){
@@ -90,7 +94,7 @@ head.split("&").forEach(function(kv){var j=kv.indexOf("=");if(j>0&&kv.slice(0,j)
 site=site.replace(/:[0-9]+$/,"").replace(/\.$/,"");
 if(!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(site)||back.charAt(0)!=="/"||back.charAt(1)==="/"||back.charAt(1)==="\\"){bad();return}
 var f=document.createElement("iframe");f.title="Security check";f.allow="";
-f.src=PAGE+"?"+head+"&fh=1&u="+back;
+f.src=PAGE+"?"+head+"&` + frameParam + `=1&u="+back;
 document.body.appendChild(f);
 addEventListener("message",function(e){if(e.origin===ORIGIN&&e.source===f.contentWindow&&e.data&&e.data.xg==="passed")location.replace("https://"+site+back)});
 })();</script></body></html>
@@ -145,6 +149,11 @@ var (
 // resolves to this server, the web server serves the page on 443 with a
 // certificate valid for the hostname, and the page is this one.
 func CheckHostPage(ctx context.Context, hostname, portalURL string, serverIPs []string) error {
+	return checkFramePage(ctx, hostname, HostPagePath, hostPageMarker, portalURL, serverIPs)
+}
+
+// checkFramePage fetches a frame page on the hostname and checks it is ours.
+func checkFramePage(ctx context.Context, hostname, path, marker, portalURL string, serverIPs []string) error {
 	if !reHostname.MatchString(hostname) {
 		return fmt.Errorf("the server hostname %q cannot carry the page", hostname)
 	}
@@ -179,20 +188,20 @@ func CheckHostPage(ctx context.Context, hostname, portalURL string, serverIPs []
 	}
 	defer tr.CloseIdleConnections()
 	c := &http.Client{Transport: tr, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, HostPageURL(hostname)+"?s=self-test&ip=127.0.0.1&h="+hostname+"&u=/", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+hostname+path+"?s=self-test&ip=127.0.0.1&h="+hostname+"&u=/", nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (xPGuard hostname self-test)")
 	req.Header.Set("Accept", "text/html")
 	res, err := c.Do(req)
 	if err != nil {
-		return fmt.Errorf("https://%s%s: %v", hostname, HostPagePath, err)
+		return fmt.Errorf("https://%s%s: %v", hostname, path, err)
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("https://%s%s answers %s", hostname, HostPagePath, res.Status)
+		return fmt.Errorf("https://%s%s answers %s", hostname, path, res.Status)
 	}
-	if !strings.Contains(string(body), hostPageMarker) || !strings.Contains(string(body), portalURL) {
-		return errors.New("the hostname serves another page at " + HostPagePath)
+	if !strings.Contains(string(body), marker) || !strings.Contains(string(body), portalURL) {
+		return errors.New("the hostname serves another page at " + path)
 	}
 	return nil
 }

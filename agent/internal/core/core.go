@@ -245,7 +245,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.Captcha.HostPage = a.hostPageFWURL
-	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf",
+	a.WAF = &waf.Manager{DB: db, Settings: st, Log: log, RulesDir: config.Dir() + "/waf", SiteAlias: a.siteAlias,
 		AgentBin: selfPath(), Firewall: a.Firewall, BlockedIPs: a.Firewall.BlockedAddrs, TrustedIPs: a.wafTrustedCIDRs, ExemptIPs: a.wafExemptIPs, VerifiedBots: a.wafVerifiedBots,
 		IPDBIPs: a.Firewall.WebIPDBEntries, TorIPs: a.Tor.Addrs, RBLExempt: a.rblExempt, TrustedCountryIPs: a.trustedCountryCIDRs, Intel: a.wafIntel,
 		Gate: func() *waf.Gate {

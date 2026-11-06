@@ -16,7 +16,7 @@ export interface PageData {
   /** Address the visitor is seen with here. */
   visitorIp: string;
   /** Request parameters, sent back with the solved check. */
-  params: { s: string; ip: string; h: string; u: string; preview?: boolean; n?: string; fh?: string } | null;
+  params: { s: string; ip: string; h: string; u: string; preview?: boolean; n?: string; fh?: string; fs?: string } | null;
   /** Cloudflare Turnstile site key ('' = not set up). */
   siteKey: string;
   /** The check: Turnstile, ALTCHA, or Turnstile with ALTCHA when it cannot load. */

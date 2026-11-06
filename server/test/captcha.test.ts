@@ -63,7 +63,7 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', fh: false, pf: '', g: 0, design: undefined });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', fh: false, fs: false, pf: '', g: 0, design: undefined });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
@@ -758,6 +758,27 @@ describe('CAPTCHA on the website’s own address', () => {
       expect(commands.map((c) => c.action)).not.toContain('captcha.ticket');
       const { rows } = await h.pool.query("SELECT via FROM captcha_events WHERE ip = '203.0.113.95' ORDER BY id DESC LIMIT 1");
       expect(rows[0].via).toBe('hostname');
+      // Site mode without a port: the agent's page on the website's own
+      // address (/xpguard-verify/) frames the check; only that website may,
+      // once its server confirms the website is its own.
+      const sUrl = `/v?s=${serverId}&ip=203.0.113.96&h=shop.example.com&fs=1&u=/wp-login.php`;
+      const sp = await h.app.inject({ method: 'GET', url: sUrl, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.96' } });
+      expect(sp.statusCode).toBe(200);
+      expect(sp.headers['x-frame-options']).toBeUndefined();
+      expect(sp.headers['content-security-policy']).toContain('frame-ancestors https://shop.example.com:* https://shop.example.com');
+      expect(sp.body).toContain('PARENT="https://shop.example.com"');
+      expect(sp.body).toContain('"fs":"1"');
+      const sEvil = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.96&h=paypal.com&fs=1&u=/`, headers: { host: 'captcha.example.org' } });
+      expect(sEvil.statusCode).toBe(404);
+      expect(sEvil.headers['x-frame-options']).toBe('DENY');
+      const sOnPortal = await fetch(h.url + sUrl, { headers: { 'x-forwarded-for': '203.0.113.96' } });
+      expect(sOnPortal.headers.get('x-frame-options')).toBe('DENY');
+      commands.length = 0;
+      const sr = await verify({ s: serverId, ip: '203.0.113.96', h: 'shop.example.com', u: '/wp-login.php', fs: '1', token: 'good-token' }, '203.0.113.96');
+      expect(sr.status).toBe(200);
+      expect(commands.map((c) => c.action)).toContain('captcha.pass');
+      const { rows: sRows } = await h.pool.query("SELECT via FROM captcha_events WHERE ip = '203.0.113.96' ORDER BY id DESC LIMIT 1");
+      expect(sRows[0].via).toBe('site-page');
       // CAPTCHA page » Test: the server's answer, with a preview link.
       h.hub.command = async (id: string, action: string, params: unknown) => {
         if (action === 'captcha.hostcheck') return { ok: true, hostname: 'server1.example.net', url: 'https://server1.example.net/xpguard-check/', in_use: true };
