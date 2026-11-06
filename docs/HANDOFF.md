@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.33** (see `VERSION`).
+- Current release: **0.24.34** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,36 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.34: remote-eval loaders, open file manager, Alfa CGI/SSI**
+  (2026-11-06). bitepestcontrol.com (superfast, bitepest): the owner's
+  assistant found a stolen WordPress admin (`admin1`, March 2026) that
+  installed wp-file-manager and dropped admin.php (curl from GitHub,
+  `eval('?>'.$output)`), sd.php (JPEG bytes then `<?=` fetching a text
+  file and `eval("?>" . $content)`), 1.php (an unauthenticated file
+  manager, "Plugin Name: PNG Optimizer Pro", in the site root) and the
+  Alfa shell's 1337_DATA/alfacgiapi/perl.alfa (Perl CGI running base64
+  `cmd`) and alfa_shtml/alfa_ssi.shtml (SSI running a command from the
+  cookie) with its SSI-enabling .htaccess. Evidence zip kept out of the
+  repository. None of these had a finding; `.shtml` and `.alfa` were not
+  even in `ScriptExts`. The 226 `HTML.SEOSpam.HiddenGambling` findings of
+  the account are right: whole gambling doorways (AGUSTOTO) written as
+  `<page>/index.html` over the site's URLs. The assistant's "WAF off on
+  this vhost" is wrong again (211 blocks there in 7 days; the Off blocks
+  are cPanel's proxy subdomain vhosts); the attacker used an admin login.
+  New: `PHP.Backdoor.RemoteCodeEval` (a remote fetch and `eval('?>'.$x)`
+  or eval of a `curl_exec` result), `PHP.Webshell.FileManager` also for
+  managers with no login check (`move_uploaded_file`, 5+ file
+  operations, 4+ request parameters like path/delete/chmod/unzip, no
+  `reAuth`, no class), `Webshell.Alfa.Component` (files in alfacgiapi,
+  alfa_shtml, ALFA_DATA folders), `SSI.Webshell.Exec` (exec/include of
+  a variable set from the cookie or query), `Perl.Webshell.CGI` (a Perl
+  CGI running request input); `.shtml`, `.shtm`, `.stm`, `.alfa` are
+  read now. Test `TestFleetRemoteEvalAndAlfaParts` (a local template
+  eval, a JSON update check, a login-protected manager, ordinary SSI and
+  a Perl mailer stay clean). Owner to check: WHM » Additional MySQL
+  Access Hosts on superfast (the report names
+  r9---ln-uvu-joml.googlevbdeo.com and mnc851.mcc405.cub.9gccnetwork.org
+  for every database user).
 - **Release 0.24.33: operator-panel bank kit, droppers, split decoder**
   (2026-11-06). mangomela.com.au was listed by Google Safe Browsing
   (Search Console: /wp-merc/). The owner's zip (kept out of the

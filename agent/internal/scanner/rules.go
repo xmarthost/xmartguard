@@ -46,6 +46,9 @@ var ScriptExts = map[string]bool{
 	// Web shells stored under harmless-looking names (seen in real cPanel scans:
 	// crontrol-82.dat in hidden cache folders, newsLib.class, main.css, *.flv).
 	".dat": true, ".class": true, ".css": true, ".flv": true, ".haxor": true, ".tmp": true,
+	// Server-side includes (an SSI shell runs commands) and the Alfa
+	// shell's helpers (perl.alfa, bash.alfa, py.alfa).
+	".shtml": true, ".shtm": true, ".stm": true, ".alfa": true,
 	// eicar.com, the name admins test antivirus with.
 	".com": true,
 }

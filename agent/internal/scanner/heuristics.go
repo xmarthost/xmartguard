@@ -178,6 +178,15 @@ func analyzePHP(content []byte) *verdict {
 	if hasInput && hiddenNameCall(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.HiddenFunctionName"}
 	}
+	// 6b2. Code fetched from another site and evaluated (admin.php from
+	// GitHub, sd.php behind a JPEG; bitepestcontrol.com, 2026-11-06).
+	if evalOrAssert && remoteCodeEval(s) {
+		return &verdict{CatVirus, "PHP.Backdoor.RemoteCodeEval"}
+	}
+	// 6b3. A file manager nobody logs in to (1.php "PNG Optimizer Pro").
+	if hasInput && openFileManager(s) {
+		return &verdict{CatVirus, "PHP.Webshell.FileManager"}
+	}
 	// 6c. A program downloaded, made executable and started (wget ... &&
 	// chmod 700 ... && nohup ...: mangomela.com.au, 2026-11-06).
 	if may(reDownloadRun, low) && reDownloadRun.Match(s) {

