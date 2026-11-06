@@ -19,7 +19,7 @@ var (
 	rePhishFields    = regexp.MustCompile(`(?i)\$_(?:POST|REQUEST)\s*\[\s*['"](?:[\w-]*(?:ssn|cvv|cvc|ccnum|cardnum|card_?number|cc_?num|exp(?:iry|date)|otp|pin|routing|acc(?:ount)?_?num|pass(?:word|wd)?|mmn|dob|atm))['"]`)
 	rePhishVisitor   = regexp.MustCompile(`(?i)REMOTE_ADDR|HTTP_USER_AGENT|HTTP_X_FORWARDED_FOR`)
 
-	rePhishBrand    = regexp.MustCompile(`(?i)<title>[^<]{0,120}\b(?:chase|wells\s*fargo|bank\s*of\s*america|navy\s*federal|citizens\s*bank|capital\s*one|usaa|paypal|td\s*bank|pnc\s*bank|regions\s*bank|huntington|truist|us\s*bank|santander|barclays|hsbc|lloyds|halifax|natwest|amex|american\s*express|netflix|microsoft\s*(?:365|outlook|account)|office\s*365|apple\s*id|icloud|coinbase|binance|metamask)\b`)
+	rePhishBrand    = regexp.MustCompile(`(?i)<title>[^<]{0,120}\b(?:chase|wells\s*fargo|bank\s*of\s*america|navy\s*federal|citizens\s*bank|capital\s*one|usaa|paypal|td\s*bank|pnc\s*bank|regions\s*bank|huntington|truist|us\s*bank|santander|barclays|hsbc|lloyds|halifax|natwest|amex|american\s*express|netflix|microsoft\s*(?:365|outlook|account)|office\s*365|apple\s*id|icloud|coinbase|binance|metamask|mercantil|banesco|banco\s*de\s*venezuela|bancolombia|davivienda|bbva|interbank|banorte|bradesco|ita[uú]|nubank)\b`)
 	rePhishPassword = regexp.MustCompile(`(?i)<input[^>]+type\s*=\s*['"]?password`)
 	rePhishCard     = regexp.MustCompile(`(?i)<input[^>]+name\s*=\s*['"]?[\w-]*(?:ssn|cvv|cvc|ccnum|cardnum|card_?number|routing|otp)`)
 	// A password field, in HTML or made by script.

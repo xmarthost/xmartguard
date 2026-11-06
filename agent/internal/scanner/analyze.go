@@ -32,6 +32,9 @@ func analyze(ext string, content []byte) *Detection {
 	if d := phishingKit(ext, content); d != nil {
 		return d
 	}
+	if d := realtimeKit(ext, content); d != nil {
+		return d
+	}
 	if d := downloadLure(ext, content); d != nil {
 		return d
 	}

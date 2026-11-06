@@ -178,6 +178,16 @@ func analyzePHP(content []byte) *verdict {
 	if hasInput && hiddenNameCall(s) {
 		return &verdict{CatVirus, "PHP.Backdoor.HiddenFunctionName"}
 	}
+	// 6c. A program downloaded, made executable and started (wget ... &&
+	// chmod 700 ... && nohup ...: mangomela.com.au, 2026-11-06).
+	if may(reDownloadRun, low) && reDownloadRun.Match(s) {
+		return &verdict{CatVirus, "PHP.Dropper.DownloadAndRun"}
+	}
+	// 6d. eval of a payload whose decoder's name is spelled in pieces
+	// ($fn = 'base'.'64_decode'; a 3 MB payload in 200,000 pieces).
+	if evalOrAssert && hiddenDecoder(s) {
+		return &verdict{CatVirus, "PHP.Obfuscated.HiddenDecoder"}
+	}
 	// 7. goto-flattened obfuscation with an execution sink.
 	if goto_ >= 8 && (evalOrAssert || decoders >= 1 || m(reSink)) && !readableGotos(s) {
 		return &verdict{CatVirus, "PHP.Obfuscated.GotoFlow"}

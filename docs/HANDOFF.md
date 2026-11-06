@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.32** (see `VERSION`).
+- Current release: **0.24.33** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,30 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.33: operator-panel bank kit, droppers, split decoder**
+  (2026-11-06). mangomela.com.au was listed by Google Safe Browsing
+  (Search Console: /wp-merc/). The owner's zip (kept out of the
+  repository): a Mercantil bank kit in a fake `wp-merc` folder (login
+  copy, `loade830.html` polling the operator's panel `acciones.php?
+  accion=verificar` and sending the victim to sms/cvv/preguntas pages,
+  `cvv.html` posting `?accion=cvv`, `data/*.json` victim records, an
+  operator `login.php`), eight 270-byte droppers (`firewall-<hex>.php`,
+  `dosya.php`, `web-dropper.php`: wget -O hidden file && chmod 700 &&
+  nohup) and `apalah.php` (3.2 MB: a payload in 200,000 `$z .= "...";`
+  pieces, `$fn = 'base'.'64_decode'`, decoded twice, eval). No file had a
+  finding. New: `PHP.Dropper.DownloadAndRun` (exec family with wget/curl,
+  chmod +x/700 and nohup or a run), `PHP.Obfuscated.HiddenDecoder` (eval
+  with a decoder's name spelled in pieces or escapes; `disguisedNames`
+  shared with hiddenname.go), `Phishing.Kit.OperatorLoader` (a page that
+  polls with fetch/XHR and sends the visitor to 2+ step pages named sms,
+  otp, cvv, token, pin, preguntas, card…), `Phishing.Kit.CardStep`
+  (fetch/ajax with `accion|action|step|paso=cvv|cvc` or
+  `accion=tarjeta`), and Latin American banks in the clone-page brands.
+  sms.html, preguntas and the operator login stay without a rule (too
+  close to real 2FA pages); the kit stops working without its loader,
+  card page and login copy. Test `TestFleetOperatorPanelKit` (inert
+  fixtures; a download without a run, a plain decoder name, an order
+  status page, a saved card stay clean).
 - **Release 0.24.32: login copies that send to Telegram from the browser**
   (2026-11-06). Spaceship suspended recaptcha.world (the old CAPTCHA
   domain) for phishing: its report was a CAPTCHA link

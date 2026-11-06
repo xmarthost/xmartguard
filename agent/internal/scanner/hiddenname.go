@@ -44,6 +44,35 @@ func unescapePHP(s string) string {
 	})
 }
 
+// disguisedNames are the variables holding a function name spelled in
+// pieces or escapes, by variable name.
+func disguisedNames(s []byte) map[string]string {
+	out := map[string]string{}
+	for _, m := range reNameAssign.FindAllSubmatchIndex(s, 50) {
+		expr := string(s[m[4]:m[5]])
+		if len(expr) > 400 {
+			continue
+		}
+		pieces := rePiece.FindAllString(expr, -1)
+		var name strings.Builder
+		disguised := len(pieces) > 1
+		for _, p := range pieces {
+			body := p[1 : len(p)-1]
+			if p[0] == '"' {
+				if strings.Contains(body, `\`) {
+					disguised = true
+				}
+				body = unescapePHP(body)
+			}
+			name.WriteString(body)
+		}
+		if disguised {
+			out[string(s[m[2]:m[3]])] = strings.ToLower(strings.TrimSpace(name.String()))
+		}
+	}
+	return out
+}
+
 // hiddenNameCall reports a variable holding a disguised command or code
 // runner's name that is called with request data.
 func hiddenNameCall(s []byte) bool {
