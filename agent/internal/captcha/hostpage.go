@@ -65,11 +65,15 @@ func HostPageURL(hostname string) string { return "https://" + hostname + HostPa
 // check (its origin only) that the visitor passed, goes back to the
 // website. The way back is built here from the link (https, the site's
 // name, a path on it), never taken from the message.
-func HostPageHTML(portalURL string) string { return framePageHTML(portalURL, hostPageMarker, "fh") }
+func HostPageHTML(portalURL string) string {
+	return framePageHTML(portalURL, hostPageMarker, "fh", false)
+}
 
 // framePageHTML is the frame page with its marker and the parameter that
 // tells the portal where it is framed (fh: the hostname, fs: the website).
-func framePageHTML(portalURL, marker, frameParam string) string {
+// setCookie: the page sets the pass cookie the check gives it (the site
+// page; a value checked here, on this website only).
+func framePageHTML(portalURL, marker, frameParam string, setCookie bool) string {
 	u, err := url.Parse(portalURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return ""
@@ -77,6 +81,10 @@ func framePageHTML(portalURL, marker, frameParam string) string {
 	origin := "https://" + u.Host
 	js := func(v string) string {
 		return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "<", `<`, ">", `>`, "\n", "").Replace(v)
+	}
+	cookieJS := ""
+	if setCookie {
+		cookieJS = `var c=e.data.c;if(c&&c.name==="` + GateCookie + `"&&/^[0-9a-f]{32}$/.test(c.value)&&c.max_age>0&&c.max_age<=172800)document.cookie=c.name+"="+c.value+"; path=/; max-age="+Math.floor(c.max_age)+"; samesite=lax"+(location.protocol==="https:"?"; secure":"");`
 	}
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -96,7 +104,7 @@ if(!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(sit
 var f=document.createElement("iframe");f.title="Security check";f.allow="";
 f.src=PAGE+"?"+head+"&` + frameParam + `=1&u="+back;
 document.body.appendChild(f);
-addEventListener("message",function(e){if(e.origin===ORIGIN&&e.source===f.contentWindow&&e.data&&e.data.xg==="passed")location.replace("https://"+site+back)});
+addEventListener("message",function(e){if(e.origin===ORIGIN&&e.source===f.contentWindow&&e.data&&e.data.xg==="passed"){` + cookieJS + `location.replace("https://"+site+back)}});
 })();</script></body></html>
 `
 }

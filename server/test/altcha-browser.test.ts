@@ -20,6 +20,10 @@ beforeAll(async () => {
   h.hub.command = async (_id: string, action: string, params: unknown) => {
     if (action === 'captcha.pass' || action === 'captcha.ticket') passes.push(params);
     if (action === 'captcha.host') return { hosted: true };
+    if (action === 'captcha.sitepass') {
+      passes.push(params);
+      return { ok: true, cookie: 'xg_gate', value: '0123456789abcdef0123456789abcdef', minutes: 60 };
+    }
     return { ok: true };
   };
   const admin = new Client(h.url);
@@ -207,5 +211,57 @@ browserTest('hostname mode: the check on the server hostname, then back to the w
   } finally {
     await b.close();
     await h.pool.query("UPDATE servers SET hostname = 'web-e2e' WHERE id = $1", [serverId]);
+  }
+}, 90_000);
+
+// Site mode without a port: the agent's static page on the website's own
+// address (fixtures/sitepage.html, kept equal to the agent's page) frames
+// the check; once passed, the page sets the pass cookie the server gave
+// and goes straight back: no wait for a web server reload (55 seconds on a
+// LiteSpeed server before, 2026-11-06).
+browserTest('site page: the check on the website itself, pass cookie, straight back', async () => {
+  const { chromium } = createRequire(import.meta.url)(PW);
+  const page0 = readFileSync(new URL('./fixtures/sitepage.html', import.meta.url), 'utf8');
+  const admin = new Client(h.url);
+  await admin.login();
+  await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '', secret_key: '', minutes: 60, provider: 'altcha', countdown: 0 });
+  const b = await chromium.launch();
+  try {
+    const ctx = await b.newContext({ ignoreHTTPSErrors: true });
+    let cookieSent = '';
+    await ctx.route('https://shop.example.com/**', (r: any) => {
+      const u = new URL(r.request().url());
+      if (u.pathname === '/xpguard-verify/') return r.fulfill({ contentType: 'text/html', body: page0 });
+      cookieSent = r.request().headers()['cookie'] ?? '';
+      return r.fulfill({ contentType: 'text/html', body: '<p id="site">the website</p>' });
+    });
+    await ctx.route('https://captcha.test/**', async (r: any) => {
+      const u = new URL(r.request().url());
+      const res = await r.fetch({ url: h.url + u.pathname + u.search, headers: { ...r.request().headers(), host: 'captcha.test' } });
+      await r.fulfill({ response: res });
+    });
+    const page = await ctx.newPage();
+    const before = passes.length;
+    await page.goto(`https://shop.example.com/xpguard-verify/?s=${serverId}&ip=127.0.0.1&h=shop.example.com&u=/wp-login.php?redirect_to=/wp-admin/`);
+    const frame = page.frameLocator('iframe');
+    await frame.locator('altcha-widget label').waitFor();
+    await page.waitForTimeout(800);
+    await page.mouse.move(120, 100);
+    await page.mouse.move(420, 320, { steps: 5 });
+    const t0 = Date.now();
+    await frame.locator('altcha-widget label').click();
+    await page.waitForURL((u: URL) => u.pathname === '/wp-login.php', { timeout: 30000 });
+    const took = Date.now() - t0;
+    expect(page.url()).toBe('https://shop.example.com/wp-login.php?redirect_to=/wp-admin/');
+    expect(took).toBeLessThan(8000);
+    expect(passes.length).toBe(before + 1);
+    expect(cookieSent).toContain('xg_gate=0123456789abcdef0123456789abcdef');
+    const c = (await ctx.cookies('https://shop.example.com')).find((x: any) => x.name === 'xg_gate');
+    expect(c?.domain).toBe('shop.example.com');
+    expect(c?.path).toBe('/');
+    const { rows } = await h.pool.query("SELECT result, via FROM captcha_events WHERE host = 'shop.example.com' ORDER BY id DESC LIMIT 1");
+    expect(rows[0]).toEqual({ result: 'passed', via: 'site-page' });
+  } finally {
+    await b.close();
   }
 }, 90_000);

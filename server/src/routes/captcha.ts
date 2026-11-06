@@ -781,16 +781,36 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           await rec('offline', method, ip, 'website server offline');
           return res(503, { error: "The website's server cannot be reached right now. Please try again in a minute." });
         }
+        // The page on the website's own address sets a pass cookie the
+        // server gives at once; the pass list needs a web server reload
+        // first (55 seconds on a LiteSpeed server, 2026-11-06).
+        let cookie: { name: string; value: string; max_age: number } | undefined;
         try {
           // Also the address the visitor solved it from: on mobile networks
           // (CGNAT) the next request to the site may come from that one.
           const short = (method === 'altcha' && provider === 'auto') || hosting ? { minutes: Math.min(config.minutes, ALTCHA_FALLBACK_MINUTES) } : {};
-          if (b.data.n) {
+          const also = sameIP(ip, p.ip) ? '' : ip;
+          if (b.data.fs) {
+            try {
+              const r = (await hub.command(p.s, 'captcha.sitepass', { ip: p.ip, host: p.h, also, ...short }, 15_000)) as { cookie?: string; value?: string; minutes?: number };
+              if (r?.cookie === 'xg_gate' && typeof r.value === 'string' && /^[0-9a-f]{32}$/.test(r.value) && Number(r.minutes) > 0) {
+                cookie = { name: r.cookie, value: r.value, max_age: Math.min(Number(r.minutes) * 60, 172_800) };
+              }
+            } catch (e) {
+              // An agent without it (older), or its page not in use any more:
+              // the pass list, as before. A refusal (banned) stays a refusal.
+              const msg = (e as Error).message;
+              if (!/unknown action|not in use/.test(msg)) throw e;
+            }
+          }
+          if (cookie) {
+            // given at once
+          } else if (b.data.n) {
             // On the website's own address the server gives a ticket the
             // page there trades for a pass cookie: no reload, no wait.
             await hub.command(p.s, 'captcha.ticket', { ip: p.ip, host: p.h, nonce: b.data.n }, 15_000);
           } else {
-            await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also: sameIP(ip, p.ip) ? '' : ip, ...short }, 90_000);
+            await hub.command(p.s, 'captcha.pass', { ip: p.ip, host: p.h, also, ...short }, 90_000);
           }
         } catch (e) {
           await rec('rejected', method, ip, 'server refused: ' + (e as Error).message);
@@ -800,7 +820,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         if (method === 'altcha') noteAltchaPass(altchaKeys);
         if (hosting) noteHostingPass(p.ip);
         await rec('passed', method, ip, hosting ? 'from a hosting network (VPN or cloud): a pass for an hour' : '');
-        return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}`, ...(b.data.n ? { frame: true } : {}) });
+        return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}`, ...(b.data.n ? { frame: true } : {}), ...(cookie ? { cookie } : {}) });
       };
       const pending = run();
       if (key) verifying.set(key, pending);

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.37** (see `VERSION`).
+- Current release: **0.24.38** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,31 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.38: instant pass on the site page** (2026-11-06). The
+  owner measured 55-57 seconds of "Checking…" after the tick on the site
+  page (also from a home address): the portal answers only after the
+  website's server reloads LiteSpeed for the pass list. Customers ask to
+  turn such a CAPTCHA off; the owner wants Cloudflare-like speed. Now, in
+  site mode with the page in use, the portal asks the agent for
+  `captcha.sitepass` (ip, host, also, minutes): it returns a pass-cookie
+  value from the shared rotating slots (`SitePasses.GiveAll`, recorded for
+  the website's address and the solving address); the portal hands it to
+  its framed page, which posts it to the site page (its origin only); the
+  site page checks it (`xg_gate`, 32 hex, max-age at most 2 days) and
+  sets it on the website (path /, SameSite=Lax, Secure on https) and goes
+  back. The WAF accepts the cookie when `Central.SitePage` has Slots (the
+  same two rules as the old port mode, LiteSpeed-safe), and a value sent
+  from another address is withdrawn as before. No reload per pass. An
+  older agent ("unknown action") or a page no longer in use falls back to
+  `captcha.pass`; a refusal (banned) stays a refusal. The portal's
+  countdown setting (default 5 s) still applies; 0 sends the visitor back
+  at once. Tests: captcha `TestSitePageSetsPassCookie`,
+  `TestGiveAllAddresses`, `TestSitePageFixture`; waf
+  `TestSitePageRedirect`, `TestSitePageOnApache` (valid cookie 200, wrong
+  cookie 302); core `TestSiteModeWithoutPortFallsBack`; portal
+  captcha.test.ts and a Chromium test (site page, tick, cookie on the
+  website, back in under 8 s). `test/agent-update.test.ts` times out here
+  on the base too (no network).
 - **Release 0.24.37: the portal's answer is not cut off on the server
   hosting it** (2026-11-06). Retest of 0.24.36 from the IPDB-listed VPN:
   the page opened, the check was recorded `passed, via site-page` on the

@@ -201,8 +201,9 @@ func (a *Agent) centralWAF() *waf.Central {
 	w := &waf.Central{URL: c.CentralURL, ServerID: a.Cfg.ServerID, All: all, Pass: a.centralPassList()}
 	if captcha.SiteWanted(cur) {
 		if a.central.sitePage.Load() {
-			// On the website's own address without a port.
-			w.SitePage = true
+			// On the website's own address without a port; the page sets
+			// the pass cookie (captcha.sitepass).
+			w.SitePage, w.Slots = true, a.sitePasses.Slots(time.Now())
 		} else {
 			w.Site, w.Slots, w.HTTPSPort = true, a.sitePasses.Slots(time.Now()), c.HTTPSPort
 		}
@@ -860,6 +861,50 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 			minutes = in.Minutes
 		}
 		return map[string]any{"ok": true, "minutes": minutes}, nil
+	}
+	// captcha.sitepass: the visitor solved the portal's check framed by the
+	// page on the website's own address (site mode without a port). The
+	// answer is a pass-cookie value the page sets on the website: the
+	// visitor is back at once. The pass list (captcha.pass) needs a web
+	// server reload first, 55 seconds on business400 (2026-11-06).
+	h["captcha.sitepass"] = func(_ context.Context, p json.RawMessage) (any, error) {
+		in, err := decode[struct {
+			IP      string `json:"ip"`
+			Host    string `json:"host"`
+			Also    string `json:"also"`
+			Minutes int    `json:"minutes"`
+		}](p)
+		if err != nil {
+			return nil, err
+		}
+		if !captcha.SiteWanted(a.Settings.Get()) || !a.central.sitePage.Load() {
+			return nil, errors.New("the check's page on the websites' own address is not in use on this server")
+		}
+		if !a.siteHere(in.IP, in.Host) {
+			return nil, fmt.Errorf("%s is not a website on this server", in.Host)
+		}
+		if a.Firewall != nil {
+			if err := a.Firewall.PassRefused(in.IP); err != nil {
+				return nil, err
+			}
+		}
+		ips := []string{in.IP}
+		if in.Also != "" && in.Also != in.IP && net.ParseIP(in.Also) != nil {
+			ips = append(ips, in.Also)
+		}
+		tok := a.sitePasses.GiveAll(time.Now(), ips...)
+		if tok == "" {
+			return nil, errors.New("no pass could be given")
+		}
+		minutes := a.Settings.Get().Captcha.CentralMinutes
+		if in.Minutes > 0 && in.Minutes < minutes {
+			minutes = in.Minutes
+		}
+		if minutes <= 0 {
+			minutes = 720
+		}
+		a.Log.Info("captcha solved on the website's page", "ip", in.IP, "host", in.Host)
+		return map[string]any{"ok": true, "cookie": captcha.GateCookie, "value": tok, "minutes": minutes}, nil
 	}
 	// captcha.ticket: the visitor solved the portal's check shown on the
 	// website's own address. The page there trades the ticket for the pass

@@ -155,9 +155,19 @@ func addrKey(ip string) string {
 }
 
 // Give returns a pass-cookie value for the visitor at ip and records it.
-func (p *SitePasses) Give(ip string, now time.Time) string {
-	k := addrKey(ip)
-	if len(p.Secret) == 0 || k == "" {
+func (p *SitePasses) Give(ip string, now time.Time) string { return p.GiveAll(now, ip) }
+
+// GiveAll returns one pass-cookie value for a visitor seen at several
+// addresses (the website's, and the one it solved the check from: mobile
+// networks reach sites from different addresses) and records it for each.
+func (p *SitePasses) GiveAll(now time.Time, ips ...string) string {
+	var keys []string
+	for _, ip := range ips {
+		if k := addrKey(ip); k != "" {
+			keys = append(keys, k)
+		}
+	}
+	if len(p.Secret) == 0 || len(keys) == 0 || addrKey(ips[0]) == "" {
 		return ""
 	}
 	n, err := rand.Int(rand.Reader, big.NewInt(SiteSlots))
@@ -172,7 +182,9 @@ func (p *SitePasses) Give(ip string, now time.Time) string {
 	if p.st.Given[tok] == nil {
 		p.st.Given[tok] = map[string]int64{}
 	}
-	p.st.Given[tok][k] = now.Add(passLife).Unix()
+	for _, k := range keys {
+		p.st.Given[tok][k] = now.Add(passLife).Unix()
+	}
 	p.saveSoon()
 	return tok
 }

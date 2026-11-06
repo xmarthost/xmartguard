@@ -779,6 +779,51 @@ describe('CAPTCHA on the website’s own address', () => {
       expect(commands.map((c) => c.action)).toContain('captcha.pass');
       const { rows: sRows } = await h.pool.query("SELECT via FROM captcha_events WHERE ip = '203.0.113.96' ORDER BY id DESC LIMIT 1");
       expect(sRows[0].via).toBe('site-page');
+      // An agent with the instant pass: a pass cookie the page sets on the
+      // website, no pass list (which waits for a web server reload).
+      const withSite = h.hub.command;
+      const tok = '0123456789abcdef0123456789abcdef';
+      h.hub.command = async (id: string, action: string, params: unknown) => {
+        if (action === 'captcha.sitepass') {
+          commands.push({ action, params });
+          return { ok: true, cookie: 'xg_gate', value: tok, minutes: 1440 };
+        }
+        return withSite(id, action, params);
+      };
+      commands.length = 0;
+      const fast = await verify({ s: serverId, ip: '203.0.113.97', h: 'shop.example.com', u: '/wp-login.php', fs: '1', token: 'good-token' }, '203.0.113.97');
+      expect(fast.status).toBe(200);
+      expect(fast.body.cookie).toEqual({ name: 'xg_gate', value: tok, max_age: 86400 });
+      expect(commands.map((c) => c.action)).toEqual(['captcha.sitepass']);
+      // Not for the hostname page or the portal address.
+      commands.length = 0;
+      const hn = await verify({ s: serverId, ip: '203.0.113.98', h: 'shop.example.com', u: '/', fh: '1', token: 'good-token' }, '203.0.113.98');
+      expect(hn.body.cookie).toBeUndefined();
+      expect(commands.map((c) => c.action)).not.toContain('captcha.sitepass');
+      // A value that is not a pass value is never handed to the page.
+      h.hub.command = async (id: string, action: string, params: unknown) => {
+        if (action === 'captcha.sitepass') return { ok: true, cookie: 'xg_gate', value: 'x; domain=.example.com', minutes: 1440 };
+        return withSite(id, action, params);
+      };
+      const odd = await verify({ s: serverId, ip: '203.0.113.99', h: 'shop.example.com', u: '/', fs: '1', token: 'good-token' }, '203.0.113.99');
+      expect(odd.body.cookie).toBeUndefined();
+      // An older agent: the pass list, as before; a refusal stays a refusal.
+      h.hub.command = async (id: string, action: string, params: unknown) => {
+        if (action === 'captcha.sitepass') throw new Error('unknown action "captcha.sitepass"');
+        return withSite(id, action, params);
+      };
+      commands.length = 0;
+      const old = await verify({ s: serverId, ip: '203.0.113.100', h: 'shop.example.com', u: '/', fs: '1', token: 'good-token' }, '203.0.113.100');
+      expect(old.status).toBe(200);
+      expect(old.body.cookie).toBeUndefined();
+      expect(commands.map((c) => c.action)).toContain('captcha.pass');
+      h.hub.command = async (id: string, action: string, params: unknown) => {
+        if (action === 'captcha.sitepass') throw new Error('203.0.113.101 attacked after solving the CAPTCHA');
+        return withSite(id, action, params);
+      };
+      const refused = await verify({ s: serverId, ip: '203.0.113.101', h: 'shop.example.com', u: '/', fs: '1', token: 'good-token' }, '203.0.113.101');
+      expect(refused.status).toBe(403);
+      h.hub.command = withSite;
       // CAPTCHA page » Test: the server's answer, with a preview link.
       h.hub.command = async (id: string, action: string, params: unknown) => {
         if (action === 'captcha.hostcheck') return { ok: true, hostname: 'server1.example.net', url: 'https://server1.example.net/xpguard-check/', in_use: true };

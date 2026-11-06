@@ -33,7 +33,7 @@ const sitePageMarker = "xpguard-site-check v1"
 // website's own address (fs=1: the portal allows that website, once its
 // server confirms the website is its own, to frame the check).
 func SitePageHTML(portalURL string) string {
-	return framePageHTML(portalURL, sitePageMarker, "fs")
+	return framePageHTML(portalURL, sitePageMarker, "fs", true)
 }
 
 // SiteAliasConf is the web server configuration that serves the page on

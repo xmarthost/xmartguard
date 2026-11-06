@@ -525,7 +525,8 @@ type Central struct {
 	// SitePage: suspects are sent to the check's page on the website they
 	// opened (https://<website>/xpguard-verify/, site mode without a port;
 	// the web server serves it by a global alias) and pass through the pass
-	// list. Used instead of Site when the page works.
+	// list, or at once with the pass cookie (Slots) the page sets. Used
+	// instead of Site when the page works.
 	SitePage bool
 	// Hosting: visitors of SiteLoginURLs from hosting, cloud and VPS
 	// networks (HostingNets, hostnets) are suspects, except HostingExempt
@@ -1013,7 +1014,11 @@ func Render(c settings.WAF, o Options) string {
 			toks = append(toks, ok...)
 		}
 		site := ct.Site && len(toks) > 0 && ct.HTTPSPort > 0 && ct.HTTPSPort < 65536
-		if site {
+		// The pass cookie: set on the CAPTCHA port (site), or by the check's
+		// page on the website's own address (SitePage): a pass at once,
+		// without a web server reload for the pass list.
+		cookie := site || (ct.SitePage && len(toks) > 0)
+		if cookie {
 			// Not passed: no pass cookie, and not on the pass list either (a
 			// visitor that cannot reach the CAPTCHA port solves on the portal,
 			// which lets the address in like portal mode).
@@ -1108,7 +1113,7 @@ func Render(c settings.WAF, o Options) string {
 		// Which pass-cookie value a suspect sends: a value sent from an address
 		// it was not given to is withdrawn by the agent (one solve shared
 		// with a botnet).
-		if site {
+		if cookie {
 			for i, sl := range slots {
 				if len(sl) == 0 {
 					continue

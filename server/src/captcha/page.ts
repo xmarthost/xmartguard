@@ -154,7 +154,7 @@ export function renderPage(d: PageData): string {
     d.error || !d.params
       ? ''
       : `<script>
-var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},FRAME=${d.frame ? 'true' : 'false'},PARENT=${JSON.stringify(d.parentOrigin ?? '').replace(/</g, '\\u003c')},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false;
+var P=${JSON.stringify(d.params).replace(/</g, '\\u003c')},FRAME=${d.frame ? 'true' : 'false'},PARENT=${JSON.stringify(d.parentOrigin ?? '').replace(/</g, '\\u003c')},WAIT=${wait},HOST=${JSON.stringify(host)},bd=document.getElementById('badge'),el=document.getElementById('elapsed'),cn=document.getElementById('count'),t0=Date.now(),tick=setInterval(function(){var n=Math.floor((Date.now()-t0)/1000);el.textContent=n>0?'Checking for '+n+' second'+(n===1?'':'s'):''},1000),MODE=${JSON.stringify(provider)},KEY=${JSON.stringify(d.siteKey)},st=document.getElementById('status'),ag=document.getElementById('again'),box=document.getElementById('ts'),altcha=null,usingAltcha=false,PASSC=null;
 // Messages are text: an error from the server or the framing page can not
 // add markup (audit A7 F4). Only the spinner is markup.
 function show(t,c,spin){st.className='status'+(c?' '+c:'');st.textContent=t;if(spin){var s=document.createElement('span');s.className='spin';st.prepend(s)}}
@@ -164,7 +164,7 @@ function fail(t){show(t,'err');ag.hidden=false;bd.className='badge err'}
 function stopClock(){clearInterval(tick);el.textContent=''}
 // Back to the website: in the hostname page's frame that page goes (only
 // it may move the whole window), otherwise this page.
-function leave(url){if(PARENT&&window.parent!==window){window.parent.postMessage({xg:'passed'},PARENT);return}location.replace(url)}
+function leave(url){if(PARENT&&window.parent!==window){window.parent.postMessage(PASSC?{xg:'passed',c:PASSC}:{xg:'passed'},PARENT);return}location.replace(url)}
 // Verified: the badge turns green and the seconds count down to the return.
 function back(url){
   stopClock();bd.className='badge done';
@@ -188,6 +188,7 @@ function done(sol){
   .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
   .then(function(x){
     if(!x.ok){fail(x.j.error||'The check failed. Please try again.');return}
+    if(x.j.cookie)PASSC=x.j.cookie;
     if(x.j.preview){stopClock();bd.className='badge done';show('Preview: the check works. A real visitor would now count down and go back to the website.','ok');
       if(WAIT>0){cn.hidden=false;cn.innerHTML='<p>You will be taken back to <b>'+HOST+'</b> in <span class="nw"><span class="n">'+WAIT+'</span> seconds</span></p><div class="bar"><span></span></div>'}return}
     if(FRAME&&x.j.frame&&window.parent!==window){stopClock();bd.className='badge done';show('Verified. Taking you back to '+HOST+'…','ok');window.parent.postMessage({xg:'pass',n:P.n},'*');return}

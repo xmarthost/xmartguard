@@ -16,5 +16,5 @@ if(!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(sit
 var f=document.createElement("iframe");f.title="Security check";f.allow="";
 f.src=PAGE+"?"+head+"&fh=1&u="+back;
 document.body.appendChild(f);
-addEventListener("message",function(e){if(e.origin===ORIGIN&&e.source===f.contentWindow&&e.data&&e.data.xg==="passed")location.replace("https://"+site+back)});
+addEventListener("message",function(e){if(e.origin===ORIGIN&&e.source===f.contentWindow&&e.data&&e.data.xg==="passed"){location.replace("https://"+site+back)}});
 })();</script></body></html>

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,10 +45,44 @@ func TestSiteModeWithoutPortFallsBack(t *testing.T) {
 	if w := a.centralWAF(); w == nil || w.SitePage || !w.Site || w.HTTPSPort != 7743 {
 		t.Fatalf("central %+v", w)
 	}
-	// In use (as after a passing self-test): no port.
+	// Not in use: no instant pass (the portal falls back to the pass list).
+	old := UserDomainsPath
+	UserDomainsPath = filepath.Join(t.TempDir(), "userdomains")
+	defer func() { UserDomainsPath = old }()
+	os.WriteFile(UserDomainsPath, []byte("shop.example.com: shop\n*: nobody\n"), 0o644)
+	sitepass := func(ip, host string) (map[string]any, error) {
+		p, _ := json.Marshal(map[string]any{"ip": ip, "host": host, "also": "198.51.100.7", "minutes": 60})
+		r, err := a.Handlers()["captcha.sitepass"](ctx, p)
+		m, _ := r.(map[string]any)
+		return m, err
+	}
+	if _, err := sitepass("203.0.113.5", "shop.example.com"); err == nil || !strings.Contains(err.Error(), "not in use") {
+		t.Fatalf("instant pass without the page: %v", err)
+	}
+	// In use (as after a passing self-test): no port, and the WAF accepts
+	// the pass cookie the page sets.
 	a.central.sitePage.Store(true)
-	if w := a.centralWAF(); w == nil || !w.SitePage || w.Site || w.HTTPSPort != 0 {
+	w := a.centralWAF()
+	if w == nil || !w.SitePage || w.Site || w.HTTPSPort != 0 || len(w.Slots) != captcha.SiteSlots {
 		t.Fatalf("central %+v", w)
+	}
+	r, err := sitepass("203.0.113.5", "shop.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _ := r["value"].(string)
+	if r["cookie"] != captcha.GateCookie || len(tok) != 32 || r["minutes"] != 30 { // the shorter of 60 and the configured 30
+		t.Fatalf("instant pass %v", r)
+	}
+	found := false
+	for _, sl := range a.centralWAF().Slots {
+		found = found || sl[0] == tok
+	}
+	if !found {
+		t.Fatal("value not accepted by the WAF")
+	}
+	if _, err := sitepass("203.0.113.5", "evil.example"); err == nil {
+		t.Fatal("instant pass for a website that is not here")
 	}
 	// Another mode: the alias is switched off and the page removed.
 	if err := a.applyCentralConfig(ctx, centralConfig{Version: 6, Enabled: true, URL: "https://captcha.test/v", Minutes: 30}); err != nil {
