@@ -99,6 +99,24 @@ if [ -d "$OLD_HOME/.git" ]; then
 fi
 
 if { [ -f "$MANIFEST" ] || [ -f "$OLD_HOME/manifest" ] || [ -f "$LEGACY_MANIFEST" ]; } && [ "$FORCE" -ne 1 ]; then
+  # Already installed and enrolled: the install command of another account
+  # moves this server there, with its settings and history (the portal
+  # checks the token and this server's key).
+  if [ -x "$BIN" ] && "$BIN" status 2>/dev/null | grep -q '"enrolled"'; then
+    if OUT=$("$BIN" transfer --token "$TOKEN" 2>&1); then
+      # The token's own account: nothing moved, nothing to install.
+      if grep -q "already belongs" <<<"$OUT"; then
+        die "xPGuard is already installed in this account. Uninstall first, or pass --force to re-install."
+      fi
+      ok "$OUT"
+      exit 0
+    fi
+    say "$OUT"
+    if grep -q "^Usage:" <<<"$OUT"; then
+      die "this agent is too old to move to another account. Update it first (it updates itself within a few minutes of a portal update), then run the command again."
+    fi
+    die "the server could not be moved. Create a fresh token in the portal (Add Server) and run the command again."
+  fi
   die "xPGuard is already installed. Uninstall first, or pass --force to re-install."
 fi
 

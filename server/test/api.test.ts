@@ -119,6 +119,58 @@ describe('tenant isolation and roles', () => {
   });
 });
 
+describe('moving a server to another account', () => {
+  // The install command of another account, run on an enrolled server,
+  // moves it there with its id, settings and history (owner's request,
+  // 2026-11-06: cloud2 from a customer account to the main one).
+  it('moves with the server key and a token of the new account, once', async () => {
+    // A customer's server moves to the main (master) account.
+    const { createOwner } = await import('../src/routes/users.js');
+    await createOwner(h.pool, 'mover@example.com', 'mover-long-password', 'Customer');
+    const cust = new Client(h.url);
+    await cust.login('mover@example.com', 'mover-long-password');
+    const { body: t1 } = await cust.req('POST', '/api/enrollment-tokens', {});
+    const k = agentKeys();
+    const { body: e } = await cust.req('POST', '/api/agent/enroll', { token: t1.token, public_key: k.pub, inventory: { hostname: 'cloud2.example.net' } });
+    const id = e.server_id as string;
+    const { rows: acc } = await h.pool.query('SELECT account_id FROM servers WHERE id = $1', [id]);
+    const from = acc[0].account_id as string;
+    await h.pool.query("INSERT INTO captcha_events (account_id, server_id, ip, host, result, method) VALUES ($1, $2, '203.0.113.5', 'shop.example.com', 'passed', 'altcha')", [from, id]);
+    const to = c;
+    const { body: t2 } = await to.req('POST', '/api/enrollment-tokens', {});
+    const hash = (tok: string) => crypto.createHash('sha256').update(tok).digest('hex');
+    const ts = String(Math.floor(Date.now() / 1000));
+    const req = (sig: string, token = t2.token, at = ts) => cust.req('POST', '/api/agent/transfer', { server_id: id, token, ts: at, signature: sig });
+
+    // Another key, or this key signing for another token: refused.
+    expect((await req(agentKeys().sign(`xg-transfer-v1:${id}:${hash(t2.token)}:${ts}`))).status).toBe(401);
+    expect((await req(k.sign(`xg-transfer-v1:${id}:${hash('XG-OTHER-TOKEN-1')}:${ts}`))).status).toBe(401);
+    const old = String(Math.floor(Date.now() / 1000) - 3600);
+    expect((await req(k.sign(`xg-transfer-v1:${id}:${hash(t2.token)}:${old}`), t2.token, old)).status).toBe(400);
+    expect((await cust.req('GET', `/api/servers/${id}`)).status).toBe(200);
+
+    const ok = await req(k.sign(`xg-transfer-v1:${id}:${hash(t2.token)}:${ts}`));
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ ok: true, moved: true, server_id: id });
+    // Now the new account's, with the same id and its history; gone from the old one.
+    expect((await to.req('GET', `/api/servers/${id}`)).status).toBe(200);
+    expect((await cust.req('GET', `/api/servers/${id}`)).status).toBe(404);
+    const { rows: moved } = await h.pool.query('SELECT s.account_id, (SELECT count(*)::int FROM captcha_events WHERE server_id = s.id AND account_id = s.account_id) AS events FROM servers s WHERE s.id = $1', [id]);
+    expect(moved[0].account_id).not.toBe(from);
+    expect(moved[0].events).toBe(1);
+    const { rows: logs } = await h.pool.query("SELECT action FROM audit_events WHERE action IN ('server.moved_in', 'server.moved_out') ORDER BY id");
+    expect(logs.map((r) => r.action)).toEqual(['server.moved_out', 'server.moved_in']);
+    // The token is used up: the same request again is refused.
+    expect((await req(k.sign(`xg-transfer-v1:${id}:${hash(t2.token)}:${ts}`))).status).toBe(403);
+    // A token of the account it is already in: nothing moves, the token stays.
+    const { body: t3 } = await to.req('POST', '/api/enrollment-tokens', {});
+    const same = await req(k.sign(`xg-transfer-v1:${id}:${hash(t3.token)}:${ts}`), t3.token);
+    expect(same.body).toMatchObject({ ok: true, moved: false });
+    const { rows: unused } = await h.pool.query('SELECT used_at FROM enrollment_tokens WHERE token_hash = $1', [hash(t3.token)]);
+    expect(unused[0].used_at).toBeNull();
+  });
+});
+
 describe('downloads', () => {
   it('serves install.sh with the portal URL baked in', async () => {
     const r = await c.req('GET', '/install.sh');

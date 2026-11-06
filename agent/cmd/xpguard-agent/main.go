@@ -69,6 +69,8 @@ func main() {
 		err = cmdStatus()
 	case "unenroll":
 		err = cmdUnenroll()
+	case "transfer":
+		err = cmdTransfer(os.Args[2:])
 	case "info":
 		err = printJSON(sysinfo.Collect())
 	case "check":
@@ -151,6 +153,7 @@ Usage:
   xpguard-agent run          run the agent (used by systemd)
   xpguard-agent status       show enrollment status
   xpguard-agent unenroll     remove this server from the portal
+  xpguard-agent transfer --token TOKEN   move this server (settings and history) to the token's account
   xpguard-agent info         print detected host inventory
   xpguard-agent cleanup      remove all xPGuard firewall rules
   xpguard-agent check PATH.. scan files/directories locally and print detections (--json, --misses, --no-hash)
@@ -342,6 +345,35 @@ func cmdUnenroll() error {
 		return err
 	}
 	fmt.Println("Server removed from portal.")
+	return nil
+}
+
+// cmdTransfer moves this server to the account of an enrollment token:
+// the install command of that account, run on an enrolled server.
+func cmdTransfer(args []string) error {
+	fs := flag.NewFlagSet("transfer", flag.ContinueOnError)
+	token := fs.String("token", "", "enrollment token of the account to move to")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *token == "" {
+		return errors.New("--token is required")
+	}
+	cfg, id, err := load()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	moved, err := client.Transfer(ctx, cfg, id, *token)
+	if err != nil {
+		return fmt.Errorf("move failed: %w", err)
+	}
+	if moved {
+		fmt.Printf("Moved. Server %s now belongs to the account of this token (settings and history kept).\n", cfg.ServerID)
+	} else {
+		fmt.Printf("Server %s already belongs to the account of this token.\n", cfg.ServerID)
+	}
 	return nil
 }
 

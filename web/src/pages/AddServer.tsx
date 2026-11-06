@@ -178,6 +178,9 @@ export default function AddServer() {
                 To remove it later: <code className="rounded bg-slate-100 px-1">{tok.uninstall_command}</code>
               </p>
             )}
+            <p className="mt-2 text-xs text-slate-500">
+              Already protected by xPGuard in another account? The same command moves that server into this account, with its settings and history.
+            </p>
           </div>
         </div>
 

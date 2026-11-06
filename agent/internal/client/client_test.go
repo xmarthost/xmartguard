@@ -2,6 +2,10 @@ package client
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -116,5 +120,36 @@ func TestHandleLimits(t *testing.T) {
 	}
 	if r := result(t, s, "big"); *r.OK || !strings.Contains(r.Error, "too large") {
 		t.Fatalf("big: ok=%v %q", *r.OK, r.Error)
+	}
+}
+
+// The move to another account: the request the portal checks (its
+// /api/agent/transfer signs over the token's hash, see routes/agent.ts).
+func TestTransferSignsForTheToken(t *testing.T) {
+	id, err := identity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/transfer" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.Write([]byte(`{"ok":true,"moved":true}`))
+	}))
+	defer srv.Close()
+	cfg := &config.Config{ServerURL: srv.URL, ServerID: "15d69a72-653a-47b6-90f6-fde737bce061"}
+	moved, err := Transfer(context.Background(), cfg, id, " XG-AAAA-BBBB-CCCC \n")
+	if err != nil || !moved {
+		t.Fatalf("%v %v", moved, err)
+	}
+	sum := sha256.Sum256([]byte("XG-AAAA-BBBB-CCCC"))
+	msg := "xg-transfer-v1:" + cfg.ServerID + ":" + hex.EncodeToString(sum[:]) + ":" + got["ts"]
+	pub, _ := base64.StdEncoding.DecodeString(id.PublicKeyB64())
+	sig, _ := base64.StdEncoding.DecodeString(got["signature"])
+	if got["token"] != "XG-AAAA-BBBB-CCCC" || got["server_id"] != cfg.ServerID || !ed25519.Verify(ed25519.PublicKey(pub), []byte(msg), sig) {
+		t.Fatalf("request %v", got)
 	}
 }

@@ -29,6 +29,28 @@ const UnenrollBody = z.object({
   signature: z.string().max(200),
 });
 
+const TransferBody = z.object({
+  server_id: uuid,
+  token: z.string().min(10).max(100),
+  ts: z.string().regex(/^\d{1,12}$/),
+  signature: z.string().max(200),
+});
+
+/**
+ * What the agent signs to move its server to the account of an enrollment
+ * token: the token's hash, so the signed request works with that token only.
+ */
+export function transferPayload(serverId: string, tokenHash: string, ts: string): string {
+  return `xg-transfer-v1:${serverId}:${tokenHash}:${ts}`;
+}
+
+/**
+ * Tables that keep a server's history under its account: moved with the
+ * server. Not enrollment_tokens (each stays with the account that made it)
+ * or trial_hosts (the free trial the old account used stays used).
+ */
+const MOVED_WITH_SERVER = ['audit_events', 'captcha_events', 'ipdb_reports', 'waf_name_reports'];
+
 export function authPayload(nonce: string, serverId: string): string {
   return `xg-auth-v1:${nonce}:${serverId}`;
 }
@@ -141,6 +163,70 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
       hub.revoke(server_id);
       await audit(pool, { accountId: srv.account_id, serverId: server_id, action: 'server.unenrolled', ip: req.ip });
       return { ok: true };
+    },
+  );
+
+  /**
+   * Moves an enrolled server to another account: the install command of
+   * that account (its enrollment token) run on the server. Root on the
+   * server (the agent's key signs the request) and a token of the account
+   * it moves to are the proof; the server keeps its id, settings and
+   * history, which leave the old account with it (owner's request,
+   * 2026-11-06: cloud2 from a customer account to the main one).
+   */
+  app.post(
+    '/api/agent/transfer',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (req, reply) => {
+      const parsed = TransferBody.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: 'invalid request' });
+      const { server_id, token, ts, signature } = parsed.data;
+      if (Math.abs(Date.now() / 1000 - Number(ts)) > 600) return reply.code(400).send({ error: 'stale request' });
+      const tokenHash = sha256(token.trim());
+      const result = await withTx(pool, async (c) => {
+        const { rows: srvRows } = await c.query("SELECT account_id, public_key, hostname, inventory FROM servers WHERE id = $1 AND status = 'active' FOR UPDATE", [server_id]);
+        const srv = srvRows[0];
+        if (!srv) return { code: 404, error: 'unknown server' };
+        if (!verifyEd25519(srv.public_key, transferPayload(server_id, tokenHash, ts), signature)) return { code: 401, error: 'bad signature' };
+        const { rows } = await c.query(
+          'SELECT id, account_id FROM enrollment_tokens WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() FOR UPDATE',
+          [tokenHash],
+        );
+        const tok = rows[0];
+        if (!tok) return { code: 403, error: 'token is invalid, expired or already used' };
+        const from: string = srv.account_id;
+        const to: string = tok.account_id;
+        // Already there: nothing to move, and the token stays unused.
+        if (from === to) return { code: 200, moved: false, from, to };
+        await c.query('SELECT 1 FROM accounts WHERE id = $1 FOR UPDATE', [to]);
+        if (await serverLimitError(c, to, false)) {
+          return { code: 402, error: 'the xPGuard plan of this account has no free server licence: buy another one, then run the command again' };
+        }
+        const inv = srv.inventory ?? {};
+        const lic = await loadLicense(c, to);
+        const ips = lic?.trial ? publicIPs(inv.primary_ip, inv.ips, req.ip) : [];
+        if (lic?.trial) {
+          const used = await trialHostError(c, to, lic.period_end, ips, null, s(inv.hostname));
+          if (used) return { code: 402, error: used };
+        }
+        await c.query('UPDATE servers SET account_id = $2 WHERE id = $1', [server_id, to]);
+        for (const t of MOVED_WITH_SERVER) {
+          await c.query(`UPDATE ${t} SET account_id = $2 WHERE server_id = $1`, [server_id, to]);
+        }
+        await c.query('UPDATE enrollment_tokens SET used_at = now(), server_id = $2, token = NULL WHERE id = $1', [tok.id, server_id]);
+        if (lic?.trial) await trialHostError(c, to, lic.period_end, ips, server_id, s(inv.hostname));
+        return { code: 200, moved: true, from, to, hostname: srv.hostname as string };
+      });
+      if (result.code !== 200) return reply.code(result.code).send({ error: result.error });
+      if (!result.moved) return { ok: true, moved: false, server_id };
+      // Both accounts see it in their log.
+      const detail = { hostname: result.hostname, from_account: result.from, to_account: result.to, ip: req.ip };
+      await audit(pool, { accountId: result.from, action: 'server.moved_out', detail: { ...detail, server_id }, ip: req.ip });
+      await audit(pool, { accountId: result.to, serverId: server_id, action: 'server.moved_in', detail, ip: req.ip });
+      // The agent reconnects at once and is served as the new account's.
+      hub.get(server_id)?.socket.close(4000, 'moved to another account');
+      req.log.info({ serverId: server_id, from: result.from, to: result.to }, 'server moved to another account');
+      return { ok: true, moved: true, server_id };
     },
   );
 

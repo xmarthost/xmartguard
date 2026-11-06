@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.39** (see `VERSION`).
+- Current release: **0.24.40** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,28 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.40: move a server to another account** (2026-11-06).
+  The owner wants cloud2.xmarthost.com moved from a customer account to the
+  main one with its stats; there was no way. Now the install command of
+  the account to move to, run on an enrolled server, moves it: install.sh
+  sees an enrolled agent and runs `xpguard-agent transfer --token T`; the
+  agent signs `xg-transfer-v1:<server_id>:<sha256(token)>:<ts>` with its
+  key and posts it to `/api/agent/transfer`. The portal checks the
+  signature (root on that server), the token (unused, unexpired, of the
+  new account), the 10-minute timestamp, the plan's server limit and a
+  trial's once-per-server rule, then moves `servers.account_id` and the
+  server's history (audit_events, captcha_events, ipdb_reports,
+  waf_name_reports; not enrollment_tokens or trial_hosts), uses the token,
+  logs `server.moved_out` / `server.moved_in` in both accounts and closes
+  the agent's connection so it reconnects as the new account's. Same id,
+  settings on the server and metrics unchanged. A token of the account it
+  is already in moves nothing and stays unused (install.sh then says it is
+  already installed, as before). An agent older than 0.24.40 has no
+  `transfer`: install.sh says to let it update first. Add Server page
+  says so in one line. Tests: portal api.test.ts "moving a server to
+  another account" (wrong key, token swap, stale, move, old account loses
+  it, history moved, audit, replay, same account); agent
+  `TestTransferSignsForTheToken`.
 - **Release 0.24.39: a passed visitor's login post is not refused for an
   IPDB address** (2026-11-06). Security review of 0.24.38 for the owner:
   the pass cookie let a visitor past the CAPTCHA gate, but the IPDB and

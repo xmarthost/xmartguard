@@ -48,3 +48,10 @@ func AuthPayload(nonce, serverID string) []byte {
 func UnenrollPayload(serverID, ts string) []byte {
 	return []byte("xg-unenroll-v1:" + serverID + ":" + ts)
 }
+
+// TransferPayload is what an agent signs to move its server to the account
+// of an enrollment token (tokenHash: the token's SHA-256, hex), so the
+// signed request works with that token only.
+func TransferPayload(serverID, tokenHash, ts string) []byte {
+	return []byte("xg-transfer-v1:" + serverID + ":" + tokenHash + ":" + ts)
+}

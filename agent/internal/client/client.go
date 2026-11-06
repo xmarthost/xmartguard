@@ -5,7 +5,9 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +102,25 @@ func Unenroll(ctx context.Context, cfg *config.Config, id *identity.Identity) er
 		"ts":        ts,
 		"signature": id.SignB64(protocol.UnenrollPayload(cfg.ServerID, ts)),
 	}, nil)
+}
+
+// Transfer moves this server, with its id, settings and history, to the
+// account the enrollment token belongs to. It reports whether it moved
+// (false: already in that account; the token stays unused).
+func Transfer(ctx context.Context, cfg *config.Config, id *identity.Identity, token string) (bool, error) {
+	token = strings.TrimSpace(token)
+	sum := sha256.Sum256([]byte(token))
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	var out struct {
+		Moved bool `json:"moved"`
+	}
+	err := postJSON(ctx, HTTPClient(cfg.InsecureTLS), cfg.ServerURL+"/api/agent/transfer", map[string]any{
+		"server_id": cfg.ServerID,
+		"token":     token,
+		"ts":        ts,
+		"signature": id.SignB64(protocol.TransferPayload(cfg.ServerID, hex.EncodeToString(sum[:]), ts)),
+	}, &out)
+	return out.Moved, err
 }
 
 // Handler executes a portal command and returns its result data.
