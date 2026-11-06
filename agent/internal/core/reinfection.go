@@ -9,7 +9,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 )
@@ -20,6 +22,15 @@ import (
 // cron job, or (on WordPress) a malicious plugin, theme or database entry
 // that re-creates it on page loads. The alert says what to look at.
 func (a *Agent) onReinfection(f scanner.Finding) {
+	// The cron jobs are judged now, not at the next 10-minute round: the
+	// one that rewrites the file (judged with the file it runs) is
+	// switched off before it runs a few hundred more times.
+	if a.Monitor != nil {
+		if now := time.Now().Unix(); atomic.LoadInt64(&cronKickAt) < now-60 {
+			atomic.StoreInt64(&cronKickAt, now)
+			go a.Monitor.CheckCron()
+		}
+	}
 	hints := reinfectionHints(f.Owner, f.Path)
 	a.Log.Warn("quarantined file keeps coming back", "path", f.Path, "times", f.Repeats, "owner", f.Owner)
 	n := a.Settings.Get().Notifications
@@ -30,6 +41,9 @@ func (a *Agent) onReinfection(f scanner.Finding) {
 				f.Path, f.Repeats, f.Owner, f.Signature, hints))
 	}
 }
+
+// cronKickAt: when a returning file last started a cron check.
+var cronKickAt int64
 
 // onHtaccessStorm is called when an attack kit locks many folders of an
 // account with its .htaccess (all PHP refused but its own shells).

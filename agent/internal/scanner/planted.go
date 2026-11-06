@@ -260,6 +260,31 @@ var (
 	reCallName      = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 )
 
+// reHiddenHex: a hidden file named only by random hex, with no extension
+// (".068e9e7e23b9443901c35da3e0603ed5609de66aa").
+var reHiddenHex = regexp.MustCompile(`(?i)^\.[0-9a-f]{32,64}$`)
+
+// hiddenHexScript: PHP code in a hidden file of an account named only by
+// random hex. A self-healing worm (s1, 2026-11-06: kiccom, anarkali,
+// lcciweb, rahimand) keeps such copies in the home folder, ~/.cache and
+// CageFS tmp and runs them from cron every minute; the copy in the home
+// folder had no finding at all. No program names its files that way.
+func hiddenHexScript(path string, content []byte) *Detection {
+	if !reHiddenHex.MatchString(filepath.Base(path)) || homeDepth(strings.Split(path, "/")) < 0 {
+		return nil
+	}
+	head := bytes.TrimLeft(content[:min(len(content), 512)], " \t\r\n\ufeff")
+	if bytes.HasPrefix(head, []byte("#!")) {
+		if i := bytes.IndexByte(head, '\n'); i > 0 {
+			head = bytes.TrimLeft(head[i+1:], " \t\r\n")
+		}
+	}
+	if !bytes.HasPrefix(bytes.ToLower(head), []byte("<?php")) && !bytes.HasPrefix(head, []byte("<?=")) {
+		return nil
+	}
+	return &Detection{CatVirus, "PHP.Planted.HiddenRandomName"}
+}
+
 // plantedMode is a file's permission bits, or -1.
 func plantedMode(path string) int {
 	st, err := os.Lstat(path)

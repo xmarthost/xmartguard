@@ -1916,7 +1916,7 @@ func TestFleetFakeAdobeDownloadKit(t *testing.T) {
 		"order to Telegram": "<?php\n$name = $_POST['name']; $phone = $_POST['phone'];\n$ip = $_SERVER['REMOTE_ADDR'];\n$geo = @file_get_contents(\"http://ip-api.com/json/$ip\");\nfile_get_contents(\"https://api.telegram.org/bot0000:inert/sendMessage?chat_id=1&text=\" . urlencode(\"$name $phone $ip\"));\nheader('Location: thanks.html');\n",
 		// A real check, and a plain download page.
 		"reCAPTCHA form": "<?php\nif (isset($_POST['g-recaptcha-response'])) { $r = file_get_contents('https://www.google.com/recaptcha/api/siteverify?secret=x&response=' . $_POST['g-recaptcha-response']); if (json_decode($r)->success) { $_SESSION['human_verified'] = true; } }\n?><form method=\"post\"><div class=\"g-recaptcha\"></div><button>Send</button></form>\n",
-		"Adobe link": "<html><body><p>To read these PDF files you need the latest version of Adobe Acrobat Reader, free from <a href=\"https://get.adobe.com/reader/\">Adobe</a>.</p></body></html>\n",
+		"Adobe link":     "<html><body><p>To read these PDF files you need the latest version of Adobe Acrobat Reader, free from <a href=\"https://get.adobe.com/reader/\">Adobe</a>.</p></body></html>\n",
 	} {
 		p := "/home/u/public_html/page.php"
 		if strings.Contains(what, "link") {
@@ -1947,10 +1947,10 @@ func TestFleetHiddenFunctionNameShell(t *testing.T) {
 	}
 	for what, body := range map[string]string{
 		// A name kept plainly, run on a fixed command.
-		"plain name":   "<?php\n$fn = 'exec';\n$fn('uptime', $out);\nprint_r($out);\n",
+		"plain name": "<?php\n$fn = 'exec';\n$fn('uptime', $out);\nprint_r($out);\n",
 		// Pieces that make a harmless function, with request data.
-		"escaper":      "<?php\n$e = 'esc_' . 'html';\necho $e($_GET['s']);\n",
-		"str replace":  "<?php\n$f = \"str_\" . \"replace\";\necho $f('a', 'b', $_POST['t']);\n",
+		"escaper":     "<?php\n$e = 'esc_' . 'html';\necho $e($_GET['s']);\n",
+		"str replace": "<?php\n$f = \"str_\" . \"replace\";\necho $f('a', 'b', $_POST['t']);\n",
 		// A runner name in pieces, never called with the request.
 		"log message":  "<?php\n$msg = 'sys' . 'tem';\nerror_log('module: ' . $msg);\n",
 		"newline text": "<?php\n$sep = \"\\n\";\necho $_GET['a'] . $sep;\n",
@@ -1985,5 +1985,56 @@ func TestFleetBoldGridLocator(t *testing.T) {
 		if d := s.checkContent(p, extOf(p), []byte(body)); d == nil {
 			t.Errorf("%s: no finding", what)
 		}
+	}
+}
+
+// s1 (2026-11-06): a self-healing SEO kit kept its droppers in ~/logs
+// (cache_gc.php, run by cron every minute in 8 accounts) and a worm kept
+// copies named .<40 hex> in the home folder and ~/.cache. Scans skipped
+// ~/logs and the worm's copy in the home folder had no finding, so the
+// cron monitor never switched their jobs off while the kit rewrote its
+// pages 4,200 times. Inert fixtures.
+func TestFleetSelfHealingKitHomes(t *testing.T) {
+	s := newScanner(t)
+	worm := "<?php class _cqp{private static $_yn;public static function _uzg($a){return $a;}} // inert fixture\n"
+	for what, c := range map[string]struct{ path, body, sig string }{
+		"worm in home":    {"/home/kiccom/.068e9e7e23b9443901c35da3e0603ed5609de66aa", worm, "PHP.Planted.HiddenRandomName"},
+		"worm in cache":   {"/home/kiccom/.cache/.0dbc978a69b0f615a40a06e5cbbef14214d3c052a", worm, "PHP.Planted.HiddenRandomName"},
+		"dropper in logs": {"/home/vertixsol/logs/cache_gc.php", "<?php // inert fixture\n$f = 'index.php';\n", "PHP.Planted.InLogsFolder"},
+		"stash in logs":   {"/home/vertixsol/logs/customerp.example.test/index.php", "<?php // inert fixture\n", "PHP.Planted.InLogsFolder"},
+	} {
+		if d := s.checkContent(c.path, extOf(c.path), []byte(c.body)); d == nil || d.Signature != c.sig || d.Category != CatVirus {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+	// A hex-named cache entry that is not PHP, and a hex-named file
+	// outside the accounts.
+	for what, c := range map[string]struct{ path, body string }{
+		"binary cache":  {"/home/u/.cache/.0123456789abcdef0123456789abcdef", "\x00\x01\x02 serialized"},
+		"json cache":    {"/home/u/.cache/.fedcba9876543210fedcba9876543210", `{"a":1}`},
+		"text with tag": {"/home/u/.cache/.fedcba9876543210fedcba9876543211", "notes about <?php tags"},
+	} {
+		if d := s.checkContent(c.path, extOf(c.path), []byte(c.body)); d != nil {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+	// Scans now reach the scripts in ~/logs (the logs themselves are not
+	// read).
+	root := writeTree(t, map[string]string{
+		"logs/cache_gc.php":                   malicious["eval.php"],
+		"logs/customerp.example.test/abc.php": malicious["eval.php"],
+		"logs/example.test-Nov-2026.gz":       "\x1f\x8b binary",
+		"public_html/index.php":               "<?php echo 'hello';",
+	})
+	var hits []string
+	_, err := s.scanTree(context.Background(), []string{root}, time.Time{}, 0, s.Settings.Get().Scanner, treeHooks{
+		hit: func(path string, _ fs.FileInfo, _ Detection) { hits = append(hits, path) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(hits)
+	if len(hits) != 2 || !strings.HasSuffix(hits[0], "/logs/cache_gc.php") || !strings.HasSuffix(hits[1], "/logs/customerp.example.test/abc.php") {
+		t.Fatalf("hits %v, want the two scripts in ~/logs", hits)
 	}
 }

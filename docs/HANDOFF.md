@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.30** (see `VERSION`).
+- Current release: **0.24.31** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,53 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.31: self-healing kits on s1 (cron, ~/logs, hex worm)**
+  (2026-11-06). The owner's server assistant found load 20 on s1 and sent
+  an evidence zip (password `infected`; kept out of the repository).
+  Verified: 8 accounts ran malware from cron every minute. Family A, an
+  SEO kit (C2 joingroup-id.com): droppers `~/logs/cache_gc.php` and
+  `cache_gc-N.php` (vertixsol 13, azfar 4, imperialtradelin,
+  kutradingcom) rewriting doorway pages (index.php, indexer.txt,
+  .sitemap.php, .sitemap_indo.php); each page was quarantined and
+  removed again 4,200+ times (`repeats`), the droppers had **no finding**:
+  every scan skipped `~/logs` (`skipInHome`), though `plantedByName`
+  knew PHP there is planted. Family B, a worm: one-line PHP class with a
+  string decoder, named `.<40 hex>` in the home folder, `~/.cache` and
+  CageFS tmp, rewriting its crontab (kiccom, anarkali, lcciweb,
+  rahimand); the home copy had no finding, the ~/.cache copy only
+  `CodeInNonScript` (suspicious). The cron monitor saw the worm's crons
+  on 2026-10-18 but only alerted (the hidden-folder rule is weak), and
+  `runsMalware` only knew files with a virus finding, so `cron.disable`
+  never switched them off. The crontabs also hold `#suspicious-cpg`
+  lines: cPGuard was installed on s1 at some time (open question of the
+  security review answered).
+  - **Fixed:** (1) cron rules, malicious: an interpreter running a script
+    in `~/logs/`, or a hidden file named by 32-64 hex; (2) the cron
+    monitor asks the scanner about the file a job runs (`JudgeFile` ->
+    `Scanner.Malicious`) when it has no finding; (3) a returning
+    quarantined file (3rd return) runs the cron check at once
+    (`onReinfection`, at most once a minute), so the job is switched off
+    within a minute instead of the loop running on; (4) scans read the
+    scripts (and hex-named files) in `~/logs`, not the logs;
+    (5) `PHP.Planted.HiddenRandomName` (virus) for PHP in a hidden
+    hex-named file without extension in an account. All 15 droppers and
+    16 worm copies of the evidence are virus now. Tests:
+    `TestFleetSelfHealingKitHomes`, `TestCronSelfHealingKits`.
+  - **Owner's suggestion (delete instead of quarantining again):** already
+    so since 0.23.x: a file back with the same content as its quarantined
+    copy is removed and only `repeats` grows (`Record`), no new copy, no
+    disk use. What was missing was stopping the source (above).
+  - **Not changed:** abouts.php (an HTML page), img.txt (image links) and
+    the kit's .htaccess (sitemap rewrites) are the doorway's data; its
+    PHP (index.php, PHP.SEO.Cloaking) is caught. Report items repeated
+    from the 2026-11-05 audits (realtime "misses" with root's files, path
+    scans, PHPLock .htaccess, AI, feeds, max size, PL1, PK) as answered in
+    0.24.29. The load figures (agent 250% -> 3%) come from the report;
+    the agent log sample (4,000 lines) shows the loop, not CPU.
+  - Owner to do on s1: clean the 8 accounts (the assistant set the files
+    to chmod 000 + chattr +i; `chattr -i` before the scanner can act),
+    passwords, plugins; block joingroup-id.com; itnoaa (axnpro.com) spam
+    site; PHP max_execution_time 1500 on s1.
 - **Release 0.24.30: root's files stay unscanned** (2026-11-05). Owner's
   decision: `xpguard-agent check` skips files owned by root again, like
   the running agent (0.24.29 had made the manual check read them).

@@ -516,6 +516,9 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	if shapeOK {
 		return nil, ErrTrusted
 	}
+	if d := hiddenHexScript(path, content); d != nil {
+		return final(d)
+	}
 	// A PHP file planted among WordPress core's styles and images, hidden
 	// or in the logs folder.
 	// (Not a macOS AppleDouble file: "._name.php" beside a folder unpacked
@@ -1407,6 +1410,22 @@ func (s *Scanner) scanTree(ctx context.Context, roots []string, since time.Time,
 					// run by cron hides directly in it as .<hex>
 					// (business500: baezonco, dndsnatu): its own files are
 					// checked.
+					// ~/logs holds the web server's logs, never a script, but
+					// self-healing kits keep their droppers and spare copies
+					// there (s1, 2026-11-06: cache_gc.php run by cron every
+					// minute in 8 accounts, never scanned): its scripts are
+					// checked.
+					if d.Name() == "logs" && filepath.Dir(path) == root {
+						_ = filepath.WalkDir(path, func(p string, e fs.DirEntry, err error) error {
+							if err != nil || ctx.Err() != nil || !e.Type().IsRegular() {
+								return nil
+							}
+							if bigPHPExts[extOf(e.Name())] || reHiddenHex.MatchString(e.Name()) {
+								return queue(p, e)
+							}
+							return nil
+						})
+					}
 					if d.Name() == ".cache" && filepath.Dir(path) == root {
 						if ents, err := os.ReadDir(path); err == nil {
 							for _, e := range ents {

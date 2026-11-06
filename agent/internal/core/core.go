@@ -228,7 +228,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 			return out, nil
 		}
 	}
-	a.Monitor = &monitor.Monitor{DB: db, Settings: st, Log: log, OnEvent: a.onMonitorEvent,
+	a.Monitor = &monitor.Monitor{DB: db, Settings: st, Log: log, OnEvent: a.onMonitorEvent, JudgeFile: a.Scanner.Malicious,
 		Users: func() map[string]string {
 			out := map[string]string{}
 			for _, u := range scanner.Users() {

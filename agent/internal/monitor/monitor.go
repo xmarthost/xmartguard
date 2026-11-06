@@ -46,6 +46,9 @@ type Monitor struct {
 	Users func() map[string]string
 	// OnEvent is called for new events (notifications).
 	OnEvent func(Event)
+	// JudgeFile reports whether the scanner finds the file a cron job runs
+	// malicious (a dropper the scans never reached; nil = none).
+	JudgeFile func(path string) bool
 
 	// Overridable for tests.
 	ProcRoot string
@@ -636,6 +639,14 @@ var cronBad = []struct {
 	{regexp.MustCompile(`(?i)gs-netcat|\bGS_ARGS\b|gsocket|\bdefunct\.dat\b`), "backdoor (gsocket)", false},
 	{regexp.MustCompile(`(?i)\b(?:python[0-9.]*|perl|php)\s+-(?:c|e|r)\s+['"].*(?:base64|decode|exec|eval|socket)`), "runs inline encoded code", false},
 	{regexp.MustCompile(`(?i)/(?:wp-content/)?uploads/\S+\.(?:php\d?|phtml|sh|pl|py|cgi)\b`), "runs a script from an uploads folder", false},
+	// Self-healing kits (s1, 2026-11-06: 8 accounts, cron every minute):
+	// a script in the account's logs folder, which only holds the web
+	// server's logs, and a hidden copy named by random hex (in the home
+	// folder or ~/.cache). Their crons were only reported (the hidden
+	// folder rule is weak) while the kits rewrote their files thousands
+	// of times.
+	{regexp.MustCompile(`(?i)\b(?:(?:ls|ea-)?php[0-9.]*(?:-cgi)?|python[0-9.]*|perl|ruby|node|bash|sh)\s+(?:-[a-z]\s+)*['"]?/home\d*/[^/\s'"]+/logs/\S+`), "runs a script from the account's logs folder (it holds only web server logs)", false},
+	{regexp.MustCompile(`(?i)\b(?:(?:ls|ea-)?php[0-9.]*(?:-cgi)?|python[0-9.]*|perl|bash|sh)\s+(?:-[a-z]\s+)*['"]?/home\d*/\S*/\.[0-9a-f]{32,64}['"]?(?:\s|$)`), "runs a hidden file named by random hex (a malware kit's copy)", false},
 	{regexp.MustCompile(`/\.[a-z0-9_-]{1,20}/[^ ]*\s*>\s*/dev/null\s+2>&1\s*&?$`), "silently runs a program from a hidden folder", true},
 	{regexp.MustCompile(`(?i)^@reboot\s+(?:\S+/)?(?:nohup\s+)?\S*/\.[^/\s]+/`), "starts a program from a hidden folder at every boot", true},
 }
@@ -696,6 +707,13 @@ func (m *Monitor) runsMalware(line string) bool {
 		_ = m.DB.QueryRow(`SELECT count(*) FROM findings WHERE path = ? AND category = 'virus' AND status IN ('detected','quarantined','disabled')`, p).Scan(&n)
 		if n > 0 {
 			return true
+		}
+		// The file itself, judged now: the scans may never have reached it
+		// (s1: droppers in ~/logs, skipped by every scan).
+		if m.JudgeFile != nil {
+			if m.JudgeFile(p) {
+				return true
+			}
 		}
 	}
 	return false

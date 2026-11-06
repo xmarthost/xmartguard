@@ -307,3 +307,59 @@ func TestShellFromPHP(t *testing.T) {
 		t.Error("parent PID")
 	}
 }
+
+// s1 (2026-11-06): a self-healing kit ran its droppers from ~/logs and a
+// worm its hex-named hidden copies from cron every minute, in 8 accounts;
+// those crons were only reported (the hidden-folder rule is weak) or not
+// seen at all. They are malicious now and switched off, also when only
+// the file the job runs is malware (judged on the spot).
+func TestCronSelfHealingKits(t *testing.T) {
+	for _, l := range []string{
+		"* * * * * /usr/local/bin/lsphp /home/vertixsol/logs/cache_gc.php > /dev/null 2>&1",
+		"* * * * * /usr/local/bin/lsphp /home/vertixsol/logs/cache_gc-12.php > /dev/null 2>&1",
+		"* * * * * /usr/local/bin/php '/home/kiccom/.cache/.068e9e7e23b9443901c35da3e0603ed5609de66aa' > /dev/null 2>&1",
+		"* * * * * /usr/local/bin/php '/home/kiccom/.068e9e7e23b9443901c35da3e0603ed5609de66aa' > /dev/null 2>&1",
+		"* * * * * /opt/cpanel/ea-php81/root/usr/bin/php /home2/u/.0dbc978a69b0f615a40a06e5cbbef14214d3c052a",
+	} {
+		if r, lv := AssessCron(l); lv != Malicious {
+			t.Errorf("not malicious (%s %v): %s", r, lv, l)
+		}
+	}
+	for _, l := range []string{
+		"6 6,18 * * * cd /home/anarkali/public_html; /usr/bin/php -q wp-cron.php >/dev/null 2>&1",
+		"*/5 * * * * /usr/local/bin/php /home/u/public_html/artisan schedule:run >> /dev/null 2>&1",
+		"0 3 * * * gzip -9 /home/u/logs/old.log",
+		"0 4 * * * /usr/bin/find /home/u/logs -mtime +30 -delete",
+		"*/10 * * * * /usr/local/bin/php /home/u/public_html/cron.php",
+	} {
+		if r, lv := AssessCron(l); lv == Malicious {
+			t.Errorf("malicious (%s): %s", r, l)
+		}
+	}
+
+	dir := t.TempDir()
+	t.Setenv("XG_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("XG_CONFIG_DIR", filepath.Join(dir, "conf"))
+	Crontab = ""
+	db, _ := store.Open()
+	defer db.Close()
+	st, _ := settings.Load()
+	cron := filepath.Join(dir, "cron")
+	os.MkdirAll(cron, 0o755)
+	// A dropper under a name no rule knows, never scanned: the scanner
+	// judges it when the cron monitor asks.
+	drop := "/home/bob/public_html/wp-content/plugins/x/sync.php"
+	keep := "/home/bob/public_html/wp-cron.php"
+	good := "*/15 * * * * /usr/local/bin/php " + keep
+	evil := "* * * * * /usr/local/bin/php " + drop
+	file := filepath.Join(cron, "bob")
+	os.WriteFile(file, []byte(good+"\n"+evil+"\n"), 0o600)
+	var asked []string
+	m := &Monitor{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), CronDirs: []string{cron},
+		JudgeFile: func(p string) bool { asked = append(asked, p); return p == drop }}
+	m.CheckCron()
+	b, _ := os.ReadFile(file)
+	if string(b) != good+"\n"+DisabledPrefix+evil+"\n" {
+		t.Fatalf("crontab:\n%s (asked %v)", b, asked)
+	}
+}

@@ -132,3 +132,18 @@ func (s *Scanner) checkContent(path, ext string, content []byte) *Detection {
 	}
 	return d
 }
+
+// Malicious reports whether the file at path is malware (category virus):
+// the cron monitor asks it for the file a cron job runs.
+func (s *Scanner) Malicious(path string) bool {
+	fi, err := os.Lstat(path)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() > 8<<20 {
+		return false
+	}
+	b, _, err := ReadFileLimit(path, 8<<20)
+	if err != nil {
+		return false
+	}
+	d := s.checkContent(path, extOf(path), b)
+	return d != nil && d.Category == CatVirus
+}
