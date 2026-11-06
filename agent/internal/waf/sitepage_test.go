@@ -55,6 +55,24 @@ func TestSitePageRedirect(t *testing.T) {
 	if strings.Contains(conf, "&g=") {
 		t.Error("sent to the CAPTCHA port")
 	}
+	// A passed visitor's login post from an IPDB address: let through and
+	// reported with its address (withdrawn when shared).
+	conf = Render(settings.WAF{LoginURLs: []string{"/wp-login.php"}, IPDBPost: true}, Options{Dir: "/etc/xg", Central: ct})
+	for _, want := range []string{
+		`"id:7701910,phase:1,t:none,pass,log,msg:'xPGuard - CAPTCHA pass cookie used'`,
+		`xg_gate=(?:` + tok + `)\s*(?:;|$)" "t:none,setvar:tx.xg_passed=1"`,
+		`SecRule &TX:xg_passed "@eq 0" "t:none,chain"`,
+	} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Index(conf, "id:7701910,") > strings.Index(conf, "id:7700711,") {
+		t.Error("the pass mark comes after the IPDB POST block")
+	}
+	if CentralPassSlot(7701911) != 1 || CentralPassSlot(7701920) != -1 {
+		t.Error("pass post slots")
+	}
 	// The page not working: the port mode, as before (the agent sets Site).
 	ct.SitePage, ct.Site, ct.HTTPSPort = false, true, 7743
 	conf = Render(settings.WAF{LoginURLs: []string{"/wp-login.php"}}, Options{Dir: "/etc/xg", Central: ct})
@@ -103,13 +121,13 @@ func TestSitePageOnApache(t *testing.T) {
 	db, _ := store.Open()
 	defer db.Close()
 	st, _ := settings.Load()
-	st.Patch([]byte(`{"waf":{"upload_scan":false,"login_urls":["/wp-login.php"]}}`))
+	st.Patch([]byte(`{"waf":{"upload_scan":false,"ipdb_post":true,"login_urls":["/wp-login.php"]}}`))
 	tok := "0123456789abcdef0123456789abcdef"
 	central := &Central{URL: "https://captcha.xpguard.org/v", ServerID: "15d69a72-653a-47b6-90f6-fde737bce061", Suspects: []string{"127.0.0.1"}, SitePage: true,
 		Slots: [][]string{{tok}, {"fedcba9876543210fedcba9876543210"}}}
 	on := true
 	m := &Manager{DB: db, Settings: st, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), RulesDir: filepath.Join(dir, "waf"),
-		NoSelfTest: true, Central: func() *Central { return central },
+		NoSelfTest: true, Central: func() *Central { return central }, IPDBIPs: func() []string { return []string{"127.0.0.1"} },
 		SiteAlias: func() (string, bool) {
 			if on {
 				return conf, true
@@ -175,6 +193,31 @@ func TestSitePageOnApache(t *testing.T) {
 	cookie = "wordpress_test_cookie=1; xg_gate=" + tok
 	if code, loc, body := get("shop.example.com", "/wp-login.php?redirect_to=/wp-admin/"); code != 200 || body != "login" {
 		t.Fatalf("with the pass cookie: %d %q", code, loc)
+	}
+	// Its login post from this IPDB-listed address: let through with the
+	// cookie, refused without (the pass list waits for a reload).
+	post := func(c string) int {
+		req, _ := http.NewRequest("POST", "http://127.0.0.1/wp-login.php", strings.NewReader("log=a&pwd=b"))
+		req.Host = "shop.example.com"
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) Firefox/130.0")
+		req.Header.Set("Accept", "text/html")
+		req.Header.Set("Referer", "https://shop.example.com/wp-login.php")
+		if c != "" {
+			req.Header.Set("Cookie", c)
+		}
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := post(cookie); code != 200 {
+		t.Fatalf("login post with the pass cookie: %d", code)
+	}
+	if code := post("xg_gate=ffffffffffffffffffffffffffffffff"); code == 200 {
+		t.Fatalf("login post with a wrong cookie: %d", code)
 	}
 	cookie = "xg_gate=ffffffffffffffffffffffffffffffff"
 	if code, _, _ := get("shop.example.com", "/wp-login.php"); code != 302 {

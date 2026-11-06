@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.38** (see `VERSION`).
+- Current release: **0.24.39** (see `VERSION`).
 
 ## Working rules
 
@@ -312,6 +312,19 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.39: a passed visitor's login post is not refused for an
+  IPDB address** (2026-11-06). Security review of 0.24.38 for the owner:
+  the pass cookie let a visitor past the CAPTCHA gate, but the IPDB and
+  Tor POST blocks only skip the pass list (which waits for a reload), so
+  an IPDB-listed visitor (the owner's VPN) who passed was refused its
+  login post with 403; the old port mode had the same gap. Now a form
+  post with a valid pass-cookie value is marked (rules IDCentralPassPost
+  7701910+slot, `tx.xg_passed`) before the RBL POST rules, which skip it,
+  and the use is reported with the address like IDCentralPassUsed, so a
+  value shared with other addresses is withdrawn. Tests:
+  `TestSitePageRedirect` (rules, order), `TestSitePageOnApache` (IPDB login
+  post: 200 with the cookie, refused with a wrong one; 403 with the cookie
+  before this fix).
 - **Release 0.24.38: instant pass on the site page** (2026-11-06). The
   owner measured 55-57 seconds of "Checking…" after the tick on the site
   page (also from a home address): the portal answers only after the

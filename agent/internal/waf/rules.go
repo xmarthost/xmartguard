@@ -157,6 +157,12 @@ const (
 	// of Central.Slots), so the agent sees a value used by an address it was
 	// not given to. Up to 10 slots.
 	IDCentralPassUsed = 7700910
+	// IDCentralPassPost+N: a form post with pass-cookie value N. It marks
+	// the request as passed (tx.xg_passed: the IPDB and Tor POST blocks let
+	// it through, as they do the pass list) and reports the value with the
+	// address like IDCentralPassUsed, so one shared with a botnet is
+	// withdrawn.
+	IDCentralPassPost = 7701910
 )
 
 // RuleInfo describes one of our rules for the settings page.
@@ -656,6 +662,9 @@ func CentralPassSlot(id int) int {
 	if id >= IDCentralPassUsed && id < IDCentralPassUsed+10 {
 		return id - IDCentralPassUsed
 	}
+	if id >= IDCentralPassPost && id < IDCentralPassPost+10 {
+		return id - IDCentralPassPost
+	}
 	return -1
 }
 
@@ -1125,6 +1134,16 @@ func Render(c settings.WAF, o Options) string {
 				}
 				w(`  SecRule REQUEST_HEADERS:Cookie "@rx (?:^|;)\s*%s=(?:%s)\s*(?:;|$)" "t:none"`, GateCookie, strings.Join(sl, "|"))
 			}
+			// A passed visitor's form posts (the login itself): not refused
+			// for an IPDB or Tor address, which the pass list alone did
+			// (that list waits for a web server reload).
+			for i, sl := range slots {
+				if len(sl) == 0 {
+					continue
+				}
+				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,pass,log,msg:'xPGuard - CAPTCHA pass cookie used',tag:'xpguard/captcha',chain"`, IDCentralPassPost+i)
+				w(`  SecRule REQUEST_HEADERS:Cookie "@rx (?:^|;)\s*%s=(?:%s)\s*(?:;|$)" "t:none,setvar:tx.xg_passed=1"`, GateCookie, strings.Join(sl, "|"))
+			}
 		}
 	}
 	if c.Webshell {
@@ -1295,6 +1314,7 @@ func Render(c settings.WAF, o Options) string {
 			for _, h := range heads {
 				w(`SecRule REQUEST_METHOD "@streq POST" "id:%d,phase:1,t:none,deny,status:403,log,msg:'xPGuard - %s%s',tag:'xpguard/rbl',chain"`, h.id, msg, h.what)
 				w(`  SecRule &TX:xg_wp_editing "@eq 0" "t:none,chain"`)
+				w(`  SecRule &TX:xg_passed "@eq 0" "t:none,chain"`)
 				w(`  SecRule &TX:xg_api "@eq 0" "t:none,chain"`)
 				if h.headers == "" {
 					w(`  SecRule TX:%s "@eq 1" "t:none,chain"`, h.mark)
@@ -1316,6 +1336,8 @@ func Render(c settings.WAF, o Options) string {
 				// Only in the admin and REST API: anyone can send the cookie,
 				// so forms and other pages stay refused (audit A3 F1).
 				w(`  SecRule &TX:xg_wp_editing "@eq 0" "t:none,chain"`)
+				// Passed the CAPTCHA with the pass cookie (IDCentralPassPost).
+				w(`  SecRule &TX:xg_passed "@eq 0" "t:none,chain"`)
 				if list == FileIPDBIPs {
 					// API calls and webhooks (marked by IDIPDBPostAPI: LiteSpeed
 					// ignores its ctl:ruleRemoveById, so the marker decides).
