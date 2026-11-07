@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.46** (see `VERSION`).
+- Current release: **0.24.47** (see `VERSION`).
 
 ## Working rules
 
@@ -322,6 +322,30 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.47: the portal sees the real address of visitors its own
+  server passes on** (2026-11-08). The owner's DeepSeek check of business900
+  (ERR_QUIC_PROTOCOL_ERROR on app.xpguard.org at 00:52) found: the failure
+  was browser↔Cloudflare QUIC (the owner's request never reached the
+  origin; the owner has since paused Cloudflare), a cPanel config rebuild
+  restart at 00:42 (68 × 503 for 16 s), and 429s on `/v` with
+  162.55.6.159 (business900 itself) among the top sources. That address is
+  the agent's portal pass-through (0.24.36): LiteSpeed's ProxyPass in
+  front of the portal names the agent, so every banned/IPDB visitor of a
+  business900 site looked like one address to the portal (one /v rate
+  limit; passes refused as "solved from another address"; wrong addresses
+  in reports). Now the agent adds `X-XPGuard-Visitor: <ip> <ts>
+  <server_id> <sig>` (Ed25519 over `xg-visitor-v1:<server_id>:<ip>:<ts>`,
+  a visitor's own header dropped), and the portal's `visitorIP` takes it
+  only when the request comes from one of the master account's servers,
+  the timestamp is within 120 s and the signature matches that server's
+  key (`agentVisitor` in proxy.ts; keys loaded with the own servers). A
+  website hosted on business900 cannot forge it. Tests: agent
+  `TestPortalDomainOnThisServerPassesThrough` (header set, forged one
+  dropped), portal proxy.test.ts (own server only, forged, swapped
+  address, replayed). Also from that report, not changed: with
+  Cloudflare paused, browsers reach LiteSpeed's own HTTP/3 directly; the
+  origin's default certificate CN was www.xpguardcaptcha.site for
+  app.xpguard.org (check that its SANs cover app.xpguard.org).
 - **Release 0.24.46: daily health check** (2026-11-08). The owner wants
   one command to run on 3-4 servers a day and paste back. New
   `deploy/xpguard-health.sh` (read-only; `curl -fsSL

@@ -70,9 +70,10 @@ func TestSiteRewriteDropsQuery(t *testing.T) {
 // not this server's CAPTCHA again ("redirected you too many times",
 // 2026-11-06). Other websites still get the check.
 func TestPortalDomainOnThisServerPassesThrough(t *testing.T) {
-	var gotHost, gotXFF, gotURI, gotBody string
+	var gotHost, gotXFF, gotURI, gotBody, gotVisitor string
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHost, gotXFF, gotURI = r.Host, r.Header.Get("X-Forwarded-For"), r.URL.RequestURI()
+		gotVisitor = r.Header.Get("X-XPGuard-Visitor")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.Header().Set("Content-Security-Policy", "frame-ancestors https://shop.example.com")
@@ -86,11 +87,15 @@ func TestPortalDomainOnThisServerPassesThrough(t *testing.T) {
 	s, _ := newServer(t)
 	s.ServerID = "15d69a72-653a-47b6-90f6-fde737bce061"
 	s.Settings.Patch([]byte(`{"captcha":{"central":true,"central_url":"https://xpguardcaptcha.site/v","central_mode":"site"},"waf":{"enabled":true}}`))
+	// The portal's web server names this server as the client: the visitor's
+	// address goes in a header this agent signs (a visitor's own is dropped).
+	s.VisitorHeader = func(ip string) string { return ip + " 1 server sig" }
 	do := func(method, host, target, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, target, strings.NewReader(body))
 		r.Host = host
 		r.Header.Set("Accept", "text/html")
 		r.Header.Set("X-Forwarded-For", "1.1.1.1")
+		r.Header.Set("X-XPGuard-Visitor", "6.6.6.6 1 forged sig")
 		r.RemoteAddr = "37.203.35.18:5000"
 		r = r.WithContext(context.WithValue(r.Context(), origDstKey{}, dst))
 		w := httptest.NewRecorder()
@@ -100,6 +105,9 @@ func TestPortalDomainOnThisServerPassesThrough(t *testing.T) {
 	w := do("GET", "XpGuardCaptcha.site", "/v?s=x&ip=37.203.35.18&h=shop.example.com&fs=1&u=/wp-login.php", "")
 	if w.Code != 200 || w.Body.String() != "portal page" || w.Header().Get("X-Frame-Options") != "" {
 		t.Fatalf("portal page: %d %q %v", w.Code, w.Body.String(), w.Header())
+	}
+	if gotVisitor != "37.203.35.18 1 server sig" {
+		t.Fatalf("visitor header %q", gotVisitor)
 	}
 	if gotHost != "XpGuardCaptcha.site" || gotXFF != "37.203.35.18" || gotURI != "/v?s=x&ip=37.203.35.18&h=shop.example.com&fs=1&u=/wp-login.php" {
 		t.Fatalf("sent %q %q %q", gotHost, gotXFF, gotURI)
@@ -119,7 +127,7 @@ func TestPortalDomainOnThisServerPassesThrough(t *testing.T) {
 	// Not a redirected website connection (the CAPTCHA port itself): not proxied.
 	r := httptest.NewRequest("GET", "/v", nil)
 	r.Host = "xpguardcaptcha.site"
-	if servePortal(httptest.NewRecorder(), r, "xpguardcaptcha.site") {
+	if servePortal(httptest.NewRecorder(), r, "xpguardcaptcha.site", nil) {
 		t.Fatal("proxied without a redirected connection")
 	}
 	if portalHost("http://x.test/v") != "" || portalHost("https://X.test/v") != "x.test" {
@@ -143,7 +151,7 @@ func TestPortalSlowAnswerOutlivesServerLimits(t *testing.T) {
 	// This server as it runs: short read and write limits (20 s there).
 	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), origDstKey{}, dst))
-		if !servePortal(w, r, "xpguardcaptcha.site") {
+		if !servePortal(w, r, "xpguardcaptcha.site", nil) {
 			http.Error(w, "not proxied", 500)
 		}
 	}))

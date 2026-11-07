@@ -1,4 +1,4 @@
-import { isCloudflare, plainIP } from '../proxy.js';
+import { agentVisitor, isCloudflare, plainIP } from '../proxy.js';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { BlockList, isIP } from 'node:net';
@@ -326,6 +326,8 @@ const reUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  */
 function visitorIP(req: FastifyRequest, trustProxy: boolean): string {
   const ip = plainIP(req.ip);
+  const passed = agentVisitor(ip, req.headers['x-xpguard-visitor']);
+  if (passed) return passed;
   const cf = req.headers['cf-connecting-ip'];
   if (trustProxy && isCloudflare(ip) && typeof cf === 'string' && isIP(cf.trim())) return cf.trim();
   return ip;

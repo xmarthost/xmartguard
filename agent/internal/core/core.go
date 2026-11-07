@@ -40,6 +40,7 @@ import (
 	"github.com/xmarthost/xmartguard/agent/internal/monitor"
 	"github.com/xmarthost/xmartguard/agent/internal/notify"
 	"github.com/xmarthost/xmartguard/agent/internal/prio"
+	"github.com/xmarthost/xmartguard/agent/internal/protocol"
 	"github.com/xmarthost/xmartguard/agent/internal/reputation"
 	"github.com/xmarthost/xmartguard/agent/internal/scanner"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
@@ -245,6 +246,14 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.Captcha.HostPage = a.hostPageFWURL
+	a.Captcha.VisitorHeader = func(ip string) string {
+		id, err := identity.Load(config.KeyPath())
+		if err != nil || cfg.ServerID == "" {
+			return ""
+		}
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		return ip + " " + ts + " " + cfg.ServerID + " " + id.SignB64(protocol.VisitorPayload(cfg.ServerID, ip, ts))
+	}
 	// Before the WAF's first apply: the rules it writes at start are those
 	// of the pages' last check (no web server restart for an agent update).
 	a.loadCentralPages()

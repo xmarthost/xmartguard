@@ -43,6 +43,10 @@ import (
 type Server struct {
 	Settings *settings.Store
 	Log      *slog.Logger
+	// VisitorHeader signs the visitor's address for the portal when this
+	// server passes a request on to it (servePortal): the web server in
+	// front of the portal names this server, not the visitor.
+	VisitorHeader func(ip string) string
 	// Solved is called with the visitor address after a correct answer.
 	Solved func(ip string) error
 	// Certs finds a certificate for a TLS server name (nil = self-signed).
@@ -303,7 +307,7 @@ func (s *Server) tooMany(ip string) bool {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	// The portal's own CAPTCHA page on this server: never caught here.
-	if s.Settings != nil && servePortal(w, r, portalHost(s.Settings.Get().Captcha.CentralURL)) {
+	if s.Settings != nil && servePortal(w, r, portalHost(s.Settings.Get().Captcha.CentralURL), s.VisitorHeader) {
 		return
 	}
 	// Only a person in a browser is asked to solve the check (passthrough.go).

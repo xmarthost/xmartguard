@@ -1,4 +1,5 @@
 import { BlockList, isIP } from 'node:net';
+import { verifyEd25519 } from './security.js';
 import type { Pool } from './db.js';
 import { platformAccount } from './tenancy.js';
 
@@ -32,6 +33,9 @@ function blockList(cidrs: string[]): BlockList {
 const local = blockList(LOCAL);
 const cloudflare = blockList(CLOUDFLARE);
 let own = new Set<string>();
+// The master account's servers' keys (id -> public key): a visitor's address
+// signed by the agent of the server that proxied it (agentVisitor).
+let ownKeys = new Map<string, string>();
 let extra = new Set<string>();
 
 /** A plain address: no IPv4-mapped IPv6 prefix, lower case. */
@@ -67,6 +71,44 @@ export async function refreshOwnProxies(pool: Pool): Promise<void> {
     own = new Set();
     return;
   }
-  const { rows } = await pool.query<{ primary_ip: string }>("SELECT primary_ip FROM servers WHERE account_id = $1 AND status = 'active'", [acc]);
+  const { rows } = await pool.query<{ id: string; primary_ip: string; public_key: string }>(
+    "SELECT id, primary_ip, public_key FROM servers WHERE account_id = $1 AND status = 'active'",
+    [acc],
+  );
   own = new Set(rows.map((r) => plainIP(r.primary_ip)).filter((x) => isIP(x)));
+  ownKeys = new Map(rows.map((r) => [r.id, r.public_key]));
+}
+
+/** Is addr one of the master account's own servers? */
+export function isOwnServer(addr: string): boolean {
+  return own.has(plainIP(addr));
+}
+
+/** What the agent signs for a visitor it passes on to the portal. */
+export function visitorPayload(serverId: string, ip: string, ts: string): string {
+  return `xg-visitor-v1:${serverId}:${ip}:${ts}`;
+}
+
+/**
+ * The visitor's address an agent passed on: a banned or IPDB-listed visitor
+ * of the server hosting the portal reaches the portal through that server's
+ * agent, and the web server in front of the portal names the agent, not
+ * the visitor (every such visitor shared one address: one rate limit, and
+ * passes refused as "solved from another address", 2026-11-08). Taken only
+ * from one of the master account's servers, signed by its agent's key and
+ * fresh: a website hosted on that server cannot name another address.
+ */
+export function agentVisitor(from: string, header: unknown, nowSec = Math.floor(Date.now() / 1000)): string {
+  if (typeof header !== 'string' || !isOwnServer(from)) return '';
+  const [ip, ts, serverId, sig] = header.trim().split(' ');
+  if (!ip || !ts || !serverId || !sig || !isIP(ip) || !/^\d{1,12}$/.test(ts) || Math.abs(nowSec - Number(ts)) > 120) return '';
+  const key = ownKeys.get(serverId);
+  if (!key || !verifyEd25519(key, visitorPayload(serverId, ip, ts), sig)) return '';
+  return plainIP(ip);
+}
+
+/** Tests: set the own servers directly. */
+export function setOwnServersForTest(list: { id: string; ip: string; publicKey: string }[]): void {
+  own = new Set(list.map((x) => plainIP(x.ip)));
+  ownKeys = new Map(list.map((x) => [x.id, x.publicKey]));
 }

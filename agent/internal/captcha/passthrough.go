@@ -145,7 +145,7 @@ func portalHost(centralURL string) string {
 // too many times", business900 hosting the portal, 2026-11-06). The portal
 // is the check itself; it learns the visitor's address from
 // X-Forwarded-For (it trusts the fleet's servers as proxies).
-func servePortal(w http.ResponseWriter, r *http.Request, portal string) bool {
+func servePortal(w http.ResponseWriter, r *http.Request, portal string, sign func(ip string) string) bool {
 	if portal == "" || hostOf(r.Host) != portal {
 		return false
 	}
@@ -174,6 +174,15 @@ func servePortal(w http.ResponseWriter, r *http.Request, portal string) bool {
 			// could name any address.
 			p.Out.Header.Set("X-Forwarded-For", visitor)
 			p.Out.Header.Set("X-Forwarded-Proto", scheme)
+			// The visitor's address, signed by this agent: the portal's web
+			// server names this server as the client (one address for every
+			// such visitor). A visitor's own header is never passed on.
+			p.Out.Header.Del("X-XPGuard-Visitor")
+			if sign != nil {
+				if v := sign(visitor); v != "" {
+					p.Out.Header.Set("X-XPGuard-Visitor", v)
+				}
+			}
 		},
 		Transport: &http.Transport{
 			TLSClientConfig:       &tls.Config{ServerName: portal, InsecureSkipVerify: true}, //nolint:gosec // this server's own website

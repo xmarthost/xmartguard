@@ -55,3 +55,9 @@ func UnenrollPayload(serverID, ts string) []byte {
 func TransferPayload(serverID, tokenHash, ts string) []byte {
 	return []byte("xg-transfer-v1:" + serverID + ":" + tokenHash + ":" + ts)
 }
+
+// VisitorPayload is what an agent signs for a visitor it passes on to the
+// portal (header X-XPGuard-Visitor: "<ip> <ts> <server_id> <signature>").
+func VisitorPayload(serverID, ip, ts string) []byte {
+	return []byte("xg-visitor-v1:" + serverID + ":" + ip + ":" + ts)
+}
