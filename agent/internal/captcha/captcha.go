@@ -107,6 +107,17 @@ func SiteWanted(st settings.Settings) bool {
 	return c.Central && c.CentralURL != "" && c.CentralMode == "site" && st.WAF.Enabled
 }
 
+// SitePageWanted reports whether the check's page on every website's own
+// address (/xpguard-verify/) is set up: whenever the portal's check is in
+// use, in every mode. It frames the check in site mode and, in every mode,
+// sets the pass cookie on the visitor's way back, so a solved check needs
+// no web server reload (LiteSpeed restarted for every pass, about every 20
+// minutes on a busy server, cutting open connections; 2026-11-07).
+func SitePageWanted(st settings.Settings) bool {
+	c := st.Captcha
+	return c.Central && c.CentralURL != "" && st.WAF.Enabled
+}
+
 // GateWanted reports whether the login pages show the CAPTCHA.
 func GateWanted(st settings.Settings) bool {
 	return st.Captcha.LoginGate && st.WAF.Enabled && len(st.WAF.LoginURLs) > 0

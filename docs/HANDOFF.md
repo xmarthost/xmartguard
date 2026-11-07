@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.40** (see `VERSION`).
+- Current release: **0.24.41** (see `VERSION`).
 
 ## Working rules
 
@@ -32,6 +32,16 @@ project. It holds the rules, the current state and what is still open.
   `families_test.go`, `binary_test.go`; WAF: the Apache tests), and the
   report to the owner says what changed in the engine, not only what was
   restored.
+- **No avoidable web server restarts (owner's standing rule,
+  2026-11-07).** LiteSpeed restarts all its server processes on every WAF
+  reload; open HTTP/2 and HTTP/3 connections drop (customers saw
+  ERR_CONNECTION_CLOSED and ERR_QUIC_PROTOCOL_ERROR when business500
+  restarted about every 20 minutes for CAPTCHA passes). Check every update
+  for it: no reload per visitor, per pass, per withdrawal or on a short
+  timer. Change or add WAF rules only when it is really needed (one reload
+  for a release or a real rule change is fine). Prefer ipset, cookies or
+  anything read at request time over lists that need a reload. Current
+  reload sources and their limits are listed under 0.24.41.
 - **Language**: reply to the owner in Roman Urdu.
 - **Branch**: work on the session's branch (0.23.5:
   `claude/keen-wozniak-eebt73`, 0.23.6 to 0.24.20 too), then push to `main`:
@@ -312,6 +322,42 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.41: no LiteSpeed restart per CAPTCHA pass** (2026-11-07).
+  Customers on business500, business300 and websoulhost business200 (PK,
+  whitelisted) saw ERR_CONNECTION_CLOSED / QUIC errors. Checked: the
+  firewall and WAF never touched those addresses (country whitelist:
+  firewall RETURN, WAF ruleEngine Off), firewall code unchanged for 72 h,
+  conntrack 5k/262k, no LiteSpeed crash. Found: LiteSpeed graceful
+  restarts every ~20 minutes (43 today on business500); the restart times
+  match the agent's WAF load times exactly (19:26:50 PKT = 14:26:52 UTC,
+  20:13:47 = 15:13:49). Cause: every solved CAPTCHA (mostly firewall
+  IPDB visitors in portal mode) put the address on the WAF pass list and
+  reloaded within 30 s. Fix: the site page (`/xpguard-verify/`, global
+  alias) is now set up whenever the portal's check is on (any mode,
+  `captcha.SitePageWanted`), and every pass goes back through it with a
+  pass cookie the WAF accepts (gate and IPDB/Tor POST via
+  `tx.xg_passed`): site page frame sets it (0.24.38); the hostname page
+  forwards to `https://<site>/xpguard-verify/#xgpass=<v>&m=<s>&u=<path>`
+  and the portal's own page redirects there; the site page sets the
+  cookie from the fragment (never sent to a server) and goes on. The
+  agent's `captcha.sitepass` now works in every mode, lifts a firewall ban
+  or IPDB block at once (ipset, `centralLiftBan`) and records the pass
+  list without a reload (`centralPassRecord`). Also: a withdrawn cookie
+  value is applied with the next background reload (was its own reload);
+  the site page goes out of use only after 3 failed 10-minute checks in a
+  row (one slow answer changed the WAF); the daily pass-value rotation
+  (one reload a day) also runs where the site page is in use. Old agents
+  and servers whose page does not work keep the pass list (portal falls
+  back on "unknown action" / "not in use"). Remaining reload sources: a
+  release or a real rule/setting change; the daily pass-value rotation;
+  the pass list only where the site page cannot be served; background
+  lists at most every 2 h (ListReloadGap). Tests: core
+  `TestSiteModeWithoutPortFallsBack` (portal mode gives instant passes,
+  3-failure rule), portal captcha.test.ts (hostname and portal ways back),
+  Chromium tests (portal page → site page → cookie on the website; bad
+  fragment or `//evil` sets nothing; hostname page → site page → cookie).
+  The patabook.pk NXDOMAIN and cPanel :2083 aborts are not explained by
+  this (not LiteSpeed); asked the owner for the customer-side DNS test.
 - **Release 0.24.40: move a server to another account** (2026-11-06).
   The owner wants cloud2.xmarthost.com moved from a customer account to the
   main one with its stats; there was no way. Now the install command of

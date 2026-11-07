@@ -84,8 +84,30 @@ func TestSiteModeWithoutPortFallsBack(t *testing.T) {
 	if _, err := sitepass("203.0.113.5", "evil.example"); err == nil {
 		t.Fatal("instant pass for a website that is not here")
 	}
-	// Another mode: the alias is switched off and the page removed.
+	// Portal mode: the page stays (it sets the pass cookie on the way back,
+	// no reload per pass); suspects go to the portal, not the page.
 	if err := a.applyCentralConfig(ctx, centralConfig{Version: 6, Enabled: true, URL: "https://captcha.test/v", Minutes: 30}); err != nil {
+		t.Fatal(err)
+	}
+	if _, on := a.siteAlias(); !on {
+		t.Fatal("alias not wanted in portal mode")
+	}
+	if w := a.centralWAF(); w == nil || w.SitePage || w.Site || len(w.Slots) != captcha.SiteSlots {
+		t.Fatalf("central %+v", w)
+	}
+	if r, err := sitepass("203.0.113.6", "shop.example.com"); err != nil || len(r["value"].(string)) != 32 {
+		t.Fatalf("instant pass in portal mode: %v %v", r, err)
+	}
+	// One failed check does not take the page out of use (each change of
+	// the WAF restarts LiteSpeed); three in a row do.
+	for i := 1; i <= 3; i++ {
+		a.syncSitePage(ctx) // nothing answers on this machine's 443
+		if got := a.central.sitePage.Load(); got != (i < 3) {
+			t.Fatalf("check %d failed: in use %v", i, got)
+		}
+	}
+	// The portal's check off: the alias is switched off and the page removed.
+	if err := a.applyCentralConfig(ctx, centralConfig{Version: 7, Enabled: false, URL: "https://captcha.test/v", Minutes: 30}); err != nil {
 		t.Fatal(err)
 	}
 	if _, on := a.siteAlias(); on {
@@ -96,8 +118,5 @@ func TestSiteModeWithoutPortFallsBack(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("page left behind")
-	}
-	if w := a.centralWAF(); w != nil && (w.SitePage || w.Site) {
-		t.Fatalf("central %+v", w)
 	}
 }

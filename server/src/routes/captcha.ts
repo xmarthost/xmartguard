@@ -790,7 +790,10 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           // (CGNAT) the next request to the site may come from that one.
           const short = (method === 'altcha' && provider === 'auto') || hosting ? { minutes: Math.min(config.minutes, ALTCHA_FALLBACK_MINUTES) } : {};
           const also = sameIP(ip, p.ip) ? '' : ip;
-          if (b.data.fs) {
+          // Every way back (the portal's page, the hostname page, the site
+          // page): the website's own page sets the cookie. Not the website's
+          // CAPTCHA port (n), which has its own ticket.
+          if (!b.data.n) {
             try {
               const r = (await hub.command(p.s, 'captcha.sitepass', { ip: p.ip, host: p.h, also, ...short }, 15_000)) as { cookie?: string; value?: string; minutes?: number };
               if (r?.cookie === 'xg_gate' && typeof r.value === 'string' && /^[0-9a-f]{32}$/.test(r.value) && Number(r.minutes) > 0) {
@@ -820,7 +823,12 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         if (method === 'altcha') noteAltchaPass(altchaKeys);
         if (hosting) noteHostingPass(p.ip);
         await rec('passed', method, ip, hosting ? 'from a hosting network (VPN or cloud): a pass for an hour' : '');
-        return res(200, { ok: true, redirect: `https://${p.h.replace(/\.$/, '')}${p.u}`, ...(b.data.n ? { frame: true } : {}), ...(cookie ? { cookie } : {}) });
+        const site = `https://${p.h.replace(/\.$/, '')}`;
+        // Back through the website's page, which sets the pass cookie (in the
+        // fragment: never sent to a server). Framed pages hand it over
+        // themselves.
+        const redirect = cookie && !b.data.fs && !b.data.fh ? `${site}/xpguard-verify/#xgpass=${cookie.value}&m=${cookie.max_age}&u=${p.u}` : `${site}${p.u}`;
+        return res(200, { ok: true, redirect, ...(b.data.n ? { frame: true } : {}), ...(cookie ? { cookie } : {}) });
       };
       const pending = run();
       if (key) verifying.set(key, pending);

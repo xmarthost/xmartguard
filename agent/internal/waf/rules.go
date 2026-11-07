@@ -1026,7 +1026,8 @@ func Render(c settings.WAF, o Options) string {
 		// The pass cookie: set on the CAPTCHA port (site), or by the check's
 		// page on the website's own address (SitePage): a pass at once,
 		// without a web server reload for the pass list.
-		cookie := site || (ct.SitePage && len(toks) > 0)
+		// The agent gives Slots only while one of them is in use.
+		cookie := site || len(toks) > 0
 		if cookie {
 			// Not passed: no pass cookie, and not on the pass list either (a
 			// visitor that cannot reach the CAPTCHA port solves on the portal,

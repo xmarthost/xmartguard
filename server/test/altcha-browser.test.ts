@@ -178,7 +178,15 @@ browserTest('hostname mode: the check on the server hostname, then back to the w
       const res = await r.fetch({ url: h.url + u.pathname + u.search, headers: { ...r.request().headers(), host: 'captcha.test' } });
       await r.fulfill({ response: res });
     });
-    await ctx.route('https://shop.example.com/**', (r: any) => r.fulfill({ contentType: 'text/html', body: '<p id="site">the website</p>' }));
+    // The website: its own check page (the agent's, which sets the pass
+    // cookie on the way back) and the page the visitor wanted.
+    const sitePage = readFileSync(new URL('./fixtures/sitepage.html', import.meta.url), 'utf8');
+    let cookieSent = '';
+    await ctx.route('https://shop.example.com/**', (r: any) => {
+      if (new URL(r.request().url()).pathname === '/xpguard-verify/') return r.fulfill({ contentType: 'text/html', body: sitePage });
+      cookieSent = r.request().headers()['cookie'] ?? '';
+      return r.fulfill({ contentType: 'text/html', body: '<p id="site">the website</p>' });
+    });
     const page = await ctx.newPage();
     // The preview (CAPTCHA page » Test): the check works there, no one passes.
     const before = passes.length;
@@ -203,6 +211,8 @@ browserTest('hostname mode: the check on the server hostname, then back to the w
     await page.waitForURL((u: URL) => u.host === 'shop.example.com', { timeout: 30000 });
     expect(page.url()).toBe('https://shop.example.com/wp-login.php?redirect_to=/wp-admin/');
     expect(passes.length).toBe(before + 1);
+    // Back through the website's page, which set the pass cookie there.
+    expect(cookieSent).toContain('xg_gate=0123456789abcdef0123456789abcdef');
     const { rows } = await h.pool.query("SELECT result, via FROM captcha_events WHERE host = 'shop.example.com' ORDER BY id DESC LIMIT 1");
     expect(rows[0]).toEqual({ result: 'passed', via: 'hostname' });
     // A bad link on the hostname page goes nowhere.
@@ -261,6 +271,48 @@ browserTest('site page: the check on the website itself, pass cookie, straight b
     expect(c?.path).toBe('/');
     const { rows } = await h.pool.query("SELECT result, via FROM captcha_events WHERE host = 'shop.example.com' ORDER BY id DESC LIMIT 1");
     expect(rows[0]).toEqual({ result: 'passed', via: 'site-page' });
+  } finally {
+    await b.close();
+  }
+}, 90_000);
+
+// The portal's own page (portal mode, a visitor the firewall sent): back
+// through the website's page, which sets the pass cookie from the link's
+// fragment; the server needs no web server reload for the pass.
+browserTest('portal page: back through the website page with the pass cookie', async () => {
+  const { chromium } = createRequire(import.meta.url)(PW);
+  const sitePage = readFileSync(new URL('./fixtures/sitepage.html', import.meta.url), 'utf8');
+  const b = await chromium.launch();
+  try {
+    const ctx = await b.newContext({ ignoreHTTPSErrors: true });
+    let cookieSent = '';
+    await ctx.route('https://shop.example.com/**', (r: any) => {
+      if (new URL(r.request().url()).pathname === '/xpguard-verify/') return r.fulfill({ contentType: 'text/html', body: sitePage });
+      cookieSent = r.request().headers()['cookie'] ?? '';
+      return r.fulfill({ contentType: 'text/html', body: '<p id="site">the website</p>' });
+    });
+    await ctx.route('https://captcha.test/**', async (r: any) => {
+      const u = new URL(r.request().url());
+      const res = await r.fetch({ url: h.url + u.pathname + u.search, headers: { ...r.request().headers(), host: 'captcha.test' }, postData: r.request().postData() ?? undefined });
+      await r.fulfill({ response: res });
+    });
+    const page = await ctx.newPage();
+    await page.goto(`https://captcha.test/v?s=${serverId}&ip=127.0.0.1&h=shop.example.com&k=fw&u=/shop/?p=1`);
+    await page.locator('altcha-widget label').waitFor();
+    await page.waitForTimeout(800);
+    await page.mouse.move(120, 100);
+    await page.mouse.move(420, 320, { steps: 5 });
+    await page.locator('altcha-widget label').click();
+    await page.waitForURL((u: URL) => u.host === 'shop.example.com' && u.pathname === '/shop/', { timeout: 30000 });
+    expect(page.url()).toBe('https://shop.example.com/shop/?p=1');
+    expect(cookieSent).toContain('xg_gate=0123456789abcdef0123456789abcdef');
+    // A link with a bad pass or a way off the website sets nothing.
+    await ctx.clearCookies();
+    await page.goto('https://shop.example.com/xpguard-verify/#xgpass=nothex&m=60&u=/');
+    expect(await page.textContent('body')).toContain('This check link is not valid.');
+    await page.goto('https://shop.example.com/xpguard-verify/#xgpass=0123456789abcdef0123456789abcdef&m=60&u=//evil.example/');
+    expect(await page.textContent('body')).toContain('This check link is not valid.');
+    expect((await ctx.cookies('https://shop.example.com')).find((x: any) => x.name === 'xg_gate')).toBeUndefined();
   } finally {
     await b.close();
   }

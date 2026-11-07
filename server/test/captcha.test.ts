@@ -795,11 +795,17 @@ describe('CAPTCHA on the website’s own address', () => {
       expect(fast.status).toBe(200);
       expect(fast.body.cookie).toEqual({ name: 'xg_gate', value: tok, max_age: 86400 });
       expect(commands.map((c) => c.action)).toEqual(['captcha.sitepass']);
-      // Not for the hostname page or the portal address.
+      // The hostname page and the portal's page too: no web server reload
+      // per pass (LiteSpeed restarted for each one, 2026-11-07). The hostname
+      // page hands the cookie on; the portal's page goes back through the
+      // website's page, which sets it (in the fragment).
       commands.length = 0;
       const hn = await verify({ s: serverId, ip: '203.0.113.98', h: 'shop.example.com', u: '/', fh: '1', token: 'good-token' }, '203.0.113.98');
-      expect(hn.body.cookie).toBeUndefined();
-      expect(commands.map((c) => c.action)).not.toContain('captcha.sitepass');
+      expect(hn.body.cookie).toEqual({ name: 'xg_gate', value: tok, max_age: 86400 });
+      expect(hn.body.redirect).toBe('https://shop.example.com/');
+      expect(commands.map((c) => c.action)).toEqual(['captcha.sitepass']);
+      const pt = await verify({ s: serverId, ip: '203.0.113.102', h: 'shop.example.com', u: '/wp-login.php?redirect_to=/a', token: 'good-token' }, '203.0.113.102');
+      expect(pt.body.redirect).toBe(`https://shop.example.com/xpguard-verify/#xgpass=${tok}&m=86400&u=/wp-login.php?redirect_to=/a`);
       // A value that is not a pass value is never handed to the page.
       h.hub.command = async (id: string, action: string, params: unknown) => {
         if (action === 'captcha.sitepass') return { ok: true, cookie: 'xg_gate', value: 'x; domain=.example.com', minutes: 1440 };

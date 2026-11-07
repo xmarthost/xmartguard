@@ -82,9 +82,21 @@ func framePageHTML(portalURL, marker, frameParam string, setCookie bool) string 
 	js := func(v string) string {
 		return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "<", `<`, ">", `>`, "\n", "").Replace(v)
 	}
-	cookieJS := ""
+	// The pass cookie the check gives (a value of the WAF's, at most two
+	// days): the site page sets it on its website; the hostname page sends
+	// the visitor back through the website's site page, which sets it
+	// ("#xgpass=": in the fragment, never sent to a server). No web server
+	// reload for a pass.
+	okCookie := `c&&c.name==="` + GateCookie + `"&&/^[0-9a-f]{32}$/.test(c.value)&&c.max_age>0&&c.max_age<=172800`
+	cookieJS, returnJS := "", "bad();return"
 	if setCookie {
-		cookieJS = `var c=e.data.c;if(c&&c.name==="` + GateCookie + `"&&/^[0-9a-f]{32}$/.test(c.value)&&c.max_age>0&&c.max_age<=172800)document.cookie=c.name+"="+c.value+"; path=/; max-age="+Math.floor(c.max_age)+"; samesite=lax"+(location.protocol==="https:"?"; secure":"");`
+		cookieJS = `var c=e.data.c;if(` + okCookie + `)document.cookie=c.name+"="+c.value+"; path=/; max-age="+Math.floor(c.max_age)+"; samesite=lax"+(location.protocol==="https:"?"; secure":"");`
+		returnJS = `var m=/^#xgpass=([0-9a-f]{32})&m=([0-9]{1,6})&u=(\/(?![\/\\]).*)$/.exec(location.hash);
+if(!m||+m[2]<=0||+m[2]>172800){bad();return}
+document.cookie="` + GateCookie + `="+m[1]+"; path=/; max-age="+m[2]+"; samesite=lax"+(location.protocol==="https:"?"; secure":"");
+location.replace(m[3]);return`
+	} else {
+		cookieJS = `var c=e.data.c;if(` + okCookie + `){location.replace("https://"+site+"` + SitePagePath + `#xgpass="+c.value+"&m="+Math.floor(c.max_age)+"&u="+back);return}`
 	}
 	return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -94,6 +106,7 @@ func framePageHTML(portalURL, marker, frameParam string, setCookie bool) string 
 </head><body><noscript><p>Please turn on JavaScript to continue.</p></noscript>
 <script>(function(){
 var PAGE="` + js(portalURL) + `",ORIGIN="` + js(origin) + `";
+if(location.hash.indexOf("#xgpass=")===0){` + returnJS + `}
 var q=location.search.slice(1),i=q.indexOf("&u=");
 function bad(){var p=document.createElement("p");p.textContent="This check link is not valid.";document.body.appendChild(p)}
 if(i<0){bad();return}

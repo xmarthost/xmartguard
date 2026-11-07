@@ -13,4 +13,12 @@ Standing rule from the owner (always applies):
   hash or excluding one site is never the whole fix. Every fix gets a
   regression test with an inert fixture (for the scanner:
   `agent/internal/scanner/fleetfp_test.go`).
+- No avoidable web server restarts (owner, 2026-11-07). LiteSpeed restarts
+  all its processes on every WAF reload and open connections drop
+  (ERR_CONNECTION_CLOSED / QUIC errors for customers). Every update must be
+  checked for this: nothing may reload the web server per visitor, per pass
+  or on a short timer. Write or change WAF rules (and reload) only when it
+  is really needed; one reload for a release or a real rule change is fine,
+  a continuous stream is not. Prefer address sets (ipset), cookies or files
+  read at request time over lists that need a reload.
 - Reply to the owner in Roman Urdu.

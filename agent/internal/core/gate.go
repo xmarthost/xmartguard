@@ -42,7 +42,9 @@ func (a *Agent) gateLoop(ctx context.Context) {
 			continue
 		}
 		day = d
-		if st := a.Settings.Get(); captcha.GateWanted(st) || captcha.SiteWanted(st) {
+		// The pass-cookie values change with the UTC day (one reload a day;
+		// also where the site page sets the cookie in every mode).
+		if st := a.Settings.Get(); captcha.GateWanted(st) || captcha.SiteWanted(st) || a.central.sitePage.Load() {
 			if err := a.WAF.Apply(); err != nil {
 				a.Log.Warn("WAF re-apply for the login-page CAPTCHA failed", "err", err)
 			}

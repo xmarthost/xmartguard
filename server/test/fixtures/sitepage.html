@@ -6,6 +6,10 @@
 </head><body><noscript><p>Please turn on JavaScript to continue.</p></noscript>
 <script>(function(){
 var PAGE="https://captcha.test/v",ORIGIN="https://captcha.test";
+if(location.hash.indexOf("#xgpass=")===0){var m=/^#xgpass=([0-9a-f]{32})&m=([0-9]{1,6})&u=(\/(?![\/\\]).*)$/.exec(location.hash);
+if(!m||+m[2]<=0||+m[2]>172800){bad();return}
+document.cookie="xg_gate="+m[1]+"; path=/; max-age="+m[2]+"; samesite=lax"+(location.protocol==="https:"?"; secure":"");
+location.replace(m[3]);return}
 var q=location.search.slice(1),i=q.indexOf("&u=");
 function bad(){var p=document.createElement("p");p.textContent="This check link is not valid.";document.body.appendChild(p)}
 if(i<0){bad();return}

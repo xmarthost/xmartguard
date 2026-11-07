@@ -6,6 +6,7 @@
 </head><body><noscript><p>Please turn on JavaScript to continue.</p></noscript>
 <script>(function(){
 var PAGE="https://captcha.test/v",ORIGIN="https://captcha.test";
+if(location.hash.indexOf("#xgpass=")===0){bad();return}
 var q=location.search.slice(1),i=q.indexOf("&u=");
 function bad(){var p=document.createElement("p");p.textContent="This check link is not valid.";document.body.appendChild(p)}
 if(i<0){bad();return}
@@ -16,5 +17,5 @@ if(!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(sit
 var f=document.createElement("iframe");f.title="Security check";f.allow="";
 f.src=PAGE+"?"+head+"&fh=1&u="+back;
 document.body.appendChild(f);
-addEventListener("message",function(e){if(e.origin===ORIGIN&&e.source===f.contentWindow&&e.data&&e.data.xg==="passed"){location.replace("https://"+site+back)}});
+addEventListener("message",function(e){if(e.origin===ORIGIN&&e.source===f.contentWindow&&e.data&&e.data.xg==="passed"){var c=e.data.c;if(c&&c.name==="xg_gate"&&/^[0-9a-f]{32}$/.test(c.value)&&c.max_age>0&&c.max_age<=172800){location.replace("https://"+site+"/xpguard-verify/#xgpass="+c.value+"&m="+Math.floor(c.max_age)+"&u="+back);return}location.replace("https://"+site+back)}});
 })();</script></body></html>

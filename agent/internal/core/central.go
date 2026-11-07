@@ -71,6 +71,10 @@ type central struct {
 	// (site mode without a port); siteErr why not.
 	sitePage atomic.Bool
 	siteErr  atomic.Value // string
+	// siteFails counts the site page's failed checks in a row: in use, it
+	// goes out of use only after sitePageFailLimit of them, so one slow
+	// answer does not change the WAF (each change restarts LiteSpeed).
+	siteFails atomic.Int32
 	// Login attacks: when each website last met the threshold (it stays
 	// guarded loginAttackHold after), and a nudge for centralLoop after a
 	// failed login (checked at once, not at the next minute).
@@ -152,7 +156,7 @@ func (a *Agent) syncSitePage(ctx context.Context) bool {
 	before := a.central.sitePage.Load()
 	cur := a.Settings.Get()
 	ok, why := false, ""
-	if captcha.SiteWanted(cur) {
+	if captcha.SitePageWanted(cur) {
 		host := captcha.ServerHostname()
 		switch {
 		case host == "":
@@ -167,21 +171,30 @@ func (a *Agent) syncSitePage(ctx context.Context) bool {
 			}
 		}
 		if why != "" {
-			a.Log.Info("the CAPTCHA page on the websites' own address is not in use yet; visitors go to the CAPTCHA port", "err", why)
+			a.Log.Info("the CAPTCHA page on the websites' own address is not in use yet; passes wait for a web server reload", "err", why)
 		}
 	} else {
 		captcha.RemoveSitePage()
+	}
+	if ok || !captcha.SitePageWanted(cur) {
+		a.central.siteFails.Store(0)
+	} else if before && a.central.siteFails.Add(1) < sitePageFailLimit {
+		ok = true // still in use: one failed check is not enough
 	}
 	a.central.sitePage.Store(ok)
 	a.central.siteErr.Store(why)
 	return before != ok
 }
 
+// sitePageFailLimit failed checks in a row (10 minutes apart) take the site
+// page out of use.
+const sitePageFailLimit = 3
+
 // siteAlias is the waf.Manager hook: the alias of the check's page on every
 // website, wanted in site mode.
 func (a *Agent) siteAlias() (string, bool) {
 	cur := a.Settings.Get()
-	if captcha.SiteWanted(cur) {
+	if captcha.SitePageWanted(cur) {
 		_ = captcha.InstallSitePage(cur.Captcha.CentralURL)
 		return captcha.SiteAliasConf(), true
 	}
@@ -199,14 +212,19 @@ func (a *Agent) centralWAF() *waf.Central {
 	// The login-page CAPTCHA for everyone uses the portal's page too.
 	all := captcha.GateWanted(cur)
 	w := &waf.Central{URL: c.CentralURL, ServerID: a.Cfg.ServerID, All: all, Pass: a.centralPassList()}
+	page := a.central.sitePage.Load()
 	if captcha.SiteWanted(cur) {
-		if a.central.sitePage.Load() {
-			// On the website's own address without a port; the page sets
-			// the pass cookie (captcha.sitepass).
-			w.SitePage, w.Slots = true, a.sitePasses.Slots(time.Now())
+		if page {
+			// On the website's own address without a port.
+			w.SitePage = true
 		} else {
 			w.Site, w.Slots, w.HTTPSPort = true, a.sitePasses.Slots(time.Now()), c.HTTPSPort
 		}
+	}
+	if page {
+		// The page sets the pass cookie (captcha.sitepass) in every mode:
+		// the WAF accepts it, no reload per pass.
+		w.Slots = a.sitePasses.Slots(time.Now())
 	}
 	if !all {
 		w.Suspects = a.centralSuspects()
@@ -482,24 +500,7 @@ func (a *Agent) centralPass(ips ...string) error { return a.centralPassFor(0, ip
 // configured time (0: the configured time). The portal asks for less when
 // the check was the proof-of-work fallback, which a script can solve.
 func (a *Agent) centralPassFor(minutes int, ips ...string) error {
-	for _, ip := range ips {
-		if net.ParseIP(ip) == nil {
-			return fmt.Errorf("invalid address %q", ip)
-		}
-	}
-	if conf := a.Settings.Get().Captcha.CentralMinutes; minutes <= 0 || minutes > conf {
-		minutes = conf
-	}
-	a.central.mu.Lock()
-	m := a.centralPassMap()
-	for _, ip := range ips {
-		m[net.ParseIP(ip).String()] = time.Now().Add(time.Duration(minutes) * time.Minute).Unix()
-	}
-	b, _ := json.Marshal(m)
-	err := store.SetKV(a.DB, kvCentralPass, string(b))
-	a.central.gen++
-	mine := a.central.gen
-	a.central.mu.Unlock()
+	mine, err := a.centralPassRecord(minutes, ips...)
 	if err != nil {
 		return err
 	}
@@ -525,6 +526,29 @@ func (a *Agent) centralPassFor(minutes int, ips ...string) error {
 	return nil
 }
 
+// centralPassRecord puts addresses on the pass list without a reload (the
+// next reload writes it); it returns the list's generation.
+func (a *Agent) centralPassRecord(minutes int, ips ...string) (int64, error) {
+	for _, ip := range ips {
+		if net.ParseIP(ip) == nil {
+			return 0, fmt.Errorf("invalid address %q", ip)
+		}
+	}
+	if conf := a.Settings.Get().Captcha.CentralMinutes; minutes <= 0 || minutes > conf {
+		minutes = conf
+	}
+	a.central.mu.Lock()
+	defer a.central.mu.Unlock()
+	m := a.centralPassMap()
+	for _, ip := range ips {
+		m[net.ParseIP(ip).String()] = time.Now().Add(time.Duration(minutes) * time.Minute).Unix()
+	}
+	b, _ := json.Marshal(m)
+	err := store.SetKV(a.DB, kvCentralPass, string(b))
+	a.central.gen++
+	return a.central.gen, err
+}
+
 // onPassCookie withdraws a pass-cookie value of the check on the website's
 // address that a suspect sent without having been given it (one solved
 // check shared with other addresses): the WAF is applied without it.
@@ -533,8 +557,11 @@ func (a *Agent) onPassCookie(ip string, slot int) {
 		return
 	}
 	a.Log.Warn("CAPTCHA pass cookie sent from an address it was not given to: value withdrawn", "ip", ip, "slot", slot)
+	// With the next reload the server makes anyway (at most two hours): a
+	// reload of its own restarted LiteSpeed for every withdrawal (owner's
+	// rule, 2026-11-07: no restarts that are not needed).
 	a.sitePasses.ApplyWithdrawn(func() { // one apply for withdrawals close together
-		if err := a.WAF.Apply(); err != nil {
+		if err := a.WAF.ApplyBackground(); err != nil {
 			a.Log.Warn("WAF re-apply after withdrawing a CAPTCHA pass failed", "err", err)
 		}
 	})
@@ -877,7 +904,7 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		if err != nil {
 			return nil, err
 		}
-		if !captcha.SiteWanted(a.Settings.Get()) || !a.central.sitePage.Load() {
+		if !captcha.SitePageWanted(a.Settings.Get()) || !a.central.sitePage.Load() {
 			return nil, errors.New("the check's page on the websites' own address is not in use on this server")
 		}
 		if !a.siteHere(in.IP, in.Host) {
@@ -895,6 +922,13 @@ func (a *Agent) centralHandlers(h map[string]client.Handler) {
 		tok := a.sitePasses.GiveAll(time.Now(), ips...)
 		if tok == "" {
 			return nil, errors.New("no pass could be given")
+		}
+		// The firewall lets a banned or IPDB-listed visitor in at once (an
+		// address set, no reload); the pass list follows with the next
+		// reload the server makes anyway.
+		a.centralPassRecord(in.Minutes, ips...)
+		for _, ip := range ips {
+			a.centralLiftBan(ip)
 		}
 		minutes := a.Settings.Get().Captcha.CentralMinutes
 		if in.Minutes > 0 && in.Minutes < minutes {
