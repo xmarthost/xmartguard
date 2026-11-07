@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.42** (see `VERSION`).
+- Current release: **0.24.43** (see `VERSION`).
 
 ## Working rules
 
@@ -322,6 +322,37 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.43: an agent restart does not restart the web server**
+  (2026-11-07). The owner's DeepSeek run on business500 (read-only) found
+  LiteSpeed's own restart log `/usr/local/lsws/logs/lsrestart.log` (date
+  as "Sat Nov  7 08:49:19 PM PKT 2026"; error_log was rotated and LSWS
+  6.3.7 writes "shutting down gracefully", so the owner's grep gave 0):
+  23-53 restarts a day since Nov 1 (430 a day Oct 9-15, the install week),
+  so the 48-hour updates did not start them. Verified points: each agent
+  update was followed ~30 s later by a LiteSpeed restart (agent start
+  01:31:10 → restart 01:31:41 etc.). Cause in our code: the WAF's first
+  apply at start (`Manager.Run`) ran before the 10-minute page checks, so
+  it rendered rules without the site page's pass values / hostname page
+  and differed from disk; the check then changed them back (two restarts
+  per update). Now the pages' last check results are kept in the KV
+  `central_captcha_pages` (`saveCentralPages` after each check,
+  `loadCentralPages` before the WAF starts): an agent update with no rule
+  change writes identical rules and does not reload. Also: "login attack
+  from many addresses" was logged every 20 s while its reload waited for
+  the gap; now once per change of the site list. Other restart sources on
+  business500 are not xPGuard: `/etc/cron.d/CSPLiteSpeed` runs
+  `/usr/bin/update_lswsv2` at :04 and `/usr/bin/CSPUpdate -u LiteSpeed` at
+  :43 every hour (a LiteSpeed licence/update tool, not from an RPM), and
+  cPanel maps apachectl to `lswsctrl` (every cPanel httpd restart is a
+  LiteSpeed restart). Also seen: swap 99.9 % used, load 11-12, 171-189
+  lsphp, LSAPI_CHILDREN 20 saturated. DeepSeek points that were wrong:
+  xpguardcaptcha.site is the portal's own CAPTCHA domain, not a third
+  party; ports 7780/7743 must listen on the server's addresses (the
+  firewall REDIRECTs to them, port mode uses 7743); chained ModSecurity
+  rule lines carry no id by design; the 28k hosting list is an
+  ipMatchFromFile radix lookup (cheap), and the CAPTCHA never applies to
+  the PK-whitelisted visitors (WAF off for them). Test
+  `TestCentralPagesKeptAcrossRestarts`.
 - **Release 0.24.42: pass values for a week, no daily reload** (2026-11-07).
   The owner asked why even 1-3 restarts a day: 0.24.41 still reloaded once
   a day for the new day's pass-cookie values, now on every server with the

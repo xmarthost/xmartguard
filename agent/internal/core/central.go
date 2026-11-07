@@ -49,7 +49,39 @@ type centralConfig struct {
 const (
 	kvCentralVersion = "central_captcha_version"
 	kvCentralPass    = "central_captcha_pass" // JSON {ip: until unix}
+	// The pages' last check results: the WAF rules an agent writes when it
+	// starts (after an update) are the ones on disk, so a restart of the
+	// agent does not restart the web server (it did, twice: once without
+	// the pages, once when the 10-minute check found them working).
+	kvCentralPages = "central_captcha_pages" // JSON {host_page, site_page}
 )
+
+type centralPages struct {
+	HostPage string `json:"host_page"`
+	HostFW   string `json:"host_fw"`
+	SitePage bool   `json:"site_page"`
+}
+
+// loadCentralPages restores the pages' last check results.
+func (a *Agent) loadCentralPages() {
+	var p centralPages
+	if json.Unmarshal([]byte(store.GetKV(a.DB, kvCentralPages)), &p) != nil {
+		return
+	}
+	a.central.hostPage.Store(p.HostPage)
+	a.central.hostFW.Store(p.HostFW)
+	a.central.sitePage.Store(p.SitePage)
+}
+
+// saveCentralPages keeps the pages' check results when they changed.
+func (a *Agent) saveCentralPages() {
+	hp, _ := a.central.hostPage.Load().(string)
+	fw, _ := a.central.hostFW.Load().(string)
+	b, _ := json.Marshal(centralPages{HostPage: hp, HostFW: fw, SitePage: a.central.sitePage.Load()})
+	if store.GetKV(a.DB, kvCentralPages) != string(b) {
+		_ = store.SetKV(a.DB, kvCentralPages, string(b))
+	}
+}
 
 // central holds the pass list and serialises WAF reloads for it.
 type central struct {
@@ -143,6 +175,7 @@ func (a *Agent) syncHostPage(ctx context.Context) bool {
 	a.central.hostPage.Store(next)
 	a.central.hostErr.Store(why)
 	siteChanged := a.syncSitePage(ctx)
+	a.saveCentralPages()
 	return before != next || siteChanged
 }
 
@@ -729,6 +762,9 @@ func (a *Agent) centralLoop(ctx context.Context) {
 		a.central.applyMu.Unlock()
 	}
 	last, lastSites := time.Time{}, time.Time{}
+	// The sites last logged: the reload for them waits for the reload gap,
+	// and the same sites were logged every 20 seconds meanwhile.
+	logged := ""
 	for {
 		if time.Since(last) >= 10*time.Minute {
 			last = time.Now()
@@ -740,7 +776,10 @@ func (a *Agent) centralLoop(ctx context.Context) {
 		} else if cur := a.Settings.Get(); cur.Captcha.Central && cur.Captcha.CentralURL != "" && !captcha.GateWanted(cur) {
 			lastSites = time.Now()
 			if sites := a.loginAttackSites(); a.WAF.CentralSitesAdded(sites) {
-				a.Log.Info("login attack from many addresses: the CAPTCHA guards the website's login page", "sites", sites)
+				if k := strings.Join(sites, ","); k != logged {
+					logged = k
+					a.Log.Info("login attack from many addresses: the CAPTCHA guards the website's login page", "sites", sites)
+				}
 				refresh("CAPTCHA for a website under a login attack")
 			}
 		}

@@ -120,3 +120,21 @@ func TestSiteModeWithoutPortFallsBack(t *testing.T) {
 		t.Fatal("page left behind")
 	}
 }
+
+// An agent that restarts (an update) writes the WAF rules of the pages'
+// last check, not rules without them: an update must not restart the web
+// server twice (business500, 2026-11-07: LiteSpeed restarted ~30 s after
+// each agent update).
+func TestCentralPagesKeptAcrossRestarts(t *testing.T) {
+	a := newTestAgent(t, `{"waf":{"enabled":true}}`)
+	a.central.sitePage.Store(true)
+	a.central.hostPage.Store("https://server1.example.net/xpguard-check/")
+	a.central.hostFW.Store("")
+	a.saveCentralPages()
+	a.central.sitePage.Store(false)
+	a.central.hostPage.Store("")
+	a.loadCentralPages()
+	if hp, _ := a.central.hostPage.Load().(string); !a.central.sitePage.Load() || hp != "https://server1.example.net/xpguard-check/" {
+		t.Fatalf("not restored: %v %q", a.central.sitePage.Load(), hp)
+	}
+}
