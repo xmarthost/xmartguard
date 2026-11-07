@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.45** (see `VERSION`).
+- Current release: **0.24.46** (see `VERSION`).
 
 ## Working rules
 
@@ -322,6 +322,25 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.46: daily health check** (2026-11-08). The owner wants
+  one command to run on 3-4 servers a day and paste back. New
+  `deploy/xpguard-health.sh` (read-only; `curl -fsSL
+  https://raw.githubusercontent.com/xmarthost/xmartguard/main/deploy/xpguard-health.sh
+  | bash`, optional hours argument, default 24): server load/memory/swap
+  activity/disk/connections; agent version, service restarts, agent starts
+  and updates, warnings/errors by message, last errors; every LiteSpeed
+  restart from `lsrestart.log` with its likely cause (xPGuard WAF reload
+  within 90 s, agent start within 150 s, midnight log rotation,
+  CSPLiteSpeed cron minutes, else cPanel/other); 5xx by website, 503/508,
+  addresses; LSAPI max children by account; CloudLinux faults; crashes and
+  OOM kills; ipset sizes, WAF self-test, include, CAPTCHA settings, site
+  page check, CAPTCHA passes/withdrawals; CMS update results and failure
+  reasons; scanner counters; monitor events. Paths can be overridden by
+  XG_* variables for testing. For the restart cause the agent now logs
+  each of its reloads: `msg="web server reloaded for the WAF rules"` with
+  the files that changed (`changed=`) and `urgent=` (also the repeated
+  CAPTCHA pass refresh). Tried with fake logs here (attribution of the
+  three cause kinds, 5xx counting); shellcheck clean.
 - **Release 0.24.45: WordPress updates write files directly** (2026-11-08).
   business500's agent log had 5,090 "CMS automatic action failed", most
   "Warning: Could not create directory .../wp-content/upgrade/<slug>-…

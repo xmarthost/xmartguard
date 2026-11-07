@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -430,6 +431,12 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	// changed since: the files on disk are newer than what runs.
 	changed := len(stale) > 0 || m.reloadPending
 	listsOnly, urgent := !m.reloadPending, false
+	// What changed, for the log line of the reload (which files made the
+	// web server restart: the daily health check reads it).
+	var why []string
+	if m.reloadPending {
+		why = append(why, "retry of a failed reload")
+	}
 	for path, body := range files {
 		old, err := os.ReadFile(path)
 		if err == nil {
@@ -438,6 +445,7 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 		if err != nil || string(old) != body {
 			changed = true
 			base := filepath.Base(path)
+			why = append(why, base)
 			if filepath.Dir(path) != filepath.Clean(dir) || !addressLists[base] {
 				listsOnly = false
 			} else if base == FileCaptchaPass && addsLines(string(old), body) {
@@ -578,6 +586,10 @@ func (m *Manager) installMode(t Target, rules string, botFiles map[string]string
 	}
 	m.reloadPending = false
 	m.markLoaded()
+	if m.Log != nil {
+		sort.Strings(why)
+		m.Log.Info("web server reloaded for the WAF rules", "server", t.WebServer, "changed", strings.Join(why, ","), "urgent", urgent)
+	}
 	// A visitor who solved the CAPTCHA is sent back when this returns:
 	// give LiteSpeed's new server processes a moment to take over.
 	if urgent && t.LiteSpeed {
@@ -658,6 +670,9 @@ func (m *Manager) RefreshPasses() error {
 	m.setLastReload(time.Now())
 	if out, err := m.runTimeout(reload, 120*time.Second); err != nil {
 		return fmt.Errorf("reload failed: %s", strings.TrimSpace(out))
+	}
+	if m.Log != nil {
+		m.Log.Info("web server reloaded for the WAF rules", "server", t.WebServer, "changed", "repeated CAPTCHA pass", "urgent", true)
 	}
 	if t.LiteSpeed {
 		time.Sleep(PassSettle)
