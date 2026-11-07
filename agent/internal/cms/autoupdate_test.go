@@ -248,7 +248,7 @@ func TestBulkUpdate(t *testing.T) {
 // site's plugins and theme.
 func TestWPCLISkipsSiteCode(t *testing.T) {
 	got := strings.Join(wpArgv("brandavi", []string{"/usr/local/bin/wp"}, "/home2/brandavi/public_html", []string{"plugin", "update", "elementor"}), " ")
-	if got != "-u brandavi -- /usr/local/bin/wp plugin update elementor --path=/home2/brandavi/public_html --no-color --skip-plugins --skip-themes" {
+	if got != "-u brandavi -- /usr/local/bin/wp plugin update elementor --path=/home2/brandavi/public_html --no-color --skip-plugins --skip-themes "+wpDirectFS {
 		t.Fatalf("argv: %s", got)
 	}
 }

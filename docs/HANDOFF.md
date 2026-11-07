@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.44** (see `VERSION`).
+- Current release: **0.24.45** (see `VERSION`).
 
 ## Working rules
 
@@ -322,6 +322,24 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.45: WordPress updates write files directly** (2026-11-08).
+  business500's agent log had 5,090 "CMS automatic action failed", most
+  "Warning: Could not create directory .../wp-content/upgrade/<slug>-…
+  Error: No plugins updated". Checked with the owner: wp-content and
+  wp-content/upgrade belong to the site's user (755), quotas are free, no
+  root-owned upgrade folder on the server. Cause: wp-cli runs as the site's
+  owner (runuser), but the wp-cli script (cPanel WP Toolkit's `wp`) belongs
+  to root; WordPress's get_filesystem_method() compares the owner of a
+  file it creates with getmyuid() (the running script's owner), finds them
+  different and falls back to FTP, which has no credentials. Now every
+  wp-cli call gets `--exec=if(!defined('FS_METHOD'))define('FS_METHOD',
+  'direct');` (runs before WordPress loads; a site's own FS_METHOD stays).
+  Safe because the command already runs as the site's owner. Not tested
+  against a live WordPress here (wordpress.org is blocked in this
+  container); owner to watch the next CMS run's log. One other failure:
+  allceeda "Permission denied" reading its own wp-config.php (600, owner
+  allceeda) under runuser: asked the owner to test reading it as the user.
+  Test `TestWPCLISkipsSiteCode` covers the argument.
 - **Release 0.24.44: a shared pass value is withdrawn once, not every two
   minutes** (2026-11-08). business500's agent log: "CAPTCHA pass cookie sent
   from an address it was not given to: value withdrawn" for 87.81.231.117

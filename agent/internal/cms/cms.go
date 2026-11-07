@@ -772,8 +772,16 @@ func wpArgAllowed(a string) bool {
 // (brandaville.com: Elementor Pro 2.7 with Elementor 4, "There has been a
 // critical error") failed every update with that fatal error, the update
 // that would mend it included. Updates and deactivations need neither.
+// wpDirectFS makes WordPress write files itself (FS_METHOD "direct"):
+// wp-cli runs as the site's owner, but the wp-cli script it runs (cPanel's
+// WP Toolkit copy) belongs to root, so WordPress's ownership test failed
+// and it asked for FTP: "Could not create directory .../wp-content/upgrade"
+// for sites without FS_METHOD in wp-config.php (business500, 5,090 failed
+// updates). A site that sets it keeps its own value.
+const wpDirectFS = `--exec=if(!defined('FS_METHOD'))define('FS_METHOD','direct');`
+
 func wpArgv(owner string, wp []string, path string, args []string) []string {
-	cmd := append(append(slices.Clone(wp), args...), "--path="+path, "--no-color", "--skip-plugins", "--skip-themes")
+	cmd := append(append(slices.Clone(wp), args...), "--path="+path, "--no-color", "--skip-plugins", "--skip-themes", wpDirectFS)
 	return append([]string{"-u", owner, "--"}, cmd...)
 }
 
