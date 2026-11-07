@@ -75,7 +75,8 @@ CSP=no; [ -f /etc/cron.d/CSPLiteSpeed ] && CSP=yes
 if [ -r "$LSRESTART" ]; then
   echo "(LiteSpeed's own log $LSRESTART; CSPLiteSpeed cron present: $CSP)"
   # "restart, LSWS running: 1" followed by the date line.
-  tail -n 4000 "$LSRESTART" | awk '/^restart, LSWS running/{getline d; print d}' | while read -r d; do
+  # (one restart can write two entries in the same second: counted once)
+  tail -n 4000 "$LSRESTART" | awk '/^restart, LSWS running/{getline d; if (d != last) print d; last = d}' | while read -r d; do
     t=$(date -d "$d" +%s 2>/dev/null) || continue
     [ "$t" -ge "$SINCE" ] || continue
     cause=""
@@ -95,6 +96,7 @@ if [ -r "$LSRESTART" ]; then
     [ -z "$cause" ] && cause="cPanel or other (not xPGuard: no xPGuard reload within 90 s)"
     printf '  %s  %s\n' "$(date -d "@$t" '+%F %T')" "$cause"
   done | tee /tmp/.xg_rs.$$
+  echo "(before agent 0.24.46 xPGuard did not log its reloads: older xPGuard reloads show as 'cPanel or other')"
   echo "-- totals: $(wc -l < /tmp/.xg_rs.$$) restarts; by cause:"
   sed -E 's/^  [0-9-]+ [0-9:]+  //; s/ \(.*//' /tmp/.xg_rs.$$ | sort | uniq -c | sort -rn | sed 's/^/  /'
 else
@@ -112,12 +114,12 @@ if [ -d "$DOMLOGS" ]; then
   find "$DOMLOGS" -maxdepth 2 -type f -mmin -$((HOURS * 60 + 60)) ! -name '*.bkup' ! -name '*bytes_log' ! -name '*.offset' 2>/dev/null > /tmp/.xg_dl.$$
   : > /tmp/.xg_5xx.$$
   while read -r f; do
-    T 30 awk -v a="[$D0" -v b="[$D1" -v site="$(basename "$f" | sed 's/-ssl_log$//')" '(index($0,a) || index($0,b)) && match($0,/" (50[0-9]) /){c=substr($0,RSTART+2,3); print site, c, $1}' "$f" >> /tmp/.xg_5xx.$$
+    T 30 awk -v a="[$D0" -v b="[$D1" -v site="$(basename "$f" | sed 's/-ssl_log$//')" '(index($0,a) || index($0,b)) && match($0,/" (5[0-9][0-9]) /){c=substr($0,RSTART+2,3); print site, c, $1}' "$f" >> /tmp/.xg_5xx.$$
   done < /tmp/.xg_dl.$$
   echo "-- by website and code (top 20):"
   awk '{print $1, $2}' /tmp/.xg_5xx.$$ | sort | uniq -c | sort -rn | head -20 | sed 's/^/  /'
-  echo "-- 503/508 (overload or account limits) by website (top 10):"
-  awk '$2=="503"||$2=="508"{print $1}' /tmp/.xg_5xx.$$ | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
+  echo "-- 503/508/509 (overload, account limits, 509 = account bandwidth used up) by website (top 10):"
+  awk '$2=="503"||$2=="508"||$2=="509"{print $1, $2}' /tmp/.xg_5xx.$$ | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
   echo "-- addresses getting the most 5xx (top 15):"
   awk '{print $3}' /tmp/.xg_5xx.$$ | sort | uniq -c | sort -rn | head -15 | sed 's/^/  /'
   rm -f /tmp/.xg_dl.$$ /tmp/.xg_5xx.$$
@@ -128,15 +130,14 @@ h "5. PHP AND ACCOUNT LIMITS"
 if [ -r "$STDERR" ]; then
   tail -c 300000000 "$STDERR" > /tmp/.xg_se.$$
   echo "LSAPI 'Reached max children' in the last 300 MB of stderr.log: $(grep -ac 'Reached max children' /tmp/.xg_se.$$)"
-  echo "-- by account (top 10):"
+  echo "-- by account, where the log line names it (top 10):"
   grep -a 'Reached max children' /tmp/.xg_se.$$ | tail -50000 | grep -aoE '/home[0-9]*/[a-z0-9_]+' | sort | uniq -c | sort -rn | head -10 | sed 's/^/  /'
   rm -f /tmp/.xg_se.$$
 fi
 if command -v lveinfo >/dev/null 2>&1; then
-  echo "-- CloudLinux accounts hitting limits (EPf entry processes, PMemF memory, NprocF processes):"
-  T 60 lveinfo --period=1d --by-fault=any --display-username --limit=10 -o json 2>/dev/null \
-    | grep -oE '"(ID|EPf|PMemF|NprocF|VMemF)": *("[^"]*"|[0-9]+)' | paste -d' ' - - - - - 2>/dev/null | sed 's/^/  /' \
-    || T 60 lveinfo --period=1d --by-fault=any --display-username --limit=10
+  echo "-- CloudLinux accounts hitting limits (EPf entry processes, PMemF memory, NprocF processes, last day):"
+  T 60 lveinfo --period=1d --by-fault=any --display-username --limit=10 --columns=ID,EPf,PMemF,VMemF,NprocF,aCPU,mPMem,lPMem 2>/dev/null | sed 's/^/  /' \
+    || T 60 lveinfo --period=1d --by-fault=any --display-username --limit=10 | sed 's/^/  /'
 fi
 
 # ---------------------------------------------------------------- 6. crashes
@@ -154,7 +155,7 @@ if command -v ipset >/dev/null 2>&1; then
   done
 fi
 echo "-- WAF rules: $(ls "$WAF_DIR"/*.conf 2>/dev/null | wc -l) conf files, rules.conf changed $(stat -c %y "$WAF_DIR/rules.conf" 2>/dev/null | cut -c1-19)"
-echo "-- WAF self-test: $(T 30 xpguard-agent call waf.status | grep -oE '"self_test":\{"at":[0-9]+,"ok":(true|false),"status":[0-9]+' | sed -E 's/.*"at":([0-9]+),"ok":([a-z]+),"status":([0-9]+)/ok=\2 status=\3 at=\1/')"
+echo "-- WAF self-test: $(T 30 xpguard-agent call waf.status | tr -d ' \n' | grep -oE '"self_test":\{"at":[0-9]+,"ok":(true|false),"status":[0-9]+' | sed -E 's/.*"at":([0-9]+),"ok":([a-z]+),"status":([0-9]+)/ok=\2 status=\3 at=\1/')"
 HOOK=$(grep -ls 'xpguard' /etc/apache2/conf.d/modsec/modsec2.user.conf /etc/apache2/conf-enabled/*.conf /etc/httpd/conf.d/*.conf /usr/local/lsws/conf/*.conf 2>/dev/null | head -1)
 echo "-- WAF include: ${HOOK:-MISSING (the web server does not load the xPGuard rules)}"
 echo "-- CAPTCHA settings: $(grep -oE '"(central|central_mode|central_url|login_gate|hosting_login)": *("[^"]*"|true|false)' /etc/xpguard/settings.json 2>/dev/null | tr '\n' ' ')"
@@ -171,6 +172,6 @@ echo "-- CMS failure reasons (top 5):"
 agent_lines | grep 'CMS automatic action failed' | grep -oE '(Error|Warning): [^\\"]{0,90}' | sed -E 's/[0-9a-zA-Z]{16}"?$//; s#/home[0-9]*/[^/]+/#/home/<user>/#g' | sort | uniq -c | sort -rn | head -5 | sed 's/^/  /'
 echo "-- scanner: quarantined=$(agent_lines | grep -c 'msg="file quarantined"')  keeps-coming-back=$(agent_lines | grep -c 'keeps coming back')  quarantine-failed=$(agent_lines | grep -c 'quarantine failed')  queue-overflow=$(agent_lines | grep -c 'queue overflowed')"
 echo "-- process and cron monitor (last 8 events):"
-T 20 xpguard-agent call monitor.events '{"limit":8}' | grep -oE '"at":[0-9]+,"kind":"[a-z]+","user":"[^"]*","subject":"[^"]{0,110}|"action":"[a-z]+"' | paste -d' ' - - | sed -E 's/"at":([0-9]+)/\1/' | while read -r at rest; do echo "  $(date -d "@$at" '+%F %T') $rest"; done
+T 20 xpguard-agent call monitor.events '{"limit":8}' | tr -d '\n' | sed -E 's/": +/":/g; s/, +"/,"/g' | grep -oE '"at":[0-9]+,"kind":"[a-z]+","user":"[^"]*","subject":"[^"]{0,110}|"action":"[a-z]+"' | paste -d' ' - - | sed -E 's/"at":([0-9]+)/\1/' | while read -r at rest; do echo "  $(date -d "@$at" '+%F %T') $rest"; done
 
 printf '\nDone. Nothing was changed on this server.\n'

@@ -322,6 +322,16 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Health check script fixes (2026-11-08, no agent release).** First runs
+  on business300/500/800: a restart LiteSpeed logs twice in one second is
+  counted once; a note that before agent 0.24.46 xPGuard's reloads were not
+  logged (they show as "cPanel or other" for older times: business500's
+  19:26:50 and 20:13:47 were xPGuard's pass-list reloads); 509 (account
+  bandwidth used up) is listed with 503/508 (ennovizion.com 24,842 and
+  btkrate.com 16,110 × 509, mostly to Googlebot); lveinfo as a table (the
+  JSON parse printed nothing); WAF self-test and monitor events parse the
+  indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
+  do not name the account.
 - **Release 0.24.47: the portal sees the real address of visitors its own
   server passes on** (2026-11-08). The owner's DeepSeek check of business900
   (ERR_QUIC_PROTOCOL_ERROR on app.xpguard.org at 00:52) found: the failure
