@@ -226,3 +226,32 @@ func TestPassValuesForTheWeek(t *testing.T) {
 		}
 	}
 }
+
+// business500, 2026-11-08: a visitor behind a relay (87.81.0.0/16) sent its
+// pass from a new address every few minutes; each report withdrew the slot
+// again (two-minute quiet, while the WAF dropped the value only with the
+// next background reload), breaking the other visitors' passes each time.
+func TestWithdrawOncePerReload(t *testing.T) {
+	p := &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef")}
+	now := time.Now()
+	tok := p.Give("87.81.229.30", now)
+	slot := -1
+	for i, sl := range p.Slots(now) {
+		if sl[0] == tok {
+			slot = i
+		}
+	}
+	// The same visitor's network: its pass stays.
+	if p.Used("87.81.231.117", slot, now) {
+		t.Fatal("withdrawn for an address of the same network")
+	}
+	// Another network: withdrawn once; reports until the reload are the same misuse.
+	if !p.Used("198.51.100.7", slot, now) {
+		t.Fatal("not withdrawn")
+	}
+	for _, after := range []time.Duration{2 * time.Minute, 30 * time.Minute, 2 * time.Hour} {
+		if p.Used("198.51.100.7", slot, now.Add(after)) {
+			t.Fatalf("withdrawn again after %v", after)
+		}
+	}
+}

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.43** (see `VERSION`).
+- Current release: **0.24.44** (see `VERSION`).
 
 ## Working rules
 
@@ -322,6 +322,26 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.44: a shared pass value is withdrawn once, not every two
+  minutes** (2026-11-08). business500's agent log: "CAPTCHA pass cookie sent
+  from an address it was not given to: value withdrawn" for 87.81.231.117
+  slot 1 every ~2 minutes. Since 0.24.41 a withdrawn value leaves the WAF
+  only with the next background reload (up to 2 h), but the quiet time was
+  still 2 minutes, so each new report withdrew the slot again and broke the
+  passes of every other visitor on that slot each time. Now: quiet 3 hours
+  (until that reload), and a pass counts as given to the visitor's network
+  (IPv4 /16, IPv6 /64), since relays, VPNs and phones move within one
+  (87.81.0.0/16 is such a relay). Test `TestWithdrawOncePerReload`. Same
+  check of business500 (owner's stats): no LiteSpeed crashes (the "Core
+  dump is enabled" lines are start notices), swap full but not in use
+  (vmstat si/so ~0, 31 GB RAM available), 3 OOM kills of one account's
+  lsphp in its CloudLinux memory limit (UID 1117), LVE memory faults for a
+  few accounts (aqglassshowerdoo 381, jukincpanel 135, stabiliz 66) and
+  NPROC faults for liberato (235): per-account limits, not xPGuard.
+  kayzoe.com's 500s are a scanner hitting `?rest_route=/` paths. Open:
+  xPGuard's "CMS automatic action failed" (5,090 in the log, weekly retry
+  per plugin version) and "portal connection lost" (2,248); asked the
+  owner for sample lines.
 - **Release 0.24.43: an agent restart does not restart the web server**
   (2026-11-07). The owner's DeepSeek run on business500 (read-only) found
   LiteSpeed's own restart log `/usr/local/lsws/logs/lsrestart.log` (date

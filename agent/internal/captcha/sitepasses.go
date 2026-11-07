@@ -31,7 +31,11 @@ const passLife = 49 * time.Hour
 
 // withdrawQuiet: reports for a withdrawn value that arrive before the WAF
 // runs without it are the same misuse, not a new one.
-const withdrawQuiet = 2 * time.Minute
+// The WAF drops a withdrawn value with the next reload the server makes
+// anyway (up to two hours since 0.24.41, owner's rule: no reload of its
+// own); reports meanwhile withdrew the slot again every two minutes,
+// breaking other visitors' passes each time (business500, 2026-11-08).
+const withdrawQuiet = 3 * time.Hour
 
 // SitePasses records the pass cookies the website-address check gave out.
 type SitePasses struct {
@@ -168,6 +172,20 @@ func addrKey(ip string) string {
 	return a.String()
 }
 
+// sameNetwork reports whether two address keys are one visitor's network:
+// the same IPv4 /16 or IPv6 /64.
+func sameNetwork(a, b string) bool {
+	if a == b {
+		return true
+	}
+	x, y := net.ParseIP(a), net.ParseIP(b)
+	if x == nil || y == nil || x.To4() == nil || y.To4() == nil {
+		return false
+	}
+	m := net.CIDRMask(16, 32)
+	return x.To4().Mask(m).Equal(y.To4().Mask(m))
+}
+
 // Give returns a pass-cookie value for the visitor at ip and records it.
 func (p *SitePasses) Give(ip string, now time.Time) string { return p.GiveAll(now, ip) }
 
@@ -246,10 +264,14 @@ func (p *SitePasses) Used(ip string, slot int, now time.Time) bool {
 		return false
 	}
 	d := day(now)
-	// Given within the last passLife (a cookie lives at most two days).
+	// Given within the last passLife (a cookie lives at most two days), to
+	// this address or another of its network: phones, privacy relays and
+	// VPNs move within one (87.81.0.0/16 withdrew a slot every two minutes).
 	for _, dd := range []int64{d, d - 1, d - 2} {
-		if exp, ok := p.st.Given[p.token(dd, slot)][k]; ok && exp >= now.Unix() {
-			return false
+		for given, exp := range p.st.Given[p.token(dd, slot)] {
+			if exp >= now.Unix() && sameNetwork(given, k) {
+				return false
+			}
 		}
 	}
 	// Every value of the slot the WAF accepts changes (the week's too: a
