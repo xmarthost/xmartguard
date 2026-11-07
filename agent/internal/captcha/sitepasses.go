@@ -124,8 +124,13 @@ func (p *SitePasses) token(d int64, slot int) string {
 	return hex.EncodeToString(m.Sum(nil))[:32]
 }
 
-// Slots are the values the WAF accepts now, by slot: today's, then
-// yesterday's.
+// Slots are the values the WAF accepts now, by slot: today's first, then
+// those of the whole week (UTC days, weeks from the epoch) and the two
+// days before it. They change only with the week (or a withdrawn value),
+// so the web server is not reloaded every day for them (owner's rule,
+// 2026-11-07: no restarts that are not needed); the last day of a week is
+// in the next week's values too, so a pass given before the reload for a
+// new week stays good.
 func (p *SitePasses) Slots(now time.Time) [][]string {
 	if len(p.Secret) == 0 {
 		return nil
@@ -134,12 +139,21 @@ func (p *SitePasses) Slots(now time.Time) [][]string {
 	defer p.mu.Unlock()
 	p.load()
 	d := day(now)
+	base := Week(now) * 7
 	out := make([][]string, SiteSlots)
 	for s := range out {
-		out[s] = []string{p.token(d, s), p.token(d-1, s)}
+		out[s] = []string{p.token(d, s)}
+		for dd := base - 2; dd <= base+7; dd++ {
+			if dd != d {
+				out[s] = append(out[s], p.token(dd, s))
+			}
+		}
 	}
 	return out
 }
+
+// Week is the UTC week (days since the epoch / 7) the pass values belong to.
+func Week(now time.Time) int64 { return day(now) / 7 }
 
 // addrKey is the address a pass belongs to: an IPv6 visitor is its /64
 // (privacy addresses change within it).
@@ -211,7 +225,7 @@ func (p *SitePasses) forget(now time.Time) {
 	for k := range p.st.Gen {
 		var kd int64
 		var s int
-		if _, err := fmt.Sscanf(k, "%d|%d", &kd, &s); err != nil || kd < d-1 {
+		if _, err := fmt.Sscanf(k, "%d|%d", &kd, &s); err != nil || kd < min(d-1, Week(now)*7-2) {
 			delete(p.st.Gen, k)
 		}
 	}
@@ -232,12 +246,16 @@ func (p *SitePasses) Used(ip string, slot int, now time.Time) bool {
 		return false
 	}
 	d := day(now)
-	for _, dd := range []int64{d, d - 1} {
+	// Given within the last passLife (a cookie lives at most two days).
+	for _, dd := range []int64{d, d - 1, d - 2} {
 		if exp, ok := p.st.Given[p.token(dd, slot)][k]; ok && exp >= now.Unix() {
 			return false
 		}
 	}
-	for _, dd := range []int64{d, d - 1} {
+	// Every value of the slot the WAF accepts changes (the week's too: a
+	// shared value of any day of it).
+	base := Week(now) * 7
+	for dd := min(d-2, base-2); dd <= max(d, base+7); dd++ {
 		delete(p.st.Given, p.token(dd, slot))
 		p.st.Gen[fmt.Sprintf("%d|%d", dd, slot)]++
 	}

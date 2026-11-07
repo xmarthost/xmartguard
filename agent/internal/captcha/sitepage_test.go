@@ -169,3 +169,60 @@ func TestGiveAllAddresses(t *testing.T) {
 		t.Fatal("value for no address")
 	}
 }
+
+// The pass values change with the week, not the day: the web server is not
+// reloaded daily for them (owner's rule, 2026-11-07). A pass given on the
+// last day of a week is still good after the week's reload; a value shared
+// with another address changes every value of its slot.
+func TestPassValuesForTheWeek(t *testing.T) {
+	p := &SitePasses{Secret: []byte("0123456789abcdef0123456789abcdef")}
+	// A Monday-to-Sunday-like UTC week: day 7*n is its first day.
+	start := time.Unix(int64(20400*7)*86400+3600, 0)
+	accepted := func(now time.Time) map[string]bool {
+		m := map[string]bool{}
+		for _, sl := range p.Slots(now) {
+			for _, v := range sl {
+				m[v] = true
+			}
+		}
+		return m
+	}
+	first := accepted(start)
+	for i := 1; i < 7; i++ {
+		day := accepted(start.Add(time.Duration(i) * 24 * time.Hour))
+		if len(day) != len(first) {
+			t.Fatalf("day %d: %d values, week start %d", i, len(day), len(first))
+		}
+		for v := range day {
+			if !first[v] {
+				t.Fatalf("day %d: values changed within the week", i)
+			}
+		}
+	}
+	// Given on the last day of the week, before the new week's reload.
+	last := start.Add(6*24*time.Hour + 20*time.Hour)
+	tok := p.Give("203.0.113.5", last)
+	if !first[tok] {
+		t.Fatal("last day's value not in the week's")
+	}
+	if !accepted(start.Add(7 * 24 * time.Hour))[tok] {
+		t.Fatal("last day's value dropped by the new week")
+	}
+	// Shared: the slot's values change for the whole window.
+	slot := -1
+	for i, sl := range p.Slots(last) {
+		if sl[0] == tok {
+			slot = i
+		}
+	}
+	before := append([]string(nil), p.Slots(last)[slot]...)
+	if !p.Used("198.51.100.7", slot, last) {
+		t.Fatal("a value from another address kept")
+	}
+	after := p.Slots(last)[slot]
+	for i := range before {
+		if before[i] == after[i] {
+			t.Fatalf("value %d of the slot not withdrawn", i)
+		}
+	}
+}

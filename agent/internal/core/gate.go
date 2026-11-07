@@ -41,12 +41,22 @@ func (a *Agent) gateLoop(ctx context.Context) {
 		if d == day {
 			continue
 		}
+		newWeek := d/7 != day/7
 		day = d
-		// The pass-cookie values change with the UTC day (one reload a day;
-		// also where the site page sets the cookie in every mode).
-		if st := a.Settings.Get(); captcha.GateWanted(st) || captcha.SiteWanted(st) || a.central.sitePage.Load() {
+		st := a.Settings.Get()
+		// The server's own login-page CAPTCHA: its values change daily.
+		if captcha.GateWanted(st) {
 			if err := a.WAF.Apply(); err != nil {
 				a.Log.Warn("WAF re-apply for the login-page CAPTCHA failed", "err", err)
+			}
+			continue
+		}
+		// The portal's pass cookie: values for a whole week, so one
+		// reload a week, with the next one the server makes (background;
+		// the last day of the old week stays good meanwhile).
+		if newWeek && (captcha.SiteWanted(st) || a.central.sitePage.Load()) {
+			if err := a.WAF.ApplyBackground(); err != nil {
+				a.Log.Warn("WAF re-apply for the CAPTCHA pass values failed", "err", err)
 			}
 		}
 	}

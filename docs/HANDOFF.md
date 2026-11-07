@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.41** (see `VERSION`).
+- Current release: **0.24.42** (see `VERSION`).
 
 ## Working rules
 
@@ -322,6 +322,24 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   that only Serial audit logs exist, and that its "Rule not supported"
   errors "can simply be ignored". If an article cannot be fetched, stop
   and ask the owner to paste it.
+- **Release 0.24.42: pass values for a week, no daily reload** (2026-11-07).
+  The owner asked why even 1-3 restarts a day: 0.24.41 still reloaded once
+  a day for the new day's pass-cookie values, now on every server with the
+  site page. `SitePasses.Slots` now gives each slot today's value and those
+  of the whole UTC week (days since the epoch / 7) plus the two days
+  before it, so the rendered rules change only with the week; the
+  gateLoop re-applies at a new week with ApplyBackground (rides on the
+  next reload, at most 2 h), and the last day of a week is in the next
+  week's values, so passes given before that reload stay good. The
+  server's own login-page CAPTCHA (GateWanted) keeps its daily reload.
+  `Used` accepts a pass given in the last two days (cookie life) and a
+  value from another address now changes every value of its slot in the
+  window (was today's and yesterday's only). Restarts left for the
+  portal's CAPTCHA: one per release, one with a background reload per
+  week, and the pass list only where the site page cannot be served.
+  The "0 restarts on earlier days" in the owner's check is most likely
+  the rotated error_log (asked to confirm with head -1). Test
+  `TestPassValuesForTheWeek`.
 - **Release 0.24.41: no LiteSpeed restart per CAPTCHA pass** (2026-11-07).
   Customers on business500, business300 and websoulhost business200 (PK,
   whitelisted) saw ERR_CONNECTION_CLOSED / QUIC errors. Checked: the
