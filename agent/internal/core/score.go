@@ -122,6 +122,8 @@ func (a *Agent) siteScores(user string) []SiteScore {
 				take(10, "Move the backup or database dump out of the website folder")
 			case "wp_debug":
 				take(5, "Switch WP_DEBUG off (it shows errors to visitors)")
+			case "wp_config_readable":
+				take(15, "Make wp-config.php readable by the owner only (other accounts can read the database password)")
 			case "php_eol", "php":
 				take(10, "Use a supported PHP version")
 			case "wp_core":

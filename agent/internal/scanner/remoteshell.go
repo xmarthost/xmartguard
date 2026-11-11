@@ -17,7 +17,7 @@ import (
 
 var (
 	// eval of fetched code: eval('?>' . $x) runs a whole PHP file.
-	reEvalFetched = regexp.MustCompile(`(?i)\beval\s*\(\s*(['"])\?>['"]\s*\.\s*\$\w+`)
+	reEvalFetched = regexp.MustCompile(`(?i)\beval\s*\(\s*(['"])\?>['"]\s*\.\s*\$[^\s.;)]+`)
 	reFetchRemote = regexp.MustCompile(`(?i)\bcurl_exec\s*\(|\bfile_get_contents\s*\(\s*(?:['"]https?://|\$\w*(?:url|link|src|remote|host)\w*\s*[,)])|\bfopen\s*\(\s*['"]https?://|\bstream_get_contents\s*\(`)
 	// $x = curl_exec(...); ... eval($x)
 	reCurlVar = regexp.MustCompile(`\$(\w+)\s*=\s*curl_exec\s*\(`)

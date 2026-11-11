@@ -187,6 +187,49 @@ func analyzePHP(content []byte) *verdict {
 	if hasInput && openFileManager(s) {
 		return &verdict{CatVirus, "PHP.Webshell.FileManager"}
 	}
+	// 6b4. Shapes from the server-wide compromise of 2026-11-11 (hidden2.go).
+	if selfReplicating(s) {
+		return &verdict{CatVirus, "PHP.Dropper.SelfReplicating"}
+	}
+	if evalOrAssert && remoteEvalDirect(s) {
+		return &verdict{CatVirus, "PHP.Backdoor.RemoteCodeEval"}
+	}
+	if hasInput && varFunc && hiddenRunnerOnInput(s) {
+		return &verdict{CatVirus, "PHP.Backdoor.HiddenFunctionName"}
+	}
+	if varFunc && !library && decoders >= 3 && hiddenFunctionNames(s) >= 3 {
+		return &verdict{CatVirus, "PHP.Obfuscated.HiddenFunctionNames"}
+	}
+	if hasInput && fileManagerShell(s) {
+		return &verdict{CatVirus, "PHP.Webshell.FileManager"}
+	}
+	if hasInput && zipDropper(s) {
+		return &verdict{CatVirus, "PHP.Uploader.ZipExtract"}
+	}
+	if evalOrAssert && reXorEval.Match(s) {
+		return &verdict{CatVirus, "PHP.Obfuscated.XorEval"}
+	}
+	if decoders >= 1 && !library && tempIncludeLoader(s) {
+		return &verdict{CatVirus, "PHP.Dropper.TempIncludeLoader"}
+	}
+	if evalOrAssert && !library && reEvalDynCall.Match(s) {
+		return &verdict{CatVirus, "PHP.Obfuscated.EvalDynamicCall"}
+	}
+	if hasInput && zipSiteDeployer(s) {
+		return &verdict{CatVirus, "PHP.Dropper.ZipSiteDeployer"}
+	}
+	if found, login := wpRemoteActor(s); found {
+		if login {
+			return &verdict{CatVirus, "PHP.Backdoor.WPRemoteLogin"}
+		}
+		return &verdict{CatSuspicious, "PHP.Suspicious.WPRemotePoster"}
+	}
+	if hasInput && standaloneFileManager(s) {
+		if !reAuth.Match(s) {
+			return &verdict{CatVirus, "PHP.Webshell.FileManager"}
+		}
+		return &verdict{CatSuspicious, "PHP.Suspicious.FileManager"}
+	}
 	// 6c. A program downloaded, made executable and started (wget ... &&
 	// chmod 700 ... && nohup ...: mangomela.com.au, 2026-11-06).
 	if may(reDownloadRun, low) && reDownloadRun.Match(s) {
@@ -194,7 +237,7 @@ func analyzePHP(content []byte) *verdict {
 	}
 	// 6d. eval of a payload whose decoder's name is spelled in pieces
 	// ($fn = 'base'.'64_decode'; a 3 MB payload in 200,000 pieces).
-	if evalOrAssert && hiddenDecoder(s) {
+	if evalOrAssert && (hiddenDecoder(s) || hiddenDecoderVar(s)) {
 		return &verdict{CatVirus, "PHP.Obfuscated.HiddenDecoder"}
 	}
 	// 7. goto-flattened obfuscation with an execution sink.

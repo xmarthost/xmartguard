@@ -31,6 +31,13 @@ import (
 const (
 	IDFamilyRemove = 7700941
 	IDFamilyStrict = 7700940
+	// IDUnicodeEscRemove takes CRS 920540 (\uXXXX escapes) out of a
+	// request that a relaxation flagged with tx.xg_no_uesc: a WordPress
+	// core REST write's JSON carries such escapes by design (page content:
+	// \u003c for <). CRS itself skips 920540 for JSON bodies (920539), but
+	// LiteSpeed's engine lacks the variable it reads, so Jetpack's signed
+	// page writes were refused (adventomarketing.com, 2026-11-11).
+	IDUnicodeEscRemove = 7700981
 )
 
 // familyChunk is how many rule ids one removal rule carries.
@@ -103,6 +110,7 @@ func familyRemoveSetup(dir string) string {
 	for _, f := range crsFamilies {
 		unset = append(unset, "setvar:tx."+f.flag+"=0")
 	}
+	unset = append(unset, "setvar:tx.xg_no_uesc=0")
 	fmt.Fprintf(&b, `SecRule &TX:xg_strict "@ge 1" "id:%d,phase:2,pass,t:none,nolog,%s"`+"\n", IDFamilyStrict, strings.Join(unset, ","))
 	for fi, f := range crsFamilies {
 		ids := crsFamilyIDs(dir, f.file)
@@ -118,6 +126,7 @@ func familyRemoveSetup(dir string) string {
 			fmt.Fprintf(&b, `SecRule TX:%s "@eq 1" "id:%d,phase:2,pass,t:none,nolog,%s"`+"\n", f.flag, IDFamilyRemove+fi*5+c, strings.Join(ctl, ","))
 		}
 	}
+	fmt.Fprintf(&b, `SecRule TX:xg_no_uesc "@eq 1" "id:%d,phase:2,pass,t:none,nolog,ctl:ruleRemoveById=920540"`+"\n", IDUnicodeEscRemove)
 	return b.String()
 }
 

@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.47** (see `VERSION`).
+- Current release: **0.24.48** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,78 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.48: Hetzner DDoS, server-wide hack, REST 403** (2026-11-11).
+  From the owner's three evidence zips (server1.superfastcloudhosting,
+  65.109.111.76) and the adventomarketing.com ticket.
+  *DDoS (2026-11-10):* a reflection attack made thousands of servers send
+  SYN-ACKs and DNS/NTP answers to the server. The DoS limit counted the
+  SYN-ACKs as new connections (ctstate NEW): 2.17 million DoS bans of the
+  reflectors, `xg_tban4` (1,048,576) filled, every apply failed ("Hash is
+  full"). The UDP answers filled conntrack (262,144): every new packet,
+  HTTP and the server's own DNS lookups, was dropped. Now: (1) the DoS
+  rule counts only real connection attempts (iptables `-p tcp --syn`, nft
+  `tcp flags & (fin|syn|rst|ack) == syn`); (2) `Ruleset.ReflectGuard` (on
+  with DoS, off with CSF) puts reflected UDP (source ports in
+  `ReflectionPorts`: 19, 53, 123, 161, 389, 1900, 3283, 3389, 3702, 5353,
+  10001, 11211, 37810) to the kernel's local port range (read from
+  /proc/sys/net/ipv4/ip_local_port_range, `LocalPorts`) out of conntrack:
+  iptables raw chain `XPGUARD_RAW` (`-j CT --notrack`, hooked in raw
+  PREROUTING, removed by Remove), nft chain `reflect` at priority raw;
+  the port filter (and the exempt chain) let these untracked answers in,
+  only to the local port range, so a spoofed source port reaches no
+  service; (3) at most `maxTempBans` (500,000) temporary bans are loaded,
+  the longest left kept, the rest logged, so apply never fails on a full
+  set. Hetzner's own filtering is still needed for floods larger than the
+  link. Not right in the DeepSeek report: the bans were DoS bans of
+  reflectors, not threat-feed IPs; ports 7780/7743 must not bind to
+  localhost (the firewall REDIRECTs to them); xpguardcaptcha.site is ours.
+  Tests: `TestReflectionFloodRules`, `TestTempBansCapped`,
+  `TestDoSRulesetLoads` (raw chain and untracked accept on the kernel,
+  both backends), `TestDoSCountsTCPOnly`.
+  *Hack (2026-11-11, 130 accounts):* CageFS was off for 47 accounts and
+  public_html was 755 with wp-config.php 644, so a shell on one of them
+  read every site's database password, replaced the WordPress
+  administrator's password hash in the database, logged in and uploaded
+  shells with the wp-file-manager plugin (authenticated, not its CVE).
+  None of the shells had a finding (`xpguard-agent check` on the 313
+  files; note: check skips root-owned files, copy samples to another
+  owner). New scanner rules (`hidden2.go`, wired in analyzePHP 6b4):
+  HiddenFunctionNames (01.php: function names base64-decoded into
+  variables and called), HiddenDecoder through variables ($c = $a.$b,
+  04.php; `resolvedNames`), RemoteCodeEval for eval('?>'.curl_exec())
+  and stream-context reads (bootstrap.inc.php, options-media.php; also
+  non-ASCII variable names in `reEvalFetched`), XorEval (css.php),
+  TempIncludeLoader (decoded data written to a temp file and included:
+  editUsers.php, rum.php, g.php), EvalDynamicCall (eval($a[70](...))),
+  FileManager with a command console even behind a login (hmhfm.php),
+  standalone file managers (all of list/write/upload/delete/rename/
+  mkdir/rmdir, no class/DB/site include: virus without login,
+  suspicious with one: kl.php, itu.php), ZipExtract (zip.php),
+  ZipSiteDeployer (setup.php: ZIP upload + .htaccess write),
+  WPRemoteLogin / suspicious WPRemotePoster (a page loading wp-load.php
+  that logs in or posts for any request: wp-actions.php),
+  SelfReplicating (copy(__FILE__) + touch(time()+years): a.php/bots.php),
+  `Htaccess.Hacked.SiteHijack` (whole site redirected away except
+  wp-admin/wp-login; CleanHtaccess drops it), and
+  `HTML.SEOSpam.GamblingDoorway` for saved copies of a WordPress page
+  with a gambling title/description (Indonesian slot/togel words too).
+  On the evidence: 42 of the real shells caught, none of the ~250 legit
+  files. Audit: `wp_config_readable` (high; wp-config.php readable by
+  others with every parent folder passable) and "CageFS is off for N
+  accounts" (high, `cagefsctl --list-disabled`); site score -15 for the
+  first. Tests: `TestFleetServerWideHack1111` (inert fixtures and look-
+  alikes that stay clean), `TestCrossAccountPivotReported`.
+  Owner to know: DeepSeek's 313 "webshells" include many legit files
+  (BlogVault/MalCare `bv_connector_*.php` and hash-named restore files,
+  contact forms, app pages such as kksite's): restore those from
+  `/root/quarantine-20261111/`. Still missed (review by hand): password
+  uploader/deleter pairs (wp-uploading.php, wp-delete.php), adminer
+  renamed (admi.php), dildarte's obfuscated files.
+  *REST 403 (adventomarketing.com, Jetpack):* CRS 920540 (JSON \u
+  escapes) blocked REST writes on LiteSpeed (Apache skips it through the
+  exclusion's range). The WP REST exclusion now removes 920540 and sets
+  `tx.xg_no_uesc`, removed in phase 2 (7700981) for LiteSpeed. Test:
+  `TestWPRestWriteSkipsUnicodeEscapeRule`.
 - **Release 0.24.47: the portal sees the real address of visitors its own
   server passes on** (2026-11-08). The owner's DeepSeek check of business900
   (ERR_QUIC_PROTOCOL_ERROR on app.xpguard.org at 00:52) found: the failure

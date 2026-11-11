@@ -29,6 +29,7 @@ const CHECKS: Record<string, string> = {
   public_backup: 'Public backups',
   wp_core: 'WordPress core',
   wp_debug: 'WordPress debug',
+  wp_config_readable: 'Database password readable by other accounts',
   php: 'PHP settings',
   php_eol: 'Old PHP',
   php_cve: 'PHP security update',

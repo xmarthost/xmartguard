@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,6 +46,20 @@ type Ruleset struct {
 	DoS                        bool
 	DoSPerMinute               int
 	DoSBanSeconds              int
+	// ReflectGuard keeps reflected UDP (answers of DNS, NTP and similar
+	// services to queries sent in this server's name) out of the kernel's
+	// connection table: a reflection flood filled it (262,144 entries) and
+	// every new packet, HTTP too, was dropped (server1.superfastcloudhosting,
+	// 2026-11-10). Such packets are not tracked; the ones answering this
+	// server's own lookups still reach it (the port filter lets untracked
+	// packets from these source ports in, to the local port range only,
+	// where the server's own queries leave from: a spoofed packet cannot
+	// reach a service port this way). Off with CSF, which owns the rules
+	// then.
+	ReflectGuard bool
+	// LocalPorts is the kernel's local port range ("32768-60999"), read
+	// from /proc by Build; empty means the Linux default.
+	LocalPorts string
 	// IPDB is the shared blocklist from the portal (both families).
 	IPDB []string
 	// NoSetCounters disables per-element counters (old nftables versions).
@@ -199,6 +215,10 @@ func (r Ruleset) Render() string {
 	b.WriteString("\tchain exempt {\n")
 	if pf := r.Ports; pf != nil {
 		b.WriteString("\t\tct state established,related accept\n")
+		if r.ReflectGuard {
+			lo, hi := r.localPortRange()
+			fmt.Fprintf(&b, "\t\tct state untracked udp sport { %s } udp dport %d-%d accept\n", reflectionPortList(", "), lo, hi)
+		}
 		nftPorts(&b, "tcp", pf.TCPIn)
 		nftPorts(&b, "udp", pf.UDPIn)
 		b.WriteString("\t\tmeta l4proto { tcp, udp } counter drop comment \"xg-port\"\n")
@@ -319,16 +339,30 @@ func (r Ruleset) Render() string {
 		if ban <= 0 {
 			ban = 600
 		}
-		fmt.Fprintf(&b, "\t\tct state new meta l4proto tcp update @dos4 { ip saddr limit rate over %d/minute burst %d packets } add @tempban4 { ip saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
-		fmt.Fprintf(&b, "\t\tct state new meta l4proto tcp update @dos6 { ip6 saddr limit rate over %d/minute burst %d packets } add @tempban6 { ip6 saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
+		// Connection attempts only (SYN without ACK): the kernel also calls
+		// "new" an unsolicited SYN-ACK, which a reflection attack makes
+		// thousands of servers send here, and they were all banned (2.17
+		// million DoS bans on one server; the ban set filled up and every
+		// firewall apply failed, 2026-11-10).
+		fmt.Fprintf(&b, "\t\tct state new tcp flags & (fin|syn|rst|ack) == syn update @dos4 { ip saddr limit rate over %d/minute burst %d packets } add @tempban4 { ip saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
+		fmt.Fprintf(&b, "\t\tct state new tcp flags & (fin|syn|rst|ack) == syn update @dos6 { ip6 saddr limit rate over %d/minute burst %d packets } add @tempban6 { ip6 saddr timeout %ds } counter drop comment \"xg-dos\"\n", r.DoSPerMinute, r.DoSPerMinute/2+1, ban)
 	}
 	if pf := r.Ports; pf != nil {
 		b.WriteString("\t\tct state established,related accept\n")
+		if r.ReflectGuard {
+			lo, hi := r.localPortRange()
+			fmt.Fprintf(&b, "\t\tct state untracked udp sport { %s } udp dport %d-%d accept\n", reflectionPortList(", "), lo, hi)
+		}
 		nftPorts(&b, "tcp", pf.TCPIn)
 		nftPorts(&b, "udp", pf.UDPIn)
 		b.WriteString("\t\tmeta l4proto { tcp, udp } counter drop comment \"xg-port\"\n")
 	}
 	b.WriteString("\t}\n")
+	if r.ReflectGuard {
+		// Before connection tracking (priority raw).
+		lo, hi := r.localPortRange()
+		fmt.Fprintf(&b, "\tchain reflect {\n\t\ttype filter hook prerouting priority raw; policy accept;\n\t\tiifname != \"lo\" udp sport { %s } udp dport %d-%d notrack\n\t}\n", reflectionPortList(", "), lo, hi)
+	}
 	if pf := r.Ports; pf != nil {
 		b.WriteString("\tchain output {\n\t\ttype filter hook output priority filter - 5; policy accept;\n")
 		b.WriteString("\t\toifname \"lo\" accept\n\t\tct state established,related accept\n")
@@ -350,6 +384,42 @@ func (r Ruleset) Render() string {
 	}
 	b.WriteString("}\n")
 	return b.String()
+}
+
+// ReflectionPorts are the UDP source ports of services abused for
+// reflection and amplification (DNS, NTP, chargen, SNMP, CLDAP, SSDP,
+// Apple Remote Desktop, RDP, WS-Discovery, mDNS, Ubiquiti discovery,
+// memcached, DVR).
+var ReflectionPorts = []int{19, 53, 123, 161, 389, 1900, 3283, 3389, 3702, 5353, 10001, 11211, 37810}
+
+// localPortRange returns the local (ephemeral) port range as two numbers.
+func (r Ruleset) localPortRange() (int, int) {
+	var lo, hi int
+	if n, _ := fmt.Sscanf(strings.ReplaceAll(r.LocalPorts, "-", " "), "%d %d", &lo, &hi); n == 2 && lo >= 1024 && hi >= lo && hi <= 65535 {
+		return lo, hi
+	}
+	return 32768, 60999
+}
+
+// ReadLocalPorts reads the kernel's local port range ("" when unknown).
+func ReadLocalPorts() string {
+	b, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err != nil {
+		return ""
+	}
+	f := strings.Fields(string(b))
+	if len(f) != 2 {
+		return ""
+	}
+	return f[0] + "-" + f[1]
+}
+
+func reflectionPortList(sep string) string {
+	s := make([]string, len(ReflectionPorts))
+	for i, p := range ReflectionPorts {
+		s[i] = strconv.Itoa(p)
+	}
+	return strings.Join(s, sep)
 }
 
 func nftFam(cidr string) string {

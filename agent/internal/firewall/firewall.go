@@ -325,6 +325,16 @@ func (m *Manager) Build() (Ruleset, error) {
 	if csf.Enabled {
 		rs.Ignore = append(rs.Ignore, CSFExempt()...)
 	}
+	// Reflected UDP kept out of the connection table, with the DoS
+	// protection, where this firewall owns the rules (not with CSF).
+	rs.ReflectGuard = cfg.DoS && !csf.Enabled
+	rs.LocalPorts = ReadLocalPorts()
+	// The kernel's ban set holds at most ipsetMaxElem addresses: more made
+	// every firewall apply fail ("Hash is full") and no ban was set at all
+	// (2026-11-10). The newest bans (the longest left) are kept.
+	if dropped := capTempBans(rs.TempBan, maxTempBans); dropped > 0 {
+		m.Log.Warn("too many temporary bans: the oldest are not loaded", "kept", maxTempBans, "left_out", dropped)
+	}
 	if m.Geo != nil {
 		rs.CountryBlock = m.Geo.CIDRs(cfg.BlockedCountries)
 		rs.CountryAllow = m.Geo.CIDRs(cfg.AllowedCountries)
@@ -1317,4 +1327,29 @@ func (m *Manager) RefreshDDNS(ctx context.Context) bool {
 	}
 	m.ddns = next
 	return changed
+}
+
+// maxTempBans is how many temporary bans are loaded at most (the kernel's
+// set holds 1,048,576; room is left for the bans the kernel adds itself).
+var maxTempBans = 500_000
+
+// capTempBans keeps the n bans with the longest time left and reports how
+// many were left out.
+func capTempBans(m map[string]time.Duration, n int) int {
+	if len(m) <= n {
+		return 0
+	}
+	type ban struct {
+		ip   string
+		left time.Duration
+	}
+	all := make([]ban, 0, len(m))
+	for ip, d := range m {
+		all = append(all, ban{ip, d})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].left > all[j].left })
+	for _, b := range all[n:] {
+		delete(m, b.ip)
+	}
+	return len(all) - n
 }

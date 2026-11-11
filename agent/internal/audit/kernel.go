@@ -1,11 +1,16 @@
 package audit
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ---- Kernel and tenant isolation ----
@@ -59,7 +64,54 @@ func (a *Auditor) kernel() []Item {
 				Detail: "Mount /proc with hidepid=2 (or hidepid=invisible) so an account sees only its own processes; give monitoring tools a gid= exception."})
 		}
 	}
+	out = append(out, a.cagefsDisabled()...)
 	return append(out, a.syncookies()...)
+}
+
+// cagefsDisabled reports the accounts CageFS does not jail: from one of
+// them a shell reads every other site's files that others may read
+// (wp-config.php with mode 644) and the user list; 47 such accounts were
+// how 130 sites on one server were taken over (2026-11-11).
+func (a *Auditor) cagefsDisabled() []Item {
+	list := a.CageFSDisabled
+	if list == nil {
+		if !isFile(filepath.Join(a.StackRoot, "usr/sbin/cagefsctl")) {
+			return nil
+		}
+		list = func() []string {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			b, err := exec.CommandContext(ctx, "/usr/sbin/cagefsctl", "--list-disabled").Output()
+			if err != nil {
+				return nil
+			}
+			var users []string
+			for _, l := range strings.Split(string(b), "\n") {
+				l = strings.TrimSpace(l)
+				// The first line counts them ("47 disabled user(s)").
+				if l == "" || strings.ContainsAny(l, " \t") {
+					continue
+				}
+				users = append(users, l)
+			}
+			return users
+		}
+	}
+	users := list()
+	if len(users) == 0 {
+		return nil
+	}
+	sort.Strings(users)
+	shown := users
+	if len(shown) > 30 {
+		shown = shown[:30]
+	}
+	more := ""
+	if len(users) > len(shown) {
+		more = fmt.Sprintf(" and %d more", len(users)-len(shown))
+	}
+	return []Item{{Check: "isolation", Severity: "high", Title: fmt.Sprintf("CageFS is off for %d accounts", len(users)),
+		Detail: "Not jailed: " + strings.Join(shown, ", ") + more + ". A shell on one of them reads other sites' files that are readable by others (wp-config.php: database passwords) and lists every account. Enable it (cagefsctl --enable USER) unless an account really needs to be outside."}}
 }
 
 var (

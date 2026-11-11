@@ -70,7 +70,52 @@ func htaccessHack(content []byte) *Detection {
 	if cloaking(content) {
 		return &Detection{CatVirus, "Htaccess.Hacked.SearchCloaking"}
 	}
+	if siteHijack(content) {
+		return &Detection{CatVirus, "Htaccess.Hacked.SiteHijack"}
+	}
 	return nil
+}
+
+// The whole site sent to another one, except the WordPress admin and the
+// login, so the owner sees nothing (".htaccess" of 130 sites, gambling
+// pages on pages.dev, 2026-11-11):
+//
+//	RewriteRule ^wp-admin(?:/|$) - [L]
+//	RewriteRule ^wp-login\.php$ - [L]
+//	RewriteRule ^ https://example.pages.dev/ [R=302,L]
+//
+// A site that moved sends its admin along too, and names its old host in
+// a RewriteCond.
+var reAdminPassThrough = regexp.MustCompile(`(?im)^\s*RewriteRule\s+\^?/?wp-(?:admin|login)\S*\s+-\s+\[[^\]\n]*\bL\b`)
+
+func hijackGroup(group []string) bool {
+	m := reRuleTarget.FindStringSubmatch(group[len(group)-1])
+	if m == nil || !reExternalURL.MatchString(m[1]) || reDeadEnd.MatchString(m[1]) || !regexp.MustCompile(`(?i)\bR\b|\bR=`).MatchString(m[2]) {
+		return false
+	}
+	pat := strings.Fields(strings.TrimSpace(group[len(group)-1]))[1]
+	if !reCatchAll.MatchString(pat) {
+		return false
+	}
+	for _, l := range group[:len(group)-1] {
+		if strings.Contains(strings.ToLower(l), "%{http_host}") {
+			return false
+		}
+	}
+	return true
+}
+
+func siteHijack(content []byte) bool {
+	if !reAdminPassThrough.Match(content) {
+		return false
+	}
+	lines := strings.Split(string(content), "\n")
+	for _, g := range rewriteGroups(lines) {
+		if hijackGroup(lines[g.from : g.to+1]) {
+			return true
+		}
+	}
+	return false
 }
 
 // The ClickFix kit's .htaccess (clickfix.go) sends the home page and every
@@ -136,8 +181,9 @@ func kitGroups(lines []string) map[int]bool {
 			targets[strings.ToLower(strings.TrimPrefix(filepath.Base(m[2]), "/"))] = true
 		}
 	}
+	hijack := siteHijack([]byte(strings.Join(lines, "\n")))
 	for _, g := range rewriteGroups(lines) {
-		kit := cloakGroup(lines[g.from : g.to+1])
+		kit := cloakGroup(lines[g.from:g.to+1]) || hijack && hijackGroup(lines[g.from:g.to+1])
 		for j := g.from; j <= g.to && !kit; j++ {
 			lj := strings.ToLower(strings.ReplaceAll(lines[j], `\.`, "."))
 			for name := range targets {

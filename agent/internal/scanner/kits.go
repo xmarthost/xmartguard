@@ -209,6 +209,13 @@ func kitByPlace(path, ext string, content []byte) *Detection {
 			len(reGambling.FindAllIndex(content, 40)) >= 40 {
 			return &Detection{CatVirus, "HTML.SEOSpam.GamblingDoorway"}
 		}
+		// A saved copy of one of the site's WordPress pages, put in a
+		// folder named like the page so it is served instead of it, with
+		// a gambling title and description (Indonesian slot and lottery
+		// sites: 200 pages on 12 sites, 2026-11-11).
+		if !strings.Contains(low, "/wp-content/") && bytes.Count(content, []byte("wp-content")) >= 5 && gamblingHead(content) {
+			return &Detection{CatVirus, "HTML.SEOSpam.GamblingDoorway"}
+		}
 	case ext == ".php" && strings.Contains(low, "/wp-content/mu-plugins/"):
 		// A must-use plugin printing a hidden casino block kept next to it.
 		if m := reSiblingHTML.FindSubmatch(content); m != nil && reReadFile.Match(content) && reFooterHook.Match(content) {
@@ -263,3 +270,25 @@ func phishPage(low string, content []byte) bool {
 }
 
 var rePhishInput = regexp.MustCompile(`(?i)autocomplete\s*=\s*["']one-time-code|type\s*=\s*["']password|name\s*=\s*["'](?:cvv|cvc|card_?number|cc_?num|otp|pin)["']`)
+
+var (
+	// Gambling words of pages' titles (English and Indonesian).
+	reGamblingHead = regexp.MustCompile(`(?i)\b(?:slots?|togel|toto|gacor|maxwin|rtp|judi|scatter|situs|bandar|casinos?|jackpots?|sbobet|pragmatic|mahjong|betting|free spins)\b`)
+	reGamblingCore = regexp.MustCompile(`(?i)\b(?:slots?|togel|toto|gacor|judi|casinos?|sbobet|betting)\b`)
+	reHeadText     = regexp.MustCompile(`(?is)<title[^>]*>([^<]{0,300})</title>|<meta\s[^>]*(?:name|property)\s*=\s*["'](?:description|og:title|og:description|twitter:title)["'][^>]*content\s*=\s*["']([^"']{0,400})`)
+)
+
+// gamblingHead: the page's title and descriptions sell gambling.
+func gamblingHead(content []byte) bool {
+	head := content[:min(len(content), 16<<10)]
+	if !reGamblingCore.Match(head) {
+		return false
+	}
+	n, core := 0, false
+	for _, m := range reHeadText.FindAllSubmatch(head, 12) {
+		t := append(m[1], m[2]...)
+		n += len(reGamblingHead.FindAllIndex(t, 10))
+		core = core || reGamblingCore.Match(t)
+	}
+	return core && n >= 4
+}

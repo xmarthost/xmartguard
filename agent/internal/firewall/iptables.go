@@ -223,6 +223,9 @@ func restoreIPSet(ctx context.Context, bin, script string) error {
 }
 
 // renderIPSet builds an `ipset restore` script that swaps fresh contents in.
+// ipsetMaxElem is the size of each address set.
+const ipsetMaxElem = 1048576
+
 func renderIPSet(r Ruleset) string {
 	a4, a6 := split(r.Allow)
 	i4, i6 := split(r.Ignore)
@@ -250,7 +253,7 @@ func renderIPSet(r Ruleset) string {
 	}
 	var b strings.Builder
 	for _, s := range ipsets() {
-		opts := fmt.Sprintf("%s family %s maxelem 1048576", s.typ, s.family)
+		opts := fmt.Sprintf("%s family %s maxelem %d", s.typ, s.family, ipsetMaxElem)
 		if s.timeout {
 			opts += " timeout 0"
 		}
@@ -280,6 +283,7 @@ const (
 	ChainExempt  = "XPGUARD_EXEMPT" // exempt addresses: the port filter only
 	ChainOut     = "XPGUARD_OUT"
 	ChainCaptcha = "XPGUARD_CAPTCHA" // nat table
+	ChainRaw     = "XPGUARD_RAW"     // raw table: reflected UDP not tracked (Ruleset.ReflectGuard)
 )
 
 func allChains() []string {
@@ -380,6 +384,9 @@ func renderRules(r Ruleset, v6 bool) string {
 	if pf := r.Ports; pf != nil {
 		ex := func(rule string) { fmt.Fprintf(&b, "-A %s %s\n", ChainExempt, rule) }
 		ex("-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN")
+		if r.ReflectGuard {
+			ex(untrackedReturn(r))
+		}
 		for _, c := range multiport(pf.TCPIn) {
 			ex("-p tcp -m multiport --dports " + c + " -j RETURN")
 		}
@@ -451,13 +458,20 @@ func renderRules(r Ruleset, v6 bool) string {
 		if ban <= 0 {
 			ban = 600
 		}
-		add(fmt.Sprintf("-p tcp -m conntrack --ctstate NEW -m hashlimit --hashlimit-above %d/minute --hashlimit-burst %d --hashlimit-mode srcip --hashlimit-name xgdos%s -j %s",
+		// Connection attempts only (SYN without ACK, see the nftables rule):
+		// reflected SYN-ACKs were banned by the million.
+		add(fmt.Sprintf("-p tcp --syn -m conntrack --ctstate NEW -m hashlimit --hashlimit-above %d/minute --hashlimit-burst %d --hashlimit-mode srcip --hashlimit-name xgdos%s -j %s",
 			r.DoSPerMinute, r.DoSPerMinute/2+1, sfx, ChainDoS))
 		fmt.Fprintf(&b, "-A %s -j SET --add-set xg_tban%s src --exist --timeout %d\n", ChainDoS, sfx, ban)
 		fmt.Fprintf(&b, "-A %s -m comment --comment \"xg-dos\" -j DROP\n", ChainDoS)
 	}
 	if pf := r.Ports; pf != nil {
 		add("-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN")
+		if r.ReflectGuard {
+			// Reflected UDP is not tracked (renderRaw); answers to this
+			// server's own lookups (DNS, NTP) still come in.
+			add(untrackedReturn(r))
+		}
 		for _, c := range multiport(pf.TCPIn) {
 			add("-p tcp -m multiport --dports " + c + " -j RETURN")
 		}
@@ -518,6 +532,27 @@ func iptAllowMatches(r Rule, flag string) []string {
 		}
 	}
 	return out
+}
+
+// untrackedReturn lets in the untracked answers to this server's own
+// lookups (renderRaw), to the local port range only.
+func untrackedReturn(r Ruleset) string {
+	lo, hi := r.localPortRange()
+	return fmt.Sprintf("-p udp --dport %d:%d -m conntrack --ctstate UNTRACKED -m multiport --sports %s -j RETURN", lo, hi, reflectionPortList(","))
+}
+
+// renderRaw builds the raw-table script: reflected UDP skips connection
+// tracking (Ruleset.ReflectGuard), so a reflection flood cannot fill the
+// kernel's connection table.
+func renderRaw(r Ruleset) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "*raw\n:%s - [0:0]\n", ChainRaw)
+	if r.ReflectGuard {
+		lo, hi := r.localPortRange()
+		fmt.Fprintf(&b, "-A %s ! -i lo -p udp --dport %d:%d -m multiport --sports %s -j CT --notrack\n", ChainRaw, lo, hi, reflectionPortList(","))
+	}
+	b.WriteString("COMMIT\n")
+	return b.String()
 }
 
 // renderNAT builds the nat-table script for the CAPTCHA redirect.
@@ -600,6 +635,11 @@ func (t IPTables) Apply(r Ruleset) error {
 			natIPT := []string{f.ipt, "-t", "nat"}
 			ensureJumpArgs(ctx, natIPT, "PREROUTING", ChainCaptcha, r.Captcha != nil)
 		}
+		// Reflected UDP untracked (raw table). Failure leaves it tracked,
+		// as before.
+		if err := restoreRules(ctx, f.restore, renderRaw(r)); err == nil {
+			ensureJumpArgs(ctx, []string{f.ipt, "-t", "raw"}, "PREROUTING", ChainRaw, r.ReflectGuard)
+		}
 		dropLegacyChains(ctx, f.ipt)
 	}
 	return nil
@@ -663,6 +703,9 @@ func (t IPTables) Remove() error {
 	for _, f := range t.families() {
 		removeChains(ctx, f.ipt, allChains(), ChainCaptcha)
 		dropLegacyChains(ctx, f.ipt)
+		ensureJumpArgs(ctx, []string{f.ipt, "-t", "raw"}, "PREROUTING", ChainRaw, false)
+		_, _ = run(ctx, "", f.ipt, "-w", "-t", "raw", "-F", ChainRaw)
+		_, _ = run(ctx, "", f.ipt, "-w", "-t", "raw", "-X", ChainRaw)
 	}
 	if t.IPSet != "" {
 		for _, s := range ipsets() {

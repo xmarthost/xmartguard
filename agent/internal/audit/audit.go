@@ -76,6 +76,9 @@ type Auditor struct {
 	// stack check (tests); EximVersion reads Exim's (nil: exim -bV).
 	StackRoot   string
 	EximVersion func() string
+	// CageFSDisabled lists the accounts CageFS does not jail (nil:
+	// cagefsctl --list-disabled).
+	CageFSDisabled func() []string
 	// AtDir overrides the at job spool (tests).
 	AtDir string
 	// Realtime reports the folders realtime protection could not watch and
@@ -453,6 +456,24 @@ func humanSize(n int64) string {
 	return strconv.FormatInt(n/1024, 10) + " KB"
 }
 
+// otherReadable reports a file every account can read: readable by others,
+// and every folder above it lets others through.
+func otherReadable(p string) bool {
+	st, err := os.Stat(p)
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0o004 == 0 {
+		return false
+	}
+	for d := filepath.Dir(p); ; d = filepath.Dir(d) {
+		ds, err := os.Stat(d)
+		if err != nil || ds.Mode().Perm()&0o001 == 0 {
+			return false
+		}
+		if d == filepath.Dir(d) {
+			return true
+		}
+	}
+}
+
 func isFile(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.Mode().IsRegular()
@@ -497,6 +518,10 @@ func wordpressChecks(dir string) []Item {
 	if reWPDebugOn.Match(cfg) && !reWPDebugDisplay.Match(cfg) {
 		out = append(out, Item{Check: "wp_debug", Severity: "low", Title: "WordPress debug mode shows errors to visitors", Path: filepath.Join(dir, "wp-config.php"),
 			Detail: "WP_DEBUG is on: error messages reveal paths and plugin names. Turn it off on a live site."})
+	}
+	if otherReadable(filepath.Join(dir, "wp-config.php")) {
+		out = append(out, Item{Check: "wp_config_readable", Severity: "high", Title: "Other accounts can read this site's database password", Path: filepath.Join(dir, "wp-config.php"),
+			Detail: "wp-config.php can be read by everyone (mode 644) and its folders let other accounts through (public_html 755). A shell on any account that CageFS does not jail reads it, logs in to the database and takes over the WordPress administrator (130 sites on one server, 2026-11-11). Make it readable by the owner only (chmod 600 where PHP runs as the account) or set public_html to 750 with group nobody."})
 	}
 	if st, err := os.Stat(filepath.Join(dir, "wp-content", "debug.log")); err == nil && st.Size() > 0 {
 		out = append(out, Item{Check: "wp_debug", Severity: "low", Title: "WordPress debug log inside the website", Path: filepath.Join(dir, "wp-content", "debug.log"),

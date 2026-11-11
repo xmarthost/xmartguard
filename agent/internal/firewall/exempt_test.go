@@ -136,7 +136,7 @@ func TestDoSCountsTCPOnly(t *testing.T) {
 	for _, l := range strings.Split(nft, "\n") {
 		if strings.Contains(l, `comment "xg-dos"`) {
 			n++
-			if !strings.Contains(l, "meta l4proto tcp update @dos") {
+			if !strings.Contains(l, "tcp flags & (fin|syn|rst|ack) == syn update @dos") {
 				t.Errorf("DoS rule not limited to TCP: %s", l)
 			}
 		}
@@ -144,7 +144,7 @@ func TestDoSCountsTCPOnly(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("%d DoS rules", n)
 	}
-	if !strings.Contains(renderRules(Ruleset{DoS: true, DoSPerMinute: 150}, false), "-p tcp -m conntrack --ctstate NEW -m hashlimit") {
+	if !strings.Contains(renderRules(Ruleset{DoS: true, DoSPerMinute: 150}, false), "-p tcp --syn -m conntrack --ctstate NEW -m hashlimit") {
 		t.Error("iptables DoS rule not limited to TCP")
 	}
 }

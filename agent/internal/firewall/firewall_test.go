@@ -288,12 +288,28 @@ func TestProviderSwitchRemovesOldRules(t *testing.T) {
 func TestDoSRulesetLoads(t *testing.T) {
 	providers(t, func(t *testing.T, provider string) {
 		m := newManager(t, provider)
-		m.Settings.Patch([]byte(`{"firewall":{"dos":true,"dos_threshold":100}}`))
+		m.Settings.Patch([]byte(`{"firewall":{"dos":true,"dos_threshold":100,"port_filter":true}}`))
 		if err := m.Apply(); err != nil {
 			t.Fatal(err)
 		}
+		if dump := kernelDump(m); !strings.Contains(dump, "UNTRACKED") && !strings.Contains(dump, "ct state untracked") {
+			t.Errorf("untracked answers not let through the port filter:\n%s", dump)
+		}
 		if dump := kernelDump(m); !strings.Contains(dump, "xg-dos") && !strings.Contains(dump, ChainDoS) {
 			t.Fatalf("dos rule missing:\n%s", dump)
+		}
+		// Reflected UDP is not tracked (raw table / priority raw chain).
+		var raw []byte
+		if provider == ProviderNFTables {
+			raw, _ = exec.Command(m.NFT.Bin, "list", "chain", "inet", Table, "reflect").CombinedOutput()
+		} else {
+			raw, _ = exec.Command(m.IPT.IPT, "-t", "raw", "-S").CombinedOutput()
+		}
+		if !strings.Contains(string(raw), "notrack") && !strings.Contains(string(raw), "--notrack") {
+			t.Fatalf("reflection guard not loaded:\n%s", raw)
+		}
+		if provider == ProviderIPTables && !strings.Contains(string(raw), "-A PREROUTING -j "+ChainRaw) {
+			t.Fatalf("raw chain not hooked:\n%s", raw)
 		}
 	})
 }

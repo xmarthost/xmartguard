@@ -294,9 +294,11 @@ func renderExclusions(w func(string, ...any), c settings.WAF, off map[int]bool, 
 		w(`  SecRule &TX:xg_wp_user "@gt 0" "t:none,%s"`, tags)
 	}
 	if !off[IDWPRestExcl] {
-		// 921130 reads the <meta http-equiv> of saved page HTML as response splitting.
+		// 921130 reads the <meta http-equiv> of saved page HTML as response
+		// splitting; 920540 the \uXXXX escapes of the JSON body (CRS skips it
+		// for JSON, LiteSpeed's engine cannot tell: the flag, IDUnicodeEscRemove).
 		w(`SecRule REQUEST_METHOD "@rx ^(?:POST|PUT|PATCH)$" "id:%d,phase:1,t:none,pass,nolog,chain"`, IDWPRestExcl)
-		w(`  SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wp/v2/+(?:%s)(?:[/?&]|$)" "t:none,t:urlDecodeUni,t:lowercase,%s,ctl:ruleRemoveById=921130"`, strings.Join(quoteAll(wpRestRoutes), "|"), tags)
+		w(`  SecRule REQUEST_URI "@rx (?:/wp-json/+|[?&]rest_route=/*)wp/v2/+(?:%s)(?:[/?&]|$)" "t:none,t:urlDecodeUni,t:lowercase,%s,ctl:ruleRemoveById=921130,ctl:ruleRemoveById=920540,setvar:tx.xg_no_uesc=1"`, strings.Join(quoteAll(wpRestRoutes), "|"), tags)
 	}
 	if !off[IDWPCustomizer] {
 		w(`SecRule ARGS_GET:customize_changeset_uuid "@rx ^[0-9a-f-]{36}$" "id:%d,phase:1,t:none,t:lowercase,pass,nolog,chain"`, IDWPCustomizer)

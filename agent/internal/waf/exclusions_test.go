@@ -679,3 +679,27 @@ func TestEveryRuleIDOnceOnApache(t *testing.T) {
 		}
 	}
 }
+
+// adventomarketing.com, 2026-11-11: Jetpack's signed page write
+// (/?rest_route=/wp/v2/pages&_for=jetpack, from WordPress.com) was refused by
+// CRS 920540 for the \uXXXX escapes of its JSON body: CRS skips 920540 for
+// JSON (920539), LiteSpeed's engine cannot tell. A core REST write now takes
+// 920540 out too, also by the family flag LiteSpeed honours; other requests
+// keep it.
+func TestWPRestWriteSkipsUnicodeEscapeRule(t *testing.T) {
+	out := Render(settings.Defaults().WAF, Options{Dir: "/etc/xg"})
+	if !strings.Contains(out, "ctl:ruleRemoveById=920540,setvar:tx.xg_no_uesc=1") {
+		t.Fatal("REST write exclusion does not take 920540 out")
+	}
+	setup := familyRemoveSetup(t.TempDir())
+	if !strings.Contains(setup, `SecRule TX:xg_no_uesc "@eq 1" "id:7700981,phase:2,pass,t:none,nolog,ctl:ruleRemoveById=920540"`) {
+		t.Fatalf("no removal rule for the flag:\n%s", setup)
+	}
+	if !strings.Contains(setup, "setvar:tx.xg_no_uesc=0") {
+		t.Fatal("a bad-reputation address keeps the flag")
+	}
+	// Only the REST write rule sets the flag.
+	if strings.Count(out, "xg_no_uesc=1") != 1 {
+		t.Fatal("920540 taken out elsewhere")
+	}
+}
