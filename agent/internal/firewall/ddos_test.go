@@ -100,3 +100,20 @@ func TestTempBansCapped(t *testing.T) {
 		t.Errorf("cap %d not below the set size %d", maxTempBans, ipsetMaxElem)
 	}
 }
+
+// 0.24.48 turned ReflectGuard on with the DoS protection; firewalld then
+// dropped the untracked DNS answers and the server resolved nothing. Build
+// never turns it on.
+func TestBuildLeavesDNSAnswersTracked(t *testing.T) {
+	m := unitManager(t)
+	if _, err := m.Settings.Patch([]byte(`{"firewall":{"dos":true,"port_filter":true}}`)); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := m.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.ReflectGuard || strings.Contains(rs.Render(), "notrack") || strings.Contains(renderRaw(rs), "notrack") {
+		t.Fatal("reflected UDP untracked by Build")
+	}
+}

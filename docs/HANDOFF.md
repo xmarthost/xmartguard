@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.48** (see `VERSION`).
+- Current release: **0.24.49** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,22 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.49: reflected-UDP NOTRACK off again** (2026-11-11). On
+  cloud2.xmarthost.com 0.24.48 broke name resolution (hCaptcha "Could not
+  resolve host", SMTP to G Suite failing, the agent offline from 07:49):
+  the answers to the server's own DNS lookups were untracked, and while
+  our chains let them in, the server's other firewall (firewalld, or an
+  INPUT chain that accepts only ESTABLISHED,RELATED) dropped them; an
+  accept in our table does not stop another table's drop. `Build` now
+  always leaves `ReflectGuard` false (the render code stays, unused).
+  Before turning it on again it must work with every other firewall (or
+  be limited to servers with none). The SYN-only DoS counting and the
+  temp-ban cap stay. Applying 0.24.49 removes the raw rules (empty
+  `XPGUARD_RAW`, unhooked; nft table rebuilt). A server that 0.24.48 cut
+  off cannot update itself (no DNS): stop the agent, remove the rules by
+  hand, start it (see the reply of 2026-11-11). Test:
+  `TestBuildLeavesDNSAnswersTracked`, `TestDoSRulesetLoads` (no notrack
+  on the kernel).
 - **Release 0.24.48: Hetzner DDoS, server-wide hack, REST 403** (2026-11-11).
   From the owner's three evidence zips (server1.superfastcloudhosting,
   65.109.111.76) and the adventomarketing.com ticket.

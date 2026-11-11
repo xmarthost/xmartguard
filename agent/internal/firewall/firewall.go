@@ -325,9 +325,13 @@ func (m *Manager) Build() (Ruleset, error) {
 	if csf.Enabled {
 		rs.Ignore = append(rs.Ignore, CSFExempt()...)
 	}
-	// Reflected UDP kept out of the connection table, with the DoS
-	// protection, where this firewall owns the rules (not with CSF).
-	rs.ReflectGuard = cfg.DoS && !csf.Enabled
+	// Reflected UDP out of the connection table stays off: another
+	// firewall on the server (firewalld, an INPUT chain that accepts only
+	// established packets) drops the untracked answers to the server's own
+	// DNS lookups, and the server resolved no names any more (cloud2,
+	// 0.24.48: no mail, no hCaptcha, agent offline). It needs a way to let
+	// them through every firewall before it can be on.
+	rs.ReflectGuard = false
 	rs.LocalPorts = ReadLocalPorts()
 	// The kernel's ban set holds at most ipsetMaxElem addresses: more made
 	// every firewall apply fail ("Hash is full") and no ban was set at all
