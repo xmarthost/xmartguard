@@ -34,6 +34,7 @@ export const ACTIONS: Record<string, { role: Role; mutates: boolean; timeoutMs?:
   'waf.events': { role: 'viewer', mutates: false },
   'cms.status': { role: 'viewer', mutates: false },
   'cms.sites': { role: 'viewer', mutates: false },
+  'cms.vuln_report': { role: 'viewer', mutates: false, timeoutMs: 60_000 },
   'db.findings': { role: 'viewer', mutates: false },
   'osm.events': { role: 'viewer', mutates: false },
   'osm.stats': { role: 'viewer', mutates: false },

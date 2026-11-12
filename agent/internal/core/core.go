@@ -1712,6 +1712,9 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		sites, total, err := a.CMS.Sites(f)
 		return map[string]any{"sites": sites, "total": total}, err
 	}
+	h["cms.vuln_report"] = func(context.Context, json.RawMessage) (any, error) {
+		return a.CMS.VulnReport()
+	}
 	h["cms.scan"] = func(context.Context, json.RawMessage) (any, error) {
 		if !a.Settings.Get().CMS.Enabled {
 			return nil, errors.New("CMS monitoring is disabled in settings")

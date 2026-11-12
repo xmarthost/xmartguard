@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.50** (see `VERSION`).
+- Current release: **0.24.51** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,15 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.51: `cms.vuln_report`** (2026-11-12). The owner asked
+  whether the automatic updates really patched vulnerable plugins. New read
+  action (portal allow-list too): over the stored inventory, the
+  vulnerable components now by cause (update due but not applied, under
+  the CVSS/age setting, not on wordpress.org, no fix yet, account
+  excluded) and by score band, and the outcome of every remembered
+  automatic attempt (`cms_update_try|path|kind|slug|version`: updated =
+  the version changed, failed = same version, removed), with the top open
+  and top failed slugs. Test: `TestVulnReport`.
 - **Release 0.24.50: audit reports Apache's HTTP/2 hole** (2026-11-12).
   CVE-2026-119618 (mod_http2, Apache 2.4.55-2.4.70, unauthenticated
   memory corruption/RCE, CVSS 9.8, fixed in 2.4.71 on 2026-11-11; Wordfence
