@@ -511,6 +511,8 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 			done = append(done, desc)
 		}
 	}
+	// A shield (rapid.go) goes once its plugin was updated.
+	done = append(done, unshieldUpdated(s)...)
 	for _, p := range s.Plugins {
 		if p.Active && slices.Contains(cfg.BlacklistPlugins, strings.ToLower(p.Slug)) {
 			run("deactivated blacklisted plugin "+p.Slug, "plugin", "deactivate", p.Slug)

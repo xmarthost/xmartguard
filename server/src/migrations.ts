@@ -790,4 +790,25 @@ ALTER TABLE captcha_events ADD COLUMN via text NOT NULL DEFAULT '';
 CREATE TABLE ipdb_relay (cidr cidr NOT NULL);
 `,
   },
+  {
+    version: '033_vuln_feed',
+    sql: `
+-- New plugin/theme/core vulnerabilities (vulnfeed/service.ts): one row per
+-- affected component; seq numbers new and changed rows for the agents.
+CREATE SEQUENCE vuln_feed_seq;
+CREATE TABLE vuln_feed (
+  id text PRIMARY KEY,
+  kind text NOT NULL,
+  slug text NOT NULL,
+  title text NOT NULL DEFAULT '',
+  cvss real NOT NULL DEFAULT 0,
+  ranges jsonb NOT NULL,
+  patched jsonb NOT NULL DEFAULT '[]',
+  published timestamptz,
+  updated text,
+  seq bigint NOT NULL DEFAULT 0
+);
+CREATE INDEX vuln_feed_seq_idx ON vuln_feed (seq);
+`,
+  },
 ];

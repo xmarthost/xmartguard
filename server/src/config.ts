@@ -58,6 +58,10 @@ export interface Config {
   wpMirror: string;
   /** downloads.wordpress.org: official plugin checksums. */
   wpDownloads: string;
+  /** Wordfence Intelligence production feed (free API key) for fast plugin alerts; empty disables. */
+  wordfenceApiKey: string;
+  wordfenceFeedUrl: string;
+  vulnFeedHours: number;
   /** Malware signature feeds merged and sent to agents (empty disables). */
   sigFeeds: string[];
   sigSync: boolean;
@@ -170,6 +174,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     wpSite: (env.WP_SITE || 'https://wordpress.org').replace(/\/+$/, ''),
     wpSvn: (env.WP_SVN || 'https://core.svn.wordpress.org/tags').replace(/\/+$/, ''),
     wpDownloads: (env.WP_DOWNLOADS || 'https://downloads.wordpress.org').replace(/\/+$/, ''),
+    wordfenceApiKey: (env.WORDFENCE_API_KEY || '').trim(),
+    wordfenceFeedUrl: env.WORDFENCE_FEED_URL || 'https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production',
+    vulnFeedHours: Number(env.VULN_FEED_HOURS || 3),
     wpMirror: (env.WP_MIRROR || 'https://raw.githubusercontent.com/WordPress/WordPress').replace(/\/+$/, ''),
     sigFeeds: (env.SIG_FEEDS ?? DEFAULT_SIG_FEEDS)
       .split(',')

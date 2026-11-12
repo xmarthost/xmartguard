@@ -443,8 +443,14 @@ type CMS struct {
 	AutoUpdateDays   int      `json:"auto_update_days"`  // only if the fix was released more than N days ago (0 = any)
 	BlacklistPlugins []string `json:"blacklist_plugins"` // deactivated automatically
 	ExcludeUsers     []string `json:"exclude_users"`     // never patched automatically
-	WPCron           bool     `json:"wp_cron"`           // replace wp-cron.php page loads with a real cron job
-	WPCronHours      int      `json:"wp_cron_hours"`
+	// Rapid acts on new vulnerabilities from the portal's feed within hours
+	// (update, else shield the plugin folder, else deactivate a critical
+	// one), without waiting for the next full scan.
+	Rapid           bool    `json:"rapid"`
+	RapidCVSS       float64 `json:"rapid_cvss"`       // from this score (unscored ones too)
+	RapidDeactivate bool    `json:"rapid_deactivate"` // deactivate a critical (9+) plugin no update fixes
+	WPCron          bool    `json:"wp_cron"`          // replace wp-cron.php page loads with a real cron job
+	WPCronHours     int     `json:"wp_cron_hours"`
 }
 
 // OSM is the Outgoing Spam Monitor (Exim).
@@ -578,7 +584,8 @@ func Defaults() Settings {
 		Reputation: Reputation{Enabled: true, IPs: []string{}, RBLs: DefaultRBLs(), IntervalHours: 12, EximRBLs: true, PhishingFilter: true},
 		IPDB:       IPDB{Enabled: true, Report: true, Log: true, Captcha: true},
 		CMS: CMS{Enabled: true, CoreCheck: true, DBScan: true, IntervalHours: 72, ScheduleVersion: cmsScheduleVersion, Vulns: true,
-			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 1},
+			AutoUpdateCVSS: 6, AutoUpdateDays: 7, BlacklistPlugins: []string{}, ExcludeUsers: []string{}, WPCronHours: 1,
+			Rapid: true, RapidCVSS: 7, RapidDeactivate: true},
 		OSM: OSM{Enabled: true, PerMinute: 50, PerHour: 300, Action: "notify", CheckSubjects: true,
 			SpamPatterns: []string{}, WhitelistSenders: []string{}, WhitelistIPs: []string{}, WhitelistPaths: []string{}},
 		AutoSuspend: AutoSuspend{Enabled: false, Detections: 10, WindowHours: 24, ExcludeUsers: []string{}, WhitelistDomains: []string{}},
@@ -1094,7 +1101,7 @@ func validate(s Settings) error {
 	if w := s.Notifications.SlackWebhook; w != "" && !strings.HasPrefix(w, "https://hooks.slack.com/") {
 		return errors.New("the Slack webhook must start with https://hooks.slack.com/")
 	}
-	if s.CMS.AutoUpdateCVSS < 0 || s.CMS.AutoUpdateCVSS > 10 || s.CMS.AutoUpdateDays < 0 {
+	if s.CMS.AutoUpdateCVSS < 0 || s.CMS.AutoUpdateCVSS > 10 || s.CMS.AutoUpdateDays < 0 || s.CMS.RapidCVSS < 0 || s.CMS.RapidCVSS > 10 {
 		return errors.New("invalid auto-update conditions")
 	}
 	if s.Firewall.DoSThreshold < 20 {

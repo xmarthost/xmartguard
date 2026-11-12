@@ -137,6 +137,9 @@ interface CMSS {
   exclude_users: string[];
   wp_cron: boolean;
   wp_cron_hours: number;
+  rapid: boolean;
+  rapid_cvss: number;
+  rapid_deactivate: boolean;
 }
 interface OSMS {
   enabled: boolean;
@@ -1302,6 +1305,26 @@ function CMSSection({ s, meta, admin, busy, onSave, repair, onCore }: { s: CMSS;
           </button>
         </div>
       </div>
+      <SettingRow
+        title="Act on newly disclosed vulnerabilities within hours"
+        desc="The portal reads the Wordfence vulnerability feed every few hours. A new hole in a plugin, theme or WordPress core that this server's last scan found installed is acted on at once, without a new scan and without waiting for the next full scan: the site is updated; if the vulnerable version stays (premium plugin, no fix yet, update refused), the plugin's PHP files are shielded from direct requests (.htaccess in its folder, removed after it is updated). Holes scoring below the score set here are left to the daily check."
+        recommended
+      >
+        <Toggle on={s.rapid} disabled={dis || !s.enabled} onChange={(v) => onSave({ rapid: v })} />
+      </SettingRow>
+      <SettingRow title="Minimum score for the fast response" desc="New vulnerabilities with this CVSS score or more (and those not scored yet) are acted on at once.">
+        <select className="input w-40" value={s.rapid_cvss} disabled={dis || !s.rapid} onChange={(e) => onSave({ rapid_cvss: Number(e.target.value) })}>
+          {[0, 4, 7, 9].map((c) => (
+            <option key={c} value={c}>
+              {c === 0 ? 'any' : `${c} or more`}
+              {c === 7 ? ' (recommended)' : ''}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow title="Deactivate a critical plugin that cannot be updated" desc="A plugin with a new hole scoring 9 or more (or not scored yet) that no update fixes is deactivated, besides the shield, and the owner is told to activate it again after updating it.">
+        <Toggle on={s.rapid_deactivate} disabled={dis || !s.rapid} onChange={(v) => onSave({ rapid_deactivate: v })} />
+      </SettingRow>
       <ListEditor title="Blacklisted WordPress plugins" desc="Automatically deactivate these plugins (slug) during CMS checks" items={s.blacklist_plugins ?? []} disabled={dis} placeholder="plugin-slug" onChange={(v) => onSave({ blacklist_plugins: v.map((x) => x.toLowerCase()) })} />
       <SettingRow title="Scan interval" desc="How often all websites are re-checked. Every check runs at night (from 2:00, scan schedule time zone), slowly and at the lowest priority, with a pause between sites; a database that did not change since the last check is not searched again. The daily vulnerability check and its automatic updates run at night too. Scan tonight on CMS Threat Alerts queues a full scan for the next night.">
         <select className="input w-40" value={s.interval_hours} disabled={dis || !s.enabled} onChange={(e) => onSave({ interval_hours: Number(e.target.value) })}>

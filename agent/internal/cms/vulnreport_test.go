@@ -16,10 +16,10 @@ func TestVulnReport(t *testing.T) {
 	}
 	m.save(Site{Type: WordPress, Path: "/home/a/public_html", User: "a", Version: "7.1.4", Latest: "7.1.4", MUPlugins: []string{},
 		Plugins: []Component{
-			{Slug: "cf7", Version: "6.2.1", Latest: "6.2.5", Vulns: v(9.8, "6.2.4")},  // due, not applied
-			{Slug: "kit", Version: "3.4.8", Latest: "3.5.1", Vulns: v(5.3, "3.5.1")},  // under the setting
-			{Slug: "pro", Version: "3.0.39", Vulns: v(7.5, "3.0.97")},                 // premium
-			{Slug: "nofix", Version: "1.0", Latest: "1.0", Vulns: v(9.8, "")},          // no fix
+			{Slug: "cf7", Version: "6.2.1", Latest: "6.2.5", Vulns: v(9.8, "6.2.4")}, // due, not applied
+			{Slug: "kit", Version: "3.4.8", Latest: "3.5.1", Vulns: v(5.3, "3.5.1")}, // under the setting
+			{Slug: "pro", Version: "3.0.39", Vulns: v(7.5, "3.0.97")},                // premium
+			{Slug: "nofix", Version: "1.0", Latest: "1.0", Vulns: v(9.8, "")},        // no fix
 			{Slug: "fine", Version: "2.0", Latest: "2.0"},
 		}, Themes: []Component{}})
 	m.save(Site{Type: WordPress, Path: "/home/b/public_html", User: "b", Version: "7.1.4", Latest: "7.1.4", MUPlugins: []string{},

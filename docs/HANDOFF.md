@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.51** (see `VERSION`).
+- Current release: **0.24.52** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,36 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.52: fast response to new plugin vulnerabilities**
+  (2026-11-12, owner: the full scan stays every 72 hours for the load, but
+  an exploited plugin must be stopped within hours, from the last scan's
+  inventory, no new scan). Portal: `vulnfeed/service.ts` reads Wordfence
+  Intelligence's v3 production feed every `VULN_FEED_HOURS` (3) with
+  `WORDFENCE_API_KEY` (free key from a wordfence.com account, in
+  deploy/.env; without it the feature is off and logged), table
+  `vuln_feed` (migration 033, one row per affected component, `seq` for
+  new/changed rows; the first import is backlog, seq 0, never sent), nudges
+  online agents (`cms.vuln_sync`); agents fetch `/api/agent/cms/vulns`
+  (signed, cursor; first call only takes the cursor; items published in
+  the last 90 days). Agent: `core/rapidvulns.go` (hourly and on the
+  nudge), `cms/rapid.go` `Rapid`: for each stored WordPress site whose
+  plugin/theme/core version is in an advisory's range (score >=
+  `cms.rapid_cvss`, 7, or unscored; accounts in `exclude_users` skipped;
+  once per site/version/advisory, KV `cms_rapid|...`): wp-cli update
+  (fixed release of the branch when the latest is a new major); if the
+  version is still affected: plugin folder `.htaccess` shield (marked
+  block, Apache 2.2/2.4 and LiteSpeed, read per request, no reload; the
+  site's own lines kept; never through a symlink; owned by the folder's
+  owner) and, for 9+ or unscored with `cms.rapid_deactivate`, `wp plugin
+  deactivate`; themes/core that cannot be updated are reported. The
+  shield is removed by `autoActions` once the plugin's version changed.
+  Actions go through OnAutoAction (admin alert, optional user mail).
+  Settings: `cms.rapid` (on), `rapid_cvss` (7), `rapid_deactivate` (on);
+  Settings page rows. The scanner does not flag the shield. Tests:
+  `TestRapidResponse`, `TestAdvisoryAffects`,
+  `TestFleetPluginShieldNotFlagged`, portal `vuln-feed.test.ts`. Note:
+  `agent-update.test.ts` times out in the session container with or
+  without this change (environment).
 - **Release 0.24.51: `cms.vuln_report`** (2026-11-12). The owner asked
   whether the automatic updates really patched vulnerable plugins. New read
   action (portal allow-list too): over the stored inventory, the

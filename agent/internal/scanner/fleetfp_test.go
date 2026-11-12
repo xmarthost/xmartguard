@@ -2241,3 +2241,16 @@ func TestFleetServerWideHack1111(t *testing.T) {
 		}
 	}
 }
+
+// The plugin shield that fast vulnerability response writes (cms/rapid.go)
+// is xPGuard's own .htaccess: never quarantined.
+func TestFleetPluginShieldNotFlagged(t *testing.T) {
+	s := newScanner(t)
+	shield := "Options -Indexes\n# BEGIN xPGuard shield\n# xPGuard: wf-1 version 6.2.1 is vulnerable and could not be updated.\n# Removed by xPGuard when the plugin is updated.\n" +
+		"<FilesMatch \"\\.(?i:php[0-9]?|phtml|phar|pht)$\">\n<IfModule mod_authz_core.c>\nRequire all denied\n</IfModule>\n" +
+		"<IfModule !mod_authz_core.c>\nOrder allow,deny\nDeny from all\n</IfModule>\n</FilesMatch>\n# END xPGuard shield\n"
+	p := "/home2/u/public_html/wp-content/plugins/contact-form-7/.htaccess"
+	if d := s.checkContent(p, extOf(p), []byte(shield)); d != nil {
+		t.Errorf("shield flagged: %+v", d)
+	}
+}

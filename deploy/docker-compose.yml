@@ -34,6 +34,7 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       BILLING_SECRET: ${BILLING_SECRET:-}
       BILLING_SITE_URL: ${BILLING_SITE_URL:-}
+      WORDFENCE_API_KEY: ${WORDFENCE_API_KEY:-}
     volumes:
       - portal_data:/app/data
     ports:

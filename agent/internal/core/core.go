@@ -364,6 +364,7 @@ func (a *Agent) Start(ctx context.Context) {
 	go a.mailGuardLoop(ctx)
 	go a.wafLearnLoop(ctx)
 	go a.intelLoop(ctx)
+	go a.vulnLoop(ctx)
 	go a.centralLoop(ctx)
 	go a.hostNetsLoop(ctx)
 	go a.dashboardLoop(ctx)
@@ -1240,6 +1241,7 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 	}
 	a.centralHandlers(h)
 	a.intelHandlers(h)
+	a.vulnHandlers(h)
 	h["trusted.status"] = func(context.Context, json.RawMessage) (any, error) {
 		fw := a.Settings.Get().Firewall
 		return map[string]any{"enabled": fw.TrustedServices, "services": a.Trusted.Status(fw.TrustedDisabled)}, nil

@@ -42,6 +42,8 @@ import { notificationRoutes } from './routes/notifications.js';
 import { trustedRoutes } from './routes/trusted.js';
 import { captchaRoutes } from './routes/captcha.js';
 import { wafIntelRoutes } from './routes/waf-intel.js';
+import { vulnFeedRoutes } from './routes/vuln-feed.js';
+import { VulnFeedService } from './vulnfeed/service.js';
 import { CRSService } from './waf/rulesets.js';
 import { refreshOwnProxies, setExtraProxies, trustedProxy } from './proxy.js';
 
@@ -164,6 +166,10 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   trustedRoutes(app, pool, hub);
   captchaRoutes(app, pool, cfg, hub);
   wafIntelRoutes(app, pool, hub);
+  const vulnFeed = new VulnFeedService(pool, cfg, hub, app.log);
+  vulnFeedRoutes(app, pool, vulnFeed);
+  if (cfg.ipdbSync) vulnFeed.start();
+  app.addHook('onClose', async () => vulnFeed.stop());
   mailRoutes(app, pool, hub);
   domainRepRoutes(app, pool, hub);
   notificationRoutes(app, pool, hub);
