@@ -1933,6 +1933,9 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 		}
 		v, err := updater.Update(ctx, client.HTTPClient(a.Cfg.InsecureTLS), a.Cfg.ServerURL, in.SHA256)
 		if err != nil {
+			// Also in the agent's own log: the portal's message can be lost
+			// with the connection (2026-11-13: "unexpected EOF").
+			a.Log.Warn("agent update failed", "err", err)
 			return nil, err
 		}
 		a.Log.Info("agent updated; restarting", "new_version", v)

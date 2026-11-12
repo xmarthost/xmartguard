@@ -210,6 +210,27 @@ describe('downloads', () => {
     }
   });
 
+  it('sends the agent binary whole and uncompressed to a client asking for gzip', async () => {
+    // Go's HTTP client (the agent's updater) asks for gzip; the binary went
+    // out as a gzip stream without a length and updates through the web
+    // server in front of the portal ended with "unexpected EOF".
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xg-dl-'));
+    const bin = crypto.randomBytes(3 * 1024 * 1024);
+    fs.writeFileSync(path.join(dir, 'xpguard-agent-linux-amd64'), bin);
+    const old = h.cfg.downloadsDir;
+    h.cfg.downloadsDir = dir;
+    try {
+      const r = await fetch(h.url + '/downloads/xpguard-agent-linux-amd64', { headers: { 'accept-encoding': 'gzip' } });
+      expect(r.status).toBe(200);
+      expect(r.headers.get('content-encoding')).toBeNull();
+      expect(r.headers.get('content-length')).toBe(String(bin.length));
+      expect(Buffer.from(await r.arrayBuffer()).equals(bin)).toBe(true);
+    } finally {
+      h.cfg.downloadsDir = old;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('sends checksums that start like zlib data readable (gzip asked)', async () => {
     // A release hash starting "80" looks like a zlib header to the
     // compression, which then labelled the plain text gzip: every agent

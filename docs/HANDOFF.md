@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.55** (see `VERSION`).
+- Current release: **0.24.56** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,21 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.56: agent binaries sent uncompressed** (2026-11-13). 15 of
+  17 agents stayed on 0.24.49 since 0.24.50; Update from the portal failed
+  with "unexpected EOF" after 40 s. curl through LiteSpeed got the whole
+  file (18,768,056 bytes) on business900 and business100, but curl does
+  not ask for gzip: Go's HTTP client does, and @fastify/compress (global)
+  sent the binary as a gzip stream without Content-Length, which ended
+  early through the web server in front of the portal. `/downloads/:file`
+  now has `{ compress: false }` (Content-Length always; test in
+  api.test.ts fails without it: the old test asked for identity). The agent
+  logs "agent update failed" with the error. Also: `/api/ipdb/summary`
+  waits at most 2 s for the first IPDB build after a restart (it took
+  30 s). Agents still on 0.24.49 get the fix through the portal (the fix is
+  on the portal side); the owner was also given the GitHub command to
+  update by hand. Separately the agents' WebSocket dropped at the portal
+  restarts of the updates (expected).
 - **Release 0.24.55: feed read as a stream, pages preloaded** (2026-11-13).
   After 0.24.54 with the key saved: portal pages took 40 s+, 15 of 17
   agents stayed on 0.24.49 and a manual update failed with "unexpected

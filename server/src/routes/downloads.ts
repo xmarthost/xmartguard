@@ -27,7 +27,13 @@ export function downloadRoutes(app: FastifyInstance, cfg: Config): void {
     });
   }
 
-  app.get('/downloads/:file', async (req, reply) => {
+  // Never compressed: the agent's HTTP client asks for gzip, and the binary
+  // went out as an on-the-fly gzip stream without a length; through the
+  // web server in front of the portal the update downloads ended early
+  // ("unexpected EOF", 15 of 17 agents stuck on 0.24.49, 2026-11-13), while
+  // curl, which does not ask for gzip, got the whole file. A binary does
+  // not shrink much anyway.
+  app.get('/downloads/:file', { compress: false }, async (req, reply) => {
     const file = (req.params as { file: string }).file;
     if (!ALLOWED.test(file)) return reply.code(404).send({ error: 'not found' });
     // Streamed, not read into memory: after a portal restart every agent
