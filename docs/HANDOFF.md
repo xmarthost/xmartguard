@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.49** (see `VERSION`).
+- Current release: **0.24.50** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,21 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.50: audit reports Apache's HTTP/2 hole** (2026-11-12).
+  CVE-2026-119618 (mod_http2, Apache 2.4.55-2.4.70, unauthenticated
+  memory corruption/RCE, CVSS 9.8, fixed in 2.4.71 on 2026-11-11; Wordfence
+  PSA pasted by the owner). `apacheH2CVE` in the stack check: Apache's
+  banner (`ApacheVersion`, nil: httpd -v / apache2 -v) in the affected
+  range and an active `LoadModule http2_module` (EasyApache, RHEL, Debian
+  layouts): high on cPanel, medium with a "check your vendor's notice"
+  line on CloudLinux and other distributions, which backport fixes
+  without changing the number (CloudLinux published fixed builds).
+  LiteSpeed has no mod_http2; only vps900 runs Apache in the fleet. The
+  WAF cannot help (the flaw is in the HTTP/2 layer before ModSecurity).
+  Test: `TestApacheHTTP2CVE`. The owner's weekly Wordfence report
+  (2026-11-02..08, 497 vulnerabilities, 21 critical, e.g. Contact Form 7
+  6.2-6.2.3 unauthenticated file upload) needs no change: plugin watch
+  looks installed versions up in WPVulnerability daily.
 - **Release 0.24.49: reflected-UDP NOTRACK off again** (2026-11-11). On
   cloud2.xmarthost.com 0.24.48 broke name resolution (hCaptcha "Could not
   resolve host", SMTP to G Suite failing, the agent offline from 07:49):

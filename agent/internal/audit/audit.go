@@ -76,6 +76,9 @@ type Auditor struct {
 	// stack check (tests); EximVersion reads Exim's (nil: exim -bV).
 	StackRoot   string
 	EximVersion func() string
+	// ApacheVersion reads Apache httpd's banner (nil: httpd -v / apache2 -v
+	// on the live system).
+	ApacheVersion func() string
 	// CageFSDisabled lists the accounts CageFS does not jail (nil:
 	// cagefsctl --list-disabled).
 	CageFSDisabled func() []string
