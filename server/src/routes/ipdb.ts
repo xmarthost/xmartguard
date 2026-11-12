@@ -53,7 +53,9 @@ export function ipdbRoutes(app: FastifyInstance, pool: Pool, ipdb: IPDBService):
 
   app.get('/api/ipdb/summary', viewer, async (req) => {
     const user = req.user!;
-    await ipdb.ensureBuilt();
+    // The first build after a restart takes up to half a minute: the page
+    // shows what is there after 2 seconds instead of waiting for it.
+    await Promise.race([ipdb.ensureBuilt().catch(() => undefined), new Promise((r) => setTimeout(r, 2000))]);
     const [sources, reports, hitsToday, countries, daily, servers, top] = await Promise.all([
       pool.query('SELECT source, count(*)::int AS n FROM ipdb_entries GROUP BY source'),
       pool.query(`SELECT count(*)::int AS reports_24h, count(DISTINCT ip)::int AS ips_24h,
