@@ -19,7 +19,7 @@ interface FeedState {
   last_webhook_at: string | null;
   last_webhook_ok: boolean | null;
 }
-type TestResult = { ok: boolean; error?: string };
+type TestResult = { ok: boolean; error?: string; note?: string };
 
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : 'never');
 const masked = (v: string) => ({ WebkitTextSecurity: v ? 'disc' : 'none' }) as CSSProperties;
@@ -94,7 +94,7 @@ export default function VulnFeed() {
 
       <Card
         title="1. Wordfence Intelligence API key"
-        desc="On wordfence.com: Account » Integrations » Wordfence Intelligence API Key » Create API Key, then paste it here. The portal downloads the vulnerability feed with it every few hours (and as soon as it is saved). The key stays on the portal and is shown only as a hint."
+        desc="On wordfence.com: Account » Integrations » Wordfence Intelligence API Key » Create API Key, then paste it here. The portal downloads the vulnerability feed with it every few hours (and as soon as it is saved). Wordfence allows only a few downloads per hour: a test is a download, so when the feed was downloaded recently the test only reports that. The key stays on the portal and is shown only as a hint."
         right={<KeyRound className="h-5 w-5 text-slate-400" />}
       >
         <div className="space-y-3 text-sm">
@@ -138,7 +138,7 @@ export default function VulnFeed() {
               </button>
             )}
           </div>
-          <Result r={keyTest} okText="Working: Wordfence accepted the key." />
+          <Result r={keyTest} okText={`Working: Wordfence accepted the key${keyTest?.note ? ` (${keyTest.note})` : ' and the feed was downloaded'}.`} />
         </div>
       </Card>
 

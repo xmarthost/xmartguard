@@ -61,11 +61,9 @@ export function vulnFeedRoutes(app: FastifyInstance, pool: Pool, cfg: Config, fe
   app.put('/api/vuln-feed', admin, async (req, reply) => {
     const b = z.object({ api_key: z.union([Key, z.literal('')]).optional(), webhook_secret: z.union([Secret, z.literal('')]).optional() }).safeParse(req.body);
     if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid request' });
-    if (b.data.api_key) {
-      // A new key is saved only once Wordfence accepts it.
-      const t = await feed.testKey(b.data.api_key);
-      if (!t.ok) return reply.code(400).send({ error: t.error });
-    }
+    // The key is not tested with a separate request: Wordfence's feed has a
+    // low usage limit (a test, a first download and another test got 429).
+    // The first download below shows whether it works.
     await pool.query(
       `INSERT INTO vuln_feed_config (id, api_key, webhook_secret) VALUES (1, coalesce($1, ''), coalesce($2, ''))
        ON CONFLICT (id) DO UPDATE SET api_key = coalesce($1, vuln_feed_config.api_key),
@@ -86,13 +84,26 @@ export function vulnFeedRoutes(app: FastifyInstance, pool: Pool, cfg: Config, fe
     return state();
   });
 
-  /** Tests a key (the one typed, else the saved one) without saving it. */
+  /**
+   * Tests a key (the one typed, else the saved one). A test is a download
+   * (the data is kept): when the saved key downloaded the feed in the last
+   * hours, that result is the answer and Wordfence is not asked again.
+   */
   app.post('/api/vuln-feed/test', admin, async (req, reply) => {
     const b = z.object({ api_key: z.union([Key, z.literal('')]).default('') }).safeParse(req.body ?? {});
     if (!b.success) return reply.code(400).send({ error: b.error.issues[0]?.message ?? 'invalid request' });
-    const key = b.data.api_key || (await feed.config()).api_key;
+    const conf = await feed.config();
+    const key = b.data.api_key || conf.api_key;
     if (!key) return reply.code(400).send({ error: 'enter an API key first' });
-    return feed.testKey(key);
+    if (key === conf.api_key && conf.last_sync_at && !conf.last_error && Date.now() - new Date(conf.last_sync_at).getTime() < 6 * 3600_000) {
+      return { ok: true, note: `the feed was downloaded with this key at ${new Date(conf.last_sync_at).toISOString().slice(0, 16).replace('T', ' ')} UTC` };
+    }
+    try {
+      await feed.sync(undefined, key);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message };
+    }
   });
 
   /** Reads the feed now. */

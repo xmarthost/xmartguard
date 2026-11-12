@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.53** (see `VERSION`).
+- Current release: **0.24.54** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,21 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.54: Wordfence feed usage limit and backlog** (2026-11-12).
+  The owner saved the key and pressed Test: HTTP 429. Saving tested the key
+  with one feed request, then downloaded it with a second, the Test button
+  sent a third; the feed endpoint takes no parameters and its usage limit
+  is low. Now a key is never tested separately (a test is a download, data
+  kept), a 429 stops all requests until Retry-After (else 1 hour, message
+  with the time), and Test answers from the last successful download of the
+  saved key (6 hours) without asking Wordfence. Also: the first full
+  download is backlog until a download ever succeeded (`last_sync_at`), not
+  while the table is empty: Wordfence's own webhook test had stored 2
+  records, and the next successful download would have sent the whole feed
+  to the agents as new; and any download with more than 1,000 unseen
+  records is stored as backlog. Feed dates (UTC "YYYY-MM-DD hh:mm:ss") are
+  stored as UTC. The webhook worked from the start (Wordfence's test:
+  `{"ok":true,"changed":2}`). Tests: `vuln-feed.test.ts`.
 - **Release 0.24.53: Master » Web Protection » Plugin Vulnerabilities**
   (2026-11-12, owner: the key belongs in the Master panel, add the webhook
   too, with test buttons; the Wordfence licence is for their plugin only,

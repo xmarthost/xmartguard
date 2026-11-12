@@ -73,7 +73,7 @@ export function parseFeed(raw: unknown): { item: VulnItem; updated: string }[] {
           cvss,
           ranges,
           patched: (s.patched_versions ?? []).map(String).slice(0, 20),
-          published: v.published ?? null,
+          published: v.published ? (/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(v.published) ? `${v.published.replace(' ', 'T')}Z` : v.published) : null,
         },
         updated: String(v.updated ?? v.published ?? ''),
       });
@@ -113,41 +113,57 @@ export class VulnFeedService {
     return { ...r, api_key: r.api_key || this.cfg.wordfenceApiKey };
   }
 
-  /** Checks a key: Wordfence answers the feed request (the body is not read). */
-  async testKey(key: string): Promise<{ ok: boolean; error?: string }> {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 30_000);
-    try {
-      const res = await fetch(this.cfg.wordfenceFeedUrl, { headers: { authorization: `Bearer ${key}`, 'user-agent': 'xPGuard' }, signal: ctl.signal });
-      ctl.abort(); // only the status is needed
-      if (res.ok) return { ok: true };
-      if (res.status === 401 || res.status === 403) return { ok: false, error: 'Wordfence refused the key (check it in Account » Integrations)' };
-      if (res.status === 429) return { ok: false, error: 'Wordfence: too many requests, try again in a few minutes' };
-      return { ok: false, error: `Wordfence answered HTTP ${res.status}` };
-    } catch (err) {
-      return { ok: false, error: `Wordfence not reachable: ${(err as Error).message}` };
-    } finally {
-      clearTimeout(t);
+  /** Wordfence's usage limit: no feed request before this time (ms). */
+  retryAt = 0;
+
+  /**
+   * Downloads the full feed: one request (the feed endpoint takes no
+   * parameters and its usage limit is low, so a key is never "tested"
+   * separately: a test is a download).
+   */
+  private async download(key: string): Promise<unknown> {
+    if (Date.now() < this.retryAt) {
+      throw new Error(`Wordfence limits feed downloads: next try after ${new Date(this.retryAt).toISOString().slice(11, 16)} UTC`);
     }
+    const res = await fetch(this.cfg.wordfenceFeedUrl, {
+      headers: { authorization: `Bearer ${key}`, 'user-agent': 'xPGuard' },
+      signal: AbortSignal.timeout(300_000),
+    });
+    if (res.status === 429) {
+      const after = Number(res.headers.get('retry-after'));
+      this.retryAt = Date.now() + (Number.isFinite(after) && after > 0 ? Math.min(after, 86_400) : 3600) * 1000;
+      throw new Error(`Wordfence: too many feed downloads; next try after ${new Date(this.retryAt).toISOString().slice(11, 16)} UTC`);
+    }
+    if (res.status === 401 || res.status === 403) throw new Error('Wordfence refused the API key (check it in Account » Integrations)');
+    if (!res.ok) throw new Error(`Wordfence feed: HTTP ${res.status}`);
+    return res.json();
   }
 
-  /** Reads the feed, stores new and changed items; returns how many changed. */
-  async sync(raw?: unknown): Promise<number> {
-    if (this.running) return 0;
+  /** Reads the feed (with key, else the saved one), stores new and changed items; returns how many changed. */
+  async sync(raw?: unknown, key?: string): Promise<number> {
+    if (this.running) throw new Error('a feed download is already running');
     this.running = true;
     try {
+      const conf = await this.config();
+      // Until a full download succeeded once, everything in it is backlog
+      // (webhook deliveries before it do not count).
+      const backlog = !conf.last_sync_at;
       if (raw === undefined) {
-        const key = (await this.config()).api_key;
+        key ||= conf.api_key;
         if (!key) return 0; // not set up: the feature is off
-        const res = await fetch(this.cfg.wordfenceFeedUrl, {
-          headers: { authorization: `Bearer ${key}`, 'user-agent': 'xPGuard' },
-          signal: AbortSignal.timeout(300_000),
-        });
-        if (!res.ok) throw new Error(`Wordfence feed: HTTP ${res.status}`);
-        raw = await res.json();
+        raw = await this.download(key);
       }
-      const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM vuln_feed');
-      const changed = await this.storeItems(parseFeed(raw), rows[0].n === 0);
+      const items = parseFeed(raw);
+      // A download that brings more than a thousand records never seen
+      // is a backlog too (a database emptied or restored): sending them all
+      // as new would update and deactivate plugins across the fleet at once.
+      let bulk = false;
+      if (!backlog && items.length > 1000) {
+        const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM vuln_feed WHERE id = ANY($1::text[])', [items.map((x) => x.item.id)]);
+        bulk = items.length - rows[0].n > 1000;
+        if (bulk) this.log.warn({ unseen: items.length - rows[0].n }, 'vulnerability feed: too many unseen records, stored as backlog');
+      }
+      const changed = await this.storeItems(items, backlog || bulk);
       this.syncedAt = new Date();
       this.lastError = '';
       await this.pool.query(

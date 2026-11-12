@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 import { webhookSignature } from '../src/routes/vuln-feed.js';
@@ -54,7 +56,11 @@ describe('fast plugin vulnerability alerts', () => {
   });
 
   it('keeps the first import as backlog, then sends only new and changed items and nudges the agents', async () => {
-    expect(await feed.sync({ ...wf('old', 'old-plugin', '1.0', '1') })).toBe(0);
+    // A webhook delivery before the first download (Wordfence's own test of
+    // the webhook) does not turn the backlog into new items.
+    expect(await feed.applyWebhook({ vulnerabilities: { created: Object.values(wf('pre', 'pre-plugin', '1.0', '1')) } })).toBe(1);
+    nudged.length = 0;
+    expect(await feed.sync({ ...wf('old', 'old-plugin', '1.0', '1'), ...wf('old2', 'old-plugin2', '1.0', '1') })).toBe(0);
     expect(nudged).toHaveLength(0);
     const start = await fetchSince(-1);
     expect(start.status).toBe(200);
@@ -76,15 +82,39 @@ describe('fast plugin vulnerability alerts', () => {
     let r = await admin.req('GET', '/api/vuln-feed');
     expect(r.body).toMatchObject({ key_set: false, secret_set: false });
     expect(r.body.webhook_url).toBe(h.url + '/api/hooks/wordfence');
-    // Wordfence refusing the key: not saved.
-    feed.testKey = async () => ({ ok: false, error: 'Wordfence refused the key' });
-    r = await admin.req('PUT', '/api/vuln-feed', { api_key: 'k'.repeat(40) });
-    expect(r.status).toBe(400);
-    feed.testKey = async () => ({ ok: true });
+    // One request per download; a 429 waits for Retry-After, and the
+    // test button does not ask Wordfence again in the meantime.
+    let hits = 0;
+    let answer: { status: number; body: unknown } = { status: 429, body: {} };
+    const wfServer = http.createServer((req, res) => {
+      hits++;
+      expect(req.headers.authorization).toBe('Bearer abcd' + 'k'.repeat(40) + 'wxyz');
+      res.writeHead(answer.status, { 'content-type': 'application/json', 'retry-after': '600' });
+      res.end(JSON.stringify(answer.body));
+    });
+    await new Promise<void>((r) => wfServer.listen(0, '127.0.0.1', () => r()));
+    h.cfg.wordfenceFeedUrl = `http://127.0.0.1:${(wfServer.address() as AddressInfo).port}/feed`;
     r = await admin.req('PUT', '/api/vuln-feed', { api_key: 'abcd' + 'k'.repeat(40) + 'wxyz', webhook_secret: 's'.repeat(40) });
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({ key_set: true, key_hint: 'abcd…wxyz', secret_set: true });
     expect(JSON.stringify(r.body)).not.toContain('k'.repeat(40));
+    await new Promise((res) => setTimeout(res, 300));
+    expect(hits).toBe(1);
+    expect((await admin.req('GET', '/api/vuln-feed')).body.last_error).toContain('too many feed downloads');
+    r = await admin.req('POST', '/api/vuln-feed/test');
+    expect(r.body.ok).toBe(false);
+    expect(r.body.error).toContain('next try after');
+    expect(hits).toBe(1);
+    // Later: the download works; a second test does not download again.
+    feed.retryAt = 0;
+    answer = { status: 200, body: wf('later', 'later-plugin', '1.0', '1') };
+    expect((await admin.req('POST', '/api/vuln-feed/test')).body).toEqual({ ok: true });
+    expect(hits).toBe(2);
+    r = await admin.req('POST', '/api/vuln-feed/test');
+    expect(r.body.ok).toBe(true);
+    expect(r.body.note).toContain('downloaded with this key');
+    expect(hits).toBe(2);
+    wfServer.close();
     expect((await admin.req('PUT', '/api/vuln-feed', { webhook_secret: 'short' })).status).toBe(400);
     // The test button: a signed sample delivery through the public address.
     r = await admin.req('POST', '/api/vuln-feed/webhook-test');
@@ -110,6 +140,15 @@ describe('fast plugin vulnerability alerts', () => {
     const del = JSON.stringify({ vulnerabilities: { created: [], replaced: [], deleted: ['aaaaaaaa-0000-0000-0000-000000000001'] } });
     expect((await hook(del, webhookSignature(secret, del))).status).toBe(200);
     expect((await h.pool.query("SELECT 1 FROM vuln_feed WHERE id LIKE 'aaaaaaaa-0000-0000-0000-000000000001:%'")).rowCount).toBe(0);
+  });
+
+  it('stores a download with more than a thousand unseen records as backlog', async () => {
+    const many: Record<string, unknown> = {};
+    for (let i = 0; i < 1100; i++) Object.assign(many, wf(`bulk-${i}`, `bulk-plugin-${i}`, '1.0', '1'));
+    nudged.length = 0;
+    expect(await feed.sync(many)).toBe(0);
+    expect(nudged).toHaveLength(0);
+    expect((await h.pool.query("SELECT count(*)::int AS n FROM vuln_feed WHERE id LIKE 'bulk-%' AND seq = 0")).rows[0].n).toBe(1100);
   });
 
   it('refuses unsigned requests', async () => {
