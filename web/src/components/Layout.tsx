@@ -79,6 +79,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             { to: '/waf-rulesets', label: 'WAF Rule Sets', icon: <ShieldHalf /> },
             { to: '/captcha-page', label: 'CAPTCHA Page', icon: <ShieldQuestion /> },
             { to: '/ipdb', label: 'IPDB', icon: <ShieldBan /> },
+            { to: '/vuln-feed', label: 'Plugin Vulnerabilities', icon: <ShieldAlert /> },
             { to: '/trusted-services', label: 'Trusted Services', icon: <BadgeCheck /> },
             { to: '/mail-protection', label: 'Mail Protection', icon: <Mail /> },
             { to: '/domain-reputation', label: 'Domain Reputation', icon: <Globe2 /> },

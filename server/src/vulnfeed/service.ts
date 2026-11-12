@@ -7,8 +7,9 @@ import type { AgentHub } from '../agents/hub.js';
  * New WordPress plugin, theme and core vulnerabilities for the whole fleet,
  * fast: the full scan (and its plugin inventory) runs every 72 hours, but an
  * exploited plugin must be patched within hours (owner, 2026-11-12). Every
- * few hours the portal reads Wordfence Intelligence's free production feed
- * (needs a free API key: WORDFENCE_API_KEY), keeps one row per affected
+ * few hours (and when Wordfence's webhook says something changed) the portal
+ * reads Wordfence Intelligence's free production feed (free API key, set in
+ * Master » Plugin Vulnerabilities; WORDFENCE_API_KEY also works), keeps one row per affected
  * component, numbers new and changed rows (seq) and asks the online agents
  * to fetch what is new; each agent matches its last inventory, without a new
  * scan, and updates, shields or deactivates the affected plugin.
@@ -95,14 +96,7 @@ export class VulnFeedService {
   ) {}
 
   start(): void {
-    if (!this.cfg.wordfenceApiKey) {
-      this.log.info('WORDFENCE_API_KEY not set: fast plugin vulnerability alerts are off');
-      return;
-    }
-    const tick = () => void this.sync().catch((err) => {
-      this.lastError = (err as Error).message;
-      this.log.warn({ err: this.lastError }, 'vulnerability feed sync failed');
-    });
+    const tick = () => void this.sync().catch(() => undefined);
     setTimeout(tick, 60_000).unref();
     this.timer = setInterval(tick, Math.max(1, this.cfg.vulnFeedHours) * 3600_000);
     this.timer.unref();
@@ -112,46 +106,110 @@ export class VulnFeedService {
     if (this.timer) clearInterval(this.timer);
   }
 
+  /** The operator's settings (the env key when none is saved). */
+  async config(): Promise<{ api_key: string; webhook_secret: string; last_sync_at: Date | null; last_changed: number; last_error: string; last_webhook_at: Date | null; last_webhook_ok: boolean | null }> {
+    const { rows } = await this.pool.query('SELECT * FROM vuln_feed_config WHERE id = 1');
+    const r = rows[0] ?? { api_key: '', webhook_secret: '', last_sync_at: null, last_changed: 0, last_error: '', last_webhook_at: null, last_webhook_ok: null };
+    return { ...r, api_key: r.api_key || this.cfg.wordfenceApiKey };
+  }
+
+  /** Checks a key: Wordfence answers the feed request (the body is not read). */
+  async testKey(key: string): Promise<{ ok: boolean; error?: string }> {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 30_000);
+    try {
+      const res = await fetch(this.cfg.wordfenceFeedUrl, { headers: { authorization: `Bearer ${key}`, 'user-agent': 'xPGuard' }, signal: ctl.signal });
+      ctl.abort(); // only the status is needed
+      if (res.ok) return { ok: true };
+      if (res.status === 401 || res.status === 403) return { ok: false, error: 'Wordfence refused the key (check it in Account » Integrations)' };
+      if (res.status === 429) return { ok: false, error: 'Wordfence: too many requests, try again in a few minutes' };
+      return { ok: false, error: `Wordfence answered HTTP ${res.status}` };
+    } catch (err) {
+      return { ok: false, error: `Wordfence not reachable: ${(err as Error).message}` };
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
   /** Reads the feed, stores new and changed items; returns how many changed. */
   async sync(raw?: unknown): Promise<number> {
     if (this.running) return 0;
     this.running = true;
     try {
       if (raw === undefined) {
+        const key = (await this.config()).api_key;
+        if (!key) return 0; // not set up: the feature is off
         const res = await fetch(this.cfg.wordfenceFeedUrl, {
-          headers: { authorization: `Bearer ${this.cfg.wordfenceApiKey}`, 'user-agent': 'xPGuard' },
+          headers: { authorization: `Bearer ${key}`, 'user-agent': 'xPGuard' },
           signal: AbortSignal.timeout(300_000),
         });
         if (!res.ok) throw new Error(`Wordfence feed: HTTP ${res.status}`);
         raw = await res.json();
       }
-      const items = parseFeed(raw);
       const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM vuln_feed');
-      const first = rows[0].n === 0;
-      let changed = 0;
-      for (const { item, updated } of items) {
-        // The first import is the backlog (handled by the nightly checks):
-        // seq 0, never sent as new.
-        const r = await this.pool.query(
-          `INSERT INTO vuln_feed (id, kind, slug, title, cvss, ranges, patched, published, updated, seq)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $10 THEN 0 ELSE nextval('vuln_feed_seq') END)
-           ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, cvss = EXCLUDED.cvss, ranges = EXCLUDED.ranges,
-             patched = EXCLUDED.patched, published = EXCLUDED.published, updated = EXCLUDED.updated, seq = nextval('vuln_feed_seq')
-           WHERE vuln_feed.updated IS DISTINCT FROM EXCLUDED.updated`,
-          [item.id, item.kind, item.slug, item.title, item.cvss, JSON.stringify(item.ranges), JSON.stringify(item.patched), item.published, updated, first],
-        );
-        if (!first) changed += r.rowCount ?? 0;
-      }
+      const changed = await this.storeItems(parseFeed(raw), rows[0].n === 0);
       this.syncedAt = new Date();
       this.lastError = '';
+      await this.pool.query(
+        `INSERT INTO vuln_feed_config (id, last_sync_at, last_changed, last_error) VALUES (1, now(), $1, '')
+         ON CONFLICT (id) DO UPDATE SET last_sync_at = now(), last_changed = $1, last_error = ''`,
+        [changed],
+      );
       if (changed > 0) {
         this.log.info({ changed }, 'new plugin vulnerabilities: agents notified');
         await this.notify();
       }
       return changed;
+    } catch (err) {
+      this.lastError = (err as Error).message;
+      this.log.warn({ err: this.lastError }, 'vulnerability feed sync failed');
+      await this.pool
+        .query(`INSERT INTO vuln_feed_config (id, last_error) VALUES (1, $1) ON CONFLICT (id) DO UPDATE SET last_error = $1`, [this.lastError.slice(0, 300)])
+        .catch(() => undefined);
+      throw err;
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Stores items; returns how many are new or changed. The first import is
+   * the backlog (handled by the nightly checks): seq 0, never sent as new.
+   */
+  async storeItems(items: { item: VulnItem; updated: string }[], backlog: boolean): Promise<number> {
+    let changed = 0;
+    for (const { item, updated } of items) {
+      const r = await this.pool.query(
+        `INSERT INTO vuln_feed (id, kind, slug, title, cvss, ranges, patched, published, updated, seq)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $10 THEN 0 ELSE nextval('vuln_feed_seq') END)
+         ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, cvss = EXCLUDED.cvss, ranges = EXCLUDED.ranges,
+           patched = EXCLUDED.patched, published = EXCLUDED.published, updated = EXCLUDED.updated, seq = nextval('vuln_feed_seq')
+         WHERE vuln_feed.updated IS DISTINCT FROM EXCLUDED.updated`,
+        [item.id, item.kind, item.slug, item.title, item.cvss, JSON.stringify(item.ranges), JSON.stringify(item.patched), item.published, updated, backlog],
+      );
+      if (!backlog) changed += r.rowCount ?? 0;
+    }
+    return changed;
+  }
+
+  /**
+   * A Wordfence webhook delivery ({vulnerabilities: {created, replaced,
+   * deleted}}, the full records): stored at once, agents nudged. Returns how
+   * many items changed.
+   */
+  async applyWebhook(body: unknown): Promise<number> {
+    const v = (body as { vulnerabilities?: { created?: unknown[]; replaced?: unknown[]; deleted?: unknown[] } })?.vulnerabilities;
+    if (!v || typeof v !== 'object') return 0;
+    const items = parseFeed([...(Array.isArray(v.created) ? v.created : []), ...(Array.isArray(v.replaced) ? v.replaced : [])]);
+    const changed = await this.storeItems(items, false);
+    for (const id of Array.isArray(v.deleted) ? v.deleted : []) {
+      if (typeof id === 'string' && /^[0-9a-f-]{8,64}$/i.test(id)) await this.pool.query('DELETE FROM vuln_feed WHERE id LIKE $1', [`${id}:%`]);
+    }
+    if (changed > 0) {
+      this.log.info({ changed }, 'Wordfence webhook: new plugin vulnerabilities, agents notified');
+      await this.notify();
+    }
+    return changed;
   }
 
   /** Asks every online server to fetch the new items now. */

@@ -811,4 +811,22 @@ CREATE TABLE vuln_feed (
 CREATE INDEX vuln_feed_seq_idx ON vuln_feed (seq);
 `,
   },
+  {
+    version: '034_vuln_feed_config',
+    sql: `
+-- The operator's Wordfence Intelligence API key and webhook secret (Master »
+-- Plugin Vulnerabilities); they never leave the portal.
+CREATE TABLE vuln_feed_config (
+  id int PRIMARY KEY CHECK (id = 1),
+  api_key text NOT NULL DEFAULT '',
+  webhook_secret text NOT NULL DEFAULT '',
+  last_sync_at timestamptz,
+  last_changed int NOT NULL DEFAULT 0,
+  last_error text NOT NULL DEFAULT '',
+  last_webhook_at timestamptz,
+  last_webhook_ok boolean,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+`,
+  },
 ];

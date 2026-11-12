@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.52** (see `VERSION`).
+- Current release: **0.24.53** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,24 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.53: Master » Web Protection » Plugin Vulnerabilities**
+  (2026-11-12, owner: the key belongs in the Master panel, add the webhook
+  too, with test buttons; the Wordfence licence is for their plugin only,
+  not used). Migration 034 `vuln_feed_config` (api_key, webhook_secret,
+  last sync/webhook status; `WORDFENCE_API_KEY` env still works as a
+  fallback). Routes (platform admin): `GET/PUT /api/vuln-feed` (key tested
+  against Wordfence before it is saved, shown only as a hint; secret at
+  least 32 characters), `POST /api/vuln-feed/test` (key), `/sync`
+  (download now), `/webhook-test` (a signed sample delivery sent to the
+  public webhook URL: proves the address is reachable and the signature
+  check works). Webhook `POST /api/hooks/wordfence` (raw body,
+  `X-Wordfence-Signature` = hex HMAC-SHA256 with the secret, X-Signature
+  also accepted; Wordfence's documented payload `{vulnerabilities:
+  {created, replaced, deleted}}` with full records): stored at once with
+  new seq numbers, deleted ids removed, online agents nudged; works without
+  the API key. Tests in `vuln-feed.test.ts` (key refused/saved/hint,
+  webhook test, signed delivery stored and nudged, bad signature 401,
+  delete).
 - **Release 0.24.52: fast response to new plugin vulnerabilities**
   (2026-11-12, owner: the full scan stays every 72 hours for the load, but
   an exploited plugin must be stopped within hours, from the last scan's

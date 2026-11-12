@@ -46,6 +46,7 @@ const AIConnector = lazy(() => import('./pages/AIConnector'));
 const WafRuleSets = lazy(() => import('./pages/WafRuleSets'));
 const AppearancePage = lazy(() => import('./pages/AppearancePage'));
 const IPDBPage = lazy(() => import('./pages/IPDB'));
+const VulnFeedPage = lazy(() => import('./pages/VulnFeed'));
 
 /** platform: the provider's own fleet pages (master settings), not for customers' accounts. */
 function Protected({ children, role, platform }: { children: ReactNode; role?: 'owner' | 'admin'; platform?: boolean }) {
@@ -98,6 +99,7 @@ export default function App() {
         <Route path="/servers/:id/server-audit" element={<Protected><ServerAudit /></Protected>} />
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected platform><IPDBPage /></Protected>} />
+        <Route path="/vuln-feed" element={<Protected platform><VulnFeedPage /></Protected>} />
         <Route path="/ai" element={<Protected platform><AIScanner /></Protected>} />
         <Route path="/waf-rulesets" element={<Protected platform><WafRuleSets /></Protected>} />
         <Route path="/trusted-services" element={<Protected platform><TrustedServices /></Protected>} />

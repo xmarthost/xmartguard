@@ -55,6 +55,7 @@ export interface App {
   wp: WPCoreService;
   sigs: SignatureService;
   crs: CRSService;
+  vulnFeed: VulnFeedService;
 }
 
 /**
@@ -167,7 +168,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
   captchaRoutes(app, pool, cfg, hub);
   wafIntelRoutes(app, pool, hub);
   const vulnFeed = new VulnFeedService(pool, cfg, hub, app.log);
-  vulnFeedRoutes(app, pool, vulnFeed);
+  vulnFeedRoutes(app, pool, cfg, vulnFeed);
   if (cfg.ipdbSync) vulnFeed.start();
   app.addHook('onClose', async () => vulnFeed.stop());
   mailRoutes(app, pool, hub);
@@ -220,7 +221,7 @@ export async function buildApp(cfg: Config, pool: Pool, opts: { logger?: boolean
     crs.stop();
     hub.closeAll();
   });
-  return { app, hub, ipdb, ai, wp, sigs, crs };
+  return { app, hub, ipdb, ai, wp, sigs, crs, vulnFeed };
 }
 
 /** The first bytes match what @fastify/compress takes for gzip or zlib data. */
