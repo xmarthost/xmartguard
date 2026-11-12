@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.54** (see `VERSION`).
+- Current release: **0.24.55** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,22 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.55: feed read as a stream, pages preloaded** (2026-11-13).
+  After 0.24.54 with the key saved: portal pages took 40 s+, 15 of 17
+  agents stayed on 0.24.49 and a manual update failed with "unexpected
+  EOF" (only s1 and vps900 updated). Most likely the portal restarting:
+  the feed (over 100 MB of JSON) was read whole (`res.json()`), and a
+  restart downloaded it again a minute later (the 429 wait was in memory).
+  Now `feedRecords` reads the response one record at a time (127 MB test
+  feed: 39 MB peak heap), records go in batches of 500 (`storeBatch`,
+  unnest, seq 0; changed rows numbered at the end by `number`, so agents
+  never see a half-stored or backlog download), the event loop is yielded
+  between batches, and `retry_at` / `last_attempt_at` are in the database
+  (migration 035): a download only when the last attempt is older than the
+  interval (checked every 10 minutes, first check 5 minutes after start).
+  Web: every lazy page chunk is fetched while the browser is idle after
+  load (`preloadPages` in App.tsx). Tests: `vuln-feed.test.ts` (stream
+  across chunk boundaries, restart keeps waiting).
 - **Release 0.24.54: Wordfence feed usage limit and backlog** (2026-11-12).
   The owner saved the key and pressed Test: HTTP 429. Saving tested the key
   with one feed request, then downloaded it with a second, the Test button

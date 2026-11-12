@@ -82,6 +82,56 @@ export function parseFeed(raw: unknown): { item: VulnItem; updated: string }[] {
   return out;
 }
 
+/**
+ * The records of the feed's top-level object (or array), read from the
+ * response one at a time: only the current record is held in memory.
+ */
+export async function* feedRecords(body: ReadableStream<Uint8Array>): AsyncGenerator<unknown> {
+  const dec = new TextDecoder();
+  let buf = '';
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let start = -1;
+  let i = 0;
+  const reader = body.getReader();
+  for (;;) {
+    const { value, done } = await reader.read();
+    buf += done ? dec.decode() : dec.decode(value, { stream: true });
+    for (; i < buf.length; i++) {
+      const c = buf[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === '\\') esc = true;
+        else if (c === '"') inStr = false;
+        continue;
+      }
+      if (c === '"') inStr = true;
+      else if (c === '{' || c === '[') {
+        depth++;
+        if (depth === 2 && c === '{') start = i;
+      } else if (c === '}' || c === ']') {
+        if (depth === 2 && start >= 0 && c === '}') {
+          const rec = buf.slice(start, i + 1);
+          start = -1;
+          try {
+            yield JSON.parse(rec);
+          } catch {
+            // a broken record is skipped
+          }
+        }
+        depth--;
+      }
+    }
+    // Keep only the record being read.
+    const keep = start >= 0 ? start : buf.length;
+    buf = buf.slice(keep);
+    i -= keep;
+    if (start >= 0) start = 0;
+    if (done) break;
+  }
+}
+
 export class VulnFeedService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -96,10 +146,24 @@ export class VulnFeedService {
   ) {}
 
   start(): void {
-    const tick = () => void this.sync().catch(() => undefined);
-    setTimeout(tick, 60_000).unref();
-    this.timer = setInterval(tick, Math.max(1, this.cfg.vulnFeedHours) * 3600_000);
+    // Checked every 10 minutes; a download only when the last attempt is
+    // older than the interval and Wordfence's limit has passed (both kept in
+    // the database: a restart does not download again).
+    const tick = () =>
+      void this.due()
+        .then((d) => (d ? this.sync() : 0))
+        .catch(() => undefined);
+    setTimeout(tick, 5 * 60_000).unref();
+    this.timer = setInterval(tick, 10 * 60_000);
     this.timer.unref();
+  }
+
+  private async due(): Promise<boolean> {
+    const { rows } = await this.pool.query('SELECT api_key, retry_at, last_attempt_at FROM vuln_feed_config WHERE id = 1');
+    const r = rows[0];
+    if (!r?.api_key && !this.cfg.wordfenceApiKey) return false;
+    if (r?.retry_at && new Date(r.retry_at).getTime() > Date.now()) return false;
+    return !r?.last_attempt_at || Date.now() - new Date(r.last_attempt_at).getTime() >= Math.max(1, this.cfg.vulnFeedHours) * 3600_000;
   }
 
   stop(): void {
@@ -121,22 +185,28 @@ export class VulnFeedService {
    * parameters and its usage limit is low, so a key is never "tested"
    * separately: a test is a download).
    */
-  private async download(key: string): Promise<unknown> {
-    if (Date.now() < this.retryAt) {
-      throw new Error(`Wordfence limits feed downloads: next try after ${new Date(this.retryAt).toISOString().slice(11, 16)} UTC`);
+  private async download(key: string): Promise<ReadableStream<Uint8Array>> {
+    const { rows } = await this.pool.query('SELECT retry_at FROM vuln_feed_config WHERE id = 1');
+    const until = Math.max(this.retryAt, rows[0]?.retry_at ? new Date(rows[0].retry_at).getTime() : 0);
+    if (Date.now() < until) {
+      throw new Error(`Wordfence limits feed downloads: next try after ${new Date(until).toISOString().slice(11, 16)} UTC`);
     }
+    await this.pool.query(
+      'INSERT INTO vuln_feed_config (id, last_attempt_at) VALUES (1, now()) ON CONFLICT (id) DO UPDATE SET last_attempt_at = now()',
+    );
     const res = await fetch(this.cfg.wordfenceFeedUrl, {
       headers: { authorization: `Bearer ${key}`, 'user-agent': 'xPGuard' },
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(600_000),
     });
     if (res.status === 429) {
       const after = Number(res.headers.get('retry-after'));
       this.retryAt = Date.now() + (Number.isFinite(after) && after > 0 ? Math.min(after, 86_400) : 3600) * 1000;
+      await this.pool.query('UPDATE vuln_feed_config SET retry_at = $1 WHERE id = 1', [new Date(this.retryAt)]);
       throw new Error(`Wordfence: too many feed downloads; next try after ${new Date(this.retryAt).toISOString().slice(11, 16)} UTC`);
     }
     if (res.status === 401 || res.status === 403) throw new Error('Wordfence refused the API key (check it in Account » Integrations)');
-    if (!res.ok) throw new Error(`Wordfence feed: HTTP ${res.status}`);
-    return res.json();
+    if (!res.ok || !res.body) throw new Error(`Wordfence feed: HTTP ${res.status}`);
+    return res.body;
   }
 
   /** Reads the feed (with key, else the saved one), stores new and changed items; returns how many changed. */
@@ -148,22 +218,40 @@ export class VulnFeedService {
       // Until a full download succeeded once, everything in it is backlog
       // (webhook deliveries before it do not count).
       const backlog = !conf.last_sync_at;
+      // Records go to the database in batches, read one at a time from
+      // the response (the whole feed in memory, over 100 MB of JSON, made
+      // the portal slow or killed it), all with seq 0; the changed ones get
+      // their numbers at the end, unless it was a backlog.
+      let records: AsyncIterable<unknown> | unknown[];
       if (raw === undefined) {
         key ||= conf.api_key;
         if (!key) return 0; // not set up: the feature is off
-        raw = await this.download(key);
+        records = feedRecords(await this.download(key));
+      } else {
+        records = Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? Object.values(raw as Record<string, unknown>) : [];
       }
-      const items = parseFeed(raw);
-      // A download that brings more than a thousand records never seen
-      // is a backlog too (a database emptied or restored): sending them all
-      // as new would update and deactivate plugins across the fleet at once.
-      let bulk = false;
-      if (!backlog && items.length > 1000) {
-        const { rows } = await this.pool.query('SELECT count(*)::int AS n FROM vuln_feed WHERE id = ANY($1::text[])', [items.map((x) => x.item.id)]);
-        bulk = items.length - rows[0].n > 1000;
-        if (bulk) this.log.warn({ unseen: items.length - rows[0].n }, 'vulnerability feed: too many unseen records, stored as backlog');
+      const changedIds: string[] = [];
+      let unseen = 0;
+      let batch: { item: VulnItem; updated: string }[] = [];
+      const flush = async () => {
+        if (!batch.length) return;
+        const r = await this.storeBatch(batch);
+        changedIds.push(...r.changed);
+        unseen += r.unseen;
+        batch = [];
+        await new Promise((res) => setImmediate(res)); // let requests in
+      };
+      for await (const rec of records) {
+        batch.push(...parseFeed([rec]));
+        if (batch.length >= 500) await flush();
       }
-      const changed = await this.storeItems(items, backlog || bulk);
+      await flush();
+      // A download that brings more than a thousand records never seen is
+      // a backlog too (a database emptied or restored): sending them all as
+      // new would update and deactivate plugins across the fleet at once.
+      const bulk = !backlog && unseen > 1000;
+      if (bulk) this.log.warn({ unseen }, 'vulnerability feed: too many unseen records, stored as backlog');
+      const changed = backlog || bulk ? 0 : await this.number(changedIds);
       this.syncedAt = new Date();
       this.lastError = '';
       await this.pool.query(
@@ -189,23 +277,54 @@ export class VulnFeedService {
   }
 
   /**
-   * Stores items; returns how many are new or changed. The first import is
-   * the backlog (handled by the nightly checks): seq 0, never sent as new.
+   * Stores a batch with seq 0; returns the ids that were new or changed and
+   * how many were new.
    */
-  async storeItems(items: { item: VulnItem; updated: string }[], backlog: boolean): Promise<number> {
-    let changed = 0;
-    for (const { item, updated } of items) {
-      const r = await this.pool.query(
-        `INSERT INTO vuln_feed (id, kind, slug, title, cvss, ranges, patched, published, updated, seq)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $10 THEN 0 ELSE nextval('vuln_feed_seq') END)
-         ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, cvss = EXCLUDED.cvss, ranges = EXCLUDED.ranges,
-           patched = EXCLUDED.patched, published = EXCLUDED.published, updated = EXCLUDED.updated, seq = nextval('vuln_feed_seq')
-         WHERE vuln_feed.updated IS DISTINCT FROM EXCLUDED.updated`,
-        [item.id, item.kind, item.slug, item.title, item.cvss, JSON.stringify(item.ranges), JSON.stringify(item.patched), item.published, updated, backlog],
-      );
-      if (!backlog) changed += r.rowCount ?? 0;
+  async storeBatch(items: { item: VulnItem; updated: string }[]): Promise<{ changed: string[]; unseen: number }> {
+    const by = new Map<string, { item: VulnItem; updated: string }>();
+    for (const x of items) by.set(x.item.id, x); // one row per id in a statement
+    const list = [...by.values()];
+    if (!list.length) return { changed: [], unseen: 0 };
+    const date = (v: string | null) => (v && !Number.isNaN(Date.parse(v)) ? v : null);
+    const { rows: seen } = await this.pool.query('SELECT count(*)::int AS n FROM vuln_feed WHERE id = ANY($1::text[])', [list.map((x) => x.item.id)]);
+    const { rows } = await this.pool.query(
+      `INSERT INTO vuln_feed (id, kind, slug, title, cvss, ranges, patched, published, updated, seq)
+       SELECT x.id, x.kind, x.slug, x.title, x.cvss, x.ranges::jsonb, x.patched::jsonb, x.published::timestamptz, x.updated, 0
+       FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::real[], $6::text[], $7::text[], $8::text[], $9::text[])
+         AS x(id, kind, slug, title, cvss, ranges, patched, published, updated)
+       ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, cvss = EXCLUDED.cvss, ranges = EXCLUDED.ranges,
+         patched = EXCLUDED.patched, published = EXCLUDED.published, updated = EXCLUDED.updated, seq = 0
+       WHERE vuln_feed.updated IS DISTINCT FROM EXCLUDED.updated
+       RETURNING id`,
+      [
+        list.map((x) => x.item.id),
+        list.map((x) => x.item.kind),
+        list.map((x) => x.item.slug),
+        list.map((x) => x.item.title),
+        list.map((x) => x.item.cvss),
+        list.map((x) => JSON.stringify(x.item.ranges)),
+        list.map((x) => JSON.stringify(x.item.patched)),
+        list.map((x) => date(x.item.published)),
+        list.map((x) => x.updated),
+      ],
+    );
+    return { changed: rows.map((r) => String(r.id)), unseen: list.length - seen[0].n };
+  }
+
+  /** Gives changed rows their numbers: the agents fetch them as new. */
+  private async number(ids: string[]): Promise<number> {
+    let n = 0;
+    for (let i = 0; i < ids.length; i += 1000) {
+      const r = await this.pool.query("UPDATE vuln_feed SET seq = nextval('vuln_feed_seq') WHERE id = ANY($1::text[])", [ids.slice(i, i + 1000)]);
+      n += r.rowCount ?? 0;
     }
-    return changed;
+    return n;
+  }
+
+  /** Stores items and numbers the changed ones (webhook deliveries). */
+  async storeItems(items: { item: VulnItem; updated: string }[]): Promise<number> {
+    const r = await this.storeBatch(items);
+    return this.number(r.changed);
   }
 
   /**
@@ -217,7 +336,7 @@ export class VulnFeedService {
     const v = (body as { vulnerabilities?: { created?: unknown[]; replaced?: unknown[]; deleted?: unknown[] } })?.vulnerabilities;
     if (!v || typeof v !== 'object') return 0;
     const items = parseFeed([...(Array.isArray(v.created) ? v.created : []), ...(Array.isArray(v.replaced) ? v.replaced : [])]);
-    const changed = await this.storeItems(items, false);
+    const changed = await this.storeItems(items);
     for (const id of Array.isArray(v.deleted) ? v.deleted : []) {
       if (typeof id === 'string' && /^[0-9a-f-]{8,64}$/i.test(id)) await this.pool.query('DELETE FROM vuln_feed WHERE id LIKE $1', [`${id}:%`]);
     }

@@ -1,6 +1,6 @@
 import SetPassword from './pages/SetPassword';
 import Subscription from './pages/Subscription';
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, can, useAuth } from './auth';
 import Layout from './components/Layout';
@@ -63,7 +63,53 @@ function Protected({ children, role, platform }: { children: ReactNode; role?: '
   );
 }
 
+
+// Every page's code is fetched in the background once the portal has
+// loaded (when the browser is idle), so opening a page from the menu does
+// not wait for its download (owner: "pages open late").
+const PAGES = [
+  () => import('./pages/AIScanner'),
+  () => import('./pages/Overview'),
+  () => import('./pages/ServerListModern'),
+  () => import('./pages/AddServer'),
+  () => import('./pages/ServerDashboard'),
+  () => import('./pages/Monitoring'),
+  () => import('./pages/TrustedServices'),
+  () => import('./pages/MailProtection'),
+  () => import('./pages/DomainReputation'),
+  () => import('./pages/CaptchaPage'),
+  () => import('./pages/SecurityMonitor'),
+  () => import('./pages/ServerAudit'),
+  () => import('./pages/LearningCenter'),
+  () => import('./pages/BlockLookup'),
+  () => import('./pages/FleetHealth'),
+  () => import('./pages/SecurityEvents'),
+  () => import('./pages/Reputation'),
+  () => import('./pages/AllowList'),
+  () => import('./pages/SiteScores'),
+  () => import('./pages/Unblock'),
+  () => import('./pages/Settings'),
+  () => import('./pages/MassOperations'),
+  () => import('./pages/CustomerServers'),
+  () => import('./pages/KnowledgeBase'),
+  () => import('./pages/AIConnector'),
+  () => import('./pages/WafRuleSets'),
+  () => import('./pages/AppearancePage'),
+  () => import('./pages/IPDB'),
+  () => import('./pages/VulnFeed'),
+];
+function preloadPages() {
+  const idle = (cb: () => void) => ('requestIdleCallback' in window ? (window as any).requestIdleCallback(cb, { timeout: 3000 }) : setTimeout(cb, 1500));
+  let i = 0;
+  const next = () => {
+    if (i >= PAGES.length) return;
+    PAGES[i++]().catch(() => undefined).finally(() => idle(next));
+  };
+  idle(next);
+}
+
 export default function App() {
+  useEffect(preloadPages, []);
   return (
     <AuthProvider>
       <Routes>

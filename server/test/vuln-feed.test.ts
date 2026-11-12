@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, startHarness, type Harness } from './helpers.js';
 import { webhookSignature } from '../src/routes/vuln-feed.js';
 import { envelopeMessage } from '../src/agent-sign.js';
-import { parseFeed, VulnFeedService } from '../src/vulnfeed/service.js';
+import { feedRecords, parseFeed, VulnFeedService } from '../src/vulnfeed/service.js';
 
 let h: Harness;
 let feed: VulnFeedService;
@@ -48,6 +48,25 @@ async function fetchSince(since: number) {
 }
 
 describe('fast plugin vulnerability alerts', () => {
+  it('reads the feed one record at a time, across chunk boundaries and tricky strings', async () => {
+    const text = JSON.stringify({
+      a: { id: 'a', title: 'brace } in "quotes" \\ and {', software: [] },
+      b: { id: 'b', title: 'unicode é ✓', software: [{ type: 'plugin', slug: 'x', affected_versions: { '* - 1': { from_version: '*', to_version: '1' } } }] },
+    });
+    const bytes = new TextEncoder().encode(text);
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (let i = 0; i < bytes.length; i += 7) c.enqueue(bytes.slice(i, i + 7)); // splits characters too
+        c.close();
+      },
+    });
+    const out: { id: string; title: string }[] = [];
+    for await (const r of feedRecords(stream)) out.push(r as { id: string; title: string });
+    expect(out.map((r) => r.id)).toEqual(['a', 'b']);
+    expect(out[0].title).toBe('brace } in "quotes" \\ and {');
+    expect(out[1].title).toBe('unicode é ✓');
+  });
+
   it('parses the feed into one item per component, skipping informational and bad slugs', () => {
     const items = parseFeed({ ...wf('a', 'contact-form-7', '6.2.3', '1'), b: { id: 'b', informational: true, software: [] }, c: { id: 'c', software: [{ type: 'plugin', slug: '../x', affected_versions: { x: {} } }] } });
     expect(items).toHaveLength(1);
@@ -105,6 +124,11 @@ describe('fast plugin vulnerability alerts', () => {
     expect(r.body.ok).toBe(false);
     expect(r.body.error).toContain('next try after');
     expect(hits).toBe(1);
+    // A restarted portal keeps waiting (the limit is in the database).
+    const restarted = new VulnFeedService(h.pool, h.cfg, h.hub, h.app.log);
+    await expect(restarted.sync()).rejects.toThrow('next try after');
+    expect(hits).toBe(1);
+    await h.pool.query('UPDATE vuln_feed_config SET retry_at = NULL');
     // Later: the download works; a second test does not download again.
     feed.retryAt = 0;
     answer = { status: 200, body: wf('later', 'later-plugin', '1.0', '1') };

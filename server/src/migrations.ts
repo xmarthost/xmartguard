@@ -829,4 +829,13 @@ CREATE TABLE vuln_feed_config (
 );
 `,
   },
+  {
+    version: '035_vuln_feed_retry',
+    sql: `
+-- Wordfence's usage limit and the last download attempt survive a restart
+-- (a portal restarting every minute downloaded the feed every minute).
+ALTER TABLE vuln_feed_config ADD COLUMN retry_at timestamptz;
+ALTER TABLE vuln_feed_config ADD COLUMN last_attempt_at timestamptz;
+`,
+  },
 ];
