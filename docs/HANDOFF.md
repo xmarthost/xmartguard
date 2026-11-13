@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.62** (see `VERSION`).
+- Current release: **0.24.63** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,22 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.63: the CAPTCHA check is not served on the portal
+  address** (2026-11-13). Netcraft (for ID.me) via Hetzner reported
+  xpguardcaptcha.site/v?...&h=ahreftools.com&k=fw&u=/fcx and the same on
+  app.xpguard.org as phishing on 162.55.6.159: the check page is only the
+  step a firewall/IPDB-flagged visitor (Netcraft's US crawler,
+  199.19.77.18) passed through on the way to ahreftools.com/fcx (account
+  ahreftoo on server1.mypowerfulserver.com, 185.16.39.62); the page names
+  a site only after its server confirms it hosts it and sends the visitor
+  only back to that site (no open redirect). `/v` also answered on the
+  portal host, so the report named app.xpguard.org: with a CAPTCHA domain
+  of its own, requests for `/v` and `/v/*` on the portal host now get 301
+  (GET/HEAD) or 308 to the CAPTCHA domain (host read per request from
+  cfg). Tests: captcha "serves the check only on the CAPTCHA domain";
+  on-portal assertions now expect the redirect; altcha-browser sets the
+  CAPTCHA URL to the harness address. Open: no scanner rule yet for the
+  ID.me kit at ahreftoo/public_html/fcx (needs the files).
 - **Release 0.24.62: fast response reads versions right and really
   deactivates** (2026-11-13). First sent-vulnerabilities report (641
   advisories, 5,499 site results): 492 "shielded: still vulnerable after

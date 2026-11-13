@@ -557,6 +557,28 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       )
       .send(body);
 
+  // With a CAPTCHA domain of its own, the check is not served on the
+  // portal's address: a phishing site whose visitor was sent to the check
+  // put app.xpguard.org into the abuse report too (Netcraft via Hetzner,
+  // 2026-11-13). Old links go on to the CAPTCHA domain.
+  app.addHook('onRequest', async (req, reply) => {
+    let target = '';
+    let portal = '';
+    try {
+      target = new URL(cfg.captchaUrl).host.toLowerCase();
+      portal = new URL(cfg.publicUrl).host.toLowerCase();
+    } catch {
+      return;
+    }
+    if (!target || target === portal || (req.headers.host ?? '').toLowerCase() !== portal) return;
+    const path = req.url.split('?')[0];
+    if (path !== '/v' && !path.startsWith('/v/')) return;
+    return reply
+      .header('Cache-Control', 'no-store')
+      .header('X-Robots-Tag', 'noindex, nofollow')
+      .redirect(`${new URL(cfg.captchaUrl).origin}${req.url}`, req.method === 'GET' || req.method === 'HEAD' ? 301 : 308);
+  });
+
   // The CAPTCHA host's front page (the rest of the portal stays on its own host).
   app.addHook('onRequest', async (req, reply) => {
     if (!captchaHost || captchaHost === new URL(cfg.publicUrl).host.toLowerCase()) return;

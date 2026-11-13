@@ -110,6 +110,22 @@ describe('CAPTCHA page for suspicious visitors', () => {
     }
   });
 
+  // Netcraft/Hetzner (2026-11-13): a phishing site's visitor was sent to the
+  // check, and the report named the portal's own address too, since /v also
+  // answered there. With a CAPTCHA domain, the portal's address sends it on.
+  it('serves the check only on the CAPTCHA domain, not on the portal address', async () => {
+    const portalHost = new URL(h.url).host;
+    const r = await h.app.inject({ method: 'GET', url: link(), headers: { host: portalHost } });
+    expect(r.statusCode).toBe(301);
+    expect(r.headers.location).toBe('https://captcha.example.org' + link());
+    expect(r.body).not.toContain('is protected by');
+    const post = await h.app.inject({ method: 'POST', url: '/v/verify', headers: { host: portalHost }, payload: {} });
+    expect(post.statusCode).toBe(308);
+    const ok = await h.app.inject({ method: 'GET', url: link(), headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.5' } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body).toContain('is protected by');
+  });
+
   it('keeps one slash for pages opened with a double slash (site.com//wp-admin/)', async () => {
     const r = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.5&h=shop.example.com&u=//blog/wp-includes/wlwmanifest.xml`, headers: { 'x-forwarded-for': '203.0.113.5' } });
     expect(r.statusCode).toBe(200);
@@ -616,18 +632,18 @@ describe('CAPTCHA on the website’s own address', () => {
     expect(body).toContain('st.textContent=t');
     expect(body).not.toContain('st.innerHTML');
     // The portal's own host never lets a website frame the page.
-    const onPortal = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.88' } });
-    expect(onPortal.headers.get('x-frame-options')).toBe('DENY');
-    expect(onPortal.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
-    expect(await onPortal.text()).toContain('FRAME=false');
+    // (Since 2026-11-13 it does not serve the check at all: on to the CAPTCHA domain.)
+    const onPortal = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.88' }, redirect: 'manual' });
+    expect(onPortal.status).toBe(301);
+    expect(onPortal.headers.get('location')).toBe('https://captcha.example.org' + url);
     // Without the frame parameters: no one may frame it.
-    const plain = await fetch(h.url + `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-login.php`, { headers: { 'x-forwarded-for': '203.0.113.88' } });
-    expect(plain.headers.get('x-frame-options')).toBe('DENY');
-    expect(plain.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    const plain = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.88&h=shop.example.com&u=/wp-login.php`, headers: { host: 'captcha.example.org', 'x-forwarded-for': '203.0.113.88' } });
+    expect(plain.headers['x-frame-options']).toBe('DENY');
+    expect(plain.headers['content-security-policy']).toContain("frame-ancestors 'none'");
     // A site its server does not confirm is never framed.
-    const evil = await fetch(h.url + `/v?s=${serverId}&ip=203.0.113.88&h=paypal.com&n=${nonce}&frame=1&u=/`);
-    expect(evil.status).toBe(404);
-    expect(evil.headers.get('x-frame-options')).toBe('DENY');
+    const evil = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.88&h=paypal.com&n=${nonce}&frame=1&u=/`, headers: { host: 'captcha.example.org' } });
+    expect(evil.statusCode).toBe(404);
+    expect(evil.headers['x-frame-options']).toBe('DENY');
 
     const commands: { action: string; params: any }[] = [];
     const before = h.hub.command;
@@ -743,9 +759,8 @@ describe('CAPTCHA on the website’s own address', () => {
       expect(page.body).toContain('PARENT="https://server1.example.net"');
       expect(page.body).toContain('"fh":"1"');
       // Not on the portal's own host, and not for a site its server denies.
-      const onPortal = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.95' } });
-      expect(onPortal.headers.get('x-frame-options')).toBe('DENY');
-      expect(await onPortal.text()).toContain('PARENT=""');
+      const onPortal = await fetch(h.url + url, { headers: { 'x-forwarded-for': '203.0.113.95' }, redirect: 'manual' });
+      expect(onPortal.status).toBe(301);
       const evil = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.95&h=paypal.com&fh=1&u=/`, headers: { host: 'captcha.example.org' } });
       expect(evil.statusCode).toBe(404);
       expect(evil.headers['x-frame-options']).toBe('DENY');
@@ -771,8 +786,8 @@ describe('CAPTCHA on the website’s own address', () => {
       const sEvil = await h.app.inject({ method: 'GET', url: `/v?s=${serverId}&ip=203.0.113.96&h=paypal.com&fs=1&u=/`, headers: { host: 'captcha.example.org' } });
       expect(sEvil.statusCode).toBe(404);
       expect(sEvil.headers['x-frame-options']).toBe('DENY');
-      const sOnPortal = await fetch(h.url + sUrl, { headers: { 'x-forwarded-for': '203.0.113.96' } });
-      expect(sOnPortal.headers.get('x-frame-options')).toBe('DENY');
+      const sOnPortal = await fetch(h.url + sUrl, { headers: { 'x-forwarded-for': '203.0.113.96' }, redirect: 'manual' });
+      expect(sOnPortal.status).toBe(301);
       commands.length = 0;
       const sr = await verify({ s: serverId, ip: '203.0.113.96', h: 'shop.example.com', u: '/wp-login.php', fs: '1', token: 'good-token' }, '203.0.113.96');
       expect(sr.status).toBe(200);

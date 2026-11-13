@@ -13,6 +13,9 @@ let serverId = '';
 const passes: unknown[] = [];
 beforeAll(async () => {
   h = await startHarness({ trustProxy: false, captchaUrl: 'https://captcha.test' });
+  // The browser opens the check on the harness address: the CAPTCHA domain
+  // for the portal-address redirect (the page's own links keep captcha.test).
+  h.cfg.captchaUrl = h.url;
   const { rows: acc } = await h.pool.query('SELECT id FROM accounts LIMIT 1');
   const { rows } = await h.pool.query("INSERT INTO servers (account_id, hostname, public_key) VALUES ($1, 'web-e2e', 'x') RETURNING id", [acc[0].id]);
   serverId = rows[0].id;
