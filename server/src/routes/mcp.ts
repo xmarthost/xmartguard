@@ -8,6 +8,7 @@ import { isPlatform, scopeAccounts } from '../tenancy.js';
 import { randomToken, sha256 } from '../security.js';
 import { currentRelease } from '../agents/release.js';
 import { ACTIONS, summarize } from './agent-cmd.js';
+import { dispatchDetail, dispatchResults, failureReasons, listDispatches, RESULT_FILTERS } from '../vulnfeed/report.js';
 
 /**
  * MCP (Model Context Protocol) endpoint, so an AI assistant (Claude "custom
@@ -350,6 +351,43 @@ export function mcpRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: Ag
         status: await agent(ctx, a.server, 'ipdb.status'),
         live: await agent(ctx, a.server, 'ipdb.live', { since_id: 0 }),
       }),
+    },
+    {
+      name: 'vuln_sent',
+      platform: true,
+      description:
+        'Plugin vulnerabilities sent to the servers (Wordfence feed, webhook, resends) and what each server did: without dispatch, the sends by date with counts; ' +
+        'with dispatch, that send per server, the most common reasons sites were not updated, the vulnerabilities found on sites and the websites (filter by server, result, search).',
+      inputSchema: obj({
+        dispatch: { type: 'integer', description: 'A send id from the list.' },
+        server: { type: 'string', description: 'Server id (uuid) or hostname, to see one server.' },
+        action: { type: 'string', enum: ['updated', 'shielded', 'deactivated', 'not_fixed', 'gone'] },
+        q: { type: 'string', description: 'Search domain, path, account or plugin.' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+        offset: { type: 'integer', minimum: 0, default: 0 },
+      }),
+      run: async (_ctx, a) => {
+        const limit = clamp(a.limit, 50, 200);
+        const offset = Math.max(0, Number(a.offset) || 0);
+        if (!a.dispatch) return listDispatches(pool, limit, offset);
+        const id = Number(a.dispatch);
+        const d = await dispatchDetail(pool, id, 300);
+        if (!d) throw new Error('no such send');
+        let server: string | undefined;
+        if (a.server) {
+          const { rows } = await pool.query('SELECT id FROM servers WHERE id::text = $1 OR hostname = $1 LIMIT 1', [String(a.server)]);
+          if (!rows[0]) throw new Error('unknown server');
+          server = rows[0].id;
+        }
+        const action = RESULT_FILTERS.find((x) => x === a.action);
+        return {
+          dispatch: d.dispatch,
+          servers: d.servers,
+          not_updated_reasons: await failureReasons(pool, id, server),
+          advisories_found_on_sites: d.advisories.filter((x) => x.sites > 0),
+          websites: await dispatchResults(pool, id, { server, action, q: a.q ? String(a.q).slice(0, 200) : undefined, limit, offset }),
+        };
+      },
     },
     {
       name: 'ai_knowledge',

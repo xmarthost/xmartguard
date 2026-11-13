@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.60** (see `VERSION`).
+- Current release: **0.24.61** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,14 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.61: the connector reads the sent-vulnerabilities report**
+  (2026-11-13). Portal only. The report queries moved to
+  `server/src/vulnfeed/report.ts` (routes and connector share them);
+  connector tool `vuln_sent` (master only, read): without `dispatch` the
+  sends by date; with it, per server, the most common reasons sites were
+  not updated (`failureReasons`), the vulnerabilities found on sites and
+  the websites (filters server/action/q, paging). Test: mcp "reads the
+  report of the vulnerabilities sent to the servers".
 - **Release 0.24.60: report of the vulnerabilities sent to the servers**
   (2026-11-13). Owner: see in the Master panel which vulnerabilities were
   sent on which day, what each server did, which websites were updated and

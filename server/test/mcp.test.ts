@@ -89,6 +89,36 @@ describe('mcp endpoint', () => {
     expect(o.totals).toMatchObject({ servers: 1, quarantined: 3, open_findings: 2, servers_with_alerts: 1 });
   });
 
+  // Owner (2026-11-13): "check the report of the vulnerabilities sent to
+  // the servers": the connector reads it (master only).
+  it('reads the report of the vulnerabilities sent to the servers', async () => {
+    const { rows: sv } = await h.pool.query("SELECT id FROM servers WHERE hostname = 'web1.example.com'");
+    await h.pool.query(
+      `INSERT INTO vuln_feed (id, kind, slug, title, cvss, ranges, patched, published, updated, seq)
+       VALUES ('mcp-adv', 'plugin', 'mcp-plugin', 'Plugin <= 1.0 - File Upload', 9.8, '[]', '[]', now(), '1', 900001)`,
+    );
+    const { rows: d } = await h.pool.query("INSERT INTO vuln_dispatch (source, note, seq_from, seq_to, count) VALUES ('resend', 'test', 900001, 900001, 1) RETURNING id");
+    await h.pool.query(`INSERT INTO vuln_receipts (server_id, dispatch_id, advisories, sites) VALUES ($1, $2, 1, 2)`, [sv[0].id, d[0].id]);
+    for (const [path, action, detail] of [
+      ['/home/a/public_html', 'updated', ''],
+      ['/home/b/public_html', 'failed', "the site's database is not reachable (account suspended or broken)"],
+    ]) {
+      await h.pool.query(
+        `INSERT INTO vuln_results (dispatch_id, server_id, advisory_id, kind, slug, site_path, domain, version, action, detail, at)
+         VALUES ($1, $2, 'mcp-adv', 'plugin', 'mcp-plugin', $3, $4, '1.0', $5, $6, now())`,
+        [d[0].id, sv[0].id, path, path.split('/')[2] + '.test', action, detail],
+      );
+    }
+    const list = text(await rpc(readUrl, 'tools/call', { name: 'vuln_sent', arguments: {} }));
+    expect(list.dispatches[0]).toMatchObject({ id: String(d[0].id), servers: 1, sites: 2, updated: 1, not_fixed: 1 });
+    const one = text(await rpc(readUrl, 'tools/call', { name: 'vuln_sent', arguments: { dispatch: Number(d[0].id), server: 'web1.example.com', action: 'not_fixed' } }));
+    expect(one.servers.find((x: any) => x.hostname === 'web1.example.com')).toMatchObject({ updated: 1, not_fixed: 1, advisories: 1 });
+    expect(one.not_updated_reasons[0]).toMatchObject({ action: 'failed', n: 1 });
+    expect(one.advisories_found_on_sites[0]).toMatchObject({ slug: 'mcp-plugin', sites: 2 });
+    expect(one.websites.total).toBe(1);
+    expect(one.websites.results[0]).toMatchObject({ domain: 'b.test', action: 'failed' });
+  });
+
   it('reports agent errors as tool errors', async () => {
     const r = await rpc(readUrl, 'tools/call', { name: 'list_findings', arguments: { server: 'web1.example.com' } });
     expect(r.body.result.isError).toBe(true);
@@ -128,6 +158,7 @@ describe('mcp endpoint', () => {
     const names = (await rpc(t.body.url, 'tools/list')).body.result.tools.map((x: any) => x.name);
     expect(names).not.toContain('ai_knowledge');
     expect(names).not.toContain('mark_file');
+    expect(names).not.toContain('vuln_sent');
     const kb = await rpc(t.body.url, 'tools/call', { name: 'ai_knowledge', arguments: { q: '%' } });
     expect(kb.body.error).toBeTruthy();
     expect(JSON.stringify(kb.body)).not.toContain('a'.repeat(64));

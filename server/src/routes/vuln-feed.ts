@@ -6,6 +6,7 @@ import type { Config } from '../config.js';
 import { signedPayload } from '../agent-sign.js';
 import { audit, requirePlatform } from '../auth.js';
 import type { VulnFeedService } from '../vulnfeed/service.js';
+import { dispatchDetail, dispatchResults, listDispatches, RESULT_FILTERS } from '../vulnfeed/report.js';
 
 const hint = (k: string) => (k ? `${k.slice(0, 4)}…${k.slice(-4)}` : '');
 
@@ -63,96 +64,31 @@ export function vulnFeedRoutes(app: FastifyInstance, pool: Pool, cfg: Config, fe
   });
 
   // ---- the report: what was sent when, and what each server did
-  const acted = `count(*) FILTER (WHERE r.action = 'updated')::int AS updated,
-      count(*) FILTER (WHERE r.action IN ('shielded', 'shielded_deactivated'))::int AS shielded,
-      count(*) FILTER (WHERE r.action IN ('deactivated', 'shielded_deactivated'))::int AS deactivated,
-      count(*) FILTER (WHERE r.action IN ('failed', 'manual'))::int AS not_fixed,
-      count(*) FILTER (WHERE r.action = 'gone')::int AS gone,
-      count(DISTINCT (r.server_id, r.site_path))::int AS sites`;
-
   app.get('/api/vuln-feed/dispatches', admin, async (req) => {
     const q = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), offset: z.coerce.number().int().min(0).default(0) }).parse(req.query);
-    const { rows } = await pool.query(
-      `SELECT d.id, d.created_at, d.source, d.note, d.count,
-         (SELECT count(*)::int FROM vuln_receipts x WHERE x.dispatch_id = d.id) AS servers,
-         s.updated, s.shielded, s.deactivated, s.not_fixed, s.gone, s.sites
-       FROM vuln_dispatch d
-       LEFT JOIN LATERAL (SELECT ${acted} FROM vuln_results r WHERE r.dispatch_id = d.id) s ON true
-       ORDER BY d.id DESC LIMIT $1 OFFSET $2`,
-      [q.limit, q.offset],
-    );
-    const { rows: t } = await pool.query('SELECT count(*)::int AS n FROM vuln_dispatch');
-    return { dispatches: rows, total: t[0].n };
+    return listDispatches(pool, q.limit, q.offset);
   });
 
   app.get('/api/vuln-feed/dispatches/:id', admin, async (req, reply) => {
     const id = z.coerce.number().int().positive().safeParse((req.params as { id: string }).id);
     if (!id.success) return reply.code(400).send({ error: 'bad id' });
-    const { rows: d } = await pool.query('SELECT id, created_at, source, note, count, seq_from, seq_to FROM vuln_dispatch WHERE id = $1', [id.data]);
-    if (!d[0]) return reply.code(404).send({ error: 'not found' });
-    const { rows: servers } = await pool.query(
-      `SELECT sv.id AS server_id, sv.hostname, x.received_at, coalesce(x.advisories, 0) AS advisories,
-         coalesce(s.updated, 0) AS updated, coalesce(s.shielded, 0) AS shielded, coalesce(s.deactivated, 0) AS deactivated,
-         coalesce(s.not_fixed, 0) AS not_fixed, coalesce(s.gone, 0) AS gone, coalesce(s.sites, 0) AS sites
-       FROM servers sv
-       LEFT JOIN vuln_receipts x ON x.server_id = sv.id AND x.dispatch_id = $1
-       LEFT JOIN LATERAL (SELECT ${acted} FROM vuln_results r WHERE r.dispatch_id = $1 AND r.server_id = sv.id) s ON true
-       WHERE sv.status = 'active' ORDER BY sv.hostname`,
-      [id.data],
-    );
-    const { rows: advisories } = await pool.query(
-      `SELECT f.id, f.kind, f.slug, f.title, f.cvss, f.published,
-         count(r.id)::int AS sites, count(r.id) FILTER (WHERE r.action = 'updated')::int AS updated,
-         count(r.id) FILTER (WHERE r.action IN ('failed', 'manual'))::int AS not_fixed
-       FROM vuln_feed f LEFT JOIN vuln_results r ON r.advisory_id = f.id AND r.dispatch_id = $1
-       WHERE f.seq BETWEEN $2 AND $3
-       GROUP BY f.id ORDER BY count(r.id) DESC, f.cvss DESC LIMIT 2000`,
-      [id.data, d[0].seq_from, d[0].seq_to],
-    );
-    return { dispatch: d[0], servers, advisories };
+    const d = await dispatchDetail(pool, id.data);
+    return d ?? reply.code(404).send({ error: 'not found' });
   });
 
-  const byAction: Record<string, string> = {
-    updated: "r.action = 'updated'",
-    shielded: "r.action IN ('shielded', 'shielded_deactivated')",
-    deactivated: "r.action IN ('deactivated', 'shielded_deactivated')",
-    not_fixed: "r.action IN ('failed', 'manual')",
-    gone: "r.action = 'gone'",
-  };
   app.get('/api/vuln-feed/dispatches/:id/results', admin, async (req, reply) => {
     const id = z.coerce.number().int().positive().safeParse((req.params as { id: string }).id);
     if (!id.success) return reply.code(400).send({ error: 'bad id' });
     const q = z
       .object({
         server: z.string().uuid().optional(),
-        action: z.enum(['updated', 'shielded', 'deactivated', 'not_fixed', 'gone']).optional(),
+        action: z.enum(RESULT_FILTERS).optional(),
         q: z.string().max(200).optional(),
         limit: z.coerce.number().int().min(1).max(500).default(100),
         offset: z.coerce.number().int().min(0).default(0),
       })
       .parse(req.query);
-    const where = ['r.dispatch_id = $1'];
-    const args: unknown[] = [id.data];
-    if (q.server) {
-      args.push(q.server);
-      where.push(`r.server_id = $${args.length}`);
-    }
-    if (q.action) where.push(byAction[q.action]);
-    if (q.q) {
-      args.push(q.q.toLowerCase());
-      const n = `$${args.length}`;
-      where.push(`(strpos(lower(r.domain), ${n}) > 0 OR strpos(lower(r.site_path), ${n}) > 0 OR strpos(lower(r.slug), ${n}) > 0 OR strpos(lower(r.account), ${n}) > 0)`);
-    }
-    const w = where.join(' AND ');
-    const { rows: t } = await pool.query(`SELECT count(*)::int AS n FROM vuln_results r WHERE ${w}`, args);
-    args.push(q.limit, q.offset);
-    const { rows } = await pool.query(
-      `SELECT r.at, sv.hostname, r.server_id, r.domain, r.site_path, r.account, r.kind, r.slug, r.title, r.cvss, r.version, r.action, r.to_version, r.detail
-       FROM vuln_results r JOIN servers sv ON sv.id = r.server_id
-       WHERE ${w} ORDER BY r.at DESC, r.id DESC LIMIT $${args.length - 1} OFFSET $${args.length}`,
-      args,
-    );
-    return { results: rows, total: t[0].n };
+    return dispatchResults(pool, id.data, q);
   });
 
   const state = async () => {
