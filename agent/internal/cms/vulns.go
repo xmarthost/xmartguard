@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -392,6 +393,47 @@ func installCrontab(owner, text string) error {
 // updateRetry is how long a site's update of one version is not tried again.
 const updateRetry = 7 * 86400
 
+// Panel markers of a suspended account (vars for tests).
+var (
+	cpanelSuspendedDir = "/var/cpanel/suspended"
+	daUsersDir         = "/usr/local/directadmin/data/users"
+)
+
+// accountSuspended reports an account the hosting panel suspended: its
+// sites answer with the panel's page and their databases are often gone,
+// so wp-cli cannot run there (superfast, 2026-11-13: every failed update
+// in the log was "Error establishing a database connection").
+func accountSuspended(user string) bool {
+	if user == "" || strings.ContainsAny(user, "/.") {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(cpanelSuspendedDir, user)); err == nil {
+		return true
+	}
+	b, err := os.ReadFile(filepath.Join(daUsersDir, user, "user.conf"))
+	return err == nil && reDASuspended.Match(b)
+}
+
+var reDASuspended = regexp.MustCompile(`(?m)^suspended=yes\s*$`)
+
+func (m *Manager) suspended(user string) bool {
+	if m.Suspended != nil {
+		return m.Suspended(user)
+	}
+	return accountSuspended(user)
+}
+
+// siteDownKV marks a site whose WordPress cannot reach its database (or
+// whose account is suspended): an update there is not a failed patch, the
+// site is not running. The mark goes with the next wp-cli command that
+// works.
+const siteDownKV = "cms_site_down|"
+
+// dbDown reports wp-cli's answer for a site without a working database.
+func dbDown(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "error establishing a database connection")
+}
+
 // notUpdated reports wp-cli's answer for an update that changed nothing.
 func notUpdated(out string) bool {
 	o := strings.ToLower(out)
@@ -469,15 +511,41 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 	if s.Type != WordPress || slices.Contains(cfg.ExcludeUsers, s.User) {
 		return nil
 	}
+	// A suspended account is left alone: nothing of it is served, wp-cli
+	// fails on it every night, and the update counted as a failed patch.
+	if m.suspended(s.User) {
+		_ = store.SetKV(m.DB, siteDownKV+s.Path, "suspended")
+		return nil
+	}
 	var done []string
 	wp := m.WPCLI
 	if m.RunWPCLI != nil {
 		wp = m.RunWPCLI
 	}
-	run := func(desc string, args ...string) bool {
+	// down: the site's database does not answer; the other commands of
+	// this pass would fail the same way.
+	down := false
+	call := func(args ...string) (string, error) {
+		if down {
+			return "", errors.New("site database not reachable")
+		}
 		out, err := wp(ctx, s.Path, args...)
+		switch {
+		case dbDown(err):
+			down = true
+			_ = store.SetKV(m.DB, siteDownKV+s.Path, "database")
+			m.Log.Info("WordPress cannot reach its database; automatic actions skipped", "site", s.Path)
+		case err == nil:
+			_, _ = m.DB.Exec(`DELETE FROM kv WHERE key = ?`, siteDownKV+s.Path)
+		}
+		return out, err
+	}
+	run := func(desc string, args ...string) bool {
+		out, err := call(args...)
 		if err != nil {
-			m.Log.Warn("CMS automatic action failed", "site", s.Path, "action", desc, "err", err)
+			if !down {
+				m.Log.Warn("CMS automatic action failed", "site", s.Path, "action", desc, "err", err)
+			}
 			return false
 		}
 		m.Log.Info("CMS automatic action", "site", s.Path, "action", desc, "out", out)
@@ -490,18 +558,22 @@ func (m *Manager) autoActions(ctx context.Context, s *Site) []string {
 	// again on every scan (business200: 774 times for one plugin, 1,962
 	// failures).
 	update := func(kind string, c Component) {
+		if down {
+			return
+		}
 		key := "cms_update_try|" + s.Path + "|" + kind + "|" + c.Slug + "|" + c.Version
 		if t, _ := strconv.ParseInt(store.GetKV(m.DB, key), 10, 64); t > 0 && store.Now()-t < updateRetry {
 			return
 		}
 		_ = store.SetKV(m.DB, key, strconv.FormatInt(store.Now(), 10))
 		args, to := UpdateArgs(kind, c)
-		out, err := wp(ctx, s.Path, args...)
+		out, err := call(args...)
 		desc := fmt.Sprintf("updated vulnerable %s %s %s → %s", kind, c.Slug, c.Version, to)
 		if kind == "core" {
 			desc = fmt.Sprintf("installed the WordPress security release for %s", c.Version)
 		}
 		switch {
+		case down:
 		case err != nil:
 			m.Log.Warn("CMS automatic action failed", "site", s.Path, "action", desc, "err", err)
 		case notUpdated(out):

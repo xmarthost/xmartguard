@@ -44,6 +44,9 @@ type Manager struct {
 	OnAutoAction func(site Site, actions []string)
 	// RunWPCLI replaces wp-cli in tests (nil: WPCLI).
 	RunWPCLI func(ctx context.Context, path string, args ...string) (string, error)
+	// Suspended reports a hosting account the panel suspended (nil:
+	// accountSuspended, the cPanel and DirectAdmin markers).
+	Suspended func(user string) bool
 
 	mu      sync.Mutex
 	bulk    BulkStatus

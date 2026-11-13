@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.58** (see `VERSION`).
+- Current release: **0.24.59** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,30 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.59: down sites are not failed patches; resend earlier
+  vulnerabilities** (2026-11-13). The fleet vulnerability report showed
+  superfast at 33% (1,993 of 2,991 automatic updates "failed"); every
+  failure in its agent.log was wp-cli "Error establishing a database
+  connection" on suspended or broken accounts. `autoActions` (cms/vulns.go)
+  now skips accounts the panel suspended (`accountSuspended`:
+  /var/cpanel/suspended/<user>, DirectAdmin user.conf suspended=yes;
+  `Manager.Suspended` hook) and, after a database-connection error, runs no
+  further wp-cli command on that site in the pass. Both leave the KV mark
+  `cms_site_down|<path>` ("suspended"/"database"), removed by the first
+  wp-cli command that works. `cms.vuln_report` adds `suspended`,
+  `site_down` (tried, same version, site down; no longer in `failed`) and
+  `site_down_due`. Rapid response still shields such sites (files only).
+  Portal: Master » Plugin Vulnerabilities » "3. Act on earlier
+  vulnerabilities" (`POST /api/vuln-feed/replay {since}`, at most 90 days)
+  gives the advisories published since the date new seq numbers and nudges
+  the agents (owner: act on every Wordfence hole since 1 November). Agents
+  read every page of `/api/agent/cms/vulns` in one sync (was one page of
+  2,000 per hour). Rapid acts once per site, component version and
+  advisory, so a resend never repeats work; it follows the server's
+  `rapid_cvss` (7) and `rapid_deactivate` settings. No web server reload.
+  Tests: `TestAutoActionsSuspendedAndDatabaseDown`,
+  `TestAccountSuspendedMarkers`, `TestSyncVulnsReadsEveryPage`, portal
+  vuln-feed "sends the advisories published since a date".
 - **Release 0.24.58: the portal's own server updates last** (2026-11-13).
   Cause of the bulk-update resets found: 12 parallel downloads from
   business100 all completed (no concurrency limit), but in a bulk update

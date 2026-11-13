@@ -19,10 +19,12 @@ type VulnReport struct {
 	// Now, by what can be done about them.
 	Fixable      int `json:"fixable"`         // a newer release exists
 	DueNotPatch  int `json:"due_not_patched"` // the policy would update it, still vulnerable
+	SiteDownDue  int `json:"site_down_due"`   // due, but the site's database does not answer (wp-cli cannot run)
 	BelowPolicy  int `json:"below_policy"`    // fix exists, but the score or age is under the setting
 	NoUpdate     int `json:"no_update"`       // not on wordpress.org (premium, custom): wp-cli cannot update
 	NoFix        int `json:"no_fix"`          // no fixed release yet
 	ExcludedUser int `json:"excluded_user"`   // the account is excluded from automatic patches
+	Suspended    int `json:"suspended"`       // the panel suspended the account: nothing is served
 	// By the highest score of each vulnerable component.
 	Critical int `json:"critical"` // 9+
 	High     int `json:"high"`     // 7-8.9
@@ -31,9 +33,10 @@ type VulnReport struct {
 	// Automatic update attempts remembered (one per site, component and
 	// old version; kept until the next attempt).
 	Tried    int     `json:"tried"`
-	Updated  int     `json:"updated"` // the version changed since
-	Failed   int     `json:"failed"`  // still the same version
-	Removed  int     `json:"removed"` // the component or site is gone
+	Updated  int     `json:"updated"`   // the version changed since
+	Failed   int     `json:"failed"`    // still the same version
+	SiteDown int     `json:"site_down"` // same version, the site's database or account is down (not a failed patch)
+	Removed  int     `json:"removed"`   // the component or site is gone
 	AutoOn   bool    `json:"auto_update"`
 	AutoCVSS float64 `json:"auto_update_cvss"`
 	AutoDays int     `json:"auto_update_days"`
@@ -66,10 +69,31 @@ func (m *Manager) VulnReport() (VulnReport, error) {
 	for _, u := range cfg.ExcludeUsers {
 		excluded[u] = true
 	}
+	down := map[string]bool{}
+	if rows, err := m.DB.Query(`SELECT key FROM kv WHERE key LIKE ?`, siteDownKV+"%"); err == nil {
+		for rows.Next() {
+			var k string
+			if rows.Scan(&k) == nil {
+				down[strings.TrimPrefix(k, siteDownKV)] = true
+			}
+		}
+		rows.Close()
+	}
+	owner := map[string]string{}
+	susp := map[string]bool{}
+	isSusp := func(u string) bool {
+		v, ok := susp[u]
+		if !ok {
+			v = m.suspended(u)
+			susp[u] = v
+		}
+		return v
+	}
 	for _, s := range sites {
 		r.Sites++
 		inst := map[string]string{}
 		installed[s.Path] = inst
+		owner[s.Path] = s.User
 		comps := []struct {
 			kind string
 			c    Component
@@ -111,12 +135,19 @@ func (m *Manager) VulnReport() (VulnReport, error) {
 			case excluded[s.User]:
 				r.ExcludedUser++
 				why = "account excluded"
+			case isSusp(s.User):
+				r.Suspended++
+				why = "account suspended"
 			case x.c.Latest == "" && x.kind != "core":
 				r.NoUpdate++
 				why = "not on wordpress.org"
 			case CompareVersions(x.c.Version, x.c.Latest) >= 0:
 				r.NoFix++
 				why = "no fix released"
+			case down[s.Path] && autoUpdateDue(cfg, x.c, now):
+				r.Fixable++
+				r.SiteDownDue++
+				why = "site database down"
 			case autoUpdateDue(cfg, x.c, now):
 				r.Fixable++
 				r.DueNotPatch++
@@ -161,6 +192,8 @@ func (m *Manager) VulnReport() (VulnReport, error) {
 			switch {
 			case !ok || !has:
 				r.Removed++
+			case cur == ver && (down[path] || isSusp(owner[path])):
+				r.SiteDown++
 			case cur == ver:
 				r.Failed++
 				fk := key{kind, slug}

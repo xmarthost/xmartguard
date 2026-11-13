@@ -36,18 +36,29 @@ func (a *Agent) syncVulns(ctx context.Context) error {
 	if v := store.GetKV(a.DB, kvVulnCursor); v != "" {
 		since, _ = strconv.ParseInt(v, 10, 64)
 	}
-	var r struct {
-		Items  []cms.Advisory `json:"items"`
-		Cursor int64          `json:"cursor"`
+	// The portal answers in pages (2,000): a resend of earlier weeks
+	// (Master » Plugin Vulnerabilities) can be longer; every page is read.
+	for page := 0; page < 50; page++ {
+		var r struct {
+			Items  []cms.Advisory `json:"items"`
+			Cursor int64          `json:"cursor"`
+		}
+		if err := a.AI.Portal.Post(ctx, "/api/agent/cms/vulns", map[string]any{"since": since}, &r); err != nil {
+			return err
+		}
+		if len(r.Items) > 0 {
+			n := a.CMS.Rapid(ctx, r.Items)
+			a.Log.Info("new plugin vulnerabilities checked against the sites", "advisories", len(r.Items), "sites_acted_on", n)
+		}
+		if err := store.SetKV(a.DB, kvVulnCursor, strconv.FormatInt(r.Cursor, 10)); err != nil {
+			return err
+		}
+		if len(r.Items) == 0 || r.Cursor <= since || ctx.Err() != nil {
+			return nil
+		}
+		since = r.Cursor
 	}
-	if err := a.AI.Portal.Post(ctx, "/api/agent/cms/vulns", map[string]any{"since": since}, &r); err != nil {
-		return err
-	}
-	if len(r.Items) > 0 {
-		n := a.CMS.Rapid(ctx, r.Items)
-		a.Log.Info("new plugin vulnerabilities checked against the sites", "advisories", len(r.Items), "sites_acted_on", n)
-	}
-	return store.SetKV(a.DB, kvVulnCursor, strconv.FormatInt(r.Cursor, 10))
+	return nil
 }
 
 func (a *Agent) vulnLoop(ctx context.Context) {

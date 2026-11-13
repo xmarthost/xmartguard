@@ -44,6 +44,7 @@ export default function VulnFeed() {
   const [secret, setSecret] = useState('');
   const [keyTest, setKeyTest] = useState<TestResult | null>(null);
   const [hookTest, setHookTest] = useState<TestResult | null>(null);
+  const [since, setSince] = useState('2026-11-01');
   const d = st.data;
   const save = (body: Record<string, string>, ok: string) =>
     run(() => api<FeedState>('PUT', '/api/vuln-feed', body), ok).then((r) => {
@@ -190,6 +191,27 @@ export default function VulnFeed() {
             <li>In Wordfence » Account » Integrations » Add Webhook: paste the URL above and the same secret; leave "Format for Slack/Discord" off; keep Create, Replace and Delete ticked.</li>
             <li>Click Create and Test Webhook in Wordfence: "Last webhook delivery" above shows it with "signature OK".</li>
           </ol>
+        </div>
+      </Card>
+      <Card
+        title="3. Act on earlier vulnerabilities"
+        desc="The first download is kept as history: the servers only act on what is published after it. To have them act on the holes of the last weeks too, choose a date: every vulnerability Wordfence published since then is sent to the servers as new. Each site is updated (or shielded) once per vulnerability, so sending again does nothing twice."
+      >
+        <div className="flex flex-wrap items-end gap-2 text-sm">
+          <label>
+            <span className="mb-1 block text-xs font-medium text-slate-500">Published since</span>
+            <input className="input" type="date" value={since} onChange={(e) => setSince(e.target.value)} />
+          </label>
+          <button
+            className="btn-primary"
+            disabled={busy || !since}
+            onClick={() =>
+              confirm(`Send every vulnerability published since ${since} to the servers? Affected sites are updated now; where the update does not apply, the plugin is shielded or (critical, if enabled) deactivated.`) &&
+              void run(() => api<{ ok: boolean; sent?: number; error?: string }>('POST', '/api/vuln-feed/replay', { since }), (r) => (r.ok ? `${r.sent ?? 0} vulnerabilities sent to the servers` : `Not sent: ${r.error}`))
+            }
+          >
+            Send to servers
+          </button>
         </div>
       </Card>
       <p className="flex items-center gap-2 text-xs text-slate-500">

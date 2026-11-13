@@ -321,6 +321,26 @@ export class VulnFeedService {
     return n;
   }
 
+  /**
+   * Sends the advisories published since a date to the agents again, as if
+   * they were new (owner, 2026-11-13: the first download is backlog, the
+   * holes of the last weeks were never acted on). The agents act once per
+   * site and advisory, so a repeat does nothing twice. Returns how many.
+   */
+  async replay(from: Date): Promise<number> {
+    const { rows } = await this.pool.query(
+      `WITH r AS (
+         UPDATE vuln_feed SET seq = nextval('vuln_feed_seq')
+         WHERE published >= $1 AND published > now() - interval '90 days'
+         RETURNING 1)
+       SELECT count(*)::int AS n FROM r`,
+      [from],
+    );
+    const n = Number(rows[0].n);
+    if (n > 0) await this.notify();
+    return n;
+  }
+
   /** Stores items and numbers the changed ones (webhook deliveries). */
   async storeItems(items: { item: VulnItem; updated: string }[]): Promise<number> {
     const r = await this.storeBatch(items);

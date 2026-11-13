@@ -117,6 +117,18 @@ export function vulnFeedRoutes(app: FastifyInstance, pool: Pool, cfg: Config, fe
     }
   });
 
+  /** Sends the advisories published since a date to the servers again. */
+  app.post('/api/vuln-feed/replay', admin, async (req, reply) => {
+    const body = z.object({ since: z.string().regex(/^\d{4}-\d\d-\d\d$/) }).safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: 'give a date (YYYY-MM-DD)' });
+    const from = new Date(`${body.data.since}T00:00:00Z`);
+    if (Number.isNaN(from.getTime()) || from.getTime() > Date.now()) return reply.code(400).send({ error: 'give a past date' });
+    if (Date.now() - from.getTime() > 90 * 86400_000) return reply.code(400).send({ error: 'at most 90 days back' });
+    const sent = await feed.replay(from);
+    await audit(pool, { accountId: req.user!.accountId, userId: req.user!.id, action: 'vulnfeed.replay', detail: { since: body.data.since, sent }, ip: req.ip });
+    return { ok: true, sent };
+  });
+
   /**
    * Tests the webhook end to end: a signed sample delivery (no
    * vulnerabilities) sent to the public webhook address, as Wordfence would.

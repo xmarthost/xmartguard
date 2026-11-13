@@ -175,6 +175,32 @@ describe('fast plugin vulnerability alerts', () => {
     expect((await h.pool.query("SELECT count(*)::int AS n FROM vuln_feed WHERE id LIKE 'bulk-%' AND seq = 0")).rows[0].n).toBe(1100);
   });
 
+  // Owner (2026-11-13): the first download is backlog, so the holes of the
+  // weeks before it were never acted on. A resend from a date numbers the
+  // advisories published since then again and nudges the agents.
+  it('sends the advisories published since a date to the servers again', async () => {
+    await h.pool.query(
+      `INSERT INTO vuln_feed (id, kind, slug, title, cvss, ranges, patched, published, updated, seq) VALUES
+       ('rp-new', 'plugin', 'rp-new', 't', 9.8, '[]', '[]', now() - interval '3 days', '1', 0),
+       ('rp-old', 'plugin', 'rp-old', 't', 9.8, '[]', '[]', now() - interval '40 days', '1', 0)`,
+    );
+    const { rows } = await h.pool.query('SELECT coalesce(max(seq), 0)::bigint AS c FROM vuln_feed');
+    const before = Number(rows[0].c);
+    const admin = new Client(h.url);
+    await admin.login();
+    expect((await admin.req('POST', '/api/vuln-feed/replay', { since: 'yesterday' })).status).toBe(400);
+    expect((await admin.req('POST', '/api/vuln-feed/replay', { since: '2000-01-01' })).status).toBe(400);
+    const since = new Date(Date.now() - 10 * 86400_000).toISOString().slice(0, 10);
+    nudged.length = 0;
+    const r = await admin.req('POST', '/api/vuln-feed/replay', { since });
+    expect(r.status).toBe(200);
+    expect(r.body.sent).toBeGreaterThanOrEqual(1);
+    expect(nudged).toEqual([server.id]);
+    const slugs = (await fetchSince(before)).body.items.map((i: { slug: string }) => i.slug);
+    expect(slugs).toContain('rp-new');
+    expect(slugs).not.toContain('rp-old');
+  });
+
   it('refuses unsigned requests', async () => {
     const r = await fetch(h.url + '/api/agent/cms/vulns', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ since: 0 }) });
     expect(r.status).toBe(400);
