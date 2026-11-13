@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.64** (see `VERSION`).
+- Current release: **0.24.65** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,17 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.65: the portal's domain never serves or redirects the
+  CAPTCHA** (2026-11-13). Owner: the 0.24.63 redirect from
+  app.xpguard.org/v still made the main domain part of the abused chain in
+  Netcraft's eyes; the check must exist only on the CAPTCHA domain. With a
+  CAPTCHA domain of its own, `/v` and `/v/*` requested on the portal's
+  hostname, www.<portal> or a bare IP answer 404 (plain text, noindex, no
+  Location). Servers learn the check's address from the portal
+  (`pageUrl` = CAPTCHA domain; a changed address bumps the config version
+  so every server resyncs), so no server sends visitors to the portal.
+  Tests: captcha "serves the check only on the CAPTCHA domain: 404 on the
+  portal address, no redirect"; on-portal assertions expect 404.
 - **Release 0.24.64: RAHASIA password gate trimmed, not quarantined;
   trim default 50%** (2026-11-13). halaltech.co.uk (superfast, account
   magazin5, docroot /home2/magazin5/halaltech.co.uk) went down after the

@@ -557,26 +557,32 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       )
       .send(body);
 
-  // With a CAPTCHA domain of its own, the check is not served on the
-  // portal's address: a phishing site whose visitor was sent to the check
-  // put app.xpguard.org into the abuse report too (Netcraft via Hetzner,
-  // 2026-11-13). Old links go on to the CAPTCHA domain.
+  // With a CAPTCHA domain of its own, the check exists only there. On the
+  // portal's address (or the server's bare IP) /v answers 404: no page and
+  // no redirect. A phishing site whose visitor was sent to the check put
+  // app.xpguard.org into an abuse report (Netcraft via Hetzner, 2026-11-13),
+  // and a redirect from the portal's domain counted against it too (owner).
   app.addHook('onRequest', async (req, reply) => {
     let target = '';
     let portal = '';
     try {
-      target = new URL(cfg.captchaUrl).host.toLowerCase();
-      portal = new URL(cfg.publicUrl).host.toLowerCase();
+      target = new URL(cfg.captchaUrl).hostname.toLowerCase();
+      portal = new URL(cfg.publicUrl).hostname.toLowerCase();
     } catch {
       return;
     }
-    if (!target || target === portal || (req.headers.host ?? '').toLowerCase() !== portal) return;
+    if (!target || target === portal) return;
     const path = req.url.split('?')[0];
     if (path !== '/v' && !path.startsWith('/v/')) return;
+    const host = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+    if (host === target) return;
+    if (host !== portal && host !== `www.${portal}` && !isIP(host)) return;
     return reply
+      .code(404)
       .header('Cache-Control', 'no-store')
       .header('X-Robots-Tag', 'noindex, nofollow')
-      .redirect(`${new URL(cfg.captchaUrl).origin}${req.url}`, req.method === 'GET' || req.method === 'HEAD' ? 301 : 308);
+      .type('text/plain; charset=utf-8')
+      .send('Not found');
   });
 
   // The CAPTCHA host's front page (the rest of the portal stays on its own host).
