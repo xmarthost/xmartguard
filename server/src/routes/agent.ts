@@ -8,7 +8,7 @@ import { loadLicense, publicIPs, serverLimitError, trialHostError } from './bill
 import type { AgentHub, MetricsSample } from '../agents/hub.js';
 import { audit } from '../auth.js';
 import { parseEd25519PublicKey, sha256, verifyEd25519 } from '../security.js';
-import { currentRelease, updateParams, versionLess } from '../agents/release.js';
+import { currentRelease, portalHostIds, updateParams, versionLess } from '../agents/release.js';
 import type { IPDBService } from '../ipdb/service.js';
 
 /** How often agents are pinged; one missed answer closes the connection. */
@@ -68,7 +68,10 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
   function maybeAutoUpdate(serverId: string, agentVersion: string) {
     const rel = currentRelease(cfg.downloadsDir);
     if (!cfg.autoUpdateAgents || !rel || !agentVersion || !versionLess(agentVersion, rel.version)) return;
-    setTimeout(async () => {
+    // The server hosting the portal updates 5 minutes later: its update
+    // restarts the web server in front of the portal, which cut the other
+    // agents' downloads when they all reconnected after a portal restart.
+    const schedule = (delay: number) => setTimeout(async () => {
       try {
         const { rows } = await pool.query('SELECT inventory FROM servers WHERE id = $1', [serverId]);
         await hub.command(serverId, 'agent.update', updateParams(rel, rows[0]?.inventory?.arch), 180_000);
@@ -76,7 +79,10 @@ export function agentRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: 
       } catch (err) {
         app.log.warn({ serverId, err: (err as Error).message }, 'agent auto-update failed');
       }
-    }, 3000);
+    }, delay);
+    void portalHostIds(pool, cfg.publicUrl)
+      .then((hosts) => schedule(hosts.has(serverId) ? 5 * 60_000 : 3000))
+      .catch(() => schedule(3000));
   }
 
   app.post(

@@ -90,3 +90,46 @@ describe('mass operations', () => {
     expect((await c.req('POST', '/api/mass/run', { op: 'quick_scan', server_ids: [rows[0].id] })).body).toMatchObject({ total: 1 });
   });
 });
+
+describe('agent updates and the portal host', () => {
+  it('updates the server that hosts the portal last, after the others finished', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xg-rel-'));
+    fs.writeFileSync(path.join(dir, 'VERSION'), '9.9.9\n');
+    fs.writeFileSync(path.join(dir, 'xpguard-agent-linux-amd64.sha256'), 'a'.repeat(64) + '  x\n');
+    const oldDir = h.cfg.downloadsDir;
+    h.cfg.downloadsDir = dir;
+    const { rows: acc } = await h.pool.query('SELECT id FROM accounts LIMIT 1');
+    // The portal's public name (127.0.0.1 in the test) is this server's address.
+    const { rows } = await h.pool.query(
+      "INSERT INTO servers (account_id, hostname, public_key, agent_version, primary_ip) VALUES ($1, 'aaa-portal-host', 'key-host', '0.4.0', '127.0.0.1') RETURNING id",
+      [acc[0].id],
+    );
+    const hostId = rows[0].id as string;
+    const order: string[] = [];
+    let running = 0;
+    let overlap = false;
+    const oldCmd = h.hub.command;
+    h.hub.command = (async (id: string) => {
+      if (id === hostId && running > 0) overlap = true;
+      running++;
+      order.push(id);
+      await new Promise((r) => setTimeout(r, 50));
+      running--;
+      return { version: '9.9.9' };
+    }) as typeof h.hub.command;
+    try {
+      const r = await c.req('POST', '/api/mass/run', { op: 'update_agent', server_ids: [hostId, ...serverIds] });
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(3);
+      expect(order[order.length - 1]).toBe(hostId);
+      expect(overlap).toBe(false);
+    } finally {
+      h.hub.command = oldCmd;
+      h.cfg.downloadsDir = oldDir;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

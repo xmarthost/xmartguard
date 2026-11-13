@@ -1,3 +1,5 @@
+import dns from 'node:dns/promises';
+import type { Pool } from '../db.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -55,4 +57,28 @@ export function versionLess(a: string, b: string): boolean {
     if (x !== y) return x < y;
   }
   return false;
+}
+
+let hostCache: { at: number; ips: Set<string> } | null = null;
+
+/**
+ * The servers that host the portal itself (their address is one the
+ * portal's public name points to). Their agent's update restarts the web
+ * server in front of the portal (it reloads the WAF), which cut the other
+ * agents' update downloads and connections (2026-11-13): they are updated
+ * last.
+ */
+export async function portalHostIds(pool: Pool, publicUrl: string): Promise<Set<string>> {
+  if (!hostCache || Date.now() - hostCache.at > 10 * 60_000) {
+    const ips = new Set<string>();
+    try {
+      for (const a of await dns.lookup(new URL(publicUrl).hostname, { all: true })) ips.add(a.address);
+    } catch {
+      // no answer: nobody is held back
+    }
+    hostCache = { at: Date.now(), ips };
+  }
+  if (!hostCache.ips.size) return new Set();
+  const { rows } = await pool.query("SELECT id FROM servers WHERE status = 'active' AND primary_ip = ANY($1::text[])", [[...hostCache.ips]]);
+  return new Set(rows.map((r) => String(r.id)));
 }

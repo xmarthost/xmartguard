@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.57** (see `VERSION`).
+- Current release: **0.24.58** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,19 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.58: the portal's own server updates last** (2026-11-13).
+  Cause of the bulk-update resets found: 12 parallel downloads from
+  business100 all completed (no concurrency limit), but in a bulk update
+  business900 (which hosts the portal) updated first (local, fast), its
+  new agent loaded the WAF (`waf.status` load_at = the update time) and
+  the LiteSpeed reload cut every open connection to the portal: the other
+  agents' downloads ("connection reset by peer" / "unexpected EOF") and
+  their WebSockets. `portalHostIds` (agents/release.ts) finds the servers
+  whose primary_ip is an address of the portal's public name (cached 10
+  min); mass update_agent runs them last, alone, after the others
+  finished; auto-update on reconnect delays them 5 minutes (others 3 s).
+  Agents from 0.24.57 also download from GitHub, so the reload no longer
+  touches their update. Test: mass.test.ts (portal host last, no overlap).
 - **Release 0.24.57: agent updates from the GitHub release** (2026-11-13).
   After 0.24.56 (downloads uncompressed) a bulk update still failed on half
   the servers with "connection reset by peer" / "unexpected EOF" from

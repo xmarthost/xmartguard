@@ -5,7 +5,7 @@ import type { Pool } from '../db.js';
 import type { Config } from '../config.js';
 import { CommandError, type AgentHub } from '../agents/hub.js';
 import { audit, hasRole, type Role } from '../auth.js';
-import { currentRelease, updateParams } from '../agents/release.js';
+import { currentRelease, portalHostIds, updateParams } from '../agents/release.js';
 import { ACTIONS } from './agent-cmd.js';
 import { scopeAccounts } from '../tenancy.js';
 
@@ -236,7 +236,17 @@ export function massRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub: A
         }
       }
     };
+    // An agent update on the server that hosts the portal restarts the web
+    // server in front of it and cuts the other servers' downloads: it goes
+    // last, alone.
+    const hosts = action === 'agent.update' ? await portalHostIds(pool, cfg.publicUrl) : new Set<string>();
+    const last = servers.filter((s) => hosts.has(s.id));
+    servers.splice(0, servers.length, ...servers.filter((s) => !hosts.has(s.id)));
     await Promise.all(Array.from({ length: Math.min(8, servers.length) }, worker));
+    if (last.length) {
+      servers.push(...last);
+      await worker();
+    }
     results.sort((a, b) => a.hostname.localeCompare(b.hostname));
     await audit(pool, {
       accountId: user.accountId,
