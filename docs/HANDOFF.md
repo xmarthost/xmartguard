@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.65** (see `VERSION`).
+- Current release: **0.24.66** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,28 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.66: check links expire (5 minutes, once)** (2026-11-13).
+  Netcraft kept xpguardcaptcha.site/v?...&k=fw&u=/fcx "active" (the portal
+  domain resolved after 0.24.65). Owner: a link is made for one visit,
+  valid five minutes (reloads and a VPN's other address fine), dead once
+  passed, so a reported link resolves by itself; the domain explains
+  itself (like malware.expert/recaptcha). The firewall link (k=fw) is
+  built by the agent (captcha.centralURL, site.go): it now carries
+  `&t=<unix>&sig=<ed25519, base64url>` before `&u=`
+  (protocol.CaptchaLinkPayload "xg-captcha-link-v1:s:ip:h:t:k", agent key
+  via `Server.LinkSign`); hostname and site pages pass them on unchanged.
+  Portal `linkExpired`: signed → time within 300+60 s past / 120 s future,
+  signature by the server's public_key, not in `captcha_used` (migration
+  037; sha256 of the signature, kept a day); unsigned k=fw from a server
+  on 0.24.66+ → expired (the reported link); unsigned login-page links
+  (ModSecurity redirect: LiteSpeed has no TIME_EPOCH, no signing) stay as
+  before. Expired: HTTP 410 `renderExpired`; verify answers 410; a pass
+  records the link used. The CAPTCHA domain's front page (`renderInfo`)
+  and the expired page say what the service is, that it never asks for
+  passwords, payment or personal data, and that links expire. Any update
+  order works (old portal ignores t/sig; new portal takes old agents'
+  unsigned links). Tests: TestCentralRedirectSigned; captcha "CAPTCHA
+  links expire" (3).
 - **Release 0.24.65: the portal's domain never serves or redirects the
   CAPTCHA** (2026-11-13). Owner: the 0.24.63 redirect from
   app.xpguard.org/v still made the main domain part of the abused chain in

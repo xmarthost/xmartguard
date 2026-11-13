@@ -58,6 +58,14 @@ func TransferPayload(serverID, tokenHash, ts string) []byte {
 
 // VisitorPayload is what an agent signs for a visitor it passes on to the
 // portal (header X-XPGuard-Visitor: "<ip> <ts> <server_id> <signature>").
+// CaptchaLinkPayload is what a server signs in a link it sends a visitor
+// to the portal's check with (t: Unix time, kind: "fw" or ""): the portal
+// accepts the link for five minutes and once solved, not again (owner,
+// 2026-11-13: an old reported link must expire by itself).
+func CaptchaLinkPayload(serverID, ip, host, t, kind string) []byte {
+	return []byte("xg-captcha-link-v1:" + serverID + ":" + ip + ":" + host + ":" + t + ":" + kind)
+}
+
 func VisitorPayload(serverID, ip, ts string) []byte {
 	return []byte("xg-visitor-v1:" + serverID + ":" + ip + ":" + ts)
 }

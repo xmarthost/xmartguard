@@ -63,7 +63,7 @@ async function verify(body: Record<string, string>, ip = '203.0.113.5') {
 
 describe('CAPTCHA page for suspicious visitors', () => {
   it('reads the page the WAF appends unescaped', () => {
-    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', fh: false, fs: false, pf: '', g: 0, design: undefined });
+    expect(parseParams('/v?s=a&ip=1.2.3.4&h=x.org&u=/wp-login.php?redirect_to=/a&b=c')).toEqual({ s: 'a', ip: '1.2.3.4', h: 'x.org', u: '/wp-login.php?redirect_to=/a&b=c', preview: false, n: '', frame: false, k: '', fh: false, fs: false, pf: '', g: 0, t: '', sig: '', design: undefined });
     expect(parseParams('/v?s=a&ip=1.2.3.4&h=X.ORG').u).toBe('/');
   });
 
@@ -892,5 +892,67 @@ describe('CAPTCHA on the website’s own address', () => {
     expect(ev.body.events[0]).toMatchObject({ server: 'cust-1', result: 'failed' });
     const g = await admin.req('GET', '/api/captcha');
     expect(g.body.last24h.failed).toBeGreaterThan(0);
+  });
+});
+
+// Owner (2026-11-13): Netcraft kept a firewall link to the check "active".
+// A link is made for one visit: the server signs its time into it; the
+// check takes it for five minutes (reloads and another address are fine)
+// and never again once passed. Old unsigned firewall links of a server that
+// signs its links are expired; login-page links (from the WAF) stay.
+describe('CAPTCHA links expire', () => {
+  const signed = (ip: string, t: number, k = 'fw') => {
+    const sig = crypto.sign(null, Buffer.from(`xg-captcha-link-v1:${serverId}:${ip}:shop.example.com:${t}:${k}`), keys.privateKey).toString('base64url');
+    return { url: `/v?s=${serverId}&ip=${ip}&h=shop.example.com${k ? `&k=${k}` : ''}&t=${t}&sig=${sig}&u=/blog/`, t: String(t), sig };
+  };
+  const get = (url: string, ip: string) => h.app.inject({ method: 'GET', url, headers: { host: 'captcha.example.org', 'x-forwarded-for': ip } });
+
+  it('takes a signed link for five minutes, once', async () => {
+    await admin.req('PUT', '/api/captcha', { enabled: true, site_key: '0x4AAAAAAAtestSiteKey', secret_key: '', minutes: 60, strict_ip: false });
+    await h.pool.query("UPDATE servers SET agent_version = '0.24.66' WHERE id = $1", [serverId]);
+    const now = Math.floor(Date.now() / 1000);
+    const l = signed('203.0.113.70', now - 30);
+    for (const from of ['203.0.113.70', '203.0.113.70', '198.51.100.70']) {
+      const r = await get(l.url, from); // reloads, and a VPN's other address
+      expect(r.statusCode, from).toBe(200);
+      expect(r.body).toContain('is protected by');
+      expect(r.body).toContain(l.sig);
+    }
+    const ok = await verify({ s: serverId, ip: '203.0.113.70', h: 'shop.example.com', u: '/blog/', k: 'fw', t: l.t, sig: l.sig, token: 'good-token' }, '203.0.113.70');
+    expect(ok.status).toBe(200);
+    // Passed: the same link is dead, to the page and to the check.
+    const again = await get(l.url, '203.0.113.70');
+    expect(again.statusCode).toBe(410);
+    expect(again.body).toContain('This check link has expired');
+    expect(again.body).not.toContain('<form');
+    const re = await verify({ s: serverId, ip: '203.0.113.70', h: 'shop.example.com', u: '/blog/', k: 'fw', t: l.t, sig: l.sig, token: 'good-token' }, '203.0.113.70');
+    expect(re.status).toBe(410);
+    // Older than five minutes, or tampered with: expired.
+    expect((await get(signed('203.0.113.71', now - 400).url, '203.0.113.71')).statusCode).toBe(410);
+    const forged = signed('203.0.113.72', now).url.replace('ip=203.0.113.72', 'ip=203.0.113.73');
+    expect((await get(forged, '203.0.113.73')).statusCode).toBe(410);
+    const otherKey = crypto.generateKeyPairSync('ed25519');
+    const bad = crypto.sign(null, Buffer.from(`xg-captcha-link-v1:${serverId}:203.0.113.74:shop.example.com:${now}:fw`), otherKey.privateKey).toString('base64url');
+    expect((await get(`/v?s=${serverId}&ip=203.0.113.74&h=shop.example.com&k=fw&t=${now}&sig=${bad}&u=/`, '203.0.113.74')).statusCode).toBe(410);
+  });
+
+  it('expires the old unsigned firewall links of a server that signs, keeps the rest', async () => {
+    const fw = `/v?s=${serverId}&ip=199.19.77.18&h=shop.example.com&k=fw&u=%2Ffcx`;
+    expect((await get(fw, '199.19.77.18')).statusCode).toBe(410);
+    // Login-page links come from the WAF, which cannot sign: unchanged.
+    expect((await get(`/v?s=${serverId}&ip=203.0.113.75&h=shop.example.com&u=/wp-login.php`, '203.0.113.75')).statusCode).toBe(200);
+    // A server still on an older agent: its unsigned links work as before.
+    await h.pool.query("UPDATE servers SET agent_version = '0.24.65' WHERE id = $1", [serverId]);
+    expect((await get(fw, '199.19.77.18')).statusCode).toBe(200);
+    await h.pool.query("UPDATE servers SET agent_version = '0.24.66' WHERE id = $1", [serverId]);
+  });
+
+  it('explains the service on its front page: no form, no request for data', async () => {
+    const r = await h.app.inject({ method: 'GET', url: '/', headers: { host: 'captcha.example.org' } });
+    expect(r.statusCode).toBe(200);
+    expect(r.body).toContain('What it never asks for');
+    expect(r.body).toContain('valid for five minutes');
+    expect(r.body).not.toContain('<form');
+    expect(r.body).not.toContain('<input');
   });
 });

@@ -9,7 +9,9 @@ import type { Config } from '../config.js';
 import type { AgentHub } from '../agents/hub.js';
 import { audit, requirePlatform, requireRole } from '../auth.js';
 import { signedPayload } from '../agent-sign.js';
-import { CAPTCHA_DESIGNS, type CaptchaDesign, renderInfo, renderPage } from '../captcha/page.js';
+import { verifyEd25519 } from '../security.js';
+import { CAPTCHA_DESIGNS, type CaptchaDesign, renderExpired, renderInfo, renderPage } from '../captcha/page.js';
+import { compareVersions } from '../wpcore/service.js';
 import { altchaChallenge, altchaScript, altchaVerify } from '../captcha/altcha.js';
 import { checkAbuseIPDB, loadAbuseIPDB } from '../ipdb/abuseipdb.js';
 
@@ -391,9 +393,56 @@ export function parseParams(rawUrl: string) {
     // The server's CAPTCHA port (site mode): the page sends a browser that
     // reaches it on to the website's own address (see probePage).
     g: /^[0-9]{1,5}$/.test(head.get('g') ?? '') && Number(head.get('g')) > 0 && Number(head.get('g')) < 65536 ? Number(head.get('g')) : 0,
+    // t, sig: the time a server signed into the link (protocol
+    // CaptchaLinkPayload); such a link is valid five minutes, once.
+    t: /^[0-9]{9,11}$/.test(head.get('t') ?? '') ? (head.get('t') as string) : '',
+    sig: /^[A-Za-z0-9_-]{80,100}$/.test(head.get('sig') ?? '') ? (head.get('sig') as string) : '',
     // Previews may show another design than the saved one.
     design: (CAPTCHA_DESIGNS as readonly string[]).includes(d) ? (d as CaptchaDesign) : undefined,
   };
+}
+
+/** How long a signed check link is valid, and the clock difference allowed. */
+export const LINK_SECONDS = 300;
+const LINK_SKEW = 120;
+/** From this agent version on, a server signs the links it builds (k=fw). */
+export const SIGNED_LINKS_FROM = '0.24.66';
+
+export function captchaLinkPayload(s: string, ip: string, h: string, t: string, k: string): string {
+  return `xg-captcha-link-v1:${s}:${ip}:${h}:${t}:${k}`;
+}
+
+const linkKey = (sig: string) => createHash('sha256').update(sig).digest('hex');
+
+/**
+ * Whether a check link can no longer be used (owner, 2026-11-13: a link is
+ * made for one visit, valid five minutes, dead once passed, so a reported
+ * link resolves by itself). A signed link: its time, its signature, not
+ * used. An unsigned firewall link (k=fw, built only by the server) from a
+ * server that signs its links is an old one. Login-page links come from
+ * the WAF, which cannot sign: they stay as they are.
+ */
+export async function linkExpired(
+  pool: Pool,
+  p: { s: string; ip: string; h: string; t: string; sig: string; k: string },
+  server: { public_key?: string | null; agent_version?: string | null },
+): Promise<boolean> {
+  if (p.sig) {
+    const now = Math.floor(Date.now() / 1000);
+    const t = Number(p.t);
+    if (!p.t || now - t > LINK_SECONDS + 60 || t - now > LINK_SKEW) return true;
+    if (!server.public_key || !verifyEd25519(server.public_key, captchaLinkPayload(p.s, p.ip, p.h, p.t, p.k), p.sig)) return true;
+    const { rowCount } = await pool.query('SELECT 1 FROM captcha_used WHERE link = $1', [linkKey(p.sig)]);
+    return (rowCount ?? 0) > 0;
+  }
+  return p.k === 'fw' && compareVersions(String(server.agent_version ?? '0').replace(/-.*$/, ''), SIGNED_LINKS_FROM) >= 0;
+}
+
+/** A signed link that was passed: never accepted again. */
+async function useLink(pool: Pool, sig: string): Promise<void> {
+  if (!sig) return;
+  await pool.query(`INSERT INTO captcha_used (link, until) VALUES ($1, now() + interval '1 day') ON CONFLICT (link) DO NOTHING`, [linkKey(sig)]);
+  if (Math.random() < 0.02) await pool.query('DELETE FROM captcha_used WHERE until < now()').catch(() => undefined);
 }
 
 function validParams(p: { s: string; ip: string; h: string; u: string }): string | null {
@@ -595,7 +644,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       return reply.type('text/plain; charset=utf-8').header('X-Robots-Tag', 'noindex').send('User-agent: *\nAllow: /\n');
     }
     if (path === '/v' || path === '/v/verify' || path === '/v/altcha.js' || path === '/v/altcha/challenge' || /^\/(?:xpguard-shield|xpguard-wordmark|favicon-32)\.png$/.test(path)) return;
-    return html(reply, renderInfo());
+    return html(reply, renderInfo(cfg.billingSiteUrl));
   });
 
   // Counted per visitor, not per connecting address: behind Cloudflare and
@@ -608,8 +657,9 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     if (p.preview) Object.assign(p, { ip, h: 'example.com', u: '/wp-login.php' });
     const bad = validParams(p);
     if (bad) return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: bad }), 400);
-    const { rows } = await pool.query("SELECT account_id, hostname FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
+    const { rows } = await pool.query("SELECT account_id, hostname, public_key, agent_version FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
     if (!rows[0]) return html(reply, renderPage({ host: '', visitorIp: shownIP(ip, ''), params: null, siteKey: '', error: 'This check link is not valid.' }), 404);
+    if (!p.preview && (await linkExpired(pool, p, rows[0]))) return html(reply, renderExpired(cfg.billingSiteUrl), 410);
     const { config } = await load(pool, rows[0].account_id);
     // Hostname mode: the server's own hostname page frames this page. The
     // name comes from the server's record, never from the link.
@@ -627,7 +677,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // On the website's own address: framed by that website only, once its
     // server confirms the website is its own (below).
     const siteFrame = !frame && !hostFrame && p.fs && !onPortal && !p.preview;
-    const kind = { ...(p.k ? { k: p.k } : {}), ...(p.pf ? { pf: p.pf } : {}), ...(hostFrame ? { fh: '1' } : {}), ...(siteFrame ? { fs: '1' } : {}) };
+    const kind = { ...(p.k ? { k: p.k } : {}), ...(p.sig ? { t: p.t, sig: p.sig } : {}), ...(p.pf ? { pf: p.pf } : {}), ...(hostFrame ? { fh: '1' } : {}), ...(siteFrame ? { fs: '1' } : {}) };
     const params = p.preview ? { s: p.s, ip: p.ip, h: p.h, u: p.u, preview: true, ...(hostFrame ? { fh: '1' } : {}) } : frame ? { s: p.s, ip: p.ip, h: p.h, n: p.n, ...kind, u: p.u } : { s: p.s, ip: p.ip, h: p.h, ...kind, u: p.u };
     const design = (p.preview && p.design) || config.design;
     // The page names the website only when its server confirms the site is
@@ -653,7 +703,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
           'Content-Security-Policy',
           `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https://${p.h.replace(/\.$/, '')}:${p.g}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
         )
-        .send(probePage(p.h.replace(/\.$/, ''), p.g, p.u, `${pageUrl}?s=${p.s}&ip=${encodeURIComponent(p.ip)}&h=${p.h}&u=${p.u}`));
+        .send(probePage(p.h.replace(/\.$/, ''), p.g, p.u, `${pageUrl}?s=${p.s}&ip=${encodeURIComponent(p.ip)}&h=${p.h}${p.k ? `&k=${p.k}` : ''}${p.sig ? `&t=${p.t}&sig=${p.sig}` : ''}&u=${p.u}`));
     }
     // In a frame only on a website its server confirmed (the frame is on
     // the website's own address).
@@ -699,6 +749,8 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
     // Opened in a frame on the website's own address (see /v).
     n: z.string().regex(/^[a-f0-9]{32}$/).optional(),
     k: z.enum(['fw']).optional(),
+    t: z.string().regex(/^[0-9]{9,11}$/).optional(),
+    sig: z.string().regex(/^[A-Za-z0-9_-]{80,100}$/).optional(),
     pf: z.enum(['t', 'e']).optional(),
     fh: z.literal('1').optional(),
     fs: z.literal('1').optional(),
@@ -712,8 +764,12 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
       if (!b.success) return reply.code(400).send({ error: 'Invalid request.' });
       const p = { s: b.data.s, ip: b.data.ip, h: b.data.h.toLowerCase(), u: b.data.u };
       if (validParams(p)) return reply.code(400).send({ error: 'This check link is not valid.' });
-      const { rows } = await pool.query("SELECT account_id FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
+      const { rows } = await pool.query("SELECT account_id, public_key, agent_version FROM servers WHERE id = $1 AND status = 'active'", [p.s]);
       if (!rows[0]) return reply.code(404).send({ error: 'This check link is not valid.' });
+      const link = { s: p.s, ip: p.ip, h: p.h, t: b.data.t ?? '', sig: b.data.sig ?? '', k: b.data.k ?? '' };
+      if (!b.data.preview && (await linkExpired(pool, link, rows[0]))) {
+        return reply.code(410).send({ error: 'This check link has expired. Go back to the website and load the page again.' });
+      }
       const accountId = String(rows[0].account_id);
       const { config } = await load(pool, accountId);
       const provider = effectiveProvider(config);
@@ -853,6 +909,7 @@ export function captchaRoutes(app: FastifyInstance, pool: Pool, cfg: Config, hub
         if (method === 'altcha') noteAltchaPass(altchaKeys);
         if (hosting) noteHostingPass(p.ip);
         await rec('passed', method, ip, hosting ? 'from a hosting network (VPN or cloud): a pass for an hour' : '');
+        await useLink(pool, link.sig).catch((e) => req.log.warn({ err: (e as Error).message }, 'captcha link not marked used'));
         const site = `https://${p.h.replace(/\.$/, '')}`;
         // Back through the website's page, which sets the pass cookie (in the
         // fragment: never sent to a server). Framed pages hand it over

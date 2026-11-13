@@ -6,6 +6,7 @@ package core
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -246,6 +247,17 @@ func New(cfg *config.Config, log *slog.Logger) (*Agent, error) {
 		return a.Firewall.CaptchaSolved(ip, time.Duration(a.Settings.Get().Captcha.AllowMinutes)*time.Minute)
 	}}
 	a.Captcha.HostPage = a.hostPageFWURL
+	a.Captcha.LinkSign = func(msg []byte) string {
+		id, err := identity.Load(config.KeyPath())
+		if err != nil {
+			return ""
+		}
+		raw, err := base64.StdEncoding.DecodeString(id.SignB64(msg))
+		if err != nil {
+			return ""
+		}
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
 	a.Captcha.VisitorHeader = func(ip string) string {
 		id, err := identity.Load(config.KeyPath())
 		if err != nil || cfg.ServerID == "" {

@@ -16,7 +16,7 @@ export interface PageData {
   /** Address the visitor is seen with here. */
   visitorIp: string;
   /** Request parameters, sent back with the solved check. */
-  params: { s: string; ip: string; h: string; u: string; preview?: boolean; n?: string; fh?: string; fs?: string } | null;
+  params: { s: string; ip: string; h: string; u: string; preview?: boolean; n?: string; fh?: string; fs?: string; t?: string; sig?: string } | null;
   /** Cloudflare Turnstile site key ('' = not set up). */
   siteKey: string;
   /** The check: Turnstile, ALTCHA, or Turnstile with ALTCHA when it cannot load. */
@@ -275,9 +275,58 @@ ${script}
 }
 
 /** Plain page for the CAPTCHA host's front page. */
-export function renderInfo(): string {
-  return renderPage({ host: 'xPGuard', visitorIp: '', params: null, siteKey: '', error: 'This is the xPGuard verification service. You are sent here by a website when a check is needed.' }).replace(
-    /<p class="ip">[\s\S]*?<\/p>/,
-    '',
+/**
+ * The CAPTCHA domain's own pages: what the service is (its front page) and
+ * a link that expired. They say plainly what the check does and does not
+ * ask for, so a visitor, a hosting provider or an abuse desk sees a
+ * security service, not a page posing as someone (Netcraft via Hetzner,
+ * 2026-11-13). No form, no script, no third party.
+ */
+function infoPage(title: string, lead: string, extra: string, site = ''): string {
+  const home = site ? `<p class="more">About the service: <a href="${esc(site)}" rel="noopener">${esc(site.replace(/^https?:\/\//, ''))}</a></p>` : '';
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>${esc(title)}</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f8fb;--card:#fff;--text:#1e293b;--muted:#5b6475;--line:#e2e8f0;--accent:#1d4ed8}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1220;--card:#111a2e;--text:#e2e8f0;--muted:#9aa4b5;--line:#22304a;--accent:#7aa2ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:760px;margin:0 auto;padding:40px 16px 56px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px 24px}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}.brand img{width:40px;height:40px}.brand b{font-size:18px}
+h1{font-size:24px;line-height:1.3;margin:0 0 10px}h2{font-size:17px;margin:26px 0 8px}
+p,li{color:var(--muted)}p.lead{color:var(--text);font-size:17px}ul{padding-left:20px}a{color:var(--accent)}
+.more{margin-top:26px;font-size:14px}
+</style></head><body><main><div class="card">
+<div class="brand"><img src="/xpguard-shield.png" alt=""><b>xPGuard</b></div>
+<h1>${esc(title)}</h1>
+<p class="lead">${esc(lead)}</p>
+${extra}
+<h2>What this service is</h2>
+<p>xPGuard is a security service for web hosting servers. When a server sees a visit that looks automated or comes from an address on a block list, it can ask the visitor to confirm they are a person before the website opens. This domain only shows that confirmation step.</p>
+<h2>What it never asks for</h2>
+<ul>
+<li>No passwords, card or bank details, ID documents or other personal data. There is nothing to type: the check is a single box to tick.</li>
+<li>It does not host any website's content. After the check, the visitor goes back to the website they were opening, on that website's own address.</li>
+<li>A website is named on the check only when its hosting server confirms that it hosts it.</li>
+</ul>
+<h2>Check links expire</h2>
+<p>Each check link is made for one visit. It is valid for five minutes and stops working once the check is passed. An old or copied link shows this page instead.</p>
+<h2>Seeing something wrong?</h2>
+<p>If a page on this domain asks you for a password, payment or personal details, it is not ours. Report the full address to the hosting provider of the website you were opening.</p>
+${home}
+</div></main></body></html>`;
+}
+
+export function renderInfo(site = ''): string {
+  return infoPage('Website security check', 'This is the xPGuard verification service. Websites send a visitor here only when a check is needed.', '', site);
+}
+
+export function renderExpired(site = ''): string {
+  return infoPage(
+    'This check link has expired',
+    'This link was made for one visit and can no longer be used: it is older than five minutes, it was already used, or it was copied.',
+    '<p>If you were opening a website, go back to it and load the page again. A new check is shown when one is needed.</p>',
+    site,
   );
 }

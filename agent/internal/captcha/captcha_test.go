@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"image/png"
 	"io"
@@ -28,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/protocol"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 )
 
@@ -454,5 +457,35 @@ func TestServeFromSite(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), origDstKey{}, ap))
 	if serveFromSite(httptest.NewRecorder(), req) && ap.Port() != 80 && ap.Port() != 443 {
 		t.Fatal("served from a port that is not a website")
+	}
+}
+
+// Owner (2026-11-13): a link to the portal's check is valid five minutes and
+// once solved, not again; a link reported to Netcraft expires by itself.
+// The server signs the time into the link it builds (before "&u=", which
+// the portal reads to the end).
+func TestCentralRedirectSigned(t *testing.T) {
+	s, _ := newServer(t)
+	s.ServerID = "15d69a72-653a-47b6-90f6-fde737bce061"
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	s.LinkSign = func(msg []byte) string { return base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, msg)) }
+	s.Settings.Patch([]byte(`{"captcha":{"central":true,"central_url":"https://captcha.xpguard.org/v"}}`))
+	r := httptest.NewRequest("GET", "/blog/?p=1", nil)
+	r.Host = "shop.example.com"
+	r.Header.Set("Accept", "text/html")
+	r.RemoteAddr = "203.0.113.5:4000"
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	loc := w.Header().Get("Location")
+	m := regexp.MustCompile(`&k=fw&t=(\d+)&sig=([A-Za-z0-9_-]+)&u=/blog/\?p=1$`).FindStringSubmatch(loc)
+	if w.Code != 302 || m == nil {
+		t.Fatalf("%d %q", w.Code, loc)
+	}
+	if ts, _ := strconv.ParseInt(m[1], 10, 64); time.Now().Unix()-ts > 5 {
+		t.Fatalf("time %s", m[1])
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(m[2])
+	if err != nil || !ed25519.Verify(pub, protocol.CaptchaLinkPayload(s.ServerID, "203.0.113.5", "shop.example.com", m[1], "fw"), sig) {
+		t.Fatalf("signature does not verify: %v", err)
 	}
 }

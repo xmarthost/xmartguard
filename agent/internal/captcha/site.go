@@ -95,7 +95,7 @@ func (s *Server) sitePage(w http.ResponseWriter, r *http.Request, ip, back strin
 		kind = "&k=fw"
 	}
 	src := c.CentralURL + "?s=" + url.QueryEscape(s.ServerID) + "&ip=" + url.QueryEscape(ip) + "&h=" + url.QueryEscape(host) +
-		"&n=" + nonce + "&frame=1" + kind + "&u=" + safeBack(back)
+		"&n=" + nonce + "&frame=1" + kind + s.linkTag(ip, host, strings.TrimPrefix(kind, "&k=")) + "&u=" + safeBack(back)
 	pass := passURL(host, c, r.TLS != nil)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-src "+origin+"; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' "+pass+"; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")

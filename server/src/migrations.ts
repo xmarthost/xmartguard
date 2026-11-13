@@ -887,4 +887,15 @@ CREATE TABLE vuln_results (
 CREATE INDEX vuln_results_dispatch_idx ON vuln_results (dispatch_id, server_id, action);
 `,
   },
+  {
+    version: '037_captcha_used',
+    sql: `
+-- Signed check links that were passed (sha256 of the signature): never
+-- accepted again (owner, 2026-11-13).
+CREATE TABLE captcha_used (
+  link text PRIMARY KEY,
+  until timestamptz NOT NULL
+);
+`,
+  },
 ];

@@ -36,6 +36,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/xmarthost/xmartguard/agent/internal/protocol"
 	"github.com/xmarthost/xmartguard/agent/internal/settings"
 )
 
@@ -69,6 +70,9 @@ type Server struct {
 	// hostpage.go: this server then serves the page with the hostname's
 	// certificate), "" otherwise (the portal address).
 	HostPage func() string
+	// LinkSign signs a check link (protocol.CaptchaLinkPayload) with this
+	// server's key, base64url; nil: links without a signature.
+	LinkSign func(msg []byte) string
 
 	key      []byte
 	tickets  map[string]ticket
@@ -384,6 +388,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.page(w, r, ip, "")
 }
 
+// linkTag is "&t=<now>&sig=<signature>" for a check link (see
+// protocol.CaptchaLinkPayload), "" without a signer.
+func (s *Server) linkTag(ip, host, kind string) string {
+	if s.LinkSign == nil || s.ServerID == "" {
+		return ""
+	}
+	t := strconv.FormatInt(time.Now().Unix(), 10)
+	sig := s.LinkSign(protocol.CaptchaLinkPayload(s.ServerID, ip, host, t, kind))
+	if sig == "" {
+		return ""
+	}
+	return "&t=" + t + "&sig=" + sig
+}
+
 // centralURL is the portal's CAPTCHA page for this visitor, or "" while
 // that page is off: banned visitors (whatever page they asked for) and the
 // login-page CAPTCHA go there, and come back to the page they wanted.
@@ -417,7 +435,8 @@ func (s *Server) centralURL(r *http.Request, ip string) string {
 	}
 	// The page ("u") goes last and as it is: the portal reads everything
 	// after "&u=".
-	return fmt.Sprintf("%s?s=%s&ip=%s&h=%s%s&u=%s", base, url.QueryEscape(s.ServerID), url.QueryEscape(ip), url.QueryEscape(host), kind, back)
+	return fmt.Sprintf("%s?s=%s&ip=%s&h=%s%s%s&u=%s", base, url.QueryEscape(s.ServerID), url.QueryEscape(ip), url.QueryEscape(host), kind,
+		s.linkTag(ip, host, strings.TrimPrefix(kind, "&k=")), back)
 }
 
 // token binds a challenge answer to an address and an expiry.
