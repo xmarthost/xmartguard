@@ -340,6 +340,10 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   not updated (`failureReasons`), the vulnerabilities found on sites and
   the websites (filters server/action/q, paging). Test: mcp "reads the
   report of the vulnerabilities sent to the servers".
+  Setup script (same day): the package step installs only missing
+  packages, without `-q`/`>/dev/null`, and warns when another dnf/yum or
+  cPanel update holds the package lock (the portal update on business900
+  looked stuck at "Installing packages and Docker").
 - **Release 0.24.60: report of the vulnerabilities sent to the servers**
   (2026-11-13). Owner: see in the Master panel which vulnerabilities were
   sent on which day, what each server did, which websites were updated and

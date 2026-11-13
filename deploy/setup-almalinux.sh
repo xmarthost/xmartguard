@@ -145,7 +145,17 @@ if [ -z "$DNSIP" ] || [ "$DNSIP" != "$MYIP" ]; then
 fi
 
 step "Installing packages and Docker"
-dnf -y -q install git curl dnf-plugins-core openssl >/dev/null 2>&1 || dnf -y install git curl dnf-plugins-core openssl
+# Only what is missing: on an update everything is there, and a silent dnf
+# waiting on another package job (cPanel's nightly update, a locked rpm
+# database) looked stuck at this step (business900, 2026-11-13).
+need=""
+for p in git curl dnf-plugins-core openssl; do rpm -q "$p" >/dev/null 2>&1 || need="$need $p"; done
+if [ -n "$need" ]; then
+  if pgrep -x dnf >/dev/null || pgrep -x yum >/dev/null || pgrep -f '/usr/local/cpanel/scripts/upcp' >/dev/null; then
+    warn "another package job is running (dnf/yum or cPanel update); waiting for it"
+  fi
+  dnf -y install $need || die "could not install:$need"
+fi
 # A "docker" command alone is not enough: podman-docker provides one without
 # the Docker service. Install Docker CE unless its service really exists.
 if ! systemctl list-unit-files docker.service 2>/dev/null | grep -q '^docker.service'; then
