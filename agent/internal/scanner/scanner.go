@@ -1012,6 +1012,16 @@ func (s *Scanner) applyAction(f *Finding, d Detection, path string) {
 			// A theme's functions.php with the fake-check loader appended
 			// is put back without the loader's lines: the site keeps its
 			// theme (the original stays in quarantine).
+			// A theme, plugin or core file with a password gate in front of
+			// its own code goes back without the gate (RAHASIA campaign:
+			// whole-file quarantine took a site down).
+			if d.Signature == "PHP.Injected.PasswordGate" {
+				if err := s.trimPasswordGate(f.ID); err != nil {
+					s.Log.Info("removing the password gate not possible; the file stays in quarantine", "path", path, "err", err)
+				} else {
+					f.Status, f.Note = "trimmed", "Injected password gate removed; the rest of the file kept"
+				}
+			}
 			if d.Signature == "PHP.Injector.FooterScriptLoader" {
 				// (The engine knows the exact lines, so a short child theme's
 				// file, mostly loader, is trimmed too.)

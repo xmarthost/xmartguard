@@ -77,6 +77,9 @@ type Scanner struct {
 	Trim bool `json:"trim"`
 	// TrimMaxPercent is the largest share of a file Trim may remove.
 	TrimMaxPercent int `json:"trim_max_percent"`
+	// TrimVersion 1: the default limit went from 20% to 50% (owner,
+	// 2026-11-13); a saved 20 (the old default) was raised once.
+	TrimVersion int `json:"trim_version"`
 	// UserScans lets cPanel users start scans of their own home.
 	UserScans bool `json:"user_scans"`
 	// YARA also runs YARA rules from /etc/xpguard/yara when yara is installed.
@@ -573,7 +576,7 @@ func Defaults() Settings {
 			VirusAction: ActionQuarantine, SuspiciousAction: ActionNotify, BinaryAction: ActionNotify,
 			DailyScan: true, WeeklyScan: true, ScheduleTZ: "Asia/Karachi", MaxFileSizeMB: 10,
 			WhitelistUsers: []string{}, WhitelistPaths: []string{}, BlacklistNames: []string{},
-			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 20, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60, QuarantineDays: 7, ScanSpeed: "auto",
+			DeleteSymlinks: false, AutoClean: false, Feeds: true, ClamAV: true, WPCoreRepair: true, Trim: false, TrimMaxPercent: 50, TrimVersion: 1, UserScans: true, YARA: true, DBWhitelist: []Exclusion{}, KeepDays: 60, QuarantineDays: 7, ScanSpeed: "auto",
 		},
 		Firewall: Firewall{
 			Enabled: true, Provider: "iptables", BruteForce: true, BFThreshold: 5, BFWindowMinutes: 10, BanMinutes: 60,
@@ -862,7 +865,13 @@ func normalize(s *Settings) {
 		s.AI.MaxKB = 12
 	}
 	if s.Scanner.TrimMaxPercent <= 0 {
-		s.Scanner.TrimMaxPercent = 20
+		s.Scanner.TrimMaxPercent = 50
+	}
+	if s.Scanner.TrimVersion < 1 {
+		if s.Scanner.TrimMaxPercent == 20 {
+			s.Scanner.TrimMaxPercent = 50
+		}
+		s.Scanner.TrimVersion = 1
 	}
 	s.Processes.WhitelistUsers = clean(s.Processes.WhitelistUsers, false)
 	s.Processes.WhitelistStrings = clean(s.Processes.WhitelistStrings, false)

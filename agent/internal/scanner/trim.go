@@ -174,7 +174,7 @@ func (s *Scanner) Trim(id int64, cuts []Cut, maxPercent int) error {
 		return err
 	}
 	if maxPercent <= 0 {
-		maxPercent = 20
+		maxPercent = 50
 	}
 	if removed*100 > len(orig)*maxPercent {
 		return fmt.Errorf("the injected code is %d%% of the file (limit %d%%); quarantine it instead", removed*100/max(1, len(orig)), maxPercent)

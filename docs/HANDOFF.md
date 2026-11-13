@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.63** (see `VERSION`).
+- Current release: **0.24.64** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,38 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.64: RAHASIA password gate trimmed, not quarantined;
+  trim default 50%** (2026-11-13). halaltech.co.uk (superfast, account
+  magazin5, docroot /home2/magazin5/halaltech.co.uk) went down after the
+  realtime scanner quarantined whole plugin and theme files (redirection,
+  bingo, bingo-ruby-core, wordpress-seo, akismet...) on 11-12 20:48 as
+  PHP.Backdoor.FileDropper / PHP.Suspicious.FileManager: a mass injector
+  (MassEvasion, wp-content/plugin-editor.php) had put the same 49,788-byte
+  password-gated file manager ("Haxor.Group", "#RAHASIA NEGARA", bcrypt
+  password, `?i` PNG bypass) in front of 84 files; core files were
+  replaced with official copies, the others were taken away (the gate is
+  over the trim limit) and every require_once failed. gate.go:
+  `PasswordGateCut` (file opens with `<?php`, bcrypt literal +
+  password_verify + session + request data in the first 6 KB; cut after
+  the first `</html>` outside PHP with no brace open, the rest non-empty
+  and without the gate) → `PHP.Injected.PasswordGate` (checked first in
+  analyzePHP, on the raw content); on quarantine `trimPasswordGate` puts
+  the file back without the gate (Trim at 100%, PHP lint and rescan still
+  apply). All 84 real files trimmed back to the exact original bytes; 912
+  wp-file-manager files and the 84 originals: no new detection (2 elFinder
+  files carried the gate). Also: `PHP.Injector.MassPrepend` (tree walk,
+  posted code prepended, dates restored), `PHP.Backdoor.OpenAdminLogin`
+  (loads wp-load, logs in as administrator with no request data, names in
+  string pieces; spelled out it stays the family's WPAdminLogin),
+  `PHP.Dropper.HaltCompilerLoader` (__COMPILER_HALT_OFFSET__ payload
+  decoded and included from tmpfile()'s uri; wp-content/geck.php). Not
+  covered: htapengaman.phhp (.htaccess template), static spam pages.
+  Trim default 20% → 50% (`TrimVersion` 1: a saved 20 raised once).
+  Tests: TestFleetPasswordGateTrimmed, TestFleetRahasiaCompanions,
+  TestTrimLimitDefaultRaisedOnce.
+- Owner rule (2026-11-13): every release reply includes the update
+  commands (portal setup command; manual agent update from the GitHub
+  release with the sha256 check).
 - **Release 0.24.63: the CAPTCHA check is not served on the portal
   address** (2026-11-13). Netcraft (for ID.me) via Hetzner reported
   xpguardcaptcha.site/v?...&h=ahreftools.com&k=fw&u=/fcx and the same on

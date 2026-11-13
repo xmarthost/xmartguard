@@ -174,3 +174,20 @@ func TestLoginURLsChecked(t *testing.T) {
 		}
 	}
 }
+
+// Owner (2026-11-13): the trim limit's default goes from 20% to 50%. A saved
+// 20 (the old default) is raised once; another value, or 20 chosen again
+// afterwards, stays.
+func TestTrimLimitDefaultRaisedOnce(t *testing.T) {
+	if Defaults().Scanner.TrimMaxPercent != 50 {
+		t.Fatalf("default %d", Defaults().Scanner.TrimMaxPercent)
+	}
+	for _, c := range []struct{ saved, version, want int }{{20, 0, 50}, {30, 0, 30}, {0, 0, 50}, {20, 1, 20}} {
+		s := Defaults()
+		s.Scanner.TrimMaxPercent, s.Scanner.TrimVersion = c.saved, c.version
+		normalize(&s)
+		if s.Scanner.TrimMaxPercent != c.want || s.Scanner.TrimVersion != 1 {
+			t.Errorf("saved %d (version %d): %d, version %d", c.saved, c.version, s.Scanner.TrimMaxPercent, s.Scanner.TrimVersion)
+		}
+	}
+}
