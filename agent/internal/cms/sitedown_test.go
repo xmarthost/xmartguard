@@ -61,7 +61,9 @@ func TestAutoActionsSuspendedAndDatabaseDown(t *testing.T) {
 	}
 	// The database answers again: the mark goes with the first command
 	// that works.
-	m.RunWPCLI = func(context.Context, string, ...string) (string, error) { return "Success: Deactivated 1 of 1 plugins.", nil }
+	m.RunWPCLI = func(context.Context, string, ...string) (string, error) {
+		return "Success: Deactivated 1 of 1 plugins.", nil
+	}
 	m.Settings.Patch([]byte(`{"cms":{"blacklist_plugins":["one"]}}`))
 	s := site("dbgone")
 	s.Plugins[0].Active = true

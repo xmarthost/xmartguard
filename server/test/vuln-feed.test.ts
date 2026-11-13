@@ -201,6 +201,54 @@ describe('fast plugin vulnerability alerts', () => {
     expect(slugs).not.toContain('rp-old');
   });
 
+  // Owner (2026-11-13): the Master panel shows which vulnerabilities were
+  // sent on which day and what each server did on each website.
+  it('records each send and what the servers report back, and lists it for the report', async () => {
+    nudged.length = 0;
+    const since = new Date(Date.now() - 10 * 86400_000).toISOString().slice(0, 10);
+    const admin = new Client(h.url);
+    await admin.login();
+    expect((await admin.req('POST', '/api/vuln-feed/replay', { since })).status).toBe(200);
+    const list = await admin.req('GET', '/api/vuln-feed/dispatches');
+    expect(list.status).toBe(200);
+    const d = list.body.dispatches[0];
+    expect(d).toMatchObject({ source: 'resend', note: `published since ${since}` });
+    expect(d.count).toBeGreaterThanOrEqual(1);
+    const { rows } = await h.pool.query("SELECT seq FROM vuln_feed WHERE id = 'rp-new'");
+    const seq = Number(rows[0].seq);
+    // The server confirms it received the send and reports two sites.
+    const post = async (payload: unknown) => {
+      const raw = JSON.stringify(payload);
+      const ts = String(Math.floor(Date.now() / 1000));
+      const signature = crypto.sign(null, Buffer.from(envelopeMessage(server.id, ts, raw)), server.key.privateKey).toString('base64');
+      return fetch(h.url + '/api/agent/cms/vulns/results', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ server_id: server.id, ts, signature, payload: raw }) });
+    };
+    const at = Math.floor(Date.now() / 1000);
+    const res = (path: string, action: string, extra = {}) => ({ at, advisory: 'rp-new', cvss: 0, path, domain: path.split('/')[2] + '.test', user: path.split('/')[2], kind: 'plugin', slug: 'rp-new', version: '1.0', action, ...extra });
+    const r = await post({ results: [res('/home/alice/public_html', 'updated', { to_version: '1.1' }), res('/home/bob/public_html', 'failed', { detail: 'update failed: disk full' })], receipt: { seqs: [seq], sites: 2 } });
+    expect(r.status).toBe(200);
+    // Reported again (the agent retries): no duplicates.
+    expect((await post({ results: [res('/home/alice/public_html', 'updated', { to_version: '1.1' })] })).status).toBe(200);
+    const again = (await admin.req('GET', '/api/vuln-feed/dispatches')).body.dispatches[0];
+    expect(again).toMatchObject({ servers: 1, sites: 2, updated: 1, not_fixed: 1 });
+    const detail = await admin.req('GET', `/api/vuln-feed/dispatches/${d.id}`);
+    expect(detail.status).toBe(200);
+    const srv = detail.body.servers.find((x: { server_id: string }) => x.server_id === server.id);
+    expect(srv).toMatchObject({ hostname: 'web-a', updated: 1, not_fixed: 1, advisories: 1 });
+    expect(srv.received_at).toBeTruthy();
+    expect(detail.body.advisories.find((a: { id: string }) => a.id === 'rp-new')).toMatchObject({ sites: 2, updated: 1, not_fixed: 1 });
+    const failed = await admin.req('GET', `/api/vuln-feed/dispatches/${d.id}/results?action=not_fixed`);
+    expect(failed.body.total).toBe(1);
+    // The title and score come from the feed when the server does not send them.
+    expect(failed.body.results[0]).toMatchObject({ domain: 'bob.test', account: 'bob', hostname: 'web-a', detail: 'update failed: disk full', title: 't' });
+    expect(failed.body.results[0].cvss).toBeCloseTo(9.8);
+    expect((await admin.req('GET', `/api/vuln-feed/dispatches/${d.id}/results?q=ALICE`)).body.total).toBe(1);
+    expect((await admin.req('GET', `/api/vuln-feed/dispatches/${d.id}/results?server=${server.id}`)).body.total).toBe(2);
+    // Feed downloads and webhook deliveries are recorded as sends too.
+    expect(await feed.applyWebhook({ vulnerabilities: { created: Object.values(wf('hook-1', 'hook-plugin', '1.0', '1')) } })).toBe(1);
+    expect((await admin.req('GET', '/api/vuln-feed/dispatches')).body.dispatches[0]).toMatchObject({ source: 'webhook', count: 1 });
+  });
+
   it('refuses unsigned requests', async () => {
     const r = await fetch(h.url + '/api/agent/cms/vulns', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ since: 0 }) });
     expect(r.status).toBe(400);

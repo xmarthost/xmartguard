@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.59** (see `VERSION`).
+- Current release: **0.24.60** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,30 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.60: report of the vulnerabilities sent to the servers**
+  (2026-11-13). Owner: see in the Master panel which vulnerabilities were
+  sent on which day, what each server did, which websites were updated and
+  which not. Agent: the fast response records every site/advisory outcome
+  in `cms_rapid_log` (updated, shielded, shielded_deactivated, deactivated,
+  manual, failed, gone; with the reason, e.g. "site's database is not
+  reachable", "premium: no update wp-cli can install") and posts them to
+  `/api/agent/cms/vulns/results` (500 per request, retried until stored;
+  reported rows dropped after 90 days), with a receipt of the advisory seq
+  numbers each page brought. `BackfillRapid` (once) turns the earlier
+  `cms_rapid|...` once-only marks of the 1 November resend into results,
+  judged from the stored inventory (version changed = updated, the
+  advisory's shield in the folder = shielded, else failed/manual/gone).
+  Portal: migration 036 (`vuln_dispatch`, `vuln_receipts`, `vuln_results`;
+  the advisories numbered before it become one dispatch "sent before this
+  report existed"); every feed download, webhook delivery or resend that
+  numbers advisories records a dispatch (seq range). Page Master » Plugin
+  Vulnerabilities » Sent to servers (`/vuln-feed/sent`, `/:id`): sends by
+  date with counts; per send the servers (received when, sites, updated,
+  shielded, deactivated, not updated), the websites (filter by server,
+  result, domain/account/plugin search) and the vulnerabilities found on
+  sites. No web server reload. Tests: `TestRapidResponse` (results),
+  `TestRapidBackfill`, `TestSyncVulnsReadsEveryPage` (receipts), portal
+  vuln-feed "records each send and what the servers report back".
 - **Release 0.24.59: down sites are not failed patches; resend earlier
   vulnerabilities** (2026-11-13). The fleet vulnerability report showed
   superfast at 33% (1,993 of 2,991 automatic updates "failed"); every

@@ -1,4 +1,5 @@
 import { useState, type CSSProperties } from 'react';
+import { Link } from 'react-router-dom';
 import { CheckCircle2, KeyRound, RefreshCw, ShieldAlert, Webhook, XCircle } from 'lucide-react';
 import { api } from '../api';
 import { useApi } from '../hooks';
@@ -193,6 +194,9 @@ export default function VulnFeed() {
           </ol>
         </div>
       </Card>
+      <Link to="/vuln-feed/sent" className="block rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 hover:bg-blue-100">
+        <span className="font-semibold">Sent to servers: report</span> — which vulnerabilities were sent on which day, and what each server did on each website (updated, shielded, deactivated, not updated). ›
+      </Link>
       <Card
         title="3. Act on earlier vulnerabilities"
         desc="The first download is kept as history: the servers only act on what is published after it. To have them act on the holes of the last weeks too, choose a date: every vulnerability Wordfence published since then is sent to the servers as new. Each site is updated (or shielded) once per vulnerability, so sending again does nothing twice."

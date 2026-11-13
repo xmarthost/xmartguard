@@ -31,6 +31,24 @@ export interface VulnItem {
   ranges: VulnRange[];
   patched: string[];
   published: string | null;
+  seq?: number;
+}
+
+/** One site's outcome for one advisory, as an agent reports it. */
+export interface AgentResult {
+  at: number;
+  advisory: string;
+  title?: string;
+  cvss: number;
+  path: string;
+  domain?: string;
+  user?: string;
+  kind: string;
+  slug: string;
+  version: string;
+  action: string;
+  to_version?: string;
+  detail?: string;
 }
 
 type WFSoftware = {
@@ -311,14 +329,67 @@ export class VulnFeedService {
     return { changed: rows.map((r) => String(r.id)), unseen: list.length - seen[0].n };
   }
 
-  /** Gives changed rows their numbers: the agents fetch them as new. */
-  private async number(ids: string[]): Promise<number> {
+  /** Gives changed rows their numbers: the agents fetch them as new. Records the dispatch. */
+  private async number(ids: string[], source = 'feed', note = ''): Promise<number> {
     let n = 0;
+    let lo = Infinity;
+    let hi = 0;
     for (let i = 0; i < ids.length; i += 1000) {
-      const r = await this.pool.query("UPDATE vuln_feed SET seq = nextval('vuln_feed_seq') WHERE id = ANY($1::text[])", [ids.slice(i, i + 1000)]);
-      n += r.rowCount ?? 0;
+      const { rows } = await this.pool.query(
+        "UPDATE vuln_feed SET seq = nextval('vuln_feed_seq') WHERE id = ANY($1::text[]) RETURNING seq",
+        [ids.slice(i, i + 1000)],
+      );
+      for (const r of rows) {
+        const q = Number(r.seq);
+        lo = Math.min(lo, q);
+        hi = Math.max(hi, q);
+      }
+      n += rows.length;
     }
+    if (n > 0) await this.dispatch(source, note, lo, hi, n);
     return n;
+  }
+
+  private async dispatch(source: string, note: string, from: number, to: number, count: number): Promise<void> {
+    await this.pool.query('INSERT INTO vuln_dispatch (source, note, seq_from, seq_to, count) VALUES ($1, $2, $3, $4, $5)', [source, note, from, to, count]);
+  }
+
+  /**
+   * Stores what a server did with the advisories it received: the sites it
+   * acted on (results) and, with receipt, which advisories reached it.
+   */
+  async results(serverId: string, results: AgentResult[], receipt?: { seqs: number[]; sites: number }): Promise<number> {
+    if (receipt && receipt.seqs.length > 0) {
+      await this.pool.query(
+        `INSERT INTO vuln_receipts (server_id, dispatch_id, advisories, sites)
+         SELECT $1, d.id, count(*)::int, $3 FROM unnest($2::bigint[]) AS s(seq)
+           JOIN vuln_dispatch d ON s.seq BETWEEN d.seq_from AND d.seq_to
+         GROUP BY d.id
+         ON CONFLICT (server_id, dispatch_id) DO UPDATE SET received_at = now(),
+           advisories = GREATEST(vuln_receipts.advisories, EXCLUDED.advisories), sites = vuln_receipts.sites + EXCLUDED.sites`,
+        [serverId, receipt.seqs, receipt.sites],
+      );
+    }
+    if (results.length === 0) return 0;
+    const col = <K extends keyof AgentResult>(k: K) => results.map((r) => r[k]);
+    const r = await this.pool.query(
+      `INSERT INTO vuln_results (dispatch_id, server_id, advisory_id, kind, slug, title, cvss, site_path, domain, account, version, action, to_version, detail, at)
+       SELECT (SELECT d.id FROM vuln_dispatch d WHERE f.seq BETWEEN d.seq_from AND d.seq_to ORDER BY d.id DESC LIMIT 1),
+              $1, x.advisory, x.kind, x.slug, coalesce(nullif(x.title, ''), f.title, ''), coalesce(nullif(x.cvss, 0), f.cvss, 0),
+              x.path, x.domain, x.account, x.version, x.action, x.to_version, x.detail, to_timestamp(x.at)
+       FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::real[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[], $12::text[], $13::text[], $14::bigint[])
+         AS x(advisory, kind, slug, title, cvss, path, domain, account, version, action, to_version, detail, at)
+       LEFT JOIN vuln_feed f ON f.id = x.advisory
+       ON CONFLICT (server_id, advisory_id, site_path, version) DO UPDATE SET
+         action = EXCLUDED.action, to_version = EXCLUDED.to_version, detail = EXCLUDED.detail, at = EXCLUDED.at,
+         dispatch_id = coalesce(vuln_results.dispatch_id, EXCLUDED.dispatch_id)`,
+      [
+        serverId, col('advisory'), col('kind'), col('slug'), col('title'), col('cvss'), col('path'),
+        col('domain').map((v) => v ?? ''), col('user').map((v) => v ?? ''), col('version'), col('action'),
+        col('to_version').map((v) => v ?? ''), col('detail').map((v) => v ?? ''), col('at'),
+      ],
+    );
+    return r.rowCount ?? 0;
   }
 
   /**
@@ -332,19 +403,22 @@ export class VulnFeedService {
       `WITH r AS (
          UPDATE vuln_feed SET seq = nextval('vuln_feed_seq')
          WHERE published >= $1 AND published > now() - interval '90 days'
-         RETURNING 1)
-       SELECT count(*)::int AS n FROM r`,
+         RETURNING seq)
+       SELECT count(*)::int AS n, min(seq)::bigint AS lo, max(seq)::bigint AS hi FROM r`,
       [from],
     );
     const n = Number(rows[0].n);
-    if (n > 0) await this.notify();
+    if (n > 0) {
+      await this.dispatch('resend', `published since ${from.toISOString().slice(0, 10)}`, Number(rows[0].lo), Number(rows[0].hi), n);
+      await this.notify();
+    }
     return n;
   }
 
   /** Stores items and numbers the changed ones (webhook deliveries). */
   async storeItems(items: { item: VulnItem; updated: string }[]): Promise<number> {
     const r = await this.storeBatch(items);
-    return this.number(r.changed);
+    return this.number(r.changed, 'webhook');
   }
 
   /**
@@ -391,7 +465,7 @@ export class VulnFeedService {
       [since],
     );
     const items = rows.map((r) => ({
-      id: r.id, kind: r.kind, slug: r.slug, title: r.title, cvss: Number(r.cvss), ranges: r.ranges, patched: r.patched,
+      id: r.id, kind: r.kind, slug: r.slug, title: r.title, cvss: Number(r.cvss), ranges: r.ranges, patched: r.patched, seq: Number(r.seq),
       published: r.published ? new Date(r.published).toISOString() : null,
     }));
     const cursor = rows.length === 2000 ? Number(rows[rows.length - 1].seq) : max;

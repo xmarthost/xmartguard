@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/xmarthost/xmartguard/agent/internal/store"
 )
 
 // Owner, 2026-11-12: a newly disclosed hole is acted on within hours from
@@ -79,6 +81,31 @@ func TestRapidResponse(t *testing.T) {
 	if !strings.Contains(shield(a, "pro"), "wf-2 version 3.0.1") || strings.Contains(joined, "deactivate pro") || strings.Contains(joined, "safe") {
 		t.Errorf("pro / low:\n%s\n%s", shield(a, "pro"), joined)
 	}
+	// Each outcome is recorded for the portal's report.
+	rs, err := m.PendingRapid(100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range rs {
+		got[r.User+"/"+r.Slug] = r.Action + " " + r.ToVersion
+		if r.User == "alice" && r.Slug == "pro" && !strings.Contains(r.Detail, "premium") {
+			t.Errorf("premium reason: %q", r.Detail)
+		}
+	}
+	want := map[string]string{"alice/cf7": "updated 6.2.5", "bob/cf7": "shielded_deactivated ", "alice/pro": "shielded ", "bob/pro": "shielded "}
+	if len(got) != len(want) {
+		t.Errorf("results: %v", got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("result %s = %q, want %q", k, got[k], v)
+		}
+	}
+	m.MarkRapidReported(rs)
+	if again, _ := m.PendingRapid(100); len(again) != 0 {
+		t.Errorf("reported results pending again: %d", len(again))
+	}
 	// Once only per advisory and version.
 	calls = nil
 	if n := m.Rapid(context.Background(), []Advisory{cf7, pro}); n != 0 || len(calls) != 0 {
@@ -112,5 +139,50 @@ func TestAdvisoryAffects(t *testing.T) {
 	}
 	if (Advisory{Ranges: []VRange{{From: "*", To: "*"}}}).Affects("3") != true {
 		t.Error("open range")
+	}
+}
+
+// The resend of 2026-11-13 ran before results were recorded: the once-only
+// marks it left become results, judged from the site as it is now.
+func TestRapidBackfill(t *testing.T) {
+	m, _ := autoUpdateManager(t, `{"cms":{"auto_update":true}}`)
+	root := filepath.Join(t.TempDir(), "carol", "public_html")
+	os.MkdirAll(filepath.Join(root, "wp-content", "plugins", "pro"), 0o755)
+	m.save(Site{Type: WordPress, Path: root, User: "carol", Domain: "carol.test", Version: "6.8.3", MUPlugins: []string{}, Themes: []Component{{Slug: "astra", Version: "4.1"}},
+		Plugins: []Component{{Slug: "cf7", Version: "6.2.5"}, {Slug: "pro", Version: "3.0.1"}, {Slug: "kit", Version: "1.0"}}})
+	if err := Shield(filepath.Join(root, "wp-content", "plugins", "pro"), "wf-2", "3.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{
+		"cms_rapid|" + root + "|plugin|cf7|6.2.1|wf-1",     // updated since
+		"cms_rapid|" + root + "|plugin|pro|3.0.1|wf-2",     // shielded
+		"cms_rapid|" + root + "|plugin|kit|1.0|wf-3",       // nothing applied
+		"cms_rapid|" + root + "|theme|astra|4.1|wf-4",      // theme: by hand
+		"cms_rapid|/home/gone/public_html|plugin|x|1|wf-5", // site gone
+	} {
+		store.SetKV(m.DB, k, "1794500000")
+	}
+	if n := m.BackfillRapid(); n != 5 {
+		t.Fatalf("backfilled %d", n)
+	}
+	if n := m.BackfillRapid(); n != 0 {
+		t.Fatalf("backfilled twice: %d", n)
+	}
+	rs, _ := m.PendingRapid(100)
+	got := map[string]string{}
+	for _, r := range rs {
+		got[r.Advisory] = r.Action + " " + r.ToVersion
+		if r.At != 1794500000 {
+			t.Errorf("%s: time %d", r.Advisory, r.At)
+		}
+		if r.Advisory == "wf-1" && r.Domain != "carol.test" {
+			t.Errorf("domain %q", r.Domain)
+		}
+	}
+	want := map[string]string{"wf-1": "updated 6.2.5", "wf-2": "shielded ", "wf-3": "failed ", "wf-4": "manual ", "wf-5": "gone "}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
 	}
 }

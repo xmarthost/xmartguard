@@ -269,6 +269,26 @@ CREATE TABLE IF NOT EXISTS suspensions (
   status     TEXT NOT NULL,           -- suspended | lifted | failed
   lifted_at  INTEGER NOT NULL DEFAULT 0
 );
+-- What the fast response did on each site for each advisory, until the
+-- portal has it (Master » Plugin Vulnerabilities report).
+CREATE TABLE IF NOT EXISTS cms_rapid_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  at          INTEGER NOT NULL,
+  advisory    TEXT NOT NULL,
+  title       TEXT NOT NULL DEFAULT '',
+  cvss        REAL NOT NULL DEFAULT 0,
+  path        TEXT NOT NULL,
+  domain      TEXT NOT NULL DEFAULT '',
+  user        TEXT NOT NULL DEFAULT '',
+  kind        TEXT NOT NULL,
+  slug        TEXT NOT NULL,
+  version     TEXT NOT NULL,
+  action      TEXT NOT NULL,
+  to_version  TEXT NOT NULL DEFAULT '',
+  detail      TEXT NOT NULL DEFAULT '',
+  reported    INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS cms_rapid_log_reported ON cms_rapid_log(reported, id);
 CREATE TABLE IF NOT EXISTS kv (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL

@@ -32,6 +32,12 @@ func (a *Agent) syncVulns(ctx context.Context) error {
 		return nil // one at a time
 	}
 	defer rapidMu.Unlock()
+	// Results recorded before the portal kept them, then any the portal
+	// did not take yet (it was offline).
+	if n := a.CMS.BackfillRapid(); n > 0 {
+		a.Log.Info("earlier fast response actions recorded for the portal's report", "marks", n)
+	}
+	a.reportRapid(ctx, nil)
 	since := int64(-1) // first time: only the cursor (the backlog is the nightly checks')
 	if v := store.GetKV(a.DB, kvVulnCursor); v != "" {
 		since, _ = strconv.ParseInt(v, 10, 64)
@@ -49,6 +55,11 @@ func (a *Agent) syncVulns(ctx context.Context) error {
 		if len(r.Items) > 0 {
 			n := a.CMS.Rapid(ctx, r.Items)
 			a.Log.Info("new plugin vulnerabilities checked against the sites", "advisories", len(r.Items), "sites_acted_on", n)
+			seqs := make([]int64, 0, len(r.Items))
+			for _, it := range r.Items {
+				seqs = append(seqs, it.Seq)
+			}
+			a.reportRapid(ctx, map[string]any{"seqs": seqs, "sites": n})
 		}
 		if err := store.SetKV(a.DB, kvVulnCursor, strconv.FormatInt(r.Cursor, 10)); err != nil {
 			return err
@@ -59,6 +70,33 @@ func (a *Agent) syncVulns(ctx context.Context) error {
 		since = r.Cursor
 	}
 	return nil
+}
+
+// reportRapid sends the fast response's results (and, with receipt, which
+// advisories this server received) to the portal, 500 at a time.
+func (a *Agent) reportRapid(ctx context.Context, receipt map[string]any) {
+	for i := 0; i < 200; i++ {
+		rs, err := a.CMS.PendingRapid(500)
+		if err != nil || (len(rs) == 0 && receipt == nil) {
+			return
+		}
+		body := map[string]any{"results": rs}
+		if receipt != nil {
+			body["receipt"] = receipt
+			receipt = nil
+		}
+		if rs == nil {
+			body["results"] = []cms.RapidResult{}
+		}
+		if err := a.AI.Portal.Post(ctx, "/api/agent/cms/vulns/results", body, &struct{}{}); err != nil {
+			a.Log.Debug("fast response results not sent", "err", err)
+			return
+		}
+		a.CMS.MarkRapidReported(rs)
+		if len(rs) < 500 {
+			return
+		}
+	}
 }
 
 func (a *Agent) vulnLoop(ctx context.Context) {

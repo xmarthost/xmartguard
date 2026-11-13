@@ -838,4 +838,53 @@ ALTER TABLE vuln_feed_config ADD COLUMN retry_at timestamptz;
 ALTER TABLE vuln_feed_config ADD COLUMN last_attempt_at timestamptz;
 `,
   },
+  {
+    version: '036_vuln_dispatch',
+    sql: `
+-- What was sent to the servers and when (each feed download, webhook
+-- delivery or resend that numbered advisories), which servers received it,
+-- and what each server did on each site (Master » Plugin Vulnerabilities).
+CREATE TABLE vuln_dispatch (
+  id bigserial PRIMARY KEY,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  source text NOT NULL,
+  note text NOT NULL DEFAULT '',
+  seq_from bigint NOT NULL,
+  seq_to bigint NOT NULL,
+  count int NOT NULL
+);
+CREATE INDEX vuln_dispatch_seq_idx ON vuln_dispatch (seq_from, seq_to);
+-- The advisories numbered before dispatches were kept (the first resend).
+INSERT INTO vuln_dispatch (source, note, seq_from, seq_to, count)
+  SELECT 'resend', 'sent before this report existed', min(seq), max(seq), count(*)::int FROM vuln_feed WHERE seq > 0 HAVING count(*) > 0;
+CREATE TABLE vuln_receipts (
+  server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  dispatch_id bigint NOT NULL REFERENCES vuln_dispatch(id) ON DELETE CASCADE,
+  received_at timestamptz NOT NULL DEFAULT now(),
+  advisories int NOT NULL DEFAULT 0,
+  sites int NOT NULL DEFAULT 0,
+  PRIMARY KEY (server_id, dispatch_id)
+);
+CREATE TABLE vuln_results (
+  id bigserial PRIMARY KEY,
+  dispatch_id bigint REFERENCES vuln_dispatch(id) ON DELETE SET NULL,
+  server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  advisory_id text NOT NULL,
+  kind text NOT NULL,
+  slug text NOT NULL,
+  title text NOT NULL DEFAULT '',
+  cvss real NOT NULL DEFAULT 0,
+  site_path text NOT NULL,
+  domain text NOT NULL DEFAULT '',
+  account text NOT NULL DEFAULT '',
+  version text NOT NULL,
+  action text NOT NULL,
+  to_version text NOT NULL DEFAULT '',
+  detail text NOT NULL DEFAULT '',
+  at timestamptz NOT NULL,
+  UNIQUE (server_id, advisory_id, site_path, version)
+);
+CREATE INDEX vuln_results_dispatch_idx ON vuln_results (dispatch_id, server_id, action);
+`,
+  },
 ];

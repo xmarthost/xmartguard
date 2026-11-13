@@ -47,6 +47,7 @@ const WafRuleSets = lazy(() => import('./pages/WafRuleSets'));
 const AppearancePage = lazy(() => import('./pages/AppearancePage'));
 const IPDBPage = lazy(() => import('./pages/IPDB'));
 const VulnFeedPage = lazy(() => import('./pages/VulnFeed'));
+const VulnSentPage = lazy(() => import('./pages/VulnSent'));
 
 /** platform: the provider's own fleet pages (master settings), not for customers' accounts. */
 function Protected({ children, role, platform }: { children: ReactNode; role?: 'owner' | 'admin'; platform?: boolean }) {
@@ -97,6 +98,7 @@ const PAGES = [
   () => import('./pages/AppearancePage'),
   () => import('./pages/IPDB'),
   () => import('./pages/VulnFeed'),
+  () => import('./pages/VulnSent'),
 ];
 function preloadPages() {
   const idle = (cb: () => void) => ('requestIdleCallback' in window ? (window as any).requestIdleCallback(cb, { timeout: 3000 }) : setTimeout(cb, 1500));
@@ -146,6 +148,8 @@ export default function App() {
         <Route path="/servers/:id/:module" element={<Protected><ComingSoon title="Coming soon" milestone="an upcoming release" /></Protected>} />
         <Route path="/ipdb" element={<Protected platform><IPDBPage /></Protected>} />
         <Route path="/vuln-feed" element={<Protected platform><VulnFeedPage /></Protected>} />
+        <Route path="/vuln-feed/sent" element={<Protected platform><VulnSentPage /></Protected>} />
+        <Route path="/vuln-feed/sent/:id" element={<Protected platform><VulnSentPage /></Protected>} />
         <Route path="/ai" element={<Protected platform><AIScanner /></Protected>} />
         <Route path="/waf-rulesets" element={<Protected platform><WafRuleSets /></Protected>} />
         <Route path="/trusted-services" element={<Protected platform><TrustedServices /></Protected>} />

@@ -33,6 +33,7 @@ type Advisory struct {
 	CVSS    float64  `json:"cvss"`
 	Ranges  []VRange `json:"ranges"`
 	Patched []string `json:"patched"`
+	Seq     int64    `json:"seq,omitempty"` // the portal's number (for its report)
 }
 
 // VRange is an affected version range ("*" or "" = open end).
@@ -144,6 +145,7 @@ func (m *Manager) rapidSite(ctx context.Context, s Site, byKey map[string][]Advi
 			}
 			_ = store.SetKV(m.DB, key, fmt.Sprint(store.Now()))
 			label := fmt.Sprintf("%s %s %s (%s, CVSS %.1f)", x.kind, x.c.Slug, x.c.Version, a.Title, a.CVSS)
+			res := RapidResult{Advisory: a.ID, Title: a.Title, CVSS: a.CVSS, Path: s.Path, Domain: s.Domain, User: s.User, Kind: x.kind, Slug: x.c.Slug, Version: x.c.Version}
 			// 1. Update.
 			var args []string
 			to := ""
@@ -161,24 +163,38 @@ func (m *Manager) rapidSite(ctx context.Context, s Site, byKey map[string][]Advi
 			now := m.currentVersion(ctx, wp, s.Path, x.kind, x.c.Slug)
 			if err == nil && !notUpdated(out) && now != "" && !a.Affects(now) {
 				done = append(done, fmt.Sprintf("updated vulnerable %s → %s right after it was disclosed", label, now))
+				res.Action, res.ToVersion = RapidUpdated, now
+				m.logRapid(res)
 				continue
 			}
+			res.Detail = updateFailure(out, err, x.c.Latest == "" && x.kind != "core")
 			if x.kind != "plugin" {
 				done = append(done, fmt.Sprintf("vulnerable %s could not be updated to %s: update it by hand", label, to))
+				res.Action = RapidManual
+				m.logRapid(res)
 				continue
 			}
 			// 2. Shield the folder; 3. deactivate a critical one.
 			dir := filepath.Join(s.Path, "wp-content", "plugins", x.c.Slug)
+			res.Action = RapidFailed
 			if err := Shield(dir, a.ID, x.c.Version); err != nil {
 				m.Log.Warn("plugin shield not written", "dir", dir, "err", err)
+				res.Detail += "; shield not written: " + err.Error()
 			} else {
+				res.Action = RapidShielded
 				done = append(done, fmt.Sprintf("vulnerable %s could not be updated: its PHP files are shielded from direct requests until it is updated", label))
 			}
 			if deactivate && (a.CVSS >= rapidCritical || a.CVSS == 0) && x.c.Active {
 				if _, err := wp(ctx, s.Path, "plugin", "deactivate", x.c.Slug); err == nil {
 					done = append(done, fmt.Sprintf("deactivated critical vulnerable %s (no update could be installed); activate it again after updating it", label))
+					if res.Action == RapidShielded {
+						res.Action = RapidShieldedDeactivated
+					} else {
+						res.Action = RapidDeactivated
+					}
 				}
 			}
+			m.logRapid(res)
 		}
 	}
 	return done
