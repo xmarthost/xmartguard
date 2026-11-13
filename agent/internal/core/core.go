@@ -1926,12 +1926,13 @@ func (a *Agent) firewallHandlers(h map[string]client.Handler) {
 	// ---- self update
 	h["agent.update"] = func(ctx context.Context, p json.RawMessage) (any, error) {
 		in, err := decode[struct {
-			SHA256 string `json:"sha256"`
+			SHA256  string `json:"sha256"`
+			Version string `json:"version"`
 		}](p)
 		if err != nil {
 			return nil, err
 		}
-		v, err := updater.Update(ctx, client.HTTPClient(a.Cfg.InsecureTLS), a.Cfg.ServerURL, in.SHA256)
+		v, err := updater.Update(ctx, client.HTTPClient(a.Cfg.InsecureTLS), a.Cfg.ServerURL, in.SHA256, in.Version)
 		if err != nil {
 			// Also in the agent's own log: the portal's message can be lost
 			// with the connection (2026-11-13: "unexpected EOF").

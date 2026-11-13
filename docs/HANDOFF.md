@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.56** (see `VERSION`).
+- Current release: **0.24.57** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,20 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.57: agent updates from the GitHub release** (2026-11-13).
+  After 0.24.56 (downloads uncompressed) a bulk update still failed on half
+  the servers with "connection reset by peer" / "unexpected EOF" from
+  162.55.6.159:443 (business900's LiteSpeed in front of the portal), even
+  for agents already on 0.24.56; xPGuard's firewall there allows the fleet
+  IPs, LiteSpeed's per-client limits are 10000 with no bandwidth limit
+  (cause not found yet: the LiteSpeed error log is in the Apache log path
+  on cPanel). Now the portal sends the release version with agent.update
+  (`updateParams`) and the agent (`updater.fromRelease`) downloads the
+  binary from `Releases` (GitHub, redirects only to github.com /
+  *.githubusercontent.com over https), accepted only when it matches the
+  portal's sha256 and the release signature; otherwise the portal's copy
+  as before. Agents before 0.24.57 still download from the portal: stuck
+  ones are updated by hand from GitHub once. Test: `TestUpdateFromRelease`.
 - **Release 0.24.56: agent binaries sent uncompressed** (2026-11-13). 15 of
   17 agents stayed on 0.24.49 since 0.24.50; Update from the portal failed
   with "unexpected EOF" after 40 s. curl through LiteSpeed got the whole

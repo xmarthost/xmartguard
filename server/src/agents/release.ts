@@ -37,9 +37,12 @@ export function currentRelease(downloadsDir: string): Release | null {
  * The agent.update parameters for a server of this architecture (one place
  * for every caller: audit A10 F9). Servers that never said are amd64.
  */
-export function updateParams(rel: Release, arch: unknown): { sha256: string } {
+export function updateParams(rel: Release, arch: unknown): { sha256: string; version: string } {
   const a = typeof arch === 'string' && arch ? arch : 'amd64';
-  return { sha256: rel.sha256[a] ?? '' };
+  // The version lets agents from 0.24.57 take the binary from the GitHub
+  // release (checked against this checksum and the release signature)
+  // instead of through the portal's web server.
+  return { sha256: rel.sha256[a] ?? '', version: rel.version };
 }
 
 /** Compares dotted versions numerically; non-numeric parts sort lowest. */

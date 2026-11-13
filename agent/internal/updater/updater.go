@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -44,16 +45,76 @@ var retryDelay = func() time.Duration { return time.Duration(5+rand.IntN(25)) * 
 // the published checksum (and the expected one, when given), checks that it
 // runs and is not older than this agent, and atomically replaces the
 // running executable, keeping the old one for a rollback.
-func Update(ctx context.Context, hc *http.Client, portal, expectSHA string) (string, error) {
+func Update(ctx context.Context, hc *http.Client, portal, expectSHA, ver string) (string, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return "", err
 	}
 	self, _ = filepath.EvalSymlinks(self)
-	return update(ctx, hc, portal, expectSHA, self)
+	return updateWith(ctx, hc, portal, expectSHA, ver, self)
 }
 
+// Releases is where the release workflow publishes the signed binaries
+// (overridden in tests).
+var Releases = "https://github.com/xmarthost/xmartguard/releases/download"
+
+// fromRelease downloads the binary of version ver from the GitHub release,
+// where the portal's own web server is not in the way (2026-11-13: the
+// portal's web server reset half the agents' downloads). It is accepted only
+// with the checksum the portal sent and, when the agent has a release key,
+// the release signature; anything else falls back to the portal.
+func fromRelease(ctx context.Context, hc *http.Client, ver, expectSHA, name string) ([]byte, error) {
+	if ver == "" || expectSHA == "" || !reVer.MatchString(ver) {
+		return nil, errors.New("no release version")
+	}
+	c := *hc
+	c.Timeout = 0
+	// GitHub answers with a redirect to its download host.
+	c.CheckRedirect = func(r *http.Request, via []*http.Request) error {
+		h := r.URL.Hostname()
+		if len(via) > 5 || r.URL.Scheme != "https" || !(h == "github.com" || strings.HasSuffix(h, ".githubusercontent.com")) {
+			return errors.New("unexpected redirect")
+		}
+		return nil
+	}
+	get := func(u string, limit int64) ([]byte, error) {
+		gctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(gctx, http.MethodGet, u, nil)
+		idle := time.AfterFunc(idleTimeout, cancel)
+		defer idle.Stop()
+		res, err := c.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return nil, fmt.Errorf("GET %s: %s", u, res.Status)
+		}
+		return io.ReadAll(&idleReader{r: io.LimitReader(res.Body, limit), t: idle})
+	}
+	base := strings.TrimRight(Releases, "/") + "/v" + ver + "/" + name
+	bin, err := get(base, 200<<20)
+	if err != nil {
+		return nil, err
+	}
+	h := sha256.Sum256(bin)
+	if hex.EncodeToString(h[:]) != expectSHA {
+		return nil, errors.New("release binary does not match the portal's checksum")
+	}
+	if err := verifyRelease(ReleaseKey, bin, func() ([]byte, error) { return get(base+".sig", 4096) }); err != nil {
+		return nil, err
+	}
+	return bin, nil
+}
+
+var reVer = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
 func update(ctx context.Context, hc *http.Client, portal, expectSHA, self string) (string, error) {
+	return updateWith(ctx, hc, portal, expectSHA, "", self)
+}
+
+func updateWith(ctx context.Context, hc *http.Client, portal, expectSHA, ver, self string) (string, error) {
 	// The binary runs as root on the server: never fetched in clear text
 	// or from a portal whose certificate is not checked (a portal on this
 	// machine itself is reached without a network, as install.sh allows).
@@ -103,6 +164,12 @@ func update(ctx context.Context, hc *http.Client, portal, expectSHA, self string
 		}
 		return nil, err
 	}
+	// The GitHub release first; the portal when that fails.
+	if bin, err := fromRelease(ctx, hc, ver, expectSHA, name); err == nil {
+		return install(ctx, bin, self)
+	} else if ver != "" {
+		fmt.Fprintf(os.Stderr, "update from the release failed (%v); using the portal\n", err)
+	}
 	sumRaw, err := retry(portal+"/downloads/"+name+".sha256", 1024)
 	if err != nil {
 		return "", err
@@ -124,6 +191,12 @@ func update(ctx context.Context, hc *http.Client, portal, expectSHA, self string
 	if err := verifyRelease(ReleaseKey, bin, func() ([]byte, error) { return retry(portal+"/downloads/"+name+".sig", 4096) }); err != nil {
 		return "", err
 	}
+	return install(ctx, bin, self)
+}
+
+// install checks that the verified binary runs and is not older, and puts
+// it in place of the running one, keeping that one for a rollback.
+func install(ctx context.Context, bin []byte, self string) (string, error) {
 	tmp := self + ".new"
 	if err := os.WriteFile(tmp, bin, 0o755); err != nil {
 		return "", err
