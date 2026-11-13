@@ -184,7 +184,7 @@ func (m *Manager) rapidSite(ctx context.Context, s Site, byKey map[string][]Advi
 				res.Action = RapidShielded
 				done = append(done, fmt.Sprintf("vulnerable %s could not be updated: its PHP files are shielded from direct requests until it is updated", label))
 			}
-			if deactivate && (a.CVSS >= rapidCritical || a.CVSS == 0) && x.c.Active {
+			if deactivate && (a.CVSS >= rapidCritical || a.CVSS == 0) && pluginActive(ctx, wp, s.Path, x.c.Slug) {
 				if _, err := wp(ctx, s.Path, "plugin", "deactivate", x.c.Slug); err == nil {
 					done = append(done, fmt.Sprintf("deactivated critical vulnerable %s (no update could be installed); activate it again after updating it", label))
 					if res.Action == RapidShielded {
@@ -200,7 +200,10 @@ func (m *Manager) rapidSite(ctx context.Context, s Site, byKey map[string][]Advi
 	return done
 }
 
-// currentVersion asks wp-cli for a component's installed version.
+// currentVersion asks wp-cli for a component's installed version. The
+// answer can carry PHP warnings before it ("Module imagick is already
+// loaded", business900 2026-11-13): updated plugins were taken for
+// vulnerable and shielded. The version is the last line that looks like one.
 func (m *Manager) currentVersion(ctx context.Context, wp func(context.Context, string, ...string) (string, error), path, kind, slug string) string {
 	var out string
 	var err error
@@ -212,7 +215,27 @@ func (m *Manager) currentVersion(ctx context.Context, wp func(context.Context, s
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	return versionLine(out)
+}
+
+var reVersionLine = regexp.MustCompile(`^v?[0-9][0-9A-Za-z.+_-]*$`)
+
+// versionLine is the last line of wp-cli output that is a version.
+func versionLine(out string) string {
+	lines := strings.Split(strings.ReplaceAll(out, "\r", ""), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); reVersionLine.MatchString(l) {
+			return l
+		}
+	}
+	return ""
+}
+
+// pluginActive asks wp-cli whether a plugin is active (the inventory reads
+// files and does not know: critical plugins were never deactivated).
+func pluginActive(ctx context.Context, wp func(context.Context, string, ...string) (string, error), path, slug string) bool {
+	_, err := wp(ctx, path, "plugin", "is-active", slug)
+	return err == nil
 }
 
 const (

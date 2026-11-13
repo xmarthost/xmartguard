@@ -37,6 +37,9 @@ func (a *Agent) syncVulns(ctx context.Context) error {
 	if n := a.CMS.BackfillRapid(); n > 0 {
 		a.Log.Info("earlier fast response actions recorded for the portal's report", "marks", n)
 	}
+	if n := a.CMS.CorrectRapid(); n > 0 {
+		a.Log.Info("fast response results corrected from the sites' files", "results", n)
+	}
 	a.reportRapid(ctx, nil)
 	since := int64(-1) // first time: only the cursor (the backlog is the nightly checks')
 	if v := store.GetKV(a.DB, kvVulnCursor); v != "" {

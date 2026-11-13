@@ -2,6 +2,7 @@ package cms
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,8 +50,17 @@ func TestRapidResponse(t *testing.T) {
 			return "Success: Updated 1 of 1.", nil
 		case len(args) >= 2 && args[1] == "update":
 			return "Warning: cf7: Plugin already updated.\nSuccess: Plugin already updated.", nil
+		case len(args) >= 3 && args[1] == "get" && u == "alice":
+			// PHP warnings before the answer (business900): still read right.
+			return "PHP Warning:  Module \"imagick\" is already loaded in Unknown on line 0\n" + versions[u+"/"+args[2]] + "\n", nil
 		case len(args) >= 3 && args[1] == "get":
 			return versions[u+"/"+args[2]] + "\n", nil
+		case len(args) >= 3 && args[1] == "is-active":
+			// Only bob's cf7 is active: the inventory does not know, wp-cli does.
+			if u == "bob" && args[2] == "cf7" {
+				return "", nil
+			}
+			return "", errors.New("exit status 1")
 		}
 		return "Success", nil
 	}
@@ -184,5 +194,54 @@ func TestRapidBackfill(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("%s = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+func TestVersionLine(t *testing.T) {
+	for in, want := range map[string]string{
+		"4.4.0\n": "4.4.0",
+		"PHP Warning:  Module \"imagick\" is already loaded in Unknown on line 0\r\n4.4.0\r\n": "4.4.0",
+		"Warning: something\n": "",
+		"6.9.5-RC1":            "6.9.5-RC1",
+		"":                     "",
+	} {
+		if got := versionLine(in); got != want {
+			t.Errorf("versionLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// 2026-11-13: results said "still vulnerable after the update, shielded"
+// for plugins the update had fixed (wp-cli output read wrong). They are
+// corrected from the site's files, and later updates count too.
+func TestCorrectRapid(t *testing.T) {
+	m, _ := autoUpdateManager(t, `{"cms":{"auto_update":true}}`)
+	root := "/home/dan/public_html"
+	m.save(Site{Type: WordPress, Path: root, User: "dan", Version: "6.8.3", MUPlugins: []string{}, Themes: []Component{},
+		Plugins: []Component{{Slug: "elementor", Version: "4.4.0"}, {Slug: "pro", Version: "3.0.1"}}})
+	for _, r := range []RapidResult{
+		{Advisory: "wf-e", Path: root, Kind: "plugin", Slug: "elementor", Version: "4.2.2", Action: RapidShielded, Detail: "the installed version is still vulnerable after the update"},
+		{Advisory: "wf-p", Path: root, Kind: "plugin", Slug: "pro", Version: "3.0.1", Action: RapidShielded},
+		{Advisory: "wf-g", Path: root, Kind: "plugin", Slug: "gone-plugin", Version: "1.0", Action: RapidFailed},
+		{Advisory: "wf-x", Path: "/home/unknown/public_html", Kind: "plugin", Slug: "x", Version: "1", Action: RapidFailed},
+	} {
+		m.logRapid(r)
+	}
+	if n := m.CorrectRapid(); n != 2 {
+		t.Fatalf("corrected %d, want 2", n)
+	}
+	if n := m.CorrectRapid(); n != 0 {
+		t.Fatalf("corrected again: %d", n)
+	}
+	rs, _ := m.PendingRapid(100)
+	last := map[string]RapidResult{}
+	for _, r := range rs {
+		last[r.Advisory] = r
+	}
+	if r := last["wf-e"]; r.Action != RapidUpdated || r.ToVersion != "4.4.0" || r.Version != "4.2.2" {
+		t.Errorf("elementor: %+v", r)
+	}
+	if last["wf-p"].Action != RapidShielded || last["wf-g"].Action != RapidGone || last["wf-x"].Action != RapidFailed {
+		t.Errorf("others: %+v %+v %+v", last["wf-p"], last["wf-g"], last["wf-x"])
 	}
 }

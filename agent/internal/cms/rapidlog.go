@@ -191,3 +191,67 @@ func shieldedFor(dir, adv string) bool {
 	b, err := os.ReadFile(filepath.Join(dir, ".htaccess"))
 	return err == nil && strings.Contains(string(b), shieldBegin) && strings.Contains(string(b), "# xPGuard: "+adv+" ")
 }
+
+// CorrectRapid records "updated" for results that said otherwise while the
+// site's files now hold another version: an update the fast response
+// misread (wp-cli output with PHP warnings, 2026-11-13), or one the nightly
+// automatic update or the customer made later. The portal replaces the
+// earlier result. Returns how many it corrected.
+func (m *Manager) CorrectRapid() int {
+	rows, err := m.DB.Query(`SELECT advisory, max(title), max(cvss), path, max(domain), max(user), kind, slug, version FROM cms_rapid_log r
+		WHERE action NOT IN ('updated', 'gone') AND NOT EXISTS (
+		  SELECT 1 FROM cms_rapid_log u WHERE u.advisory = r.advisory AND u.path = r.path AND u.version = r.version AND u.action IN ('updated', 'gone'))
+		GROUP BY advisory, path, kind, slug, version`)
+	if err != nil {
+		return 0
+	}
+	var open []RapidResult
+	for rows.Next() {
+		var r RapidResult
+		if rows.Scan(&r.Advisory, &r.Title, &r.CVSS, &r.Path, &r.Domain, &r.User, &r.Kind, &r.Slug, &r.Version) == nil {
+			open = append(open, r)
+		}
+	}
+	rows.Close()
+	sites := map[string]*Site{}
+	n := 0
+	for _, r := range open {
+		s, ok := sites[r.Path]
+		if !ok {
+			if list, _, err := m.Sites(SiteFilter{Type: WordPress, Path: r.Path, Limit: 1}); err == nil && len(list) == 1 && list[0].Path == r.Path {
+				s = &list[0]
+			}
+			sites[r.Path] = s
+		}
+		if s == nil {
+			continue // not listed now (a scan error): judged later
+		}
+		cur, found := "", false
+		switch r.Kind {
+		case "core":
+			cur, found = s.Version, true
+		case "plugin", "theme":
+			list := s.Plugins
+			if r.Kind == "theme" {
+				list = s.Themes
+			}
+			for _, c := range list {
+				if c.Slug == r.Slug {
+					cur, found = c.Version, true
+				}
+			}
+		}
+		switch {
+		case !found:
+			r.Action, r.Detail = RapidGone, "removed from the site since"
+		case cur != "" && cur != r.Version:
+			r.Action, r.ToVersion, r.Detail = RapidUpdated, cur, "updated: confirmed from the site's files"
+		default:
+			continue
+		}
+		r.At = 0
+		m.logRapid(r)
+		n++
+	}
+	return n
+}

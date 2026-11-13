@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.61** (see `VERSION`).
+- Current release: **0.24.62** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,22 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.62: fast response reads versions right and really
+  deactivates** (2026-11-13). First sent-vulnerabilities report (641
+  advisories, 5,499 site results): 492 "shielded: still vulnerable after
+  the update" were updates that had worked (business900
+  taymapigeoncommeti: elementor 4.2.2 reported shielded, files 4.4.0):
+  `currentVersion` took wp-cli's whole output, which carried PHP warnings
+  ("Module imagick is already loaded"). Now `versionLine` takes the last
+  line that is a version. Deactivated was 0 everywhere: `Component.Active`
+  is never set (the inventory reads files), so critical plugins were never
+  deactivated and blacklisted plugins never either; both now ask wp-cli
+  (`pluginActive`: `plugin is-active`). The wrong shields were already
+  gone (refresh after the action runs `unshieldUpdated`); `CorrectRapid`
+  (each sync) records "updated" (or "gone") for open results whose site
+  files now hold another version, so the report corrects itself, also for
+  later nightly or manual updates. Tests: `TestVersionLine`,
+  `TestCorrectRapid`, `TestRapidResponse` (noisy output, is-active).
 - **Release 0.24.61: the connector reads the sent-vulnerabilities report**
   (2026-11-13). Portal only. The report queries moved to
   `server/src/vulnfeed/report.ts` (routes and connector share them);
