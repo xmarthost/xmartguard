@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.68** (see `VERSION`).
+- Current release: **0.24.69** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,21 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.69: uploader rule stays inside move_uploaded_file()**
+  (2026-11-14). Fleet review after 0.24.67's rules sweeps (most were cut
+  by the 0.24.68 restart and run again 10 minutes after it; they found real
+  shells, StaticDoorway gambling pages, bytkl.php DecodedStreamInclude,
+  a.php SelfReplicating, PHPLock .htaccess). False positives: Smarty
+  (RemoteCodeEval, fixed in 0.24.68) still quarantined from earlier scans
+  on superfast (bluehosting/billing, bluemfec/billingoldold, akpetfoo
+  testshop, fansspot Smarty 5) and business200 (bohrahos clientarea):
+  restored; business800 comacepl scripts/update_slider.php was
+  PHP.Uploader.MoveUploadedFile because `reUploadRaw` ran from
+  move_uploaded_file( past `)) {` into the next statement where the name is
+  only displayed: now `[^;{}]` (the call's own arguments). Restored. Test:
+  TestFleetUploadNameAfterMove. Open: business700 technody, 3,392 real
+  PHPLock .htaccess (420 B, every folder) left "detected" by the mass-
+  quarantine pause; owner to decide.
 - **Release 0.24.68: Smarty's own template eval is not remote code**
   (2026-11-14). cloud2: the 0.24.67 rules sweep (scan 52) quarantined
   WHMCS's vendor/smarty/.../smarty_internal_cacheresource_file.php and

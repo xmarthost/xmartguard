@@ -2525,3 +2525,21 @@ func TestFleetSmartyEvalOwnTemplate(t *testing.T) {
 		}
 	}
 }
+
+// business800 comacepl (2026-11-14): a site's slider admin script was
+// quarantined as PHP.Uploader.MoveUploadedFile: the rule read past the
+// move_uploaded_file() call into the next statement, where the file name
+// is only shown. The name is judged inside the call's own arguments.
+func TestFleetUploadNameAfterMove(t *testing.T) {
+	s := newScanner(t)
+	slider := "<?php\ninclude(\"functions.php\");\nif (is_uploaded_file($_FILES['picture']['tmp_name'])) {\n$sourcePath = $_FILES['picture']['tmp_name'];\n$targetPath = \"../images/\" . $_FILES['picture']['name'];\n" +
+		"$ext = strtolower(pathinfo($targetPath, PATHINFO_EXTENSION)); if ($ext != 'jpg' && $ext != 'png') { die(); }\n" +
+		"if (move_uploaded_file($sourcePath, $targetPath)) {\n $pic = \"images/\" . htmlspecialchars(basename($_FILES[\"picture\"][\"name\"]));\n $conn->query(\"UPDATE sliders SET picture = '$pic'\");\n}\n}\n"
+	if d := s.checkContent("/home2/u/public_html/scripts/update_slider.php", ".php", []byte(slider)); d != nil && d.Signature == "PHP.Uploader.MoveUploadedFile" {
+		t.Errorf("slider script: %+v", d)
+	}
+	raw := "<?php\nif (isset($_FILES['f'])) { move_uploaded_file($_FILES['f']['tmp_name'], __DIR__ . '/' . $_FILES['f']['name']); echo 'ok'; }\n"
+	if d := s.checkContent("/home2/u/public_html/up.php", ".php", []byte(raw)); d == nil || d.Signature != "PHP.Uploader.MoveUploadedFile" {
+		t.Errorf("raw-name uploader: %+v", d)
+	}
+}

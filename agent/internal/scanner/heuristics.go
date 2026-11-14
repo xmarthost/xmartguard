@@ -73,7 +73,9 @@ var (
 	// return or print) that embeds attacker input — not a docblock example.
 	reBacktickExec = regexp.MustCompile("(?i)(?:=|echo|return|print|exec|system)\\s*`[^`]{0,200}\\$_(?:POST|GET|REQUEST|COOKIE)")
 	// move_uploaded_file whose destination is the raw client-supplied filename.
-	reUploadRaw = regexp.MustCompile(`(?is)move_uploaded_file\s*\([^;]{0,200}\$_FILES\s*\[[^\]]+\]\s*\[\s*['"]name['"]`)
+	// (Within the call's own arguments: not a name shown after the upload,
+	// "Slider has been updated" scripts, business800 comacepl, 2026-11-14.)
+	reUploadRaw = regexp.MustCompile(`(?is)move_uploaded_file\s*\([^;{}]{0,200}\$_FILES\s*\[[^\]]+\]\s*\[\s*['"]name['"]`)
 	// Markers of a legitimate framework/library file.
 	reNamespace = regexp.MustCompile(`(?m)^\s*namespace\s+[A-Za-z_\\]`)
 	reClassDef  = regexp.MustCompile(`(?m)^\s*(?:abstract\s+|final\s+)?(?:class|interface|trait)\s+\w`)
