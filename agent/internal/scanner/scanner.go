@@ -536,6 +536,9 @@ func (s *Scanner) contentVerdict(path, ext string, content []byte) (*Detection, 
 	if d := kitByPlace(path, ext, content); d != nil {
 		return final(d)
 	}
+	if d := placeRules(path, ext, content); d != nil {
+		return final(d)
+	}
 	// The Alfa shell's helpers, SSI and Perl CGI shells (remoteshell.go).
 	if d := shellKit(path, ext, content); d != nil {
 		return final(d)

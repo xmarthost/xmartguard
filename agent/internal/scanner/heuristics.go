@@ -31,7 +31,7 @@ var (
 	reWriteSink     = regexp.MustCompile(`(?i)\b(?:file_put_contents|fwrite|fputs)\s*\(`)
 	reWriteSinkFile = regexp.MustCompile(`(?i)\b(?:file_put_contents|fwrite|fputs)\s*\(\s*[^'"\s]|\b(?:file_put_contents|fwrite|fputs)\s*\(\s*['"](?:[^p'"]|p[^h]|ph[^p]|php[^:])`)
 	reUserInput     = regexp.MustCompile(`\$_(?:POST|GET|REQUEST|COOKIE|FILES)\b`)
-	reGoto          = regexp.MustCompile(`(?i)\bgoto\s+[a-zA-Z_]\w*\s*;`)
+	reGoto          = regexp.MustCompile(`(?i)\bgoto\s+[\p{L}_][\p{L}\p{N}_]*\s*;`)
 	reHex           = regexp.MustCompile(`\\x[0-9A-Fa-f]{2}`)
 	reOct           = regexp.MustCompile(`\\[0-3][0-7]{2}`)
 	reEscRun        = regexp.MustCompile(`(?:\\(?:x[0-9A-Fa-f]{2}|[0-3][0-7]{2})){4,}`)
@@ -56,7 +56,7 @@ var (
 	reWPGuard     = regexp.MustCompile(`\b(?:check_admin_referer|check_ajax_referer|wp_verify_nonce|current_user_can)\s*\(`)
 	// $GLOBALS['_xmlrpcs_prev_ehandler'](…): a handler kept under its name.
 	reGlobalsNamed = regexp.MustCompile(`\$GLOBALS\s*\[\s*['"][A-Za-z_]*[a-z]{3}[A-Za-z_]*['"]\s*\]\s*\(`)
-	reGotoLabel    = regexp.MustCompile(`(?i)\bgoto\s+([a-zA-Z_]\w*)\s*;`)
+	reGotoLabel    = regexp.MustCompile(`(?i)\bgoto\s+([\p{L}_][\p{L}\p{N}_]*)\s*;`)
 	reAssertVar    = regexp.MustCompile(`(?i)\bassert\s*\(\s*(?:@\s*)?\$`)
 	reOrdChr       = regexp.MustCompile(`(?i)\b(?:ord|chr|pack|base_convert)\s*\(`)
 	reDefineArr    = regexp.MustCompile(`\$\w+\s*=\s*(?:array\s*\(|\[)\s*(?:['"\x60][^'"\x60]{0,4}['"\x60]\s*,\s*){12,}`)
@@ -203,6 +203,22 @@ func analyzePHP(content []byte) *verdict {
 	}
 	if haltPayloadLoader(s) {
 		return &verdict{CatVirus, "PHP.Dropper.HaltCompilerLoader"}
+	}
+	// Wave 2 of 2026-11-14 (wave2.go).
+	if decodedStreamInclude(s) {
+		return &verdict{CatVirus, "PHP.Loader.DecodedStreamInclude"}
+	}
+	if mixedCaseCalls(s) >= 3 {
+		return &verdict{CatVirus, "PHP.Obfuscated.MixedCaseCalls"}
+	}
+	if fileGuardLoop(s) {
+		return &verdict{CatVirus, "PHP.Persistence.FileGuard"}
+	}
+	if unicodeGoto(s) {
+		return &verdict{CatVirus, "PHP.Obfuscated.UnicodeGoto"}
+	}
+	if wpDatabaseDump(s) {
+		return &verdict{CatVirus, "PHP.Exfil.WPDatabaseDump"}
 	}
 	if selfReplicating(s) {
 		return &verdict{CatVirus, "PHP.Dropper.SelfReplicating"}

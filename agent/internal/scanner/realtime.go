@@ -789,11 +789,33 @@ func (r *Realtime) flushPending() {
 	}
 }
 
+// HintDelay is how long after the agent starts the new rules' sweep begins.
+var HintDelay = 10 * time.Minute
+
 // ScheduleFrom and ScheduleTo are the hours the daily and weekly scans start in.
 var ScheduleFrom, ScheduleTo = 2, 5
 
 // Scheduler runs the daily and weekly scans of recently changed files.
 func (s *Scanner) Scheduler(ctx context.Context, lastRun func(kind string) int64, markRun func(kind string)) {
+	// New detection rules: the files they are about, now, gently (hints.go).
+	hintKey, fullKey := "rules_hints:"+DetectionVersion, "rules_full:"+DetectionVersion
+	if lastRun(hintKey) == 0 {
+		go func() {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(HintDelay):
+			}
+			if !s.Settings.Get().Scanner.Enabled {
+				return
+			}
+			checked, found := s.HintSweep(ctx)
+			if ctx.Err() == nil {
+				markRun(hintKey)
+			}
+			s.Log.Info("files the new detection rules are about checked", "rules", DetectionVersion, "files", checked, "found", found)
+		}()
+	}
 	t := time.NewTicker(15 * time.Minute)
 	defer t.Stop()
 	for {
@@ -802,8 +824,17 @@ func (s *Scanner) Scheduler(ctx context.Context, lastRun func(kind string) int64
 		// Run at night (02:00-05:00 in the schedule's time zone, whatever
 		// the server's clock is set to) at most once per period: not at
 		// midnight, when hosting servers run most of their users' cron jobs.
+		weekend := now.Weekday() == time.Saturday || now.Weekday() == time.Sunday
 		if cfg.Enabled && now.Hour() >= ScheduleFrom && now.Hour() < ScheduleTo {
-			if cfg.WeeklyScan && now.Weekday() == time.Sunday && now.Unix()-lastRun("weekly") > 6*86400 {
+			if weekend && (cfg.WeeklyScan || cfg.DailyScan) && lastRun(fullKey) == 0 {
+				// Once per set of new rules, on a weekend night: the whole
+				// server, in place of that night's sweep.
+				if _, err := s.Start("full", "", "scheduler: new detection rules"); err == nil {
+					markRun(fullKey)
+					markRun("weekly")
+					markRun("daily")
+				}
+			} else if cfg.WeeklyScan && now.Weekday() == time.Sunday && now.Unix()-lastRun("weekly") > 6*86400 {
 				if _, err := s.Start("weekly", "", "scheduler"); err == nil {
 					markRun("weekly")
 				}

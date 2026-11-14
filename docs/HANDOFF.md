@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.66** (see `VERSION`).
+- Current release: **0.24.67** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,48 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.67: wave-2 rules; new rules reach old files without a
+  full scan** (2026-11-14). Reports incident-wave2-20261114 (26 accounts)
+  and legalcok-forensic-20261114, superfast. Probe of every sample at its
+  original path: the 12 data.php were caught (OpenAdminLogin, 0.24.64; the
+  live agent never flagged them: placed 11-10, before the rule, and never
+  re-read), the rest not. wave2.go: `PHP.Loader.DecodedStreamInclude`
+  (stream_wrapper_register + include of the file's own scheme + a
+  decoder: dildarte's fake "WP Security Guard"/"WP Snapshot Store"
+  plugins, 123 copies; the Nov 11 evidence already had one),
+  `PHP.Obfuscated.MixedCaseCalls` (fOpEn/iNcLuDe/eXtRaCt, trionmar),
+  `PHP.Persistence.FileGuard` (endless loop rewriting files read-only and
+  dated back: fillvent l.php), `PHP.Obfuscated.UnicodeGoto` (goto with
+  CJK identifiers: fillvent index.php; reGoto/reGotoLabel take Unicode
+  labels), `PHP.Exfil.WPDatabaseDump` (wt_fm_*_plugin-utils.php: every
+  table, base64(gzip(json)), no auth check). `placeRules` (after
+  kitByPlace): `Htaccess.Hacked.StaticDoorway` (WordPress root .htaccess
+  serving flat .html with WordPress's rule gone, LP-JOOMLA-STATIC; cleaned
+  by CleanHackedHtaccess, WordPress block restored),
+  `WP.Core.BootstrapReplaced` (wp-load/wp-blog-header/wp-settings with no
+  PHP: abmover1's tinyurl meta refresh), `WP.Core.IndexReplaced` (root
+  index.php without wp-blog-header and a gambling head or redirect:
+  pushopper), `HTML.SEOSpam.StaticDoorway` (index.html/htm/php with a
+  gambling head in a folder below a WordPress root, not under wp-content:
+  AGUSTOTO/SEMUTWIN pages, legalcok /product-category/mdma/). All 17
+  evidence archives (1,679 code files) re-run: every malware sample is
+  caught (place rules verified in tests with a WordPress tree); no new
+  rule fires on the clean files in them (wp-file-manager, BlogVault
+  connectors, customer apps, cPGuard's false positives). Not covered:
+  sitemap/feed/robots/Google verification files (also legitimate), files
+  under the account's .trash (skipped by every scan).
+  Owner: no full scan per release; full scans on weekends. hints.go:
+  `DetectionVersion`; on agent start (10 min) a "rules" scan walks the
+  homes' listings and reads only candidates: names from every evidence set
+  so far, random dropper/hex/upload names, PHP in hiding places (.tmb,
+  .cache, .koality, .local, cgi-bin, uploads, mu-plugins,
+  upgrade-temp-backup, backuply, lscache, wp-content root) and PHP files
+  dated back (ctime within 30 days, more than 2 days after mtime: touch
+  cannot set ctime); candidates are judged by the full rules (a clean
+  data.php stays). Then the first weekend night (Sat/Sun 02-05) runs one
+  full scan per DetectionVersion in place of that night's sweep. Bump
+  DetectionVersion in a release whose rules find files earlier ones did
+  not. Tests: TestFleetWave2Shapes, TestFleetWave2Places, TestHintSweep.
 - **Release 0.24.66: check links expire (5 minutes, once)** (2026-11-13).
   Netcraft kept xpguardcaptcha.site/v?...&k=fw&u=/fcx "active" (the portal
   domain resolved after 0.24.65). Owner: a link is made for one visit,
