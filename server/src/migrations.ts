@@ -898,4 +898,14 @@ CREATE TABLE captcha_used (
 );
 `,
   },
+  {
+    version: '038_ai_kb_no_blank',
+    sql: `
+-- A blank file runs no code: no verdict is kept for empty content
+-- (2026-11-14: "malicious" for the empty hash flagged every empty
+-- index.html of the fleet). Agents from 0.24.70 drop their copy themselves.
+DELETE FROM ai_kb WHERE sha256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+DELETE FROM ai_kb_account WHERE sha256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+`,
+  },
 ];

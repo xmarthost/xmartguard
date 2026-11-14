@@ -231,7 +231,7 @@ func (a *Analyzer) Sync(ctx context.Context) (int, error) {
 			return total, err
 		}
 		for _, k := range res.KB {
-			if len(k.SHA256) != 64 {
+			if len(k.SHA256) != 64 || strings.EqualFold(k.SHA256, EmptySHA) {
 				continue
 			}
 			Save(a.DB, Verdict{SHA256: strings.ToLower(k.SHA256), Verdict: k.Verdict, Confidence: k.Confidence, Reason: k.Reason,

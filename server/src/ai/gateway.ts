@@ -6,6 +6,20 @@ import type { Config } from '../config.js';
 import { complete, ProviderError, type ProviderRow } from './providers.js';
 import { SYSTEM, maxTokens, parseAnswer, userMessage, type FileIn, type Judgement } from './prompt.js';
 
+/** SHA-256 of no content at all. */
+export const EMPTY_SHA = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+
+/**
+ * A blank file runs no code: no verdict is asked or kept for it (2026-11-14:
+ * a "malicious" verdict for the empty hash flagged every empty index.html
+ * of the fleet).
+ */
+export function blankFile(f: { sha256: string; size: number; excerpt: string; truncated?: boolean }): boolean {
+  if (f.sha256.toLowerCase() === EMPTY_SHA) return true;
+  // Only whitespace, and the excerpt is the whole file.
+  return f.size > 0 && f.size <= 8192 && !f.truncated && f.excerpt.replace(/^\uFEFF/, '').trim() === '';
+}
+
 export interface Result {
   id: string;
   verdict?: string;
@@ -75,6 +89,11 @@ export class AIGateway {
     }
     const out: Promise<Result>[] = [];
     for (const f of files) {
+      if (blankFile(f)) {
+        // No code, nothing to judge: answered here, never stored.
+        out.push(Promise.resolve({ id: f.id, verdict: 'clean', confidence: 100, reason: 'The file is empty (or only whitespace): it runs no code.', model: 'rule', source: 'fleet' }));
+        continue;
+      }
       const k = known.get(f.sha256.toLowerCase());
       if (k) {
         // Another server already had this exact file judged: no tokens spent.
@@ -236,6 +255,7 @@ export class AIGateway {
    */
   private async store(accountId: string, p: Pending, a: Judgement, model: string): Promise<void> {
     const f = p.file;
+    if (blankFile(f)) return;
     if (!(await isPlatform(this.pool, accountId))) {
       await this.pool.query(
         `INSERT INTO ai_kb_account (account_id, sha256, verdict, confidence, reason, injected, cut, model)
@@ -264,8 +284,8 @@ export class AIGateway {
   async sync(_base: string, cursor: number, _modelVersion: number) {
     const limit = 2000;
     const { rows } = await this.pool.query(
-      `SELECT seq, sha256, size, verdict, confidence, reason, model, injected FROM ai_kb WHERE seq > $1 ORDER BY seq LIMIT $2`,
-      [cursor, limit],
+      `SELECT seq, sha256, size, verdict, confidence, reason, model, injected FROM ai_kb WHERE seq > $1 AND sha256 <> $3 ORDER BY seq LIMIT $2`,
+      [cursor, limit, EMPTY_SHA],
     );
     return {
       kb: rows.map(({ seq: _s, size, ...r }) => ({ ...r, size: Number(size) })),

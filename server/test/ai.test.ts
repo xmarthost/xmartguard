@@ -168,6 +168,28 @@ describe('AI gateway', () => {
     expect(s.body.delta).toBeNull();
   });
 
+  it('never judges, keeps or sends a verdict for a blank file (2026-11-14)', async () => {
+    // An empty index.html was once stored "malicious" and every empty file
+    // of the fleet was flagged.
+    calls.length = 0;
+    const empty = file('e', '', { name: 'index.html' });
+    const space = file('w', '\uFEFF \n\t\n', { name: 'index.php' });
+    const r = await agentPost('/api/agent/ai/judge', envelope({ files: [empty, space] }));
+    expect(r.status).toBe(200);
+    for (const res of r.body.results) expect(res).toMatchObject({ verdict: 'clean', model: 'rule' });
+    expect(calls).toHaveLength(0);
+    const { rows } = await h.pool.query('SELECT sha256 FROM ai_kb WHERE sha256 = ANY($1)', [[empty.sha256, space.sha256]]);
+    expect(rows).toHaveLength(0);
+    // An old wrong row is not sent to agents.
+    await h.pool.query(
+      `INSERT INTO ai_kb (sha256, size, verdict, confidence, reason, injected, cut, model, name, match) VALUES ($1, 0, 'malicious', 95, 'wrong', false, '[]', 'x', 'index.html', '')`,
+      [empty.sha256],
+    );
+    const s = await agentPost('/api/agent/ai/sync', envelope({ cursor: 0, base: 'v1', model_version: 0 }));
+    expect(s.body.kb.map((k: { sha256: string }) => k.sha256)).not.toContain(empty.sha256);
+    await h.pool.query('DELETE FROM ai_kb WHERE sha256 = $1', [empty.sha256]);
+  });
+
   it('rejects forged, altered and stale requests', async () => {
     const good = envelope({ files: [file('a', 'x')] });
     expect((await agentPost('/api/agent/ai/judge', { ...good, payload: good.payload.replace('"x"', '"y"') })).status).toBe(401);

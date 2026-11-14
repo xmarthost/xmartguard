@@ -386,6 +386,9 @@ func (a *Agent) Start(ctx context.Context) {
 		if n := a.Scanner.RestoreSystemFiles(); n > 0 {
 			a.Log.Info("restored system files quarantined by older rules", "count", n)
 		}
+		if n := a.clearBlankAI(); n > 0 {
+			a.Log.Info("put back blank files an AI hash verdict had flagged", "count", n)
+		}
 	}()
 	go a.trustedLoop(ctx)
 	go a.clamLoop(ctx)
@@ -2119,6 +2122,9 @@ func (a *Agent) onAIVerdict(j ai.Job, v ai.Verdict) {
 	if v.Verdict != ai.Malicious || v.Confidence < 80 {
 		return
 	}
+	if v.SHA256 == ai.EmptySHA || ai.BlankFile(j.Path) {
+		return // a blank file runs no code, whatever a verdict says
+	}
 	if j.FindingID == 0 {
 		// A file the signatures passed: record it so it shows in the logs.
 		info, err := os.Lstat(j.Path)
@@ -2191,6 +2197,44 @@ func (a *Agent) restoreFinding(id int64) error {
 			Model: "admin", Source: ai.SourceAdmin, At: store.Now(), Size: f.Size})
 	}
 	return nil
+}
+
+// clearBlankAI undoes AI hash detections of blank files (before 0.24.70 a
+// wrong fleet verdict for empty content flagged every empty index.html):
+// detected ones are cleared, quarantined or disabled ones put back. No
+// verdict is saved for them (there is nothing to remember about no code).
+func (a *Agent) clearBlankAI() int {
+	rows, err := a.DB.Query(`SELECT id FROM findings WHERE signature = 'XG.AI.Malicious' AND status IN ('detected','quarantined','disabled')
+		AND (sha256 = ? OR size <= 8192)`, ai.EmptySHA)
+	if err != nil {
+		return 0
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	n := 0
+	for _, id := range ids {
+		f, err := a.Scanner.Get(id)
+		if err != nil {
+			continue
+		}
+		// The content as it is now (the file may have changed since).
+		b, _, err := a.Scanner.Content(id, 8193)
+		if err != nil || len(b) > 8192 || !ai.Blank(b) {
+			continue
+		}
+		if err := a.Scanner.ClearAs(id, scanner.StatusAIRestored); err != nil {
+			a.Log.Warn("could not put back a blank file", "path", f.Path, "err", err)
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // clearFinding marks a detection as a false positive by hand.

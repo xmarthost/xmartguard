@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.69** (see `VERSION`).
+- Current release: **0.24.70** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,23 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.70: a blank file is never AI-malicious** (2026-11-14).
+  business700 showed 291 detected XG.AI.Malicious findings, all 0-byte
+  index.html (technody, aureonpe, clickcre). The fleet knowledge base held
+  "malicious" (95%, "Obfuscated backdoor in mu-plugins") for the SHA-256
+  of empty content (e3b0c442...b855), so every empty file of every server
+  matched it in "all files" mode. Fix: agent `ai.EmptySHA`, `ai.Blank`,
+  `ai.BlankFile` (empty or only whitespace, up to 8 KB): never sent to the
+  AI, never cached (`Save`/`Cached`/`Sync` refuse the empty hash, the stored
+  row is dropped at start), never acted on (`onAIVerdict`); at start
+  `clearBlankAI` puts back XG.AI.Malicious findings whose current content
+  is blank (status ai_restored; real files keep theirs). Portal: `blankFile`
+  answers blank files "clean" (model "rule") without a provider call and
+  never stores them; sync never sends the empty hash; migration 038 deletes
+  the wrong row from ai_kb and ai_kb_account. The same day business700's
+  2,894 Htaccess.Hacked.PHPLock files (technody) were quarantined by the
+  owner's request. Tests: core TestBlankFileNeverAIMalicious, portal
+  ai.test "never judges, keeps or sends a verdict for a blank file".
 - **Release 0.24.69: uploader rule stays inside move_uploaded_file()**
   (2026-11-14). Fleet review after 0.24.67's rules sweeps (most were cut
   by the 0.24.68 restart and run again 10 minutes after it; they found real

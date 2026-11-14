@@ -13,6 +13,7 @@
 package ai
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -153,6 +154,9 @@ func (a *Analyzer) process(ctx context.Context, batch []Job) {
 				continue
 			}
 		}
+		if j.SHA256 == EmptySHA || BlankFile(j.Path) {
+			continue // nothing to judge
+		}
 		v, ok := Cached(a.DB, j.SHA256)
 		// Another server's "clean" does not clear a file here (see
 		// isClearedVerdict): this server's AI judges the finding itself.
@@ -209,9 +213,56 @@ func (a *Analyzer) allow(limit int) bool {
 	return true
 }
 
-// Cached returns a stored verdict for a file hash.
+// EmptySHA is the SHA-256 of no content at all. A blank file runs no code:
+// no verdict is asked, kept or acted on for it (2026-11-14: one wrong
+// "malicious" for this hash in the fleet knowledge base flagged every empty
+// index.html of every server, 291 on business700 alone).
+const EmptySHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+// blankLimit: a file bigger than this is never only whitespace in practice
+// and is not read to check.
+const blankLimit = 8192
+
+// Blank reports content with nothing but whitespace (and a byte-order mark).
+func Blank(b []byte) bool {
+	return len(bytes.TrimSpace(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf")))) == 0
+}
+
+// BlankFile reports a file that is empty or only whitespace (read through
+// scanner.OpenFile: no planted link is followed). A file that cannot be
+// read is not blank.
+func BlankFile(p string) bool {
+	f, err := scanner.OpenFile(p)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() > blankLimit {
+		return false
+	}
+	b, err := io.ReadAll(io.LimitReader(f, blankLimit+1))
+	return err == nil && len(b) <= blankLimit && Blank(b)
+}
+
+// blankVerdict answers for a blank file without asking anyone.
+func blankVerdict(sha string) Verdict {
+	return Verdict{SHA256: sha, Verdict: Clean, Confidence: 100, Reason: "The file is empty (or only whitespace): it runs no code.",
+		Model: "rule", Source: "rule", At: store.Now()}
+}
+
+// dropBlank removes verdicts kept for empty content (from the fleet before
+// 0.24.70).
+func dropBlank(db *sql.DB) {
+	_, _ = db.Exec(`DELETE FROM ai_verdicts WHERE sha256 = ?`, EmptySHA)
+}
+
+// Cached returns a stored verdict for a file hash (none for empty content).
 func Cached(db *sql.DB, sha string) (Verdict, bool) {
 	v := Verdict{SHA256: sha}
+	if sha == EmptySHA {
+		return v, false
+	}
 	var cut string
 	var injected int
 	err := db.QueryRow(`SELECT verdict, confidence, reason, model, at, injected, cut, source, size FROM ai_verdicts WHERE sha256 = ?`, sha).
@@ -230,6 +281,9 @@ func Cached(db *sql.DB, sha string) (Verdict, bool) {
 // portal) is not replaced by the AI, nor a file kept from before the AI only advised by another clean
 // verdict (it would then be flagged again).
 func Save(db *sql.DB, v Verdict) {
+	if v.SHA256 == EmptySHA || v.SHA256 == "" {
+		return
+	}
 	if v.Source != SourceAdmin && !(v.Source == "fleet" && v.Model == "admin") {
 		var old string
 		if db.QueryRow(`SELECT source FROM ai_verdicts WHERE sha256 = ?`, v.SHA256).Scan(&old) == nil &&
@@ -274,13 +328,35 @@ func (a *Analyzer) Analyze(ctx context.Context, j Job) (Verdict, error) {
 // empty Verdict field.
 func (a *Analyzer) AnalyzeBatch(ctx context.Context, jobs []Job) ([]Verdict, error) {
 	cfg := a.Settings.Get().AI
+	// Blank files are answered here: never sent, never stored.
+	var send []Job
+	var at []int
+	blank := make([]bool, len(jobs))
+	for i, j := range jobs {
+		if j.SHA256 == EmptySHA || BlankFile(j.Path) {
+			blank[i] = true
+			continue
+		}
+		send, at = append(send, j), append(at, i)
+	}
 	// The portal's AI only; while it is unavailable the files wait and are
 	// asked again later (there is no offline model).
-	out, err := a.analyzePortal(ctx, jobs, cfg)
-	if len(out) != len(jobs) {
-		out = make([]Verdict, len(jobs))
+	var got []Verdict
+	var err error
+	if len(send) > 0 {
+		got, err = a.analyzePortal(ctx, send, cfg)
+	}
+	out := make([]Verdict, len(jobs))
+	if len(got) == len(send) {
+		for k, i := range at {
+			out[i] = got[k]
+		}
 	}
 	for i := range out {
+		if blank[i] {
+			out[i] = blankVerdict(jobs[i].SHA256)
+			continue
+		}
 		if out[i].Verdict == "" {
 			continue
 		}
@@ -396,6 +472,7 @@ func keepAIRestored(db *sql.DB) {
 
 func loadCleared(db *sql.DB) {
 	keepAIRestored(db)
+	dropBlank(db)
 	set, admin := map[string]bool{}, map[string]bool{}
 	// Content one of the untrusted signatures caught stays flagged unless an
 	// administrator cleared it (the AI and the fleet were wrong about it).
