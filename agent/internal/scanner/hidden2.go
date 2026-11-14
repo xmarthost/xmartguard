@@ -202,7 +202,12 @@ func hiddenFunctionNames(s []byte) int {
 
 var (
 	// eval('?>' . curl_exec($ch)) and the like: fetched code run at once.
-	reEvalFetchCall = regexp.MustCompile(`(?i)\beval\s*\(\s*(['"])\?>['"]\s*\.\s*@?\s*(?:curl_exec|file_get_contents|stream_get_contents)\s*\(`)
+	// file_get_contents() counts only for what is not a local file: a URL,
+	// request data or decoded text (Smarty, in WHMCS, evaluates its own
+	// compiled template: eval('?>' . file_get_contents($tpl->cached->filepath));
+	// cloud2, 2026-11-14).
+	reEvalFetchCall = regexp.MustCompile(`(?i)\beval\s*\(\s*(['"])\?>['"]\s*\.\s*@?\s*(?:curl_exec|stream_get_contents)\s*\(`)
+	reEvalFileGet   = regexp.MustCompile(`(?i)\beval\s*\(\s*['"]\?>['"]\s*\.\s*@?\s*file_get_contents\s*\(\s*(['"]\s*(?:https?|ftp)://|\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\b|(?:base64_decode|str_rot13|hex2bin|gzinflate|urldecode)\s*\(|\$(\w+)\s*\))`)
 	// Code read from a URL through a stream context (fopen($u, 'r', false, $ctx)).
 	reStreamFetch = regexp.MustCompile(`(?i)\bstream_context_create\s*\(`)
 	reStreamRead  = regexp.MustCompile(`(?i)\b(?:fread|fgets|stream_get_contents)\s*\(`)
@@ -217,6 +222,16 @@ var (
 func remoteEvalDirect(s []byte) bool {
 	if reEvalFetchCall.Match(s) {
 		return true
+	}
+	for _, m := range reEvalFileGet.FindAllSubmatch(s, 5) {
+		if len(m[2]) == 0 {
+			return true // a URL, request data or decoded text
+		}
+		// A plain variable: only when it holds a URL or request data.
+		v := regexp.QuoteMeta(string(m[2]))
+		if regexp.MustCompile(`(?i)\$` + v + `\s*=\s*(?:['"]\s*(?:https?|ftp)://|\$_(?:GET|POST|REQUEST|COOKIE)\b|(?:base64_decode|str_rot13|hex2bin|urldecode)\s*\()`).Match(s) {
+			return true
+		}
 	}
 	return reEvalFetched.Match(s) && reStreamFetch.Match(s) && reStreamRead.Match(s)
 }

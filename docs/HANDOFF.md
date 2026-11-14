@@ -17,7 +17,7 @@ project. It holds the rules, the current state and what is still open.
   - `deploy/`: setup script.
   - `docs/`: notes. See `PROJECT-REPORT.md`, `WAF-RULESETS.md`,
     `TESTING.md` and `AI-TRAINING.md`.
-- Current release: **0.24.67** (see `VERSION`).
+- Current release: **0.24.68** (see `VERSION`).
 
 ## Working rules
 
@@ -332,6 +332,20 @@ WAF: next is the plan's own direct-deny rules (phase 2) from fleet logs.
   JSON parse printed nothing); WAF self-test and monitor events parse the
   indented JSON of `xpguard-agent call`. LSAPI max-children lines mostly
   do not name the account.
+- **Release 0.24.68: Smarty's own template eval is not remote code**
+  (2026-11-14). cloud2: the 0.24.67 rules sweep (scan 52) quarantined
+  WHMCS's vendor/smarty/.../smarty_internal_cacheresource_file.php and
+  smarty_template_compiled.php as PHP.Backdoor.RemoteCodeEval (restored
+  by the administrator): `reEvalFetchCall` took any
+  eval('?>' . file_get_contents(...)), and Smarty evaluates its own
+  compiled template that way on HHVM. file_get_contents now counts only
+  for a URL literal, request data, a decoder, or a plain variable assigned
+  from one of those (`reEvalFileGet`); curl_exec/stream_get_contents as
+  before. Test: TestFleetSmartyEvalOwnTemplate. cloud2 quarantine review:
+  a ticket attachment with an obfuscated eval (Laravel controller, kept),
+  admin diagnostics .diag.php/.t.php in the home (not WHMCS, left);
+  modules/gateways/paypalnofees.php (EncodedPayload, AI clean 85) was
+  quarantined 2026-10-27 and removed by retention.
 - **Release 0.24.67: wave-2 rules; new rules reach old files without a
   full scan** (2026-11-14). Reports incident-wave2-20261114 (26 accounts)
   and legalcok-forensic-20261114, superfast. Probe of every sample at its
